@@ -1,4 +1,4 @@
-.PHONY: help install lint format typecheck test test-cov check all
+.PHONY: help install lint format typecheck test test-cov check all up down reset logs ps
 
 help:  ## Показати цю довідку
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -27,3 +27,24 @@ test-cov:  ## Запустити тести з coverage
 check: lint typecheck test  ## Повна перевірка (lint + types + tests)
 
 all: format check  ## Форматувати + повна перевірка
+
+# --- Infrastructure ---
+
+up:  ## Запустити інфраструктуру (PostgreSQL + MinIO)
+	docker compose up -d
+	@echo "Waiting for services..."
+	@docker compose exec postgres pg_isready -U $${POSTGRES_USER:-course_supporter} > /dev/null 2>&1 && \
+		echo "PostgreSQL: ready" || echo "PostgreSQL: waiting..."
+	@echo "MinIO Console: http://localhost:9001"
+
+down:  ## Зупинити інфраструктуру
+	docker compose down
+
+reset:  ## Зупинити та видалити всі дані (чистий рестарт)
+	docker compose down -v
+
+logs:  ## Показати логи сервісів
+	docker compose logs -f
+
+ps:  ## Статус сервісів
+	docker compose ps

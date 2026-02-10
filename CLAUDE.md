@@ -88,7 +88,7 @@ Course Materials → Ingestion Engine → SourceDocuments
 
 ## Code Standards
 
-- **Linting/Formatting:** `ruff` only. Base rules: E, W, F, I, N, UP, B, SIM, RUF. Extended in S1-002: ASYNC, S, PTH, T20. No `print()` — use `structlog`.
+- **Linting/Formatting:** `ruff` only. Rules: E, W, F, I, N, UP, B, SIM, RUF, ASYNC, S, PTH, T20. No `print()` — use `structlog`. S101/T20 allowed in tests via per-file-ignores.
 - **Type checking:** `mypy --strict`. Pydantic plugin enabled. Targeted `ignore_missing_imports` for untyped libs (trafilatura, pptx, docx, fitz, whisper).
 - **Testing:** `pytest` with `pytest-asyncio` (`asyncio_mode = "auto"`). Fixtures over classes.
 - **Docstrings/comments:** English only (Google/NumPy style).

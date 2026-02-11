@@ -209,3 +209,7 @@ __marimo__/
 # Docker volumes (bind mount fallback)
 postgres_data/
 minio_data/
+
+
+# PyCharm
+.idea/

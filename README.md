@@ -1,3 +1,5 @@
+[![CI](https://github.com/KonstZiv/course-supporter/actions/workflows/ci.yaml/badge.svg)](https://github.com/KonstZiv/course-supporter/actions/workflows/ci.yaml)
+
 # Course Supporter
 
 AI-powered system for transforming course materials into structured learning plans with automated mentoring.

@@ -20,16 +20,16 @@ PR створено → lint + typecheck + tests паралельно → все
 
 ## Контрольні точки
 
-- [ ] CI тригериться на PR до `main` та push в `main`
-- [ ] `Lint & Format` job: ruff check + ruff format --check проходять
-- [ ] `Type Check` job: mypy strict проходить
-- [ ] `Tests` job: pytest проходить з `ENVIRONMENT=testing`
-- [ ] `AI Code Review` job: запускається тільки після успіху 3 базових jobs
-- [ ] AI review залишає inline-коментарі до PR
-- [ ] AI review НЕ запускається на push в main (тільки PR)
+- [x] CI тригериться на PR до `main` та push в `main`
+- [x] `Lint & Format` job: ruff check + ruff format --check проходять
+- [x] `Type Check` job: mypy strict проходить
+- [x] `Tests` job: pytest проходить з `ENVIRONMENT=testing`
+- [x] `AI Code Review` job: запускається тільки після успіху 3 базових jobs
+- [x] AI review залишає inline-коментарі до PR
+- [x] AI review НЕ запускається на push в main (тільки PR)
 - [ ] Pipeline завершується за < 5 хвилин
 - [ ] При fail lint/typecheck/test — PR не можна merge
-- [ ] CI badge відображається в README
+- [x] CI badge відображається в README
 
 ## Залежності
 

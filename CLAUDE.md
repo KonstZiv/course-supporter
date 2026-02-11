@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **course-supporter** — AI-powered system for transforming course materials into structured learning plans with automated mentoring. Ingests video, presentations, text, and web links, then generates structured course outlines via LLM-powered agents.
 
-Python 3.13+ | src layout (`src/course_supporter/`) | async-first (FastAPI + asyncpg + async LLM SDKs)
+Python 3.13+ | src layout (`src/course_supporter/`) | async-first (FastAPI + psycopg v3 + async LLM SDKs)
 
 ## Common Commands
 
@@ -83,7 +83,7 @@ Course Materials → Ingestion Engine → SourceDocuments
 
 - **`config/models.yaml`** — Model registry (provider configs, fallback chains)
 - **`prompts/architect/v1.yaml`** — Prompt templates
-- **`migrations/`** — Alembic (async template with asyncpg)
+- **`migrations/`** — Alembic (psycopg v3)
 - **`scripts/`** — Evaluation scripts (`eval_architect.py`)
 
 ## Code Standards

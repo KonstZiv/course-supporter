@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr | None = None
 
     # --- DeepSeek ---
+    # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.
+    # Other providers have their own SDKs with built-in endpoints.
     deepseek_base_url: str = "https://api.deepseek.com"
 
     # --- Convenience properties ---

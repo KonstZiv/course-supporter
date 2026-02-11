@@ -28,7 +28,7 @@ PR створено → lint + typecheck + tests паралельно → все
 - [x] AI review залишає inline-коментарі до PR
 - [x] AI review НЕ запускається на push в main (тільки PR)
 - [ ] Pipeline завершується за < 5 хвилин
-- [ ] При fail lint/typecheck/test — PR не можна merge
+- [ ] ~~При fail lint/typecheck/test — PR не можна merge~~ — відкладено: branch protection недоступний на free plan GitHub для приватних репо
 - [x] CI badge відображається в README
 
 ## Залежності

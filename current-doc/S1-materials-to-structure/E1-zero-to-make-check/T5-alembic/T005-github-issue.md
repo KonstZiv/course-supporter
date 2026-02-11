@@ -38,4 +38,4 @@ uv run alembic upgrade head  # 8 таблиць створено
 
 ## Деталі
 
-Повний spec (ORM-моделі, env.py, тести, пояснення рішень): **S1-005-alembic.md**
+Повний spec (ORM-моделі, env.py, тести, пояснення рішень): **T005-alembic.md**

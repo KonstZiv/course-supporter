@@ -39,4 +39,4 @@ PR створено → lint + typecheck + tests паралельно → все
 
 ## Деталі
 
-Повний spec (workflow YAML, secrets setup, branch protection, майбутні розширення): **S1-006-ci.md**
+Повний spec (workflow YAML, secrets setup, branch protection, майбутні розширення): **T006-ci.md**

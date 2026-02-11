@@ -1,0 +1,51 @@
+# Documentation (not needed in containers)
+current-doc/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment
+.env
+.env.local
+.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Testing & quality tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Docker volumes (bind mount fallback)
+postgres_data/
+minio_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Media files (large, stored in S3)
+*.mp4
+*.mp3
+*.wav
+
+# Pre-commit
+.pre-commit-config.yaml
+
+# CI
+.github/

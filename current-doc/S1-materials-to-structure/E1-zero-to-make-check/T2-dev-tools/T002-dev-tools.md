@@ -30,9 +30,6 @@
 target-version = "py313"
 line-length = 88
 src = ["src"]
-extend-include = []
-extend-exclude = []
-include = ["*.py"]
 
 [tool.ruff.lint]
 select = [

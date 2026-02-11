@@ -1,4 +1,4 @@
-.PHONY: help install lint format typecheck test test-cov check all up down reset logs ps
+.PHONY: help install lint format typecheck test test-cov check all up down reset logs ps migrate db-upgrade db-downgrade db-reset
 
 help:  ## Показати цю довідку
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -27,6 +27,21 @@ test-cov:  ## Запустити тести з coverage
 check: lint typecheck test  ## Повна перевірка (lint + types + tests)
 
 all: format check  ## Форматувати + повна перевірка
+
+# --- Database ---
+
+migrate:  ## Створити нову міграцію (autogenerate): make migrate msg="add_feedback_table"
+	uv run alembic revision --autogenerate -m "$(msg)"
+
+db-upgrade:  ## Застосувати міграції
+	uv run alembic upgrade head
+
+db-downgrade:  ## Відкатити останню міграцію
+	uv run alembic downgrade -1
+
+db-reset:  ## Повний ресет: downgrade до base + upgrade до head
+	uv run alembic downgrade base
+	uv run alembic upgrade head
 
 # --- Infrastructure ---
 

@@ -51,8 +51,11 @@ make all
 # Start infrastructure (PostgreSQL + MinIO)
 docker compose up -d
 
-# Run DB migrations
-uv run alembic upgrade head
+# Database migrations
+make db-upgrade            # alembic upgrade head
+make db-downgrade          # alembic downgrade -1
+make db-reset              # downgrade base + upgrade head
+make migrate msg="name"    # autogenerate new migration
 
 # Start API server
 uv run uvicorn course_supporter.api:app --reload
@@ -74,8 +77,8 @@ Course Materials → Ingestion Engine → SourceDocuments
 - **`ingestion/`** — Abstract `SourceProcessor` interface with implementations: `VideoProcessor` (Gemini → Whisper fallback), `PresentationProcessor` (PDF/PPTX), `TextProcessor` (MD/DOCX/HTML), `WebProcessor`. All produce unified `SourceDocument` output.
 - **`llm/`** — `ModelRouter` with provider selection and fallback logic. Providers: Gemini, Anthropic, OpenAI, DeepSeek (DeepSeek uses OpenAI SDK with custom `base_url`).
 - **`agents/`** — `ArchitectAgent` generates course structure via LLM structured output with Pydantic validation and retry on invalid JSON.
-- **`models/`** — Pydantic schemas: `course.py` (CourseStructure, Module, Lesson, Concept, Task), `source.py` (SourceMaterial, SourceDocument), `llm.py` (LLMCall, LLMResponse).
-- **`storage/`** — SQLAlchemy async ORM, repository pattern. 8 tables: courses, source_materials, slide_video_mappings, modules, lessons, concepts, tasks, llm_calls. pgvector for embeddings.
+- **`models/`** — Pydantic schemas: `course.py` (CourseStructure, Module, Lesson, Concept, Exercise), `source.py` (SourceMaterial, SourceDocument), `llm.py` (LLMCall, LLMResponse).
+- **`storage/`** — SQLAlchemy async ORM, repository pattern. 8 tables: courses, source_materials, slide_video_mappings, modules, lessons, concepts, exercises, llm_calls. UUIDv7 PKs (via `uuid-utils`). pgvector for embeddings (Vector(1536)).
 - **`api/`** — FastAPI routes for course management.
 - **`config.py`** — Pydantic Settings with env vars, `SecretStr` for API keys, DB URL assembly from components.
 
@@ -96,7 +99,7 @@ Course Materials → Ingestion Engine → SourceDocuments
 
 ## Infrastructure
 
-- **PostgreSQL 17-Alpine** with pgvector extension
+- **PostgreSQL 17** (image: `pgvector/pgvector:pg17`) with pgvector extension
 - **MinIO** — S3-compatible object storage for course materials
 - **`openai-whisper`** in separate optional dependency `media` (pulls PyTorch ~2GB). Install: `uv sync --extra media`. Mock in CI.
 - **Dependency management:** PEP 735 — `dev` tools in `[dependency-groups]` (included by default with `uv sync`), `media` in `[project.optional-dependencies]`.

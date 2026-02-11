@@ -38,4 +38,4 @@ settings.is_dev             # → True
 
 ## Деталі
 
-Повний spec (код config.py, тести, інтеграція з FastAPI/Alembic/ModelRouter): **S1-004-config.md**
+Повний spec (код config.py, тести, інтеграція з FastAPI/Alembic/ModelRouter): **T004-config.md**

@@ -34,4 +34,4 @@
 
 ## Деталі
 
-Повний spec (конфігурації ruff/mypy/pre-commit, Makefile): **S1-002-dev-tools.md**
+Повний spec (конфігурації ruff/mypy/pre-commit, Makefile): **T002-dev-tools.md**

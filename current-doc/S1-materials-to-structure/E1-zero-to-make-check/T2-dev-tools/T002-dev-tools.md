@@ -136,6 +136,9 @@ repos:
         additional_dependencies:
           - pydantic>=2.12
           - pydantic-settings>=2.12
+          - sqlalchemy[asyncio]>=2.0.37
+          - pgvector>=0.4
+          - uuid-utils>=0.9
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/

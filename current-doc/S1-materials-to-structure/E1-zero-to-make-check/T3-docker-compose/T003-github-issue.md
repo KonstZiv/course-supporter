@@ -7,7 +7,7 @@
 ## Що робимо
 
 1. **docker-compose.yaml:** два сервіси (postgres, minio) + одноразовий init-контейнер для створення S3-бакету
-2. **PostgreSQL 17 Alpine:** офіційний образ, pgvector extension через init-script (`scripts/init-db.sh`). Якщо alpine не містить pgvector — fallback на образ `pgvector/pgvector:pg17`
+2. **PostgreSQL 17 + pgvector:** образ `pgvector/pgvector:pg17` (PostgreSQL 17 з pgvector з коробки), pgvector extension активується через init-script (`scripts/init-db.sh`)
 3. **MinIO:** S3-сумісний storage, API на :9000, Console UI на :9001. Бакет `course-materials` створюється автоматично
 4. **Health checks:** для обох сервісів, щоб залежні контейнери чекали готовності
 5. **Makefile:** команди `up`, `down`, `reset` (з видаленням volumes), `logs`, `ps`
@@ -40,4 +40,4 @@ PostgreSQL готовий для Alembic міграцій (S1-005), MinIO гот
 
 ## Деталі
 
-Повний spec (docker-compose.yaml, init-db.sh, перевірки, альтернативи): **S1-003-docker-compose.md**
+Повний spec (docker-compose.yaml, init-db.sh, перевірки, альтернативи): **T003-docker-compose.md**

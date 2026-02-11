@@ -28,7 +28,7 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 | S1-002 | Dev-інструменти та лінтинг | Конфігурація ruff, mypy, pre-commit hooks. Єдиний стиль коду з першого коміту |
 | S1-003 | Docker Compose середовище | PostgreSQL + pgvector, MinIO (S3-сумісний storage), конфігурація для локальної розробки |
 | S1-004 | Конфігурація додатку | Pydantic Settings: змінні середовища, секрети (API keys), feature flags. `.env.example` |
-| S1-005 | Alembic та початкова міграція | Налаштування Alembic, початкова схема БД: courses, source_materials, modules, lessons, concepts, tasks, slide_video_mappings, llm_calls |
+| S1-005 | Alembic та початкова міграція | Налаштування Alembic, початкова схема БД: courses, source_materials, modules, lessons, concepts, exercises, slide_video_mappings, llm_calls |
 | S1-006 | CI pipeline | GitHub Actions: lint (ruff) → type check (mypy) → unit tests (pytest). Запуск на кожен PR |
 
 ---

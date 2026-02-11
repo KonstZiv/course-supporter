@@ -9,8 +9,9 @@ from course_supporter.config import Environment, Settings
 class TestSettings:
     """Test Settings model validation and computed fields."""
 
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Settings loads with all defaults (no env vars needed)."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
         s = Settings(
             _env_file=None,
         )

@@ -19,6 +19,10 @@ logger = structlog.get_logger()
 
 LogCallback = Callable[[LLMResponse, bool, str | None], Awaitable[None]]
 
+# Return type for _execute_with_fallback and internal chain methods.
+# complete() returns LLMResponse, complete_structured() returns tuple.
+_RouterResult = LLMResponse | tuple[Any, LLMResponse]
+
 
 class AllModelsFailedError(Exception):
     """All models in all attempted strategies failed."""
@@ -83,13 +87,13 @@ class ModelRouter:
         async def call_fn(provider: LLMProvider, req: LLMRequest) -> LLMResponse:
             return await provider.complete(req)
 
-        result: Any = await self._execute_with_fallback(
+        result = await self._execute_with_fallback(
             action,
             strategy,
             request,
             call_fn,
         )
-        return result  # type: ignore[no-any-return]
+        return result  # type: ignore[return-value]
 
     async def complete_structured(
         self,
@@ -117,13 +121,13 @@ class ModelRouter:
         ) -> tuple[Any, LLMResponse]:
             return await provider.complete_structured(req, response_schema)
 
-        result: Any = await self._execute_with_fallback(
+        result = await self._execute_with_fallback(
             action,
             strategy,
             request,
             call_fn,
         )
-        return result  # type: ignore[no-any-return]
+        return result  # type: ignore[return-value]
 
     # -- internal: strategy fallback ------------------------------------
 
@@ -132,8 +136,8 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[Any]],
-    ) -> Any:
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
+    ) -> _RouterResult:
         """Two-level fallback: requested strategy -> default."""
         errors: list[tuple[str, str]] = []
         strategies_tried: list[str] = []
@@ -179,9 +183,9 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[Any]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
         errors: list[tuple[str, str]],
-    ) -> Any | None:
+    ) -> _RouterResult | None:
         """Walk the model chain, calling call_fn for each active provider."""
         chain = self._registry.get_chain(action, strategy)
         for model_cfg in chain:
@@ -227,11 +231,11 @@ class ModelRouter:
         provider: LLMProvider,
         request: LLMRequest,
         model_cfg: ModelConfig,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[Any]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
         errors: list[tuple[str, str]],
         action: str,
         strategy: str,
-    ) -> Any | None:
+    ) -> _RouterResult | None:
         """Retry call_fn up to max_attempts on transient errors."""
         for attempt in range(1, self._max_attempts + 1):
             try:
@@ -297,7 +301,7 @@ class ModelRouter:
 
     @staticmethod
     def _enrich_response(
-        result: Any,
+        result: _RouterResult,
         model_cfg: ModelConfig,
         action: str,
         strategy: str,
@@ -320,14 +324,14 @@ class ModelRouter:
             )
 
     @staticmethod
-    def _set_strategy_path(result: Any, strategy_path: str) -> None:
+    def _set_strategy_path(result: _RouterResult, strategy_path: str) -> None:
         """Set strategy on the LLMResponse inside result."""
         if isinstance(result, LLMResponse):
             result.strategy = strategy_path
         elif isinstance(result, tuple) and len(result) == 2:
             result[1].strategy = strategy_path
 
-    async def _log_success(self, result: Any) -> None:
+    async def _log_success(self, result: _RouterResult) -> None:
         """Log successful LLM call."""
         response: LLMResponse
         if isinstance(result, LLMResponse):

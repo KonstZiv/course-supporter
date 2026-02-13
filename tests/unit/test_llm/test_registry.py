@@ -169,13 +169,6 @@ class TestGetAvailableStrategies:
             cfg.get_available_strategies("nonexistent")
 
 
-class TestEstimateCost:
-    def test_estimate_by_model_id(self, valid_config: dict) -> None:
-        cfg = ModelRegistryConfig.model_validate(valid_config)
-        cost = cfg.estimate_cost("model-a", tokens_in=1000, tokens_out=500)
-        assert cost == pytest.approx(0.002)
-
-
 class TestLoadRegistry:
     def test_load_from_file(self, valid_config: dict, tmp_path: Path) -> None:
         p = tmp_path / "models.yaml"

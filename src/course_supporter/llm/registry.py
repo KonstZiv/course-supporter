@@ -151,26 +151,18 @@ class ModelRegistryConfig(BaseModel):
             raise KeyError(f"Unknown action: '{action}'")
         return list(self.routing[action].keys())
 
-    def estimate_cost(
-        self,
-        model_id: str,
-        tokens_in: int,
-        tokens_out: int,
-    ) -> float:
-        """Estimate cost in USD for a specific model."""
-        return self.models[model_id].estimate_cost(tokens_in, tokens_out)
 
-
-def load_registry(config_path: Path | None = None) -> ModelRegistryConfig:
+def load_registry(config_path: Path) -> ModelRegistryConfig:
     """Load and validate model registry from YAML.
+
+    Args:
+        config_path: Path to models.yaml. Typically comes from
+            Settings.model_registry_path.
 
     Raises:
         FileNotFoundError: if YAML file doesn't exist.
         ValueError: if validation fails.
     """
-    if config_path is None:
-        config_path = Path("config/models.yaml")
-
     if not config_path.exists():
         raise FileNotFoundError(f"Registry config not found: {config_path}")
 

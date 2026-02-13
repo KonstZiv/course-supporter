@@ -14,113 +14,142 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 
 ---
 
+## Поточний стан
+
+- **Epic 1: DONE** — merged to main, 17 тестів (9 config + 8 ORM)
+- **Epic 2: DONE** — merged to main, 67 тестів (14 providers + 22 registry + 24 router + 7 logging)
+- **Total tests: 84**, `make check` зелений
+- **Migrations: 2** (initial schema + action/strategy refactor)
+- **Next: Epic 3** (Ingestion Engine)
+
+---
+
 ## Епіки та задачі
 
-### Epic 1: Project Bootstrap
+### Epic 1: Project Bootstrap ✅
 
 Ініціалізація репозиторію, інструментів розробки, CI та локального середовища. Після цього епіку — будь-який розробник може клонувати репо, запустити `docker compose up` і мати робоче середовище з базою даних.
 
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-001 | Ініціалізація репозиторію | Створення репо, `uv init`, pyproject.toml, структура директорій проєкту, .gitignore, README |
-| S1-002 | Dev-інструменти та лінтинг | Конфігурація ruff, mypy, pre-commit hooks. Єдиний стиль коду з першого коміту |
-| S1-003 | Docker Compose середовище | PostgreSQL + pgvector, MinIO (S3-сумісний storage), конфігурація для локальної розробки |
-| S1-004 | Конфігурація додатку | Pydantic Settings: змінні середовища, секрети (API keys), feature flags. `.env.example` |
-| S1-005 | Alembic та початкова міграція | Налаштування Alembic, початкова схема БД: courses, source_materials, modules, lessons, concepts, exercises, slide_video_mappings, llm_calls |
-| S1-006 | CI pipeline | GitHub Actions: lint (ruff) → type check (mypy) → unit tests (pytest). Запуск на кожен PR |
+| ID | Назва | Статус | Опис |
+| :---- | :---- | :---- | :---- |
+| S1-001 | Ініціалізація репозиторію | ✅ | `uv init`, pyproject.toml, src layout (`src/course_supporter/`), .gitignore, README |
+| S1-002 | Dev-інструменти та лінтинг | ✅ | ruff (E/W/F/I/N/UP/B/SIM/RUF/ASYNC/S/PTH/T20), mypy --strict, pre-commit hooks |
+| S1-003 | Docker Compose середовище | ✅ | `pgvector/pgvector:pg17` + MinIO, `docker-compose.yaml` |
+| S1-004 | Конфігурація додатку | ✅ | Pydantic Settings, `SecretStr` для API keys, `database_url` computed field, `.env.example`. 9 тестів |
+| S1-005 | Alembic та початкова міграція | ✅ | Sync template (psycopg v3), 8 таблиць: courses, source_materials, modules, lessons, concepts, exercises, slide_video_mappings, llm_calls. UUIDv7, pgvector. 8 тестів |
+| S1-006 | CI pipeline | ✅ | GitHub Actions: lint → typecheck → test → ai-review (Gemini). Python 3.13 з `.python-version` |
 
 ---
 
-### Epic 2: Model Registry & LLM Infrastructure
+### Epic 2: Model Registry & LLM Infrastructure ✅
 
-Уніфікований інтерфейс для роботи з кількома LLM-провайдерами з strategy-based routing. Після цього епіку — будь-який компонент системи викликає LLM через `ModelRouter`, не знаючи деталей конкретного провайдера. Routing, fallback (within chain + cross-strategy requested→default), retry з класифікацією помилок, cost tracking — все автоматично.
+Уніфікований інтерфейс для роботи з 4 LLM-провайдерами з strategy-based routing. `ModelRouter` — центральна абстракція: two-level fallback, retry з класифікацією помилок, cost tracking, DB logging.
+
+**Фінальна структура:**
+
+```
+src/course_supporter/llm/
+├── __init__.py           # Public: ModelRouter, create_model_router, LLMRequest, LLMResponse
+├── schemas.py            # LLMRequest, LLMResponse (Pydantic)
+├── factory.py            # create_providers(settings) → dict[str, LLMProvider]
+├── registry.py           # ModelRegistryConfig, load_registry(path), Capability StrEnum
+├── router.py             # ModelRouter, AllModelsFailedError, LogCallback
+├── logging.py            # create_log_callback(session_factory) → LogCallback
+├── setup.py              # create_model_router(settings, session_factory) — one-stop factory
+└── providers/
+    ├── __init__.py        # PROVIDER_REGISTRY: gemini, anthropic, openai, deepseek
+    ├── base.py            # LLMProvider ABC, StructuredOutputError
+    ├── gemini.py          # GeminiProvider (google-genai SDK)
+    ├── anthropic.py       # AnthropicProvider (anthropic SDK)
+    └── openai_compat.py   # OpenAICompatProvider (openai SDK, DeepSeek via base_url)
+```
 
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-007 | LLM Providers ✅ | ABC `LLMProvider` з `complete()`/`complete_structured()`. Реалізації: Gemini, Anthropic, OpenAI/DeepSeek (через `base_url`). `LLMRequest`/`LLMResponse` схеми, `StructuredOutputError`, `PROVIDER_REGISTRY`, `create_providers()` factory |
-| S1-008 | Actions & Model Registry ✅ | `config/models.yaml` — action → strategies → ordered model chains. `ModelConfig`, `Capability` StrEnum, `CostPer1K`. Pydantic-валідація routing при старті. `get_chain(action, strategy)` → `list[ModelConfig]` |
-| S1-009 | ModelRouter ✅ | Two-level fallback: within chain + cross-strategy (requested→default). Класифікація помилок (transient/permanent), retry до `max_attempts`, cost enrichment, `LogCallback` для S1-010. Передає `model_id` провайдеру через `request.model` |
-| S1-010 | LLM Call logging ✅ | Збереження кожного LLM-виклику в таблицю `llm_calls` через `LogCallback`. `task_type` → `action` rename + `strategy` column. Фабрика `create_model_router()` для збирання повного стеку. 7 тестів |
+| ID | Назва | Статус | Тести | Опис |
+| :---- | :---- | :---- | :---- | :---- |
+| S1-007 | LLM Providers | ✅ | 14 | ABC `LLMProvider` + 3 реалізації (Gemini, Anthropic, OpenAI/DeepSeek). `LLMRequest`/`LLMResponse`, `StructuredOutputError`, `PROVIDER_REGISTRY`, `create_providers()` |
+| S1-008 | Actions & Model Registry | ✅ | 22 | `config/models.yaml`: 5 моделей, 4 actions, 3 стратегії. `Capability` StrEnum, `CostPer1K`. Pydantic-валідація routing при старті |
+| S1-009 | ModelRouter | ✅ | 24 | Two-level fallback (within chain + cross-strategy). Permanent/transient error classification, retry до `max_attempts`, cost enrichment, `LogCallback` |
+| S1-010 | LLM Call Logging | ✅ | 7 | `create_log_callback()` → DB persistence. `task_type` → `action` rename + `strategy` column. `create_model_router()` one-stop factory |
 
 ---
 
 ### Epic 3: Ingestion Engine
 
-Обробка всіх типів матеріалів курсу. Після цього епіку — система може прийняти відео, PDF, текст або URL і перетворити кожне джерело на уніфікований `SourceDocument`.
+Обробка всіх типів матеріалів курсу. Після цього епіку — система може прийняти відео, PDF/PPTX, текст або URL і перетворити кожне джерело на уніфікований `SourceDocument`.
 
 **Задачі:**
 
 | ID | Назва | Опис |
 | :---- | :---- | :---- |
 | S1-011 | SourceProcessor інтерфейс | ABC з методом `async def process(source_url) -> SourceDocument`. Pydantic-моделі: `SourceDocument`, `ContentChunk` |
-| S1-012 | VideoProcessor (primary) | Обробка відео через Gemini 2.5 Flash: завантаження через File API, промпт для таймкодованого транскрипту зі structured output |
-| S1-013 | VideoProcessor (fallback) | FFmpeg нарізка на сегменти → Whisper v3 STT → об'єднання у таймкодований транскрипт. Автоматичне переключення при помилці primary |
-| S1-014 | PresentationProcessor | Обробка PDF (PyMuPDF) та PPTX (python-pptx): витягування тексту, рендеринг слайдів у зображення, Vision LLM для діаграм та нетекстового контенту |
-| S1-015 | TextProcessor | Парсинг MD, DOCX, HTML → plain text з чанкуванням по структурі (заголовки, параграфи) |
-| S1-016 | WebProcessor | Fetch HTML → content extraction (trafilatura) → збереження snapshot + оригінального URL → чанкування |
-| S1-017 | MergeStep | Об'єднання кількох `SourceDocument` у єдиний `CourseContext`. Інтеграція даних з `SlideVideoMapping` (ручний маппінг) |
-| S1-018 | SourceMaterial persistence | CRUD для таблиці `source_materials`: створення, оновлення статусу (pending → processing → done/error), збереження метаданих |
+| S1-012 | VideoProcessor (primary) | Обробка відео через Gemini Vision: завантаження через File API, таймкодований транскрипт зі structured output |
+| S1-013 | VideoProcessor (fallback) | FFmpeg нарізка на сегменти → Whisper v3 STT → об'єднання у таймкодований транскрипт |
+| S1-014 | PresentationProcessor | PDF (PyMuPDF) та PPTX (python-pptx): витягування тексту, рендеринг слайдів, Vision LLM для діаграм |
+| S1-015 | TextProcessor | MD, DOCX, HTML → plain text з чанкуванням по структурі |
+| S1-016 | WebProcessor | Fetch HTML → trafilatura → content extraction → snapshot + URL |
+| S1-017 | MergeStep | Об'єднання кількох `SourceDocument` у `CourseContext`. Інтеграція `SlideVideoMapping` |
+| S1-018 | SourceMaterial persistence | CRUD для `source_materials`: статус-машина (pending → processing → done/error) |
 
 ---
 
 ### Epic 4: Architect Agent (Методист)
 
-AI-агент, що аналізує `CourseContext` і генерує структуру курсу. Після цього епіку — система перетворює сирі матеріали на навчальний план з модулями, уроками, концепціями та завданнями.
+AI-агент, що аналізує `CourseContext` і генерує структуру курсу.
 
 **Задачі:**
 
 | ID | Назва | Опис |
 | :---- | :---- | :---- |
-| S1-019 | Pydantic-моделі output | `CourseStructure`, `Module`, `Lesson`, `Concept`, `Task`, `SlideRange`, `WebReference` — повний набір схем для structured output агента |
-| S1-020 | System prompt v1 | Промпт для Architect Agent у `prompts/architect/v1.yaml`. Інструкції: аналіз CourseContext, генерація ієрархії, створення concept cards із cross-references на таймкоди/слайди/URL |
-| S1-021 | ArchitectAgent клас | `async def run(context: CourseContext) -> CourseStructure`. Виклик LLM через ModelRouter, валідація output через Pydantic, retry при невалідному JSON |
-| S1-022 | Збереження структури курсу | Маппінг `CourseStructure` → реляційні таблиці (modules, lessons, concepts, tasks). Транзакційне збереження з FK constraints |
+| S1-019 | Pydantic-моделі output | `CourseStructure`, `Module`, `Lesson`, `Concept`, `Exercise`, `SlideRange`, `WebReference` |
+| S1-020 | System prompt v1 | Промпт у `prompts/architect/v1.yaml` |
+| S1-021 | ArchitectAgent клас | `async def run(context: CourseContext) -> CourseStructure` через ModelRouter |
+| S1-022 | Збереження структури курсу | Маппінг `CourseStructure` → ORM таблиці (modules, lessons, concepts, exercises) |
 
 ---
 
 ### Epic 5: API Layer
 
-REST API для взаємодії з системою. Після цього епіку — зовнішній клієнт може створити курс, додати матеріали, задати slide mapping і отримати структуру курсу.
+REST API для взаємодії з системою.
 
 **Задачі:**
 
 | ID | Назва | Опис |
 | :---- | :---- | :---- |
-| S1-023 | FastAPI bootstrap | Ініціалізація FastAPI app, CORS, health check, error handling, OpenAPI docs |
-| S1-024 | POST /courses | Створення курсу з переліком матеріалів (video_url, slides_url, text_url, web_urls — всі опціональні, мінімум один). Запускає повний pipeline: ingestion → merge → architect → save |
-| S1-025 | POST /courses/{id}/materials | Додавання нового матеріалу до існуючого курсу. Re-run ingestion + merge + architect для оновлення структури |
-| S1-026 | POST /courses/{id}/slide-mapping | Ручний маппінг слайдів до таймкодів відео. Формат: `[{slide_number, video_timecode}]` |
-| S1-027 | GET /courses/{id} | Повертає повну структуру курсу з модулями, уроками, концепціями, завданнями та cross-references |
-| S1-028 | GET /courses/{id}/lessons/{id} | Повертає окремий урок з деталями: концепції, завдання, таймкоди, слайди, веб-посилання |
+| S1-023 | FastAPI bootstrap | CORS, health check, error handling, OpenAPI docs |
+| S1-024 | POST /courses | Створення курсу з матеріалами, запуск pipeline |
+| S1-025 | POST /courses/{id}/materials | Додавання матеріалу, re-run pipeline |
+| S1-026 | POST /courses/{id}/slide-mapping | Ручний маппінг слайдів до таймкодів |
+| S1-027 | GET /courses/{id} | Повна структура курсу |
+| S1-028 | GET /courses/{id}/lessons/{id} | Окремий урок з деталями |
 
 ---
 
 ### Epic 6: Evals & Observability
 
-Інструменти для вимірювання якості та витрат. Після цього епіку — можна оцінити, наскільки добре Architect Agent структурує курс, і скільки це коштує.
+Інструменти для вимірювання якості та витрат.
 
 **Задачі:**
 
 | ID | Назва | Опис |
 | :---- | :---- | :---- |
-| S1-029 | Тестовий датасет | Підготовка набору матеріалів: одне відео (Python tutorial, 30–60 хв) + PDF-презентація + текстовий конспект + 2–3 веб-посилання на документацію |
-| S1-030 | Еталонна розбивка | Ручна експертна структурування тестового курсу: модулі, уроки, концепції з таймкодами та слайдами. Золотий стандарт для порівняння |
-| S1-031 | Eval script | Скрипт порівняння output Architect Agent з еталоном: кількість модулів/уроків, покриття тем, точність таймкодів, наявність cross-references |
-| S1-032 | Cost report | Агрегація даних з `llm_calls`: загальна вартість обробки курсу, breakdown по моделях та етапах pipeline |
-| S1-033 | Structlog setup | Налаштування структурованих логів для всіх компонентів. Формат JSON для подальшого парсингу |
+| S1-029 | Тестовий датасет | Відео + PDF + текст + веб-посилання |
+| S1-030 | Еталонна розбивка | Ручне структурування для порівняння |
+| S1-031 | Eval script | Порівняння output з еталоном |
+| S1-032 | Cost report | Агрегація `llm_calls`: вартість pipeline по моделях |
+| S1-033 | Structlog setup | Структуровані логи JSON |
 
 ---
 
 ## Залежності між епіками
 
 ```
-Epic 1 (Bootstrap)
+Epic 1 (Bootstrap) ✅
   ↓
-Epic 2 (Model Registry)
+Epic 2 (Model Registry) ✅
   ↓
 Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
                                   ↓
@@ -129,22 +158,28 @@ Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
                        Epic 6 (Evals & Observability)
 ```
 
-- **Epic 1** — блокує все, починаємо з нього
-- **Epic 2** — блокує Epic 3 та 4 (вони використовують ModelRouter)
-- **Epic 3 та 4** — можна частково паралелити (Pydantic-моделі з Epic 4 не залежать від Ingestion)
-- **Epic 5** — інтеграція, потребує готових Epic 3 та 4
-- **Epic 6** — потребує робочий pipeline (Epic 5)
+- **Epic 1** — DONE. Блокувало все.
+- **Epic 2** — DONE. Блокувало Epic 3 та 4 (ModelRouter).
+- **Epic 3 та 4** — можна частково паралелити (Pydantic-моделі з Epic 4 не залежать від Ingestion).
+- **Epic 5** — інтеграція, потребує готових Epic 3 та 4.
+- **Epic 6** — потребує робочий pipeline (Epic 5).
 
-## Орієнтовний розподіл часу
+---
 
-| Епік | Днів | Примітка |
-| :---- | :---- | :---- |
-| Epic 1: Bootstrap | 1–2 | Базова інфраструктура |
-| Epic 2: Model Registry | 1–2 | Ключова абстракція |
-| Epic 3: Ingestion | 3–4 | Найбільший обсяг коду, 4 процесори |
-| Epic 4: Architect Agent | 2 | Промпт-інженерія + structured output |
-| Epic 5: API Layer | 1–2 | Інтеграція готових компонентів |
-| Epic 6: Evals | 1–2 | Підготовка датасету + скрипти |
+## Технічний стек (актуальний)
+
+| Категорія | Інструменти |
+| :---- | :---- |
+| Runtime | Python 3.13, src layout |
+| Deps | `uv`, PEP 735 (`[dependency-groups]` for dev, `[project.optional-dependencies]` for media) |
+| API | FastAPI + Pydantic v2 |
+| DB | PostgreSQL 17 (`pgvector/pgvector:pg17`), psycopg v3, SQLAlchemy 2.0+ async, Alembic (sync template) |
+| PKs | UUIDv7 via `uuid-utils` |
+| LLM | 4 providers (Gemini, Anthropic, OpenAI, DeepSeek), ModelRouter з strategy-based fallback |
+| Storage | MinIO (S3-compatible) |
+| Quality | ruff, mypy --strict, pre-commit, pytest + pytest-asyncio (asyncio_mode=auto) |
+| CI | GitHub Actions: lint → typecheck → test → ai-review (Gemini) |
+| Logging | structlog |
 
 ---
 
@@ -155,8 +190,8 @@ Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
 - ✅ VideoProcessor автоматично fallback-ає на Whisper при помилці Gemini
 - ✅ ModelRouter коректно обробляє fallback між моделями
 - ✅ Slide-video mapping працює через ручний endpoint
-- ✅ Output відповідає Pydantic-схемам (CourseStructure → Module → Lesson → Concept → Task)
-- ✅ Кожен LLM-виклик залогований в `llm_calls` з model/tokens/cost
+- ✅ Output відповідає Pydantic-схемам (CourseStructure → Module → Lesson → Concept → Exercise)
+- ✅ Кожен LLM-виклик залогований в `llm_calls` з model/tokens/cost/action/strategy
 - ✅ Eval script запущений на тестовому датасеті, результати задокументовані
 - ✅ Cost одного повного прогону відомий
 - ✅ CI зелений (ruff + mypy + pytest)
@@ -169,7 +204,7 @@ Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
 | Ризик | Ймовірність | Мітигація |
 | :---- | :---- | :---- |
 | Gemini File API нестабільний для великих відео | Висока | Fallback pipeline з Whisper готовий з першого дня |
-| Structured output від LLM невалідний JSON | Середня | Pydantic retry + prompt iteration |
+| Structured output від LLM невалідний JSON | Середня | Pydantic retry + prompt iteration (ModelRouter retries) |
 | Обробка PPTX з нестандартним форматуванням | Середня | Фокус на стандартних PPTX, edge cases — в backlog |
 | Scope creep через 4 типи процесорів | Середня | Строгий Definition of Done, TextProcessor та WebProcessor — найпростіші, робити першими |
 | API keys rate limits при тестуванні | Низька | Мокані відповіді для unit tests, реальні API тільки для eval |

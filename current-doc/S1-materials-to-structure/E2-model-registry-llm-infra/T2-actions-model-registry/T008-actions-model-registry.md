@@ -17,9 +17,10 @@ YAML-конфігурація з трьома секціями: **models** (до
 - [ ] `actions` декларують вимоги (`requires: [vision, structured_output]`)
 - [ ] `routing` підтримує named strategies: `default`, `quality`, `budget` та довільні
 - [ ] Валідація: модель у routing chain має capabilities з `requires` відповідного action
-- [ ] `get_models_for_action("video_analysis")` → default chain
-- [ ] `get_models_for_action("video_analysis", strategy="quality")` → quality chain
-- [ ] `estimate_cost(model_id, tokens_in, tokens_out)` → USD
+- [ ] `get_chain("video_analysis")` → default chain як `list[ModelConfig]`
+- [ ] `get_chain("video_analysis", strategy="quality")` → quality chain
+- [ ] `ModelConfig.estimate_cost(tokens_in, tokens_out)` → USD
+- [ ] `ModelConfig` має `.model_id`, `.provider`, `.estimate_cost()` — інтерфейс для ModelRouter (S1-009)
 - [ ] Невалідний YAML → зрозуміла `ValidationError` при старті
 - [ ] Додати новий action/model/strategy = зміна YAML, без зміни коду
 
@@ -499,3 +500,14 @@ tests/unit/test_llm/
 - **Fallback між strategies** — не тут, а в ModelRouter (S1-009). Registry тільки дає chain для конкретної strategy.
 - **Невідома strategy** → fallback на default chain, не помилка. Forward compatibility.
 - **Валідація capabilities** — при завантаженні YAML, не в runtime. Невалідний конфіг = додаток не стартує.
+
+---
+
+## Адаптація під S1-009 (ModelRouter)
+
+Зміни відносно оригінальної специфікації для сумісності з S1-009:
+
+1. **`ModelCapability` StrEnum → `Capability`** — звільняє ім'я `ModelCapability` (S1-009 використовує його інакше). Фактично S1-009 працює з `ModelConfig` напряму.
+2. **`get_models_for_action()` → `get_chain()`** — метод, який S1-009 викликає. Повертає `list[ModelConfig]` (не tuples).
+3. **`ModelConfig.model_id`** — заповнюється з dict key при валідації. Router потребує `.model_id`, `.provider`, `.estimate_cost()` на кожному елементі chain.
+4. **S1-009 буде імпортувати** `ModelConfig` та `ModelRegistryConfig` з `registry.py` (не `ModelCapability`).

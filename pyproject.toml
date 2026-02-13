@@ -127,6 +127,10 @@ module = "whisper.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "bs4.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "pgvector.*"
 ignore_missing_imports = true
 

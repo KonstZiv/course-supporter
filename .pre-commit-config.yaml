@@ -16,6 +16,7 @@ repos:
           - sqlalchemy[asyncio]>=2.0.37
           - pgvector>=0.4
           - uuid-utils>=0.9
+          - beautifulsoup4>=4.12
           - structlog>=25.1
           - google-genai>=1.12
           - anthropic>=0.49

@@ -222,7 +222,8 @@ class LLMCall(Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    task_type: Mapped[str] = mapped_column(String(100))
+    action: Mapped[str] = mapped_column(String(100), default="")
+    strategy: Mapped[str] = mapped_column(String(50), default="default")
     provider: Mapped[str] = mapped_column(String(50))
     model_id: Mapped[str] = mapped_column(String(100))
     prompt_version: Mapped[str | None] = mapped_column(String(50))

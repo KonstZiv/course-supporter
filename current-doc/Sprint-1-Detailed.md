@@ -44,7 +44,7 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 | S1-007 | LLM Providers ✅ | ABC `LLMProvider` з `complete()`/`complete_structured()`. Реалізації: Gemini, Anthropic, OpenAI/DeepSeek (через `base_url`). `LLMRequest`/`LLMResponse` схеми, `StructuredOutputError`, `PROVIDER_REGISTRY`, `create_providers()` factory |
 | S1-008 | Actions & Model Registry ✅ | `config/models.yaml` — action → strategies → ordered model chains. `ModelConfig`, `Capability` StrEnum, `CostPer1K`. Pydantic-валідація routing при старті. `get_chain(action, strategy)` → `list[ModelConfig]` |
 | S1-009 | ModelRouter ✅ | Two-level fallback: within chain + cross-strategy (requested→default). Класифікація помилок (transient/permanent), retry до `max_attempts`, cost enrichment, `LogCallback` для S1-010. Передає `model_id` провайдеру через `request.model` |
-| S1-010 | LLM Call logging | Збереження кожного LLM-виклику в таблицю `llm_calls` через `LogCallback`. Фабрика `create_model_router()` для збирання повного стеку |
+| S1-010 | LLM Call logging ✅ | Збереження кожного LLM-виклику в таблицю `llm_calls` через `LogCallback`. `task_type` → `action` rename + `strategy` column. Фабрика `create_model_router()` для збирання повного стеку. 7 тестів |
 
 ---
 

@@ -21,7 +21,7 @@
 1. **LLM Providers** (S1-007) ✅ — ABC `LLMProvider` з методами `complete()` та `complete_structured()`. Реалізації: `GeminiProvider`, `AnthropicProvider`, `OpenAICompatProvider` (OpenAI + DeepSeek через `base_url`). Спільні схеми `LLMRequest`/`LLMResponse`. `StructuredOutputError` для невалідного JSON. `PROVIDER_REGISTRY` dict + `create_providers(settings)` factory. Runtime enable/disable.
 2. **Actions & Model Registry** (S1-008) ✅ — `config/models.yaml` з трьома секціями: `models` (5 моделей з `Capability` StrEnum та `CostPer1K`), `actions` (4 types з вимогами), `routing` (action → strategies → ordered model chains). `ModelRegistryConfig` з Pydantic-валідацією при старті: перевірка capabilities, unknown models/actions, empty chains. `get_chain(action, strategy)` → `list[ModelConfig]`. Шлях конфігу — `Settings.model_registry_path`.
 3. **ModelRouter** (S1-009) ✅ — центральна точка виклику LLM. Приймає action + prompt + optional strategy, обирає ланцюжок моделей через `registry.get_chain()`, передає `model_id` провайдеру через `request.model`. Two-level fallback: within chain (модель 1 → 2) та cross-strategy (requested → default). Класифікація помилок: permanent (401, 403) → skip одразу, transient (429, 500) → retry до `max_attempts`. Cost enrichment через `ModelConfig.estimate_cost()`. `LogCallback` для S1-010. DRY: `complete()`/`complete_structured()` через спільний `_execute_with_fallback`.
-4. **LLM Call Logging** (S1-010) — автоматичне збереження кожного виклику в таблицю `llm_calls` (action, provider, model, tokens, latency, cost, strategy, success/fail). Фабрика `create_model_router()` для збирання повного стеку.
+4. **LLM Call Logging** (S1-010) ✅ — автоматичне збереження кожного виклику в таблицю `llm_calls` (action, provider, model, tokens, latency, cost, strategy, success/fail). Фабрика `create_model_router()` для збирання повного стеку. `task_type` перейменовано на `action`, додано `strategy`. 7 тестів.
 
 ## Для чого
 
@@ -39,11 +39,11 @@ ModelRouter — ключова абстракція проєкту. Усі на�
 - [x] `router.complete("video_analysis", prompt)` — default strategy, повертає відповідь від першого доступного провайдера
 - [x] `router.complete("video_analysis", prompt, strategy="quality")` — використовує quality chain
 - [x] При помилці всіх моделей у requested chain — fallback на default strategy (якщо requested != default)
-- [ ] Кожен виклик створює запис в `llm_calls` з action/provider/model/tokens/latency/cost/strategy (S1-010)
+- [x] Кожен виклик створює запис в `llm_calls` з action/provider/model/tokens/latency/cost/strategy (S1-010)
 - [x] `config/models.yaml` валідується при старті: невалідний конфіг = помилка; модель без потрібних capabilities для action = помилка
 - [x] Новий провайдер = новий клас + рядок в `PROVIDER_REGISTRY`, без зміни router.py
 - [x] Новий action = запис в YAML, без зміни коду
-- [x] `uv run pytest tests/unit/test_llm/` — 60 тестів зелені (14 providers + 22 registry + 24 router)
+- [x] `uv run pytest tests/unit/test_llm/` — 67 тестів зелені (14 providers + 22 registry + 24 router + 7 logging)
 - [x] `make check` проходить
 
 ## Залежності

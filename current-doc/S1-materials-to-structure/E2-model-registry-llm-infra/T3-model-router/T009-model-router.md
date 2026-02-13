@@ -429,3 +429,14 @@ class TestCostAndLogging:
 - **`strategy="quality→default"`** — response.strategy показує фактичний шлях для дебагу та аналітики.
 - **Disabled provider** — skip, не error. Runtime відключення без впливу на інші.
 - **LogCallback**: `(LLMResponse, bool, str | None)`. Action/strategy вже в LLMResponse.
+
+---
+
+## Додаткова вимога (з review S1-007): централізована обробка помилок API
+
+Провайдери (S1-007) — тонкі обгортки над SDK. Вони прокидають помилки API напряму (мережеві, 429, auth, timeout). Централізована обробка цих помилок — відповідальність ModelRouter:
+
+- **`_try_with_retries`** ловить `Exception` від провайдерів і вирішує: retry, fallback на наступну модель, або disable провайдер
+- **Класифікація помилок**: розрізняти transient (мережа, 429, 500) vs permanent (401 auth, 400 bad request) — transient = retry, permanent = skip модель одразу
+- **Auto-disable**: після N послідовних помилок від одного провайдера — `provider.disable(reason)` з логуванням
+- **`StructuredOutputError`** (з S1-007 `_parse_structured`) — retry з тим самим провайдером (LLM може повернути валідний JSON з другої спроби)

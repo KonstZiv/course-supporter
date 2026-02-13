@@ -161,10 +161,13 @@ def load_registry(config_path: Path) -> ModelRegistryConfig:
 
     Raises:
         FileNotFoundError: if YAML file doesn't exist.
-        ValueError: if validation fails.
+        ValueError: if YAML parsing or validation fails.
     """
     if not config_path.exists():
         raise FileNotFoundError(f"Registry config not found: {config_path}")
 
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise ValueError(f"Failed to parse registry config '{config_path}': {e}") from e
     return ModelRegistryConfig.model_validate(raw)

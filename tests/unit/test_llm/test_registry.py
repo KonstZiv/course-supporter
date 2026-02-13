@@ -180,6 +180,12 @@ class TestLoadRegistry:
         with pytest.raises(FileNotFoundError):
             load_registry(tmp_path / "nope.yaml")
 
+    def test_invalid_yaml(self, tmp_path: Path) -> None:
+        p = tmp_path / "bad.yaml"
+        p.write_text("models:\n  - :\n  bad: [unclosed", encoding="utf-8")
+        with pytest.raises(ValueError, match="Failed to parse"):
+            load_registry(p)
+
     def test_real_config_file(self) -> None:
         """Validate the actual config/models.yaml."""
         cfg_path = Path("config/models.yaml")

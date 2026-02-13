@@ -1,8 +1,9 @@
 """Tests for LLM providers."""
 
 import pytest
+from pydantic import BaseModel
 
-from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 
@@ -48,6 +49,49 @@ class TestLLMProviderInterface:
         assert p.enabled is False
         p.enable()
         assert p.enabled is True
+
+
+class TestParseStructured:
+    """Verify _parse_structured helper and StructuredOutputError."""
+
+    class _SimpleSchema(BaseModel):
+        name: str
+        value: int
+
+    def _make_provider(self) -> LLMProvider:
+        class DummyProvider(LLMProvider):
+            provider_name = "dummy"
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                return LLMResponse(content="", provider="dummy", model_id="d")
+
+            async def complete_structured(self, request, schema):  # type: ignore[override]
+                return None, LLMResponse(content="", provider="dummy", model_id="d")
+
+        return DummyProvider()
+
+    def test_parse_valid_json(self) -> None:
+        p = self._make_provider()
+        raw = '{"name": "test", "value": 42}'
+        result = p._parse_structured(raw, self._SimpleSchema)
+        assert result.name == "test"
+        assert result.value == 42
+
+    def test_parse_invalid_json_raises_structured_output_error(self) -> None:
+        p = self._make_provider()
+        with pytest.raises(StructuredOutputError) as exc_info:
+            p._parse_structured("not valid json", self._SimpleSchema)
+
+        err = exc_info.value
+        assert err.provider == "dummy"
+        assert err.schema_name == "_SimpleSchema"
+        assert "not valid json" in err.raw_content
+        assert err.__cause__ is not None
+
+    def test_parse_wrong_schema_raises_structured_output_error(self) -> None:
+        p = self._make_provider()
+        with pytest.raises(StructuredOutputError):
+            p._parse_structured('{"name": "test"}', self._SimpleSchema)
 
 
 class TestProviderRegistry:

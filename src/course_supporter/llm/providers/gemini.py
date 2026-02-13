@@ -19,7 +19,7 @@ class GeminiProvider(LLMProvider):
 
     provider_name = "gemini"
 
-    def __init__(self, api_key: str, default_model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: str, default_model: str) -> None:
         super().__init__()
         self._client = genai.Client(api_key=api_key)
         self._default_model = default_model
@@ -80,5 +80,5 @@ class GeminiProvider(LLMProvider):
             latency_ms=timer.elapsed_ms,
         )
 
-        parsed = response_schema.model_validate_json(response.text or "{}")
+        parsed = self._parse_structured(response.text or "{}", response_schema)
         return parsed, llm_response

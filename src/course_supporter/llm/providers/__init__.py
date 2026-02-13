@@ -11,7 +11,7 @@ That's it -- no changes to factory.py or router.py needed.
 """
 
 from course_supporter.llm.providers.anthropic import AnthropicProvider
-from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 
@@ -28,4 +28,5 @@ __all__ = [
     "GeminiProvider",
     "LLMProvider",
     "OpenAICompatProvider",
+    "StructuredOutputError",
 ]

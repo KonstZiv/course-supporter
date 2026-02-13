@@ -19,8 +19,8 @@ class OpenAICompatProvider(LLMProvider):
     def __init__(
         self,
         api_key: str,
+        default_model: str,
         provider_name: str = "openai",
-        default_model: str = "gpt-4o-mini",
         base_url: str | None = None,
     ) -> None:
         super().__init__()
@@ -41,6 +41,10 @@ class OpenAICompatProvider(LLMProvider):
         with self._measure_latency() as timer:
             response = await self._client.chat.completions.create(
                 model=self._default_model,
+                # OpenAI SDK expects union of typed message params
+                # (ChatCompletionSystemMessageParam | ...), but accepts
+                # plain dicts at runtime. Using dicts keeps code simple
+                # and avoids coupling to SDK-specific message types.
                 messages=messages,  # type: ignore[arg-type]
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
@@ -75,6 +79,9 @@ class OpenAICompatProvider(LLMProvider):
         messages.append({"role": "user", "content": request.prompt})
 
         with self._measure_latency() as timer:
+            # call-overload: OpenAI SDK overloads don't match dict-based
+            # messages + dict-based response_format simultaneously, but
+            # both are accepted at runtime per OpenAI API docs.
             response = await self._client.chat.completions.create(  # type: ignore[call-overload]
                 model=self._default_model,
                 messages=messages,
@@ -93,5 +100,5 @@ class OpenAICompatProvider(LLMProvider):
             tokens_out=usage.completion_tokens if usage else None,
             latency_ms=timer.elapsed_ms,
         )
-        parsed = response_schema.model_validate_json(llm_response.content)
+        parsed = self._parse_structured(llm_response.content, response_schema)
         return parsed, llm_response

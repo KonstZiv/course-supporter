@@ -16,9 +16,7 @@ class AnthropicProvider(LLMProvider):
 
     provider_name = "anthropic"
 
-    def __init__(
-        self, api_key: str, default_model: str = "claude-sonnet-4-20250514"
-    ) -> None:
+    def __init__(self, api_key: str, default_model: str) -> None:
         super().__init__()
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._default_model = default_model
@@ -66,7 +64,7 @@ class AnthropicProvider(LLMProvider):
         )
         llm_response = await self.complete(modified_request)
         raw = _strip_markdown_json(llm_response.content)
-        parsed = response_schema.model_validate_json(raw)
+        parsed = self._parse_structured(raw, response_schema)
         return parsed, llm_response
 
 

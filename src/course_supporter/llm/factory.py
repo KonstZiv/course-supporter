@@ -17,12 +17,21 @@ logger = structlog.get_logger()
 PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "gemini": {
         "key_attr": "gemini_api_key",
+        "extra_kwargs": {
+            "default_model": "gemini-2.5-flash",
+        },
     },
     "anthropic": {
         "key_attr": "anthropic_api_key",
+        "extra_kwargs": {
+            "default_model": "claude-sonnet-4-20250514",
+        },
     },
     "openai": {
         "key_attr": "openai_api_key",
+        "extra_kwargs": {
+            "default_model": "gpt-4o-mini",
+        },
     },
     "deepseek": {
         "key_attr": "deepseek_api_key",

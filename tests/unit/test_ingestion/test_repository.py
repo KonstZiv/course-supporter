@@ -100,6 +100,22 @@ class TestGetByCourseId:
 
         assert len(result) == 2
 
+    async def test_returns_empty_list(self) -> None:
+        """Course with no materials returns empty list."""
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value = mock_scalars
+
+        session = AsyncMock()
+        session.execute.return_value = mock_result
+
+        repo = SourceMaterialRepository(session)
+        result = await repo.get_by_course_id(uuid.uuid4())
+
+        assert result == []
+
 
 class TestUpdateStatus:
     async def test_pending_to_processing(self) -> None:
@@ -181,6 +197,16 @@ class TestUpdateStatus:
         )
 
         assert result.content_snapshot == "<html>snapshot</html>"
+
+    async def test_terminal_state_error(self) -> None:
+        """error → any raises ValueError."""
+        mat = _make_material(status="error")
+        session = AsyncMock()
+        session.get.return_value = mat
+
+        repo = SourceMaterialRepository(session)
+        with pytest.raises(ValueError, match="Invalid status transition"):
+            await repo.update_status(mat.id, "pending")
 
 
 class TestDelete:

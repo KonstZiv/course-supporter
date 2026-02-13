@@ -5,16 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import SourceMaterial
+
+logger = structlog.get_logger()
 
 # Valid status transitions: current_status → set of allowed next statuses
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"processing"},
     "processing": {"done", "error"},
     "done": set(),  # terminal state
+    # TODO: consider error → pending for retry workflow
     "error": set(),  # terminal state
 }
 

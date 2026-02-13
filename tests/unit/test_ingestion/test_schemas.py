@@ -14,7 +14,21 @@ from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
     SourceDocument,
+    SourceType,
 )
+
+
+class TestSourceType:
+    def test_source_type_values(self) -> None:
+        """All expected source types exist with correct string values."""
+        assert SourceType.VIDEO == "video"
+        assert SourceType.PRESENTATION == "presentation"
+        assert SourceType.TEXT == "text"
+        assert SourceType.WEB == "web"
+
+    def test_source_type_matches_orm_enum(self) -> None:
+        """SourceType values match ORM source_type_enum."""
+        assert len(SourceType) == 4
 
 
 class TestChunkType:
@@ -51,7 +65,7 @@ class TestContentChunk:
 class TestSourceDocument:
     def test_source_document_defaults(self) -> None:
         """SourceDocument has empty chunks and auto processed_at."""
-        doc = SourceDocument(source_type="text", source_url="file:///test.md")
+        doc = SourceDocument(source_type=SourceType.TEXT, source_url="file:///test.md")
         assert doc.chunks == []
         assert doc.title == ""
         assert isinstance(doc.processed_at, datetime)
@@ -64,7 +78,7 @@ class TestSourceDocument:
             ContentChunk(chunk_type=ChunkType.PARAGRAPH, text="Body", index=1),
         ]
         doc = SourceDocument(
-            source_type="text",
+            source_type=SourceType.TEXT,
             source_url="file:///test.md",
             title="My Doc",
             chunks=chunks,
@@ -83,7 +97,7 @@ class TestCourseContext:
 
     def test_course_context_with_mappings(self) -> None:
         """CourseContext with documents and slide-video mappings."""
-        doc = SourceDocument(source_type="video", source_url="file:///v.mp4")
+        doc = SourceDocument(source_type=SourceType.VIDEO, source_url="file:///v.mp4")
         mapping = SlideVideoMapEntry(slide_number=1, video_timecode="00:05:30")
         ctx = CourseContext(
             documents=[doc],

@@ -5,6 +5,7 @@ from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
     SourceDocument,
+    SourceType,
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "CourseContext",
     "SlideVideoMapEntry",
     "SourceDocument",
+    "SourceType",
 ]

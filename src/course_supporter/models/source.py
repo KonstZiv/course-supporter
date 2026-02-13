@@ -7,6 +7,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class SourceType(StrEnum):
+    """Types of source materials. Mirrors ORM source_type_enum."""
+
+    VIDEO = "video"
+    PRESENTATION = "presentation"
+    TEXT = "text"
+    WEB = "web"
+
+
 class ChunkType(StrEnum):
     """Types of content chunks produced by processors."""
 
@@ -40,7 +49,7 @@ class SourceDocument(BaseModel):
     (one video, one PDF, etc.) as a list of ContentChunks.
     """
 
-    source_type: str
+    source_type: SourceType
     source_url: str
     title: str = ""
     chunks: list[ContentChunk] = Field(default_factory=list)

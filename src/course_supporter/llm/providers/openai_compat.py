@@ -33,6 +33,7 @@ class OpenAICompatProvider(LLMProvider):
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API."""
+        model = request.model or self._default_model
         messages: list[dict[str, str]] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
@@ -40,7 +41,7 @@ class OpenAICompatProvider(LLMProvider):
 
         with self._measure_latency() as timer:
             response = await self._client.chat.completions.create(
-                model=self._default_model,
+                model=model,
                 # OpenAI SDK expects union of typed message params
                 # (ChatCompletionSystemMessageParam | ...), but accepts
                 # plain dicts at runtime. Using dicts keeps code simple
@@ -55,7 +56,7 @@ class OpenAICompatProvider(LLMProvider):
         return LLMResponse(
             content=choice.message.content or "",
             provider=self.provider_name,
-            model_id=self._default_model,
+            model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
             latency_ms=timer.elapsed_ms,
@@ -67,6 +68,7 @@ class OpenAICompatProvider(LLMProvider):
         response_schema: type[BaseModel],
     ) -> tuple[Any, LLMResponse]:
         """Generate structured output via JSON mode."""
+        model = request.model or self._default_model
         messages: list[dict[str, str]] = []
         schema_json = json.dumps(
             response_schema.model_json_schema(), ensure_ascii=False
@@ -83,7 +85,7 @@ class OpenAICompatProvider(LLMProvider):
             # messages + dict-based response_format simultaneously, but
             # both are accepted at runtime per OpenAI API docs.
             response = await self._client.chat.completions.create(  # type: ignore[call-overload]
-                model=self._default_model,
+                model=model,
                 messages=messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
@@ -95,7 +97,7 @@ class OpenAICompatProvider(LLMProvider):
         llm_response = LLMResponse(
             content=choice.message.content or "",
             provider=self.provider_name,
-            model_id=self._default_model,
+            model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
             latency_ms=timer.elapsed_ms,

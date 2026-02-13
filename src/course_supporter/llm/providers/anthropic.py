@@ -23,8 +23,9 @@ class AnthropicProvider(LLMProvider):
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Anthropic."""
+        model = request.model or self._default_model
         kwargs: dict[str, Any] = {
-            "model": self._default_model,
+            "model": model,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "messages": [{"role": "user", "content": request.prompt}],
@@ -38,7 +39,7 @@ class AnthropicProvider(LLMProvider):
         return LLMResponse(
             content=response.content[0].text if response.content else "",
             provider=self.provider_name,
-            model_id=self._default_model,
+            model_id=model,
             tokens_in=response.usage.input_tokens,
             tokens_out=response.usage.output_tokens,
             latency_ms=timer.elapsed_ms,

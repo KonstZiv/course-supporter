@@ -26,6 +26,7 @@ class GeminiProvider(LLMProvider):
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Gemini."""
+        model = request.model or self._default_model
         config = types.GenerateContentConfig(
             temperature=request.temperature,
             max_output_tokens=request.max_tokens,
@@ -34,7 +35,7 @@ class GeminiProvider(LLMProvider):
 
         with self._measure_latency() as timer:
             response = await self._client.aio.models.generate_content(
-                model=self._default_model,
+                model=model,
                 contents=request.prompt,
                 config=config,
             )
@@ -43,7 +44,7 @@ class GeminiProvider(LLMProvider):
         return LLMResponse(
             content=response.text or "",
             provider=self.provider_name,
-            model_id=self._default_model,
+            model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
             tokens_out=usage.candidates_token_count if usage else None,
             latency_ms=timer.elapsed_ms,
@@ -55,6 +56,7 @@ class GeminiProvider(LLMProvider):
         response_schema: type[BaseModel],
     ) -> tuple[Any, LLMResponse]:
         """Generate structured output with native Gemini JSON mode."""
+        model = request.model or self._default_model
         config = types.GenerateContentConfig(
             temperature=request.temperature,
             max_output_tokens=request.max_tokens,
@@ -65,7 +67,7 @@ class GeminiProvider(LLMProvider):
 
         with self._measure_latency() as timer:
             response = await self._client.aio.models.generate_content(
-                model=self._default_model,
+                model=model,
                 contents=request.prompt,
                 config=config,
             )
@@ -74,7 +76,7 @@ class GeminiProvider(LLMProvider):
         llm_response = LLMResponse(
             content=response.text or "",
             provider=self.provider_name,
-            model_id=self._default_model,
+            model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
             tokens_out=usage.candidates_token_count if usage else None,
             latency_ms=timer.elapsed_ms,

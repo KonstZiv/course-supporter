@@ -20,7 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Rename task_type → action, add strategy column."""
-    op.alter_column("llm_calls", "task_type", new_column_name="action")
+    op.alter_column(
+        "llm_calls",
+        "task_type",
+        new_column_name="action",
+        existing_type=sa.String(length=100),
+        nullable=False,
+    )
     op.add_column(
         "llm_calls",
         sa.Column(

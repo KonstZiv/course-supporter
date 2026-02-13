@@ -8,6 +8,7 @@ DB errors are swallowed and logged -- LLM call flow is never interrupted.
 """
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.llm.router import LogCallback
@@ -51,7 +52,7 @@ def create_log_callback(
             async with session_factory() as session:
                 session.add(record)
                 await session.commit()
-        except Exception:
+        except (SQLAlchemyError, OSError):
             logger.error(
                 "llm_call_log_failed",
                 provider=response.provider,

@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from course_supporter.llm.logging import create_log_callback
 from course_supporter.llm.schemas import LLMResponse
@@ -102,7 +103,9 @@ class TestLogCallback:
 
     async def test_db_error_swallowed(self) -> None:
         factory, session = _mock_session_factory()
-        session.commit = AsyncMock(side_effect=RuntimeError("connection lost"))
+        session.commit = AsyncMock(
+            side_effect=OperationalError("connection lost", params=None, orig=None)
+        )
         callback = create_log_callback(factory)
 
         resp = _response()

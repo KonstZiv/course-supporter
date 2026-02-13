@@ -16,17 +16,18 @@
 
 Чотири процесори + merge + persistence:
 
-1. **SourceProcessor ABC + Pydantic schemas** (S1-011) — базовий інтерфейс та моделі даних:
-   - `SourceProcessor` ABC в `ingestion/base.py`: `async def process(source: SourceMaterial, router: ModelRouter) -> SourceDocument`
-   - Pydantic-моделі в `models/source.py`: `SourceDocument`, `ContentChunk` (type, text, metadata dict)
-   - Pydantic-моделі в `models/course.py`: `CourseContext` (list of SourceDocument + SlideVideoMapping)
-2. **VideoProcessor primary** (S1-012) — Gemini Vision через ModelRouter (`action="video_analysis"`): завантаження відео через File API → таймкодований транскрипт зі structured output.
-3. **VideoProcessor fallback** (S1-013) — FFmpeg → сегменти → Whisper v3 STT → об'єднання. Автоматичне переключення при помилці Gemini. Потребує FFmpeg (system) + openai-whisper (media group).
-4. **PresentationProcessor** (S1-014) — PDF (PyMuPDF) та PPTX (python-pptx): витягування тексту, рендеринг слайдів у зображення, Vision LLM через ModelRouter (`action="presentation_analysis"`) для діаграм/графіків.
-5. **TextProcessor** (S1-015) — MD (raw read), DOCX (python-docx), HTML (beautifulsoup4) → plain text з чанкуванням по структурі документа (заголовки, параграфи). НЕ використовує LLM.
-6. **WebProcessor** (S1-016) — Fetch HTML → trafilatura → content extraction → snapshot збереження + URL preservation. НЕ використовує LLM.
-7. **MergeStep** (S1-017) — об'єднання кількох `SourceDocument` у `CourseContext`. Інтеграція `SlideVideoMapping` (ручний маппінг слайдів до таймкодів).
-8. **SourceMaterial persistence** (S1-018) — Repository pattern в `storage/repositories.py`: CRUD для `source_materials` ORM, статус-машина (pending → processing → done/error), збереження `content_snapshot`.
+1. **SourceProcessor ABC + Pydantic schemas** ([S1-011](T1-source-processor/T011-source-processor.md)) — базовий інтерфейс та моделі даних:
+   - `SourceProcessor` ABC в `ingestion/base.py`: `async def process(source: SourceMaterial, *, router: ModelRouter | None = None) -> SourceDocument`
+   - `ProcessingError`, `UnsupportedFormatError` — custom exceptions
+   - Pydantic-моделі в `models/source.py`: `ChunkType` (StrEnum, 7 типів), `ContentChunk` (type, text, index, metadata dict), `SourceDocument`
+   - Pydantic-моделі в `models/course.py`: `SlideVideoMapEntry`, `CourseContext` (list of SourceDocument + mappings)
+2. **VideoProcessor primary** ([S1-012](T2-video-primary/T012-video-primary.md)) — `GeminiVideoProcessor`: upload відео через Gemini File API → `router.complete(action="video_analysis")` → parse timestamped transcript → `ContentChunk(TRANSCRIPT)`. `VideoProcessor` — composition shell з fallback placeholder.
+3. **VideoProcessor fallback** ([S1-013](T3-video-fallback/T013-video-fallback.md)) — `WhisperVideoProcessor`: FFmpeg subprocess → audio extraction → Whisper transcribe (в thread pool) → segments → `ContentChunk(TRANSCRIPT)`. Підключення до `VideoProcessor` як автоматичний fallback при збої Gemini.
+4. **PresentationProcessor** ([S1-014](T4-presentation/T014-presentation.md)) — PDF (`fitz.open()` → page text + optional pixmap → Vision LLM) та PPTX (`Presentation()` → shapes text). Vision LLM через `router.complete(action="presentation_analysis")` для `SLIDE_DESCRIPTION` chunks. Graceful degradation при збої LLM.
+5. **TextProcessor** ([S1-015](T5-text/T015-text.md)) — MD (regex heading parse), DOCX (`docx.Document` heading styles), HTML (`BeautifulSoup` h1..h6 + p), TXT → `HEADING` + `PARAGRAPH` chunks. НЕ використовує LLM.
+6. **WebProcessor** ([S1-016](T6-web/T016-web.md)) — `trafilatura.fetch_url()` + `trafilatura.extract()` → `WEB_CONTENT` chunks. Raw HTML → `metadata["content_snapshot"]`. Domain + fetched_at у metadata. НЕ використовує LLM.
+7. **MergeStep** ([S1-017](T7-merge/T017-merge.md)) — синхронний (не async). Сортування documents за пріоритетом (video→presentation→text→web). Cross-references: slide SLIDE_TEXT chunks збагачуються `video_timecode` з `SlideVideoMapEntry` mappings.
+8. **SourceMaterial persistence** ([S1-018](T8-source-persistence/T018-source-persistence.md)) — `SourceMaterialRepository` з CRUD (create, get_by_id, get_by_course_id, update_status, delete). Status machine з валідацією переходів. `flush()` замість `commit()` — caller контролює transaction.
 
 ## Для чого
 
@@ -62,14 +63,14 @@ Ingestion — це "вхідна воронка" системи. Якість р
 
 | ID | Назва | Естімейт | Примітка |
 |:---|:---|:---|:---|
-| S1-011 | SourceProcessor інтерфейс | 0.25 дня | ABC + Pydantic schemas (SourceDocument, ContentChunk, CourseContext) |
-| S1-012 | VideoProcessor (primary) | 0.5 дня | Gemini Vision через ModelRouter |
-| S1-013 | VideoProcessor (fallback) | 0.5 дня | FFmpeg + Whisper, system dep |
-| S1-014 | PresentationProcessor | 0.5 дня | PDF + PPTX + Vision LLM |
-| S1-015 | TextProcessor | 0.25 дня | Найпростіший, без LLM |
-| S1-016 | WebProcessor | 0.25 дня | trafilatura, без LLM |
-| S1-017 | MergeStep | 0.5 дня | cross-references logic |
-| S1-018 | SourceMaterial persistence | 0.25 дня | Repository + status machine |
+| S1-011 | SourceProcessor інтерфейс | 0.25 дня | [spec](T1-source-processor/T011-source-processor.md) · [issue](T1-source-processor/T011-github-issue.md) — ABC + schemas (~8 тестів) |
+| S1-012 | VideoProcessor (primary) | 0.5 дня | [spec](T2-video-primary/T012-video-primary.md) · [issue](T2-video-primary/T012-github-issue.md) — GeminiVideoProcessor + VideoProcessor shell (~8 тестів) |
+| S1-013 | VideoProcessor (fallback) | 0.5 дня | [spec](T3-video-fallback/T013-video-fallback.md) · [issue](T3-video-fallback/T013-github-issue.md) — WhisperVideoProcessor + fallback (~7 тестів) |
+| S1-014 | PresentationProcessor | 0.5 дня | [spec](T4-presentation/T014-presentation.md) · [issue](T4-presentation/T014-github-issue.md) — PDF + PPTX + Vision LLM (~10 тестів) |
+| S1-015 | TextProcessor | 0.25 дня | [spec](T5-text/T015-text.md) · [issue](T5-text/T015-github-issue.md) — MD/DOCX/HTML/TXT, без LLM (~9 тестів) |
+| S1-016 | WebProcessor | 0.25 дня | [spec](T6-web/T016-web.md) · [issue](T6-web/T016-github-issue.md) — trafilatura, без LLM (~7 тестів) |
+| S1-017 | MergeStep | 0.5 дня | [spec](T7-merge/T017-merge.md) · [issue](T7-merge/T017-github-issue.md) — sync merge + cross-references (~7 тестів) |
+| S1-018 | SourceMaterial persistence | 0.25 дня | [spec](T8-source-persistence/T018-source-persistence.md) · [issue](T8-source-persistence/T018-github-issue.md) — Repository + status machine (~8 тестів) |
 
 **Загалом: 3–4 дні** (найбільший епік спрінту)
 
@@ -83,43 +84,103 @@ Ingestion — це "вхідна воронка" системи. Якість р
 
 ---
 
-## Пропозиції покращень (для обговорення)
+## Прийняті архітектурні рішення
 
-### 1. Сигнатура SourceProcessor.process()
+### 1. Сигнатура SourceProcessor.process() ✅
 
-Документ пропонував `process(source_url) -> SourceDocument`. Але реально процесору потрібні:
-- `source_url` (або path)
-- `source_type` (для dispatch)
-- `ModelRouter` (для Vision LLM)
-- Можливо `MinIO client` (для збереження файлів)
+```python
+async def process(source: SourceMaterial, *, router: ModelRouter | None = None) -> SourceDocument
+```
 
-**Пропозиція:** `async def process(source: SourceMaterial, *, router: ModelRouter | None = None) -> SourceDocument`. Процесор отримує ORM-об'єкт і вирішує що з ним робити. TextProcessor/WebProcessor ігнорують router.
+Процесор отримує ORM-об'єкт `SourceMaterial` і keyword-only `router`. TextProcessor/WebProcessor ігнорують router. VideoProcessor/PresentationProcessor вимагають router для LLM-викликів.
 
-### 2. VideoProcessor: два файли чи один?
+### 2. VideoProcessor: Composition ✅
 
-S1-012 (primary) та S1-013 (fallback) — це окремі task, але це один `VideoProcessor` з двома стратегіями. Варіанти:
-- **A) Один клас** `VideoProcessor` з `try: gemini_path() except: whisper_path()`
-- **B) Два класи** `GeminiVideoProcessor` + `WhisperVideoProcessor`, композиція в `VideoProcessor`
+Обрано **варіант B** — два окремі класи:
+- `GeminiVideoProcessor(SourceProcessor)` — upload + Gemini Vision
+- `WhisperVideoProcessor(SourceProcessor)` — FFmpeg + Whisper
 
-Варіант B кращий для тестування і відповідальності.
+`VideoProcessor(SourceProcessor)` — composition shell:
+```python
+def __init__(self, *, enable_whisper: bool = True):
+    self._gemini = GeminiVideoProcessor()
+    self._whisper = WhisperVideoProcessor() if enable_whisper else None
+```
+Fallback: Gemini fails → Whisper; обидва fail → raise останню помилку.
 
-### 3. MinIO integration
+### 3. MinIO: після MVP ✅
 
-Документ не згадує де зберігаються оригінальні файли (відео, PDF). ORM має `source_url` (String 2000) — це може бути URL або S3 path. MinIO вже налаштований в Docker Compose. Потрібно визначити:
-- Чи зберігає Ingestion файли в MinIO?
-- Чи передає URL напряму провайдеру (Gemini File API)?
+Процесори працюють з `source_url` напряму (local path або remote URL). S3/MinIO інтеграція — окремий task після Epic 3. ORM `source_url: String(2000)` підтримує і local paths, і S3 URLs.
 
-Рекомендація: на цьому етапі процесори працюють з `source_url` напряму (local path або remote URL). MinIO integration — після MVP.
+### 4. Тестування ✅
 
-### 4. Тестування з реальними API
+Unit-тести мокають `ModelRouter`, SDK calls (fitz, pptx, docx, trafilatura, whisper), FFmpeg subprocess. Інтеграційні тести з реальними API — `tests/evals/`. Очікувана кількість тестів: ~64 нових (8+8+7+10+9+7+7+8).
 
-Процесори використовують LLM (VideoProcessor, PresentationProcessor). Unit-тести мають мокати `ModelRouter` calls. Інтеграційні тести (з реальними API) — в `tests/evals/` (вже є stub).
+### 5. Custom exceptions ✅
 
-### 5. Порядок імплементації
+- `ProcessingError(Exception)` — загальна помилка обробки
+- `UnsupportedFormatError(ProcessingError)` — непідтримуваний формат
 
-Рекомендований порядок (від простого до складного):
-1. S1-011 → S1-018 (паралельно з S1-015)
-2. S1-015 → S1-016
-3. S1-014
-4. S1-012 → S1-013
-5. S1-017
+Всі процесори raise `UnsupportedFormatError` при невалідному `source_type` або розширенні.
+
+---
+
+## Shared Pydantic Models (S1-011)
+
+Ці моделі використовуються всіма задачами Epic 3:
+
+```python
+# models/source.py
+class ChunkType(StrEnum):
+    TRANSCRIPT = "transcript"           # video timecoded text
+    SLIDE_TEXT = "slide_text"           # extracted text from slide
+    SLIDE_DESCRIPTION = "slide_description"  # vision LLM analysis
+    PARAGRAPH = "paragraph"             # text document paragraph
+    HEADING = "heading"                 # text document heading
+    WEB_CONTENT = "web_content"         # extracted web content
+    METADATA = "metadata"              # general metadata
+
+class ContentChunk(BaseModel):
+    chunk_type: ChunkType
+    text: str
+    index: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+class SourceDocument(BaseModel):
+    source_type: str  # "video" | "presentation" | "text" | "web"
+    source_url: str
+    title: str = ""
+    chunks: list[ContentChunk] = Field(default_factory=list)
+    processed_at: datetime = Field(default_factory=datetime.now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+# models/course.py
+class SlideVideoMapEntry(BaseModel):
+    slide_number: int
+    video_timecode: str  # "01:23:45", matches ORM String(20)
+
+class CourseContext(BaseModel):
+    documents: list[SourceDocument]
+    slide_video_mappings: list[SlideVideoMapEntry] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+```
+
+---
+
+## Task Specs
+
+Детальні специфікації для кожної задачі:
+
+```
+E3-ingestion-engine/
+├── T1-source-processor/     S1-011: ABC + schemas
+├── T2-video-primary/        S1-012: GeminiVideoProcessor
+├── T3-video-fallback/       S1-013: WhisperVideoProcessor
+├── T4-presentation/         S1-014: PDF + PPTX
+├── T5-text/                 S1-015: MD/DOCX/HTML/TXT
+├── T6-web/                  S1-016: trafilatura
+├── T7-merge/                S1-017: MergeStep
+└── T8-source-persistence/   S1-018: Repository
+```
+
+Кожна папка містить `T0XX-*.md` (повна spec з кодом і тестами) + `T0XX-github-issue.md` (summary).

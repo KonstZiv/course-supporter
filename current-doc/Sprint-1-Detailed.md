@@ -35,16 +35,16 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 
 ### Epic 2: Model Registry & LLM Infrastructure
 
-Уніфікований інтерфейс для роботи з кількома LLM-провайдерами. Після цього епіку — будь-який компонент системи може викликати LLM через `ModelRouter`, не знаючи деталей конкретного провайдера.
+Уніфікований інтерфейс для роботи з кількома LLM-провайдерами з strategy-based routing. Після цього епіку — будь-який компонент системи викликає LLM через `ModelRouter`, не знаючи деталей конкретного провайдера. Routing, fallback (within chain + cross-strategy requested→default), retry з класифікацією помилок, cost tracking — все автоматично.
 
 **Задачі:**
 
 | ID | Назва | Опис |
 | :---- | :---- | :---- |
-| S1-007 | LLM Provider Interface | Абстрактний клас `LLMProvider` з єдиним async-інтерфейсом. Реалізації для Gemini, Anthropic, OpenAI SDK. DeepSeek — через OpenAI SDK з кастомним `base_url` |
-| S1-008 | Model Registry конфігурація | `config/models.yaml` — маппінг task_type → список моделей з пріоритетами. Pydantic-схеми для валідації конфігу |
-| S1-009 | ModelRouter | Клас, що послідовно пробує моделі за пріоритетом, обробляє retry/fallback, логує кожен виклик (model, tokens, latency, cost, success/fail) |
-| S1-010 | LLM Call logging | Збереження кожного LLM-виклику в таблицю `llm_calls` для cost tracking та A/B аналізу моделей |
+| S1-007 | LLM Providers ✅ | ABC `LLMProvider` з `complete()`/`complete_structured()`. Реалізації: Gemini, Anthropic, OpenAI/DeepSeek (через `base_url`). `LLMRequest`/`LLMResponse` схеми, `StructuredOutputError`, `PROVIDER_REGISTRY`, `create_providers()` factory |
+| S1-008 | Actions & Model Registry ✅ | `config/models.yaml` — action → strategies → ordered model chains. `ModelConfig`, `Capability` StrEnum, `CostPer1K`. Pydantic-валідація routing при старті. `get_chain(action, strategy)` → `list[ModelConfig]` |
+| S1-009 | ModelRouter ✅ | Two-level fallback: within chain + cross-strategy (requested→default). Класифікація помилок (transient/permanent), retry до `max_attempts`, cost enrichment, `LogCallback` для S1-010. Передає `model_id` провайдеру через `request.model` |
+| S1-010 | LLM Call logging | Збереження кожного LLM-виклику в таблицю `llm_calls` через `LogCallback`. Фабрика `create_model_router()` для збирання повного стеку |
 
 ---
 

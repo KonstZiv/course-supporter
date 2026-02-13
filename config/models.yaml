@@ -1,1 +1,105 @@
-# Model registry: provider configs, fallback chains. TODO: implement in Sprint 1.
+# ============================================================
+# Models: available LLM models with capabilities and pricing
+# ============================================================
+models:
+  gemini-2.5-flash:
+    provider: gemini
+    capabilities: [vision, structured_output, long_context]
+    max_context: 1048576
+    cost_per_1k:
+      input: 0.00015
+      output: 0.0006
+
+  gemini-2.5-pro:
+    provider: gemini
+    capabilities: [vision, structured_output, long_context]
+    max_context: 1048576
+    cost_per_1k:
+      input: 0.00125
+      output: 0.005
+
+  claude-sonnet:
+    provider: anthropic
+    capabilities: [structured_output, long_context]
+    max_context: 200000
+    cost_per_1k:
+      input: 0.003
+      output: 0.015
+
+  deepseek-chat:
+    provider: deepseek
+    capabilities: [structured_output]
+    max_context: 65536
+    cost_per_1k:
+      input: 0.00014
+      output: 0.00028
+
+  gpt-4o-mini:
+    provider: openai
+    capabilities: [vision, structured_output]
+    max_context: 128000
+    cost_per_1k:
+      input: 0.00015
+      output: 0.0006
+
+# ============================================================
+# Actions: task types with capability requirements
+# ============================================================
+actions:
+  video_analysis:
+    description: "Transcribe and analyze video content"
+    requires: [vision, long_context]
+
+  presentation_analysis:
+    description: "Extract and analyze presentation content"
+    requires: [vision, structured_output]
+
+  course_structuring:
+    description: "Generate course structure from materials"
+    requires: [structured_output]
+
+  text_processing:
+    description: "Process and transform text content"
+    requires: [structured_output]
+
+# ============================================================
+# Routing: action -> strategies -> ordered model chains
+# ============================================================
+routing:
+  video_analysis:
+    default:
+      - gemini-2.5-flash
+      - gemini-2.5-pro
+    quality:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+    budget:
+      - gemini-2.5-flash
+
+  presentation_analysis:
+    default:
+      - gemini-2.5-flash
+      - gpt-4o-mini
+    quality:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+
+  course_structuring:
+    default:
+      - gemini-2.5-flash
+      - deepseek-chat
+    quality:
+      - claude-sonnet
+      - gemini-2.5-pro
+    budget:
+      - deepseek-chat
+
+  text_processing:
+    default:
+      - deepseek-chat
+      - gemini-2.5-flash
+    quality:
+      - claude-sonnet
+      - gemini-2.5-flash
+    budget:
+      - deepseek-chat

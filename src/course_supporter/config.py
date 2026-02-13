@@ -2,6 +2,7 @@
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,6 +78,9 @@ class Settings(BaseSettings):
     # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.
     # Other providers have their own SDKs with built-in endpoints.
     deepseek_base_url: str = "https://api.deepseek.com"
+
+    # --- Model Registry ---
+    model_registry_path: Path = Path("config/models.yaml")
 
     # --- Convenience properties ---
     @property

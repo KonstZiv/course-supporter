@@ -20,6 +20,8 @@ repos:
           - google-genai>=1.12
           - anthropic>=0.49
           - openai>=1.68
+          - types-PyYAML>=6.0
+          - pyyaml>=6.0
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/

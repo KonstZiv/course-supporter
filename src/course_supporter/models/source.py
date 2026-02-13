@@ -1,6 +1,6 @@
 """Source material schemas for ingestion pipeline."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -53,5 +53,5 @@ class SourceDocument(BaseModel):
     source_url: str
     title: str = ""
     chunks: list[ContentChunk] = Field(default_factory=list)
-    processed_at: datetime = Field(default_factory=datetime.now)
+    processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)

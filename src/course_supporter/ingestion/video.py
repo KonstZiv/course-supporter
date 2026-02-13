@@ -9,8 +9,12 @@ VideoProcessor composes both with automatic fallback.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
-from typing import TYPE_CHECKING
+import tempfile
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -174,6 +178,149 @@ class GeminiVideoProcessor(SourceProcessor):
         return chunks
 
 
+class WhisperVideoProcessor(SourceProcessor):
+    """Process video using local FFmpeg + OpenAI Whisper.
+
+    Extracts audio track via FFmpeg subprocess, then transcribes
+    using whisper library. No external API calls required.
+
+    Requires:
+    - FFmpeg installed on the system
+    - whisper package (optional 'media' dependency group)
+    """
+
+    async def process(
+        self,
+        source: SourceMaterial,
+        *,
+        router: ModelRouter | None = None,
+    ) -> SourceDocument:
+        if source.source_type != SourceType.VIDEO:
+            raise UnsupportedFormatError(
+                f"WhisperVideoProcessor expects 'video', got '{source.source_type}'"
+            )
+
+        logger.info(
+            "whisper_video_processing_start",
+            source_url=source.source_url,
+        )
+
+        # 1. Extract audio from video
+        audio_path = await self._extract_audio(source.source_url)
+
+        try:
+            # 2. Transcribe audio with Whisper
+            segments = await self._transcribe(audio_path)
+
+            # 3. Convert segments to chunks
+            chunks = self._segments_to_chunks(segments)
+
+            logger.info(
+                "whisper_video_processing_done",
+                source_url=source.source_url,
+                chunk_count=len(chunks),
+            )
+
+            return SourceDocument(
+                source_type=SourceType.VIDEO,
+                source_url=source.source_url,
+                title=source.filename or "",
+                chunks=chunks,
+                metadata={"strategy": "whisper"},
+            )
+        finally:
+            # Clean up temp audio file
+            with contextlib.suppress(OSError):
+                Path(audio_path).unlink()  # noqa: ASYNC240
+
+    async def _extract_audio(self, video_path: str) -> str:
+        """Extract audio from video using FFmpeg.
+
+        Args:
+            video_path: Path to the video file.
+
+        Returns:
+            Path to the extracted WAV audio file.
+
+        Raises:
+            ProcessingError: If FFmpeg is not found or fails.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            audio_path = tmp.name
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-i",
+                video_path,
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                audio_path,
+                "-y",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                raise ProcessingError(
+                    f"FFmpeg failed (code {process.returncode}): "
+                    f"{stderr.decode()[:500]}"
+                )
+        except FileNotFoundError:
+            raise ProcessingError(
+                "FFmpeg not found. Install FFmpeg to use WhisperVideoProcessor."
+            ) from None
+
+        return audio_path
+
+    async def _transcribe(self, audio_path: str) -> list[dict[str, Any]]:
+        """Transcribe audio file using Whisper.
+
+        Runs Whisper in a thread pool to avoid blocking the event loop.
+
+        Args:
+            audio_path: Path to the WAV audio file.
+
+        Returns:
+            List of segment dicts with 'start', 'end', 'text' keys.
+        """
+        import whisper
+
+        loop = asyncio.get_running_loop()
+        model = await loop.run_in_executor(None, whisper.load_model, "base")
+        result = await loop.run_in_executor(None, model.transcribe, audio_path)
+        return result.get("segments", [])  # type: ignore[no-any-return]
+
+    @staticmethod
+    def _segments_to_chunks(
+        segments: list[dict[str, Any]],
+    ) -> list[ContentChunk]:
+        """Convert Whisper segments to ContentChunks."""
+        chunks: list[ContentChunk] = []
+        for idx, seg in enumerate(segments):
+            text = seg.get("text", "").strip()
+            if not text:
+                continue
+            chunks.append(
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text=text,
+                    index=idx,
+                    metadata={
+                        "start_sec": round(seg.get("start", 0.0), 2),
+                        "end_sec": round(seg.get("end", 0.0), 2),
+                    },
+                )
+            )
+        return chunks
+
+
 class VideoProcessor(SourceProcessor):
     """Composite video processor with Gemini primary + Whisper fallback.
 
@@ -181,10 +328,11 @@ class VideoProcessor(SourceProcessor):
     falls back to WhisperVideoProcessor (local FFmpeg + Whisper).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, enable_whisper: bool = True) -> None:
         self._gemini = GeminiVideoProcessor()
-        # WhisperVideoProcessor will be connected in S1-013
-        self._whisper: SourceProcessor | None = None
+        self._whisper: SourceProcessor | None = (
+            WhisperVideoProcessor() if enable_whisper else None
+        )
 
     async def process(
         self,

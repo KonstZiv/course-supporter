@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     deepseek_api_key: SecretStr | None = None
 
+    # --- LLM Default Models ---
+    # Configurable per environment via env vars.
+    # Will be superseded by models.yaml registry in S1-008.
+    gemini_default_model: str = "gemini-2.5-flash"
+    anthropic_default_model: str = "claude-sonnet-4-20250514"
+    openai_default_model: str = "gpt-4o-mini"
+    deepseek_default_model: str = "deepseek-chat"
+
     # --- DeepSeek ---
     # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.
     # Other providers have their own SDKs with built-in endpoints.

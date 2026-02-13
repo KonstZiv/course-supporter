@@ -101,6 +101,22 @@ class TestGeminiVideoProcessor:
         assert doc.chunks[0].metadata["start_sec"] == 0.0
         assert doc.chunks[1].metadata == {}
 
+    async def test_empty_and_whitespace_lines_skipped(self) -> None:
+        """Empty lines and whitespace-only lines produce no chunks."""
+        router = AsyncMock()
+        router.complete.return_value = MagicMock(
+            content="[0:00-0:10] First\n\n   \n[0:10-0:20] Second"
+        )
+
+        proc = GeminiVideoProcessor()
+        doc = await proc.process(_make_source(), router=router)
+
+        assert len(doc.chunks) == 2
+        assert doc.chunks[0].text == "First"
+        assert doc.chunks[1].text == "Second"
+        assert doc.chunks[0].index == 0
+        assert doc.chunks[1].index == 1
+
     async def test_chunk_ordering(self) -> None:
         """Chunks indexed sequentially."""
         router = AsyncMock()
@@ -127,6 +143,14 @@ class TestVideoProcessor:
         assert isinstance(doc, SourceDocument)
         assert doc.source_type == SourceType.VIDEO
 
+    async def test_unsupported_format_not_caught(self) -> None:
+        """UnsupportedFormatError propagates without fallback attempt."""
+        router = AsyncMock()
+
+        proc = VideoProcessor()
+        with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
+            await proc.process(_make_source(source_type="text"), router=router)
+
     async def test_fallback_no_whisper_re_raises(self) -> None:
         """Re-raises if whisper is None and Gemini fails."""
         router = AsyncMock()
@@ -151,6 +175,10 @@ class TestTimecodeToSeconds:
     def test_zero(self) -> None:
         """0:00 -> 0.0."""
         assert _timecode_to_seconds("0:00") == 0.0
+
+    def test_hh_mm_ss(self) -> None:
+        """HH:MM:SS with two-digit hours converts correctly."""
+        assert _timecode_to_seconds("12:00:00") == 43200.0
 
     def test_invalid_format(self) -> None:
         """Invalid format returns 0.0."""

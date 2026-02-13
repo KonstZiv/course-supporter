@@ -158,7 +158,10 @@ class GeminiVideoProcessor(SourceProcessor):
                     )
                 )
             else:
-                # Non-timestamped line — include as plain transcript
+                logger.warning(
+                    "transcript_line_without_timecode",
+                    line=line,
+                )
                 chunks.append(
                     ContentChunk(
                         chunk_type=ChunkType.TRANSCRIPT,
@@ -178,7 +181,7 @@ class VideoProcessor(SourceProcessor):
     falls back to WhisperVideoProcessor (local FFmpeg + Whisper).
     """
 
-    def __init__(self, *, enable_whisper: bool = False) -> None:
+    def __init__(self) -> None:
         self._gemini = GeminiVideoProcessor()
         # WhisperVideoProcessor will be connected in S1-013
         self._whisper: SourceProcessor | None = None
@@ -191,6 +194,8 @@ class VideoProcessor(SourceProcessor):
     ) -> SourceDocument:
         try:
             return await self._gemini.process(source, router=router)
+        except UnsupportedFormatError:
+            raise
         except Exception:
             if self._whisper is not None:
                 logger.warning(

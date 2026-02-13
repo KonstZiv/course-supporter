@@ -176,6 +176,46 @@ class TestMergeStep:
         assert "video_timecode" not in chunk.metadata
         assert chunk.metadata["slide_number"] == 3
 
+    def test_cross_references_skip_slide_description(self) -> None:
+        """SLIDE_DESCRIPTION chunks not enriched even with matching slide_number."""
+        step = MergeStep()
+        presentation = _make_doc(
+            SourceType.PRESENTATION,
+            chunks=[
+                _make_slide_chunk(1),
+                ContentChunk(
+                    chunk_type=ChunkType.SLIDE_DESCRIPTION,
+                    text="Diagram showing flow",
+                    index=1,
+                    metadata={"slide_number": 1},
+                ),
+            ],
+        )
+        mappings = [
+            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
+        ]
+
+        result = step.merge([presentation], mappings=mappings)
+
+        chunks = result.documents[0].chunks
+        assert chunks[0].metadata["video_timecode"] == "00:01:00"
+        assert "video_timecode" not in chunks[1].metadata
+
+    def test_stable_sort_same_type(self) -> None:
+        """Multiple documents of the same type preserve relative order."""
+        step = MergeStep()
+        video_a = _make_doc(SourceType.VIDEO)
+        video_a = video_a.model_copy(update={"title": "Video A"})
+        video_b = _make_doc(SourceType.VIDEO)
+        video_b = video_b.model_copy(update={"title": "Video B"})
+        text = _make_doc(SourceType.TEXT)
+
+        result = step.merge([video_a, text, video_b])
+
+        assert result.documents[0].title == "Video A"
+        assert result.documents[1].title == "Video B"
+        assert result.documents[2].source_type == SourceType.TEXT
+
     def test_created_at_set(self) -> None:
         """CourseContext has created_at timestamp."""
         step = MergeStep()

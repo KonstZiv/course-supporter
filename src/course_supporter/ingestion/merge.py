@@ -15,7 +15,7 @@ from course_supporter.models.source import (
 logger = structlog.get_logger()
 
 # Priority order for document types (lower index = higher priority)
-SOURCE_TYPE_PRIORITY: dict[str, int] = {
+SOURCE_TYPE_PRIORITY: dict[SourceType, int] = {
     SourceType.VIDEO: 0,
     SourceType.PRESENTATION: 1,
     SourceType.TEXT: 2,

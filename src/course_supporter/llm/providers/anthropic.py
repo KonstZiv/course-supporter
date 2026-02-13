@@ -26,12 +26,11 @@ class AnthropicProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": self._default_model,
             "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
             "messages": [{"role": "user", "content": request.prompt}],
         }
         if request.system_prompt:
             kwargs["system"] = request.system_prompt
-        if request.temperature > 0:
-            kwargs["temperature"] = request.temperature
 
         with self._measure_latency() as timer:
             response = await self._client.messages.create(**kwargs)

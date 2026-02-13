@@ -152,11 +152,11 @@ class TestVideoProcessor:
             await proc.process(_make_source(source_type="text"), router=router)
 
     async def test_fallback_no_whisper_re_raises(self) -> None:
-        """Re-raises if whisper is None and Gemini fails."""
+        """Re-raises if whisper is disabled and Gemini fails."""
         router = AsyncMock()
         router.complete.side_effect = RuntimeError("Gemini down")
 
-        proc = VideoProcessor()
+        proc = VideoProcessor(enable_whisper=False)
         assert proc._whisper is None
 
         with pytest.raises(RuntimeError, match="Gemini down"):

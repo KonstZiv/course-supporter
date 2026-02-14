@@ -12,17 +12,63 @@
 
 ---
 
+## Архітектурне рішення: Step-Based Design
+
+### Мотивація
+
+Монолітний `run()` з єдиним LLM-викликом достатній для MVP, але створює проблеми при міграції на ланцюги/графи (LangGraph, custom DAG):
+
+- Не можна вставити hook між кроками (логування, людський фідбек, валідація)
+- Немає проміжного стану для streaming або часткових результатів
+- Неможливо розбити на ноди графа без рефакторингу
+
+### Рішення
+
+Розбити `run()` на **окремі методи-кроки** з проміжним типом `PreparedPrompt`:
+
+```
+run(context)
+  ├─ _prepare_prompts(context) → PreparedPrompt    # step 1: load & format
+  └─ _generate(prepared)       → CourseStructure   # step 2: call LLM
+```
+
+### Переваги
+
+1. **Кожен метод — потенційна нода** в LangGraph або step у ланцюгу
+2. **Проміжні типи** (`PreparedPrompt`) стають частиною State графа
+3. **Легко додати кроки**: `_validate()`, `_refine()`, `_chunk()` без рефакторингу
+4. **Per-step тестування**: можна тестувати prompt formatting окремо від LLM
+5. **Мінімальний overhead**: для MVP — лінійний виклик, але готовий до розширення
+
+### Міграційний шлях (Epic 7+)
+
+```
+# Сьогодні (MVP): лінійний виклик
+run() → _prepare_prompts() → _generate() → return
+
+# Завтра (LangGraph): кожен метод стає нодою
+START → prepare_prompts_node → generate_node → validate_node → END
+                                    ↑                  |
+                                    └── retry_edge ←───┘
+
+# Завтра (multi-step): розбити _generate на sub-steps
+_generate_modules() → _generate_lessons(per module) → _generate_exercises()
+```
+
+---
+
 ## Acceptance Criteria
 
 - [ ] `ArchitectAgent.__init__` приймає `router`, `prompt_path`, `strategy`, `temperature`, `max_tokens`
-- [ ] `ArchitectAgent.run(context: CourseContext) -> CourseStructure` — async method
-- [ ] Серіалізує `CourseContext` → JSON string для user prompt
-- [ ] Завантажує prompt через `load_prompt()`, форматує через `format_user_prompt()`
+- [ ] `ArchitectAgent.run(context: CourseContext) -> CourseStructure` — async orchestrator
+- [ ] `_prepare_prompts(context) -> PreparedPrompt` — sync, load YAML + serialize context
+- [ ] `_generate(prepared: PreparedPrompt) -> CourseStructure` — async, call router
+- [ ] `PreparedPrompt` — NamedTuple з system_prompt, user_prompt, prompt_version
 - [ ] Викликає `router.complete_structured(action="course_structuring", response_schema=CourseStructure)`
 - [ ] Повертає перший елемент tuple (parsed CourseStructure)
 - [ ] Пробрасывает `AllModelsFailedError` від router (не глушить)
 - [ ] Default prompt path: `prompts/architect/v1.yaml`
-- [ ] ~10 unit-тестів з mocked router, всі зелені
+- [ ] ~12 unit-тестів з mocked router, всі зелені (включаючи per-step тести)
 - [ ] `make check` проходить
 
 ---
@@ -33,6 +79,8 @@
 
 ```python
 """ArchitectAgent: generates course structure from materials via LLM."""
+
+from typing import NamedTuple
 
 import structlog
 
@@ -45,11 +93,32 @@ logger = structlog.get_logger()
 DEFAULT_PROMPT_PATH = "prompts/architect/v1.yaml"
 
 
+class PreparedPrompt(NamedTuple):
+    """Intermediate result of prompt preparation step.
+
+    Separates prompt loading/formatting from LLM invocation,
+    enabling independent testing and future graph-based orchestration
+    where each step becomes a node.
+    """
+
+    system_prompt: str
+    user_prompt: str
+    prompt_version: str
+
+
 class ArchitectAgent:
     """Generates structured course program from course materials.
 
     Uses ModelRouter with action='course_structuring' to call LLM
     with structured output (CourseStructure Pydantic schema).
+
+    Architecture: step-based design for future chain/graph migration.
+    Each step is a separate method that can become a node in a
+    LangGraph or custom DAG pipeline.
+
+    Steps:
+        1. _prepare_prompts: load YAML template, serialize context, format prompt
+        2. _generate: call LLM via ModelRouter, return validated structure
 
     Args:
         router: ModelRouter instance for LLM calls.
@@ -77,6 +146,8 @@ class ArchitectAgent:
     async def run(self, context: CourseContext) -> CourseStructure:
         """Generate course structure from materials.
 
+        Orchestrates the pipeline: prepare prompts → generate via LLM.
+
         Args:
             context: Unified course context from ingestion pipeline.
 
@@ -87,28 +158,72 @@ class ArchitectAgent:
             AllModelsFailedError: If all models in all strategies fail.
             FileNotFoundError: If prompt file not found.
         """
-        # 1. Load and format prompt
+        prepared = self._prepare_prompts(context)
+        return await self._generate(prepared, documents_count=len(context.documents))
+
+    def _prepare_prompts(self, context: CourseContext) -> PreparedPrompt:
+        """Step 1: Load prompt template and format with context.
+
+        Loads YAML prompt file, serializes CourseContext to JSON,
+        and injects it into the user prompt template.
+
+        Args:
+            context: Course context to serialize into the prompt.
+
+        Returns:
+            PreparedPrompt with system prompt, formatted user prompt,
+            and prompt version for logging/A/B testing.
+
+        Raises:
+            FileNotFoundError: If prompt YAML file not found.
+            KeyError: If YAML missing required keys.
+        """
         prompt_data = load_prompt(self._prompt_path)
         system_prompt = prompt_data["system_prompt"]
         user_prompt = format_user_prompt(
             prompt_data["user_prompt_template"],
             context.model_dump_json(indent=2),
         )
-
-        logger.info(
-            "architect_agent_run",
-            strategy=self._strategy,
+        return PreparedPrompt(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             prompt_version=prompt_data.get("version", "unknown"),
-            documents_count=len(context.documents),
-            context_length=len(user_prompt),
         )
 
-        # 2. Call LLM via ModelRouter
+    async def _generate(
+        self,
+        prepared: PreparedPrompt,
+        *,
+        documents_count: int = 0,
+    ) -> CourseStructure:
+        """Step 2: Call LLM and return validated CourseStructure.
+
+        Sends prepared prompts to ModelRouter with structured output
+        and returns the parsed Pydantic model.
+
+        Args:
+            prepared: Formatted prompts from _prepare_prompts step.
+            documents_count: Number of documents for logging.
+
+        Returns:
+            Validated CourseStructure from LLM.
+
+        Raises:
+            AllModelsFailedError: If all models in all strategies fail.
+        """
+        logger.info(
+            "architect_agent_generating",
+            strategy=self._strategy,
+            prompt_version=prepared.prompt_version,
+            documents_count=documents_count,
+            context_length=len(prepared.user_prompt),
+        )
+
         structure, response = await self._router.complete_structured(
             action="course_structuring",
-            prompt=user_prompt,
+            prompt=prepared.user_prompt,
             response_schema=CourseStructure,
-            system_prompt=system_prompt,
+            system_prompt=prepared.system_prompt,
             temperature=self._temperature,
             max_tokens=self._max_tokens,
             strategy=self._strategy,
@@ -131,11 +246,12 @@ class ArchitectAgent:
 ```python
 """Agents for course structure generation."""
 
-from course_supporter.agents.architect import ArchitectAgent
+from course_supporter.agents.architect import ArchitectAgent, PreparedPrompt
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 
 __all__ = [
     "ArchitectAgent",
+    "PreparedPrompt",
     "format_user_prompt",
     "load_prompt",
 ]
@@ -150,11 +266,16 @@ __all__ = [
 ```python
 """Tests for ArchitectAgent."""
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from course_supporter.agents.architect import ArchitectAgent, DEFAULT_PROMPT_PATH
+from course_supporter.agents.architect import (
+    DEFAULT_PROMPT_PATH,
+    ArchitectAgent,
+    PreparedPrompt,
+)
 from course_supporter.llm.router import AllModelsFailedError
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import (
@@ -193,7 +314,7 @@ def sample_context() -> CourseContext:
 
 
 @pytest.fixture()
-def prompt_data() -> dict:
+def prompt_data() -> dict[str, Any]:
     """Mock prompt data."""
     return {
         "version": "v1",
@@ -226,15 +347,153 @@ class TestArchitectAgentInit:
         assert agent._max_tokens == 4096
 
 
-class TestArchitectAgentRun:
-    @pytest.mark.asyncio
-    async def test_run_returns_course_structure(
+class TestPreparePrompts:
+    """Tests for _prepare_prompts step (independent of LLM)."""
+
+    def test_returns_prepared_prompt(
         self,
         mock_router: AsyncMock,
         sample_context: CourseContext,
-        prompt_data: dict,
+        prompt_data: dict[str, Any],
     ) -> None:
-        """run() returns CourseStructure from LLM response."""
+        """_prepare_prompts returns PreparedPrompt with correct fields."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            prepared = agent._prepare_prompts(sample_context)
+
+        assert isinstance(prepared, PreparedPrompt)
+        assert prepared.system_prompt == "You are a course architect."
+        assert prepared.prompt_version == "v1"
+
+    def test_serializes_context_into_user_prompt(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: dict[str, Any],
+    ) -> None:
+        """_prepare_prompts injects serialized context into user prompt."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            prepared = agent._prepare_prompts(sample_context)
+
+        assert "Materials:" in prepared.user_prompt
+        assert "file:///test.md" in prepared.user_prompt
+        assert "{context}" not in prepared.user_prompt
+
+    def test_propagates_file_not_found(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+    ) -> None:
+        """_prepare_prompts propagates FileNotFoundError."""
+        agent = ArchitectAgent(
+            mock_router, prompt_path="nonexistent/prompt.yaml"
+        )
+        with pytest.raises(FileNotFoundError):
+            agent._prepare_prompts(sample_context)
+
+    def test_default_version_when_missing(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+    ) -> None:
+        """_prepare_prompts uses 'unknown' when version key is absent."""
+        prompt_data_no_version = {
+            "system_prompt": "System prompt.",
+            "user_prompt_template": "{context}",
+        }
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data_no_version,
+        ):
+            agent = ArchitectAgent(mock_router)
+            prepared = agent._prepare_prompts(sample_context)
+
+        assert prepared.prompt_version == "unknown"
+
+
+class TestGenerate:
+    """Tests for _generate step (LLM interaction)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_course_structure(
+        self, mock_router: AsyncMock
+    ) -> None:
+        """_generate returns CourseStructure from router response."""
+        agent = ArchitectAgent(mock_router)
+        prepared = PreparedPrompt(
+            system_prompt="System.",
+            user_prompt="User prompt.",
+            prompt_version="v1",
+        )
+        result = await agent._generate(prepared)
+
+        assert isinstance(result, CourseStructure)
+        assert result.title == "Test Course"
+        assert len(result.modules) == 1
+
+    @pytest.mark.asyncio
+    async def test_calls_router_with_correct_params(
+        self, mock_router: AsyncMock
+    ) -> None:
+        """_generate passes correct params to router."""
+        agent = ArchitectAgent(
+            mock_router, strategy="quality", temperature=0.5, max_tokens=2048
+        )
+        prepared = PreparedPrompt(
+            system_prompt="System prompt.",
+            user_prompt="User prompt.",
+            prompt_version="v1",
+        )
+        await agent._generate(prepared)
+
+        mock_router.complete_structured.assert_called_once()
+        call_kwargs = mock_router.complete_structured.call_args.kwargs
+        assert call_kwargs["action"] == "course_structuring"
+        assert call_kwargs["response_schema"] is CourseStructure
+        assert call_kwargs["system_prompt"] == "System prompt."
+        assert call_kwargs["prompt"] == "User prompt."
+        assert call_kwargs["strategy"] == "quality"
+        assert call_kwargs["temperature"] == 0.5
+        assert call_kwargs["max_tokens"] == 2048
+
+    @pytest.mark.asyncio
+    async def test_propagates_all_models_failed(
+        self, mock_router: AsyncMock
+    ) -> None:
+        """_generate propagates AllModelsFailedError from router."""
+        mock_router.complete_structured.side_effect = AllModelsFailedError(
+            action="course_structuring",
+            strategies_tried=["default"],
+            errors=[("gemini-2.5-flash", "rate limit")],
+        )
+        agent = ArchitectAgent(mock_router)
+        prepared = PreparedPrompt(
+            system_prompt="System.",
+            user_prompt="User.",
+            prompt_version="v1",
+        )
+        with pytest.raises(AllModelsFailedError):
+            await agent._generate(prepared)
+
+
+class TestArchitectAgentRun:
+    """Integration tests for full run() pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_run_end_to_end(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: dict[str, Any],
+    ) -> None:
+        """run() orchestrates prepare + generate and returns structure."""
         with patch(
             "course_supporter.agents.architect.load_prompt",
             return_value=prompt_data,
@@ -247,34 +506,13 @@ class TestArchitectAgentRun:
         assert len(result.modules) == 1
 
     @pytest.mark.asyncio
-    async def test_run_calls_router_with_correct_action(
+    async def test_run_passes_context_to_router(
         self,
         mock_router: AsyncMock,
         sample_context: CourseContext,
-        prompt_data: dict,
+        prompt_data: dict[str, Any],
     ) -> None:
-        """run() passes action='course_structuring' to router."""
-        with patch(
-            "course_supporter.agents.architect.load_prompt",
-            return_value=prompt_data,
-        ):
-            agent = ArchitectAgent(mock_router, strategy="quality")
-            await agent.run(sample_context)
-
-        mock_router.complete_structured.assert_called_once()
-        call_kwargs = mock_router.complete_structured.call_args
-        assert call_kwargs.kwargs["action"] == "course_structuring"
-        assert call_kwargs.kwargs["response_schema"] is CourseStructure
-        assert call_kwargs.kwargs["strategy"] == "quality"
-
-    @pytest.mark.asyncio
-    async def test_run_passes_system_prompt(
-        self,
-        mock_router: AsyncMock,
-        sample_context: CourseContext,
-        prompt_data: dict,
-    ) -> None:
-        """run() passes system_prompt from loaded YAML."""
+        """run() serializes context and passes it through to router."""
         with patch(
             "course_supporter.agents.architect.load_prompt",
             return_value=prompt_data,
@@ -282,83 +520,9 @@ class TestArchitectAgentRun:
             agent = ArchitectAgent(mock_router)
             await agent.run(sample_context)
 
-        call_kwargs = mock_router.complete_structured.call_args
-        assert call_kwargs.kwargs["system_prompt"] == "You are a course architect."
-
-    @pytest.mark.asyncio
-    async def test_run_formats_context_into_prompt(
-        self,
-        mock_router: AsyncMock,
-        sample_context: CourseContext,
-        prompt_data: dict,
-    ) -> None:
-        """run() serializes CourseContext and injects into user prompt."""
-        with patch(
-            "course_supporter.agents.architect.load_prompt",
-            return_value=prompt_data,
-        ):
-            agent = ArchitectAgent(mock_router)
-            await agent.run(sample_context)
-
-        call_kwargs = mock_router.complete_structured.call_args
-        user_prompt = call_kwargs.kwargs["prompt"]
-        assert "Materials:" in user_prompt
-        assert "file:///test.md" in user_prompt
-
-    @pytest.mark.asyncio
-    async def test_run_passes_temperature_and_max_tokens(
-        self,
-        mock_router: AsyncMock,
-        sample_context: CourseContext,
-        prompt_data: dict,
-    ) -> None:
-        """run() forwards temperature and max_tokens to router."""
-        with patch(
-            "course_supporter.agents.architect.load_prompt",
-            return_value=prompt_data,
-        ):
-            agent = ArchitectAgent(
-                mock_router, temperature=0.5, max_tokens=2048
-            )
-            await agent.run(sample_context)
-
-        call_kwargs = mock_router.complete_structured.call_args
-        assert call_kwargs.kwargs["temperature"] == 0.5
-        assert call_kwargs.kwargs["max_tokens"] == 2048
-
-    @pytest.mark.asyncio
-    async def test_run_propagates_all_models_failed(
-        self,
-        mock_router: AsyncMock,
-        sample_context: CourseContext,
-        prompt_data: dict,
-    ) -> None:
-        """run() propagates AllModelsFailedError from router."""
-        mock_router.complete_structured.side_effect = AllModelsFailedError(
-            action="course_structuring",
-            strategies_tried=["default"],
-            errors=[("gemini-2.5-flash", "rate limit")],
-        )
-        with patch(
-            "course_supporter.agents.architect.load_prompt",
-            return_value=prompt_data,
-        ):
-            agent = ArchitectAgent(mock_router)
-            with pytest.raises(AllModelsFailedError):
-                await agent.run(sample_context)
-
-    @pytest.mark.asyncio
-    async def test_run_propagates_file_not_found(
-        self,
-        mock_router: AsyncMock,
-        sample_context: CourseContext,
-    ) -> None:
-        """run() propagates FileNotFoundError if prompt file missing."""
-        agent = ArchitectAgent(
-            mock_router, prompt_path="nonexistent/prompt.yaml"
-        )
-        with pytest.raises(FileNotFoundError):
-            await agent.run(sample_context)
+        call_kwargs = mock_router.complete_structured.call_args.kwargs
+        assert "file:///test.md" in call_kwargs["prompt"]
+        assert call_kwargs["system_prompt"] == "You are a course architect."
 ```
 
 ---
@@ -367,20 +531,20 @@ class TestArchitectAgentRun:
 
 ```
 src/course_supporter/agents/
-├── __init__.py                  # UPDATE: add ArchitectAgent export
-├── architect.py                 # UPDATE: replace stub with implementation
+├── __init__.py                  # UPDATE: add ArchitectAgent, PreparedPrompt exports
+├── architect.py                 # UPDATE: replace stub with step-based implementation
 └── prompt_loader.py             # FROM S1-020
 
 tests/unit/
-└── test_architect_agent.py      # NEW: ~10 tests
+└── test_architect_agent.py      # NEW: ~12 tests (per-step + integration)
 ```
 
 ---
 
 ## Кроки виконання
 
-1. Замінити stub `agents/architect.py` — повна реалізація `ArchitectAgent`
-2. Оновити `agents/__init__.py` — додати `ArchitectAgent` export
+1. Замінити stub `agents/architect.py` — `PreparedPrompt` + step-based `ArchitectAgent`
+2. Оновити `agents/__init__.py` — додати `ArchitectAgent`, `PreparedPrompt` exports
 3. Створити `tests/unit/test_architect_agent.py`
 4. `make check`
 
@@ -390,7 +554,19 @@ tests/unit/
 
 - **action="course_structuring"**: вже визначений у `config/models.yaml` з `requires: [structured_output]`. Default chain: `gemini-2.5-flash → deepseek-chat`. Quality: `claude-sonnet → gemini-2.5-pro`.
 - **complete_structured()** повертає `tuple[Any, LLMResponse]`. Перший елемент — parsed Pydantic model (CourseStructure). ModelRouter обробляє retry і fallback.
+- **PreparedPrompt**: `NamedTuple` (не dataclass) — immutable, lightweight, unpacking-friendly. Стане частиною `GraphState` при міграції на LangGraph.
+- **Step isolation**: `_prepare_prompts` — sync (CPU-only), `_generate` — async (I/O). Різна природа дозволяє різне масштабування.
 - **Серіалізація context**: `context.model_dump_json(indent=2)` — JSON representation. LLM отримує повний контекст як текст.
 - **max_tokens=8192**: CourseStructure може бути великою (десятки модулів, сотні концепцій). 8192 — розумний default.
 - **Structured output validation**: Pydantic validation відбувається всередині provider.complete_structured(). Якщо LLM повертає невалідний JSON — `StructuredOutputError`, router retry/fallback.
 - **Не глушимо помилки**: `AllModelsFailedError` пробрасывается до caller (API endpoint або orchestrator).
+
+## Шлях міграції на графи/ланцюги
+
+| Сценарій | Що потрібно | Effort |
+|----------|-------------|--------|
+| **Додати validation step** | Новий метод `_validate(structure) -> CourseStructure`, виклик між `_generate` і `return` | ~1 год |
+| **Додати refinement loop** | `_refine(structure, feedback) -> CourseStructure`, loop у `run()` або edge у графі | ~2 год |
+| **Multi-step generation** | Розбити `_generate` на `_generate_modules()` + `_generate_lessons()` + `_generate_exercises()` | ~4 год |
+| **LangGraph міграція** | Кожен `_method` стає `@node`, `PreparedPrompt` входить у `GraphState`, edges = conditional routing | ~8 год |
+| **Custom DAG** | Обгортка `Pipeline(nodes=[prepare, generate, validate])` з logging per-node | ~4 год |

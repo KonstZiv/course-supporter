@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
-from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
+from course_supporter.agents.prompt_loader import (
+    PromptData,
+    format_user_prompt,
+    load_prompt,
+)
 
 
 @pytest.fixture()
@@ -23,11 +28,12 @@ def valid_prompt_file(tmp_path: Path) -> Path:
 
 class TestLoadPrompt:
     def test_load_valid_prompt(self, valid_prompt_file: Path) -> None:
-        """Loads YAML and returns dict with required keys."""
+        """Loads YAML and returns PromptData with required fields."""
         data = load_prompt(valid_prompt_file)
-        assert "system_prompt" in data
-        assert "user_prompt_template" in data
-        assert data["version"] == "v1"
+        assert isinstance(data, PromptData)
+        assert data.system_prompt == "You are a course architect."
+        assert "Materials:" in data.user_prompt_template
+        assert data.version == "v1"
 
     def test_load_missing_file(self, tmp_path: Path) -> None:
         """Raises FileNotFoundError for non-existent file."""
@@ -35,23 +41,32 @@ class TestLoadPrompt:
             load_prompt(tmp_path / "nonexistent.yaml")
 
     def test_load_missing_system_prompt(self, tmp_path: Path) -> None:
-        """Raises KeyError when system_prompt is missing."""
+        """Raises ValidationError when system_prompt is missing."""
         path = tmp_path / "bad.yaml"
         path.write_text(yaml.dump({"user_prompt_template": "test"}))
-        with pytest.raises(KeyError, match="system_prompt"):
+        with pytest.raises(ValidationError):
             load_prompt(path)
 
     def test_load_missing_user_template(self, tmp_path: Path) -> None:
-        """Raises KeyError when user_prompt_template is missing."""
+        """Raises ValidationError when user_prompt_template is missing."""
         path = tmp_path / "bad.yaml"
         path.write_text(yaml.dump({"system_prompt": "test"}))
-        with pytest.raises(KeyError, match="user_prompt_template"):
+        with pytest.raises(ValidationError):
             load_prompt(path)
 
     def test_load_accepts_string_path(self, valid_prompt_file: Path) -> None:
         """Accepts str path in addition to Path objects."""
         data = load_prompt(str(valid_prompt_file))
-        assert "system_prompt" in data
+        assert isinstance(data, PromptData)
+
+    def test_load_default_version(self, tmp_path: Path) -> None:
+        """Uses 'unknown' when version key is absent."""
+        path = tmp_path / "no_version.yaml"
+        path.write_text(
+            yaml.dump({"system_prompt": "sys", "user_prompt_template": "usr {context}"})
+        )
+        data = load_prompt(path)
+        assert data.version == "unknown"
 
 
 class TestFormatUserPrompt:
@@ -80,19 +95,17 @@ class TestPromptFileContent:
     def test_v1_prompt_loads_successfully(self) -> None:
         """The actual v1.yaml prompt file loads without errors."""
         data = load_prompt("prompts/architect/v1.yaml")
-        assert "system_prompt" in data
-        assert "user_prompt_template" in data
-        assert "{context}" in data["user_prompt_template"]
+        assert isinstance(data, PromptData)
+        assert "{context}" in data.user_prompt_template
 
     def test_v1_prompt_has_version(self) -> None:
         """The actual v1.yaml has version field."""
         data = load_prompt("prompts/architect/v1.yaml")
-        assert data["version"] == "v1"
+        assert data.version == "v1"
 
     def test_v1_prompt_describes_learning_goals(self) -> None:
         """The actual v1.yaml system prompt mentions learning goals."""
         data = load_prompt("prompts/architect/v1.yaml")
-        system = data["system_prompt"]
-        assert "learning_goal" in system
-        assert "expected_knowledge" in system
-        assert "expected_skills" in system
+        assert "learning_goal" in data.system_prompt
+        assert "expected_knowledge" in data.system_prompt
+        assert "expected_skills" in data.system_prompt

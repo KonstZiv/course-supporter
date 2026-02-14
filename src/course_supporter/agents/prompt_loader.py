@@ -1,23 +1,37 @@
 """Prompt template loading and formatting utilities."""
 
 from pathlib import Path
-from typing import Any
 
 import yaml
+from pydantic import BaseModel
 
 
-def load_prompt(path: str | Path) -> dict[str, Any]:
+class PromptData(BaseModel):
+    """Validated prompt template loaded from YAML.
+
+    Fields:
+        version: Prompt version for A/B testing (e.g., "v1").
+        system_prompt: System prompt text for the LLM.
+        user_prompt_template: User prompt with {context} placeholder.
+    """
+
+    version: str = "unknown"
+    system_prompt: str
+    user_prompt_template: str
+
+
+def load_prompt(path: str | Path) -> PromptData:
     """Load prompt template from YAML file.
 
     Args:
         path: Path to the YAML prompt file.
 
     Returns:
-        Dict with at least 'system_prompt' and 'user_prompt_template' keys.
+        Validated PromptData with system_prompt and user_prompt_template.
 
     Raises:
         FileNotFoundError: If the prompt file does not exist.
-        KeyError: If required keys are missing from YAML.
+        ValidationError: If required keys are missing or invalid.
     """
     prompt_path = Path(path)
     if not prompt_path.exists():
@@ -26,12 +40,7 @@ def load_prompt(path: str | Path) -> dict[str, Any]:
     with prompt_path.open() as f:
         data = yaml.safe_load(f)
 
-    required_keys = {"system_prompt", "user_prompt_template"}
-    missing = required_keys - set(data.keys())
-    if missing:
-        raise KeyError(f"Missing required keys in prompt file: {missing}")
-
-    return data  # type: ignore[no-any-return]
+    return PromptData.model_validate(data)
 
 
 def format_user_prompt(template: str, context: str) -> str:

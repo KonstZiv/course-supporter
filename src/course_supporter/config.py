@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # --- App ---
     environment: Environment = Environment.DEVELOPMENT
     log_level: str = "DEBUG"
+    cors_allowed_origins: list[str] = ["*"]
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"

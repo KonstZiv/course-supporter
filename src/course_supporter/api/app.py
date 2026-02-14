@@ -34,13 +34,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         secret_key=settings.s3_secret_key.get_secret_value(),
         bucket=settings.s3_bucket,
     )
-    await s3.__aenter__()
-    await s3.ensure_bucket()
-    app.state.s3_client = s3
+    async with s3:
+        await s3.ensure_bucket()
+        app.state.s3_client = s3
 
-    logger.info("app_started", environment=str(settings.environment))
-    yield
-    await s3.__aexit__(None, None, None)
+        logger.info("app_started", environment=str(settings.environment))
+        yield
     await engine.dispose()
     logger.info("app_stopped")
 
@@ -54,7 +53,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

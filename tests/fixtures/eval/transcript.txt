@@ -1,0 +1,109 @@
+[00:00:00] Welcome to this Python basics course. Today we're going to cover
+the fundamental building blocks of Python programming: variables and data types,
+functions, and loops. By the end of this lesson, you'll have a solid foundation
+to start writing your own Python programs.
+
+[00:00:25] Let's start with variables. A variable in Python is a name that
+refers to a value stored in memory. Unlike some other languages, Python uses
+dynamic typing, which means you don't need to declare the type of a variable
+before using it. You simply assign a value with the equals sign.
+
+[00:01:00] For example, you can write: name equals quote Alice quote. Here,
+name is the variable and Alice is a string value. You can also create numeric
+variables: age equals 30 creates an integer, and price equals 19.99 creates
+a floating-point number. Python figures out the type automatically based on
+the value you assign.
+
+[00:01:45] Python has several built-in data types that you should know about.
+The most common ones are: strings for text, represented with quotes; integers
+for whole numbers like 1, 42, or minus 7; floats for decimal numbers like
+3.14 or 2.718; booleans which are either True or False; and None which
+represents the absence of a value.
+
+[00:02:30] You can check the type of any variable using the type function.
+For instance, type of name would return str, type of age returns int, and
+type of price returns float. This is useful for debugging when you're not
+sure what type a variable holds.
+
+[00:03:00] Type conversion is another important concept. Sometimes you need
+to convert between types. You can use int to convert a string like quote 42
+quote to the integer 42. Similarly, str converts a number to a string, and
+float converts to a floating-point number. Be careful though: trying to
+convert a non-numeric string to int will raise a ValueError.
+
+[00:03:45] Now let's move on to functions. A function is a reusable block of
+code that performs a specific task. You define a function using the def keyword,
+followed by the function name, parentheses for parameters, and a colon. The
+function body is indented below.
+
+[00:04:15] Here's a simple example: def greet with parameter name, then on
+the next line return quote Hello comma space quote plus name. This function
+takes a name as input and returns a greeting string. You call it by writing
+greet with quote Bob quote in parentheses, and it returns Hello Bob.
+
+[00:04:50] Functions can have multiple parameters. For example, def add with
+parameters a and b, return a plus b. You can also set default values for
+parameters: def greet with name equals quote World quote. If you call greet
+without arguments, it uses the default value and returns Hello World.
+
+[00:05:30] The return statement sends a value back to the caller. A function
+can return any type of value: a number, a string, a list, or even another
+function. If a function doesn't have a return statement, it implicitly returns
+None. You can also return multiple values using tuple packing: return a, b, c.
+
+[00:06:00] Let me show you a more practical example. Let's write a function
+called calculate_average that takes a list of numbers as input. Inside the
+function, we check if the list is empty, and if so, return 0. Otherwise,
+we return the sum of the numbers divided by the length of the list. This
+demonstrates parameter handling, conditional logic, and the return statement.
+
+[00:06:45] Now let's talk about loops. Loops allow you to repeat a block of
+code multiple times. Python has two main types of loops: for loops and while
+loops. The for loop is used when you want to iterate over a sequence like a
+list, string, or range of numbers.
+
+[00:07:15] The basic syntax is: for item in sequence, colon, then the loop
+body indented below. For example, for fruit in a list containing apple, banana,
+cherry, print fruit. This prints each fruit on a separate line. The variable
+fruit takes on each value in the list one at a time.
+
+[00:07:50] The range function is commonly used with for loops to generate a
+sequence of numbers. Range 5 produces numbers 0 through 4. Range 1, 6
+produces 1 through 5. Range 0, 10, 2 produces 0, 2, 4, 6, 8. This is
+very useful for counting loops and index-based iteration.
+
+[00:08:20] While loops repeat as long as a condition is True. The syntax is:
+while condition, colon, then the loop body. For example, count equals 0, while
+count is less than 5, print count, count equals count plus 1. This prints
+numbers 0 through 4. Be careful with while loops: if the condition never
+becomes False, you'll create an infinite loop.
+
+[00:08:55] Two important keywords for controlling loop flow are break and
+continue. Break immediately exits the loop entirely. Continue skips the rest
+of the current iteration and moves to the next one. For example, in a for
+loop iterating over numbers 0 to 9, if number equals 5 break will stop the
+loop at 5, while if number modulo 2 equals 0 continue will skip even numbers.
+
+[00:09:30] You can also nest loops inside each other. A common use case is
+iterating over a 2D structure. For example, for row in range 3, for col in
+range 3, print row comma col. This produces all combinations of row and
+column indices. Be mindful of performance with nested loops, as the total
+iterations multiply.
+
+[00:10:00] Let's put everything together with a practical example. We'll
+write a function called find_common_elements that takes two lists as parameters.
+Using a for loop, we iterate over the first list, and for each element, we
+check if it exists in the second list using the in operator. If it does, we
+append it to a result list. Finally, we return the result list. This combines
+functions, loops, conditionals, and list operations.
+
+[00:10:40] To summarize what we've covered today: variables store data and
+Python handles types dynamically; functions let you organize reusable code
+with parameters and return values; and loops let you repeat operations over
+sequences or while conditions hold. These three concepts form the core of
+Python programming and you'll use them in virtually every program you write.
+
+[00:11:00] In the next lesson, we'll build on these fundamentals to explore
+more advanced topics like list comprehensions, dictionaries, and error
+handling. Practice writing small programs using variables, functions, and
+loops to solidify your understanding. Thank you for watching.

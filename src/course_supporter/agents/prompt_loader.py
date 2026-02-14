@@ -31,7 +31,7 @@ def load_prompt(path: str | Path) -> dict[str, Any]:
     if missing:
         raise KeyError(f"Missing required keys in prompt file: {missing}")
 
-    return dict(data)
+    return data  # type: ignore[no-any-return]
 
 
 def format_user_prompt(template: str, context: str) -> str:

@@ -41,6 +41,9 @@ class Course(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(Text)
+    expected_knowledge: Mapped[list[Any] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -130,6 +133,11 @@ class Module(Base):
         ForeignKey("courses.id", ondelete="CASCADE")
     )
     title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(Text)
+    expected_knowledge: Mapped[list[Any] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[Any] | None] = mapped_column(JSONB)
+    difficulty: Mapped[str | None] = mapped_column(String(20))
     order: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

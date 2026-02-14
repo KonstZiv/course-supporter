@@ -135,7 +135,7 @@ class ArchitectAgent:
             strategy=self._strategy,
             prompt_version=prepared.prompt_version,
             documents_count=documents_count,
-            context_length=len(prepared.user_prompt),
+            context_chars=len(prepared.user_prompt),
         )
 
         result, response = await self._router.complete_structured(

@@ -1,0 +1,156 @@
+--- Slide 1 ---
+Title: Python Basics: Variables, Functions, and Loops
+Subtitle: A Beginner's Guide to Core Python Concepts
+Author: Course Supporter Demo
+
+--- Slide 2 ---
+Title: What We'll Cover
+- Variables and data types
+- Defining and calling functions
+- For loops and while loops
+- Practical examples combining all concepts
+
+--- Slide 3 ---
+Title: What is a Variable?
+- A name that refers to a value in memory
+- Created with the assignment operator (=)
+- Python uses dynamic typing — no type declarations needed
+- Example: name = "Alice"
+
+--- Slide 4 ---
+Title: Common Data Types
+- str — text strings: "hello", 'world'
+- int — whole numbers: 42, -7, 0
+- float — decimal numbers: 3.14, 2.718
+- bool — True or False
+- None — represents no value
+
+--- Slide 5 ---
+Title: Variable Assignment Examples
+- message = "Hello, Python!"
+- count = 10
+- temperature = 36.6
+- is_active = True
+- result = None
+
+--- Slide 6 ---
+Title: Type Checking and Conversion
+- type(x) returns the type of variable x
+- int("42") converts string to integer
+- str(100) converts number to string
+- float("3.14") converts string to float
+- Careful: int("abc") raises ValueError
+
+--- Slide 7 ---
+Title: String Operations
+- Concatenation: "Hello" + " " + "World"
+- Repetition: "ha" * 3 produces "hahaha"
+- f-strings: f"Name: {name}, Age: {age}"
+- Methods: .upper(), .lower(), .strip(), .split()
+
+--- Slide 8 ---
+Title: What is a Function?
+- A reusable block of code
+- Defined with the def keyword
+- Can accept parameters (inputs)
+- Can return values (outputs)
+- Helps organize code and avoid repetition
+
+--- Slide 9 ---
+Title: Function Syntax
+- def function_name(parameters):
+-     """Docstring describing the function."""
+-     # function body
+-     return result
+- Called with: function_name(arguments)
+
+--- Slide 10 ---
+Title: Function Parameters
+- Positional parameters: def add(a, b)
+- Default values: def greet(name="World")
+- Keyword arguments: greet(name="Alice")
+- Multiple return values: return x, y
+
+--- Slide 11 ---
+Title: Function Example
+- def calculate_area(length, width):
+-     """Calculate the area of a rectangle."""
+-     return length * width
+-
+- area = calculate_area(5, 3)  # returns 15
+
+--- Slide 12 ---
+Title: The return Statement
+- Sends a value back to the caller
+- Function stops executing after return
+- Without return, function returns None
+- Can return any data type
+
+--- Slide 13 ---
+Title: For Loops
+- Iterate over a sequence (list, string, range)
+- Syntax: for item in sequence:
+- Example: for name in ["Alice", "Bob"]:
+-              print(name)
+- The loop variable takes each value in turn
+
+--- Slide 14 ---
+Title: The range() Function
+- range(n) — 0 to n-1
+- range(start, stop) — start to stop-1
+- range(start, stop, step) — with custom step
+- Example: range(0, 10, 2) gives 0, 2, 4, 6, 8
+
+--- Slide 15 ---
+Title: While Loops
+- Repeat while a condition is True
+- Syntax: while condition:
+- Must update the condition to avoid infinite loops
+- Example:
+-     count = 0
+-     while count < 5:
+-         print(count)
+-         count += 1
+
+--- Slide 16 ---
+Title: Loop Control: break and continue
+- break — exit the loop immediately
+- continue — skip to next iteration
+- Example with break:
+-     for n in range(10):
+-         if n == 5:
+-             break  # stops at 5
+
+--- Slide 17 ---
+Title: Nested Loops
+- A loop inside another loop
+- Total iterations = outer * inner
+- Example: multiplication table
+-     for i in range(1, 4):
+-         for j in range(1, 4):
+-             print(f"{i} x {j} = {i*j}")
+
+--- Slide 18 ---
+Title: Practical Example: Sum of Even Numbers
+- def sum_even(numbers):
+-     total = 0
+-     for n in numbers:
+-         if n % 2 == 0:
+-             total += n
+-     return total
+- Combines: function + for loop + conditional
+
+--- Slide 19 ---
+Title: Key Takeaways
+- Variables store data with dynamic typing
+- Functions encapsulate reusable logic (def/return)
+- For loops iterate over sequences
+- While loops repeat until a condition is False
+- break and continue control loop flow
+
+--- Slide 20 ---
+Title: Next Steps
+- Practice: write small programs daily
+- Explore: list comprehensions, dictionaries
+- Build: simple projects (calculator, quiz game)
+- Resources: docs.python.org, Python Tutorial

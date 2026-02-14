@@ -32,6 +32,9 @@ dependencies = [
     "trafilatura>=2.0",
     "beautifulsoup4>=4.13",
 
+    # Object storage (MinIO / S3)
+    "aiobotocore>=2.15",
+
     # Observability
     "structlog>=25.1",
 
@@ -128,6 +131,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "bs4.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "aiobotocore.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

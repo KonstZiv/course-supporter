@@ -23,6 +23,7 @@ repos:
           - openai>=1.68
           - types-PyYAML>=6.0
           - pyyaml>=6.0
+          - fastapi>=0.128
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/

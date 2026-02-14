@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from io import StringIO
 from unittest.mock import patch
 
@@ -27,16 +28,17 @@ def _capture_log_output(environment: str, log_level: str = "DEBUG") -> str:
     configure_logging(environment=environment, log_level=log_level)
 
     stream = StringIO()
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(logging.getLogger().handlers[0].formatter)
-
     root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
+    if not root.handlers or not isinstance(root.handlers[0], logging.StreamHandler):
+        raise RuntimeError("Expected configure_logging to set up a StreamHandler")
+
+    original_stream = root.handlers[0].stream
+    root.handlers[0].stream = stream
 
     logger = structlog.get_logger()
     logger.info("test_event", key="value")
 
+    root.handlers[0].stream = original_stream
     return stream.getvalue()
 
 
@@ -54,8 +56,9 @@ class TestConfigureLogging:
     def test_configure_development_console(self) -> None:
         """Development environment produces human-readable console output."""
         output = _capture_log_output("development")
-        assert "test_event" in output
-        assert "key=value" in output or "key" in output
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+        assert "test_event" in plain
+        assert "key=value" in plain
 
     def test_configure_sets_log_level(self) -> None:
         """Root logger level is set to the specified value."""

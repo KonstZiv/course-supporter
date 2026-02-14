@@ -55,19 +55,20 @@ def print_table(report: CostReport) -> str:
         ("By Provider", report.by_provider),
         ("By Model", report.by_model),
     ]:
+        indent = "  "
         lines.append(f"=== {label} ===")
         if not groups:
-            lines.append("  (no data)")
+            lines.append(f"{indent}(no data)")
         else:
             header = (
-                f"  {'Group':<30} {'Calls':>6} {'Cost':>10} "
+                f"{indent}{'Group':<30} {'Calls':>6} {'Cost':>10} "
                 f"{'Tokens In':>10} {'Tokens Out':>11} {'Avg ms':>8}"
             )
             lines.append(header)
-            lines.append("  " + "-" * (len(header) - 2))
+            lines.append(indent + "-" * (len(header) - len(indent)))
             for g in groups:
                 lines.append(
-                    f"  {g.group:<30} {g.calls:>6} "
+                    f"{indent}{g.group:<30} {g.calls:>6} "
                     f"${g.cost_usd:>9.4f} {g.tokens_in:>10} "
                     f"{g.tokens_out:>11} {g.avg_latency_ms:>8.1f}"
                 )

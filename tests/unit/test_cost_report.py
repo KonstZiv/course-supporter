@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -208,7 +209,7 @@ class TestCostReportAPI:
         from course_supporter.api.app import app
 
         @asynccontextmanager
-        async def mock_session_ctx():  # type: ignore[no-untyped-def]
+        async def mock_session_ctx() -> AsyncIterator[AsyncMock]:
             session = AsyncMock()
             yield session
 
@@ -240,7 +241,7 @@ class TestCostReportAPI:
         from course_supporter.api.app import app
 
         @asynccontextmanager
-        async def mock_session_ctx():  # type: ignore[no-untyped-def]
+        async def mock_session_ctx() -> AsyncIterator[AsyncMock]:
             session = AsyncMock()
             yield session
 

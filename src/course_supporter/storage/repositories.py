@@ -219,8 +219,7 @@ class CourseStructureRepository:
 
         # Update course metadata from structure
         course.title = structure.title
-        if structure.description:
-            course.description = structure.description
+        course.description = structure.description or None
         course.learning_goal = structure.learning_goal or None
         course.expected_knowledge = (
             structure.expected_knowledge if structure.expected_knowledge else None

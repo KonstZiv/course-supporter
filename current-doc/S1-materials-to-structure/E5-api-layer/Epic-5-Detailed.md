@@ -9,7 +9,7 @@ REST API для взаємодії з системою. Після цього е
 - **Epic 1 ✅**: DB, config, infra
 - **Epic 2 ✅**: ModelRouter, LLM providers
 - **Epic 3 ✅**: Ingestion pipeline (SourceProcessors → MergeStep → CourseContext)
-- **Epic 4**: ArchitectAgent (CourseContext → CourseStructure → DB)
+- **Epic 4 ✅**: ArchitectAgent (step-based: CourseContext → CourseStructure), CourseStructureRepository (→ DB), 55 тестів, 3 міграції
 
 ## Що робимо
 
@@ -41,7 +41,7 @@ API — єдиний спосіб взаємодії зовнішніх кліє
 
 ## Залежності
 
-- **Блокується:** Epic 3 (Ingestion), Epic 4 (ArchitectAgent)
+- **Блокується:** Epic 3 (Ingestion) ✅, Epic 4 (ArchitectAgent) ✅
 - **Блокує:** Epic 6 (eval потребує API для end-to-end тестів)
 
 ## Задачі

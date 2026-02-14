@@ -26,7 +26,7 @@ def _make_course_mock(course_id: uuid.UUID) -> MagicMock:
     course.learning_goal = None
     course.expected_knowledge = None
     course.expected_skills = None
-    course.modules = MagicMock()
+    course.modules = MagicMock(spec=list)
     return course
 
 

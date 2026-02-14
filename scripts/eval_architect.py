@@ -5,6 +5,7 @@ Usage:
     uv run python scripts/eval_architect.py --mock         # mock mode (CI)
     uv run python scripts/eval_architect.py --save-mock    # run real + save response
     uv run python scripts/eval_architect.py --output r.json  # save report to file
+    uv run python scripts/eval_architect.py --threshold 0.7  # custom pass threshold
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+
+from course_supporter.evals.comparator import StructureComparator
+from course_supporter.models.course import CourseStructure
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "eval"
 MOCK_PATH = FIXTURE_DIR / "mock_llm_response.json"
@@ -39,27 +43,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Save JSON report to file",
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Minimum overall score for success (default: 0.5)",
+    )
     return parser.parse_args(argv)
 
 
-def load_reference() -> CourseStructure:  # noqa: F821
+def load_reference() -> CourseStructure:
     """Load the gold-standard reference structure."""
-    from course_supporter.models.course import CourseStructure
-
     raw = REFERENCE_PATH.read_text()
     return CourseStructure.model_validate_json(raw)
 
 
-def load_mock() -> CourseStructure:  # noqa: F821
+def load_mock() -> CourseStructure:
     """Load pre-saved mock LLM response."""
-    from course_supporter.models.course import CourseStructure
-
     raw = MOCK_PATH.read_text()
     return CourseStructure.model_validate_json(raw)
 
 
-async def run_real_pipeline() -> CourseStructure:  # noqa: F821
-    """Run the real pipeline: TextProcessor → MergeStep → ArchitectAgent."""
+async def run_real_pipeline() -> CourseStructure:
+    """Run the real pipeline: TextProcessor -> MergeStep -> ArchitectAgent."""
     from course_supporter.agents.architect import ArchitectAgent
     from course_supporter.config import settings
     from course_supporter.ingestion.merge import MergeStep
@@ -117,8 +123,6 @@ def main() -> None:
         )
         print(f"Mock response saved to {MOCK_PATH}")
 
-    from course_supporter.evals.comparator import StructureComparator
-
     comparator = StructureComparator()
     report = comparator.compare(generated, reference)
 
@@ -133,7 +137,7 @@ def main() -> None:
         )
         print(f"Report saved to {output_path}")
 
-    sys.exit(0 if report.overall_score >= 0.5 else 1)
+    sys.exit(0 if report.overall_score >= args.threshold else 1)
 
 
 if __name__ == "__main__":

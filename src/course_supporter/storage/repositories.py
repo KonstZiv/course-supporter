@@ -5,9 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from course_supporter.models.course import (
     ConceptOutput,
@@ -17,11 +18,13 @@ from course_supporter.models.course import (
     ModuleOutput,
     SlideVideoMapEntry,
 )
+from course_supporter.models.reports import CostSummary, GroupedCost
 from course_supporter.storage.orm import (
     Concept,
     Course,
     Exercise,
     Lesson,
+    LLMCall,
     Module,
     SlideVideoMapping,
     SourceMaterial,
@@ -488,3 +491,78 @@ class LessonRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+
+class LLMCallRepository:
+    """Repository for LLM call analytics and cost reporting."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_summary(self) -> CostSummary:
+        """Get aggregate summary of all LLM calls."""
+        stmt = select(
+            func.count().label("total_calls"),
+            func.count().filter(LLMCall.success.is_(True)).label("successful_calls"),
+            func.count().filter(LLMCall.success.is_(False)).label("failed_calls"),
+            func.coalesce(func.sum(LLMCall.cost_usd), 0.0).label("total_cost_usd"),
+            func.coalesce(func.sum(LLMCall.tokens_in), 0).label("total_tokens_in"),
+            func.coalesce(func.sum(LLMCall.tokens_out), 0).label("total_tokens_out"),
+            func.coalesce(func.avg(LLMCall.latency_ms), 0.0).label("avg_latency_ms"),
+        ).select_from(LLMCall)
+        result = await self._session.execute(stmt)
+        row = result.one()
+        return CostSummary(
+            total_calls=row.total_calls,
+            successful_calls=row.successful_calls,
+            failed_calls=row.failed_calls,
+            total_cost_usd=float(row.total_cost_usd),
+            total_tokens_in=int(row.total_tokens_in),
+            total_tokens_out=int(row.total_tokens_out),
+            avg_latency_ms=float(row.avg_latency_ms),
+        )
+
+    async def get_by_action(self) -> list[GroupedCost]:
+        """Get cost breakdown grouped by action."""
+        return await self._grouped_query(LLMCall.action)
+
+    async def get_by_provider(self) -> list[GroupedCost]:
+        """Get cost breakdown grouped by provider."""
+        return await self._grouped_query(LLMCall.provider)
+
+    async def get_by_model(self) -> list[GroupedCost]:
+        """Get cost breakdown grouped by model_id."""
+        return await self._grouped_query(LLMCall.model_id)
+
+    async def _grouped_query(
+        self,
+        group_column: InstrumentedAttribute[str],
+    ) -> list[GroupedCost]:
+        """Run a GROUP BY query on the given column."""
+        stmt = (
+            select(
+                group_column.label("group"),
+                func.count().label("calls"),
+                func.coalesce(func.sum(LLMCall.cost_usd), 0.0).label("cost_usd"),
+                func.coalesce(func.sum(LLMCall.tokens_in), 0).label("tokens_in"),
+                func.coalesce(func.sum(LLMCall.tokens_out), 0).label("tokens_out"),
+                func.coalesce(func.avg(LLMCall.latency_ms), 0.0).label(
+                    "avg_latency_ms"
+                ),
+            )
+            .select_from(LLMCall)
+            .group_by(group_column)
+            .order_by(func.count().desc())
+        )
+        result = await self._session.execute(stmt)
+        return [
+            GroupedCost(
+                group=row.group,
+                calls=row.calls,
+                cost_usd=float(row.cost_usd),
+                tokens_in=int(row.tokens_in),
+                tokens_out=int(row.tokens_out),
+                avg_latency_ms=float(row.avg_latency_ms),
+            )
+            for row in result.all()
+        ]

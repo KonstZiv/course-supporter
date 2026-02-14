@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from course_supporter.models.course import (
     ConceptOutput,
@@ -14,6 +15,7 @@ from course_supporter.models.course import (
     ExerciseOutput,
     LessonOutput,
     ModuleOutput,
+    SlideVideoMapEntry,
 )
 from course_supporter.storage.orm import (
     Concept,
@@ -21,6 +23,7 @@ from course_supporter.storage.orm import (
     Exercise,
     Lesson,
     Module,
+    SlideVideoMapping,
     SourceMaterial,
 )
 
@@ -32,6 +35,147 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     # TODO: consider error → pending for retry workflow
     "error": set(),  # terminal state
 }
+
+
+class CourseRepository:
+    """Repository for Course CRUD operations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(
+        self,
+        *,
+        title: str,
+        description: str | None = None,
+    ) -> Course:
+        """Create a new course.
+
+        Args:
+            title: Course title.
+            description: Optional course description.
+
+        Returns:
+            The newly created Course ORM instance.
+        """
+        course = Course(title=title, description=description)
+        self._session.add(course)
+        await self._session.flush()
+        return course
+
+    async def get_by_id(self, course_id: uuid.UUID) -> Course | None:
+        """Get course by primary key.
+
+        Args:
+            course_id: UUID of the course.
+
+        Returns:
+            Course if found, None otherwise.
+        """
+        return await self._session.get(Course, course_id)
+
+    async def get_with_structure(self, course_id: uuid.UUID) -> Course | None:
+        """Get course with all nested structure eagerly loaded.
+
+        Uses selectinload to avoid cartesian product issues
+        that joinedload would cause with multiple collections.
+
+        Args:
+            course_id: UUID of the course.
+
+        Returns:
+            Course with modules, lessons, concepts, exercises,
+            and source_materials loaded, or None if not found.
+        """
+        stmt = (
+            select(Course)
+            .where(Course.id == course_id)
+            .options(
+                selectinload(Course.source_materials),
+                selectinload(Course.modules)
+                .selectinload(Module.lessons)
+                .selectinload(Lesson.concepts),
+                selectinload(Course.modules)
+                .selectinload(Module.lessons)
+                .selectinload(Lesson.exercises),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_all(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Course]:
+        """List courses ordered by creation date (newest first).
+
+        Args:
+            limit: Maximum number of results.
+            offset: Number of results to skip.
+
+        Returns:
+            List of Course instances.
+        """
+        stmt = (
+            select(Course)
+            .order_by(Course.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+
+class SlideVideoMappingRepository:
+    """Repository for slide-video mapping operations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def batch_create(
+        self,
+        course_id: uuid.UUID,
+        mappings: list[SlideVideoMapEntry],
+    ) -> list[SlideVideoMapping]:
+        """Create multiple slide-video mappings in a batch.
+
+        Args:
+            course_id: FK to the parent course.
+            mappings: List of SlideVideoMapEntry Pydantic models.
+
+        Returns:
+            List of created SlideVideoMapping ORM instances.
+        """
+        records = []
+        for m in mappings:
+            record = SlideVideoMapping(
+                course_id=course_id,
+                slide_number=m.slide_number,
+                video_timecode=m.video_timecode,
+            )
+            self._session.add(record)
+            records.append(record)
+        await self._session.flush()
+        return records
+
+    async def get_by_course_id(self, course_id: uuid.UUID) -> list[SlideVideoMapping]:
+        """Get all slide-video mappings for a course.
+
+        Args:
+            course_id: UUID of the parent course.
+
+        Returns:
+            List of SlideVideoMapping instances ordered by slide_number.
+        """
+        stmt = (
+            select(SlideVideoMapping)
+            .where(SlideVideoMapping.course_id == course_id)
+            .order_by(SlideVideoMapping.slide_number)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
 
 class SourceMaterialRepository:
@@ -307,3 +451,40 @@ class CourseStructureRepository:
             grading_criteria=data.grading_criteria,
             difficulty_level=data.difficulty_level,
         )
+
+
+class LessonRepository:
+    """Repository for Lesson read operations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_id_for_course(
+        self,
+        lesson_id: uuid.UUID,
+        course_id: uuid.UUID,
+    ) -> Lesson | None:
+        """Get lesson by ID, ensuring it belongs to the given course.
+
+        Joins Module to verify course ownership and eagerly loads
+        concepts and exercises.
+
+        Args:
+            lesson_id: UUID of the lesson.
+            course_id: UUID of the parent course.
+
+        Returns:
+            Lesson with concepts and exercises loaded,
+            or None if not found or wrong course.
+        """
+        stmt = (
+            select(Lesson)
+            .join(Module, Lesson.module_id == Module.id)
+            .where(Lesson.id == lesson_id, Module.course_id == course_id)
+            .options(
+                selectinload(Lesson.concepts),
+                selectinload(Lesson.exercises),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()

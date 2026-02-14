@@ -1,0 +1,83 @@
+"""FastAPI application with lifespan management."""
+
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+import structlog
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from course_supporter.api.routes.courses import router as courses_router
+from course_supporter.config import settings
+from course_supporter.llm import create_model_router
+from course_supporter.storage.database import async_session, engine
+from course_supporter.storage.s3 import S3Client
+
+logger = structlog.get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Manage application startup and shutdown.
+
+    Startup:
+        - Create ModelRouter with DB logging enabled.
+    Shutdown:
+        - Dispose database engine (close connection pool).
+    """
+    app.state.model_router = create_model_router(settings, async_session)
+
+    s3 = S3Client(
+        endpoint_url=settings.s3_endpoint,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key.get_secret_value(),
+        bucket=settings.s3_bucket,
+    )
+    await s3.__aenter__()
+    await s3.ensure_bucket()
+    app.state.s3_client = s3
+
+    logger.info("app_started", environment=str(settings.environment))
+    yield
+    await s3.__aexit__(None, None, None)
+    await engine.dispose()
+    logger.info("app_stopped")
+
+
+app = FastAPI(
+    title="Course Supporter",
+    description="AI-powered course structuring from learning materials",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    """Catch-all handler for unhandled exceptions."""
+    logger.error("unhandled_exception", exc_info=exc, path=request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
+
+app.include_router(courses_router, prefix="/api/v1")

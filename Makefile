@@ -1,4 +1,4 @@
-.PHONY: help install lint format typecheck test test-cov check all up down reset logs ps migrate db-upgrade db-downgrade db-reset
+.PHONY: help install lint format typecheck test test-cov check all run-api up down reset logs ps migrate db-upgrade db-downgrade db-reset
 
 help:  ## Показати цю довідку
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -27,6 +27,11 @@ test-cov:  ## Запустити тести з coverage
 check: lint typecheck test  ## Повна перевірка (lint + types + tests)
 
 all: format check  ## Форматувати + повна перевірка
+
+# --- API ---
+
+run-api:  ## Запустити API сервер (uvicorn --reload)
+	uv run uvicorn course_supporter.api:app --reload
 
 # --- Database ---
 

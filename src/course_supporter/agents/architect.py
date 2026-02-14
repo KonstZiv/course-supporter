@@ -101,7 +101,7 @@ class ArchitectAgent:
         prompt_data = load_prompt(self._prompt_path)
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
-            context.model_dump_json(indent=2),
+            context.model_dump_json(),
         )
         return PreparedPrompt(
             system_prompt=prompt_data.system_prompt,

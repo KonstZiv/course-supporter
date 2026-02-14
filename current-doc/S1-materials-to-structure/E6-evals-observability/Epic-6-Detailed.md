@@ -59,7 +59,7 @@ def configure_logging(environment: str = "development", log_level: str = "INFO")
 ```python
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Log HTTP request/response with timing."""
-    SKIP_PATHS: set[str] = {"/health", "/docs", "/openapi.json", "/redoc"}
+    SKIP_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
     # Logs: method, path, status_code, latency_ms
 ```
 

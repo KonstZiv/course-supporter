@@ -8,9 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
+from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
 from course_supporter.storage.s3 import S3Client
 
@@ -26,6 +28,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     Shutdown:
         - Dispose database engine (close connection pool).
     """
+    configure_logging(
+        environment=str(settings.environment),
+        log_level=settings.log_level,
+    )
     app.state.model_router = create_model_router(settings, async_session)
 
     s3 = S3Client(
@@ -51,6 +57,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,

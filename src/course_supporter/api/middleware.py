@@ -9,17 +9,19 @@ from starlette.responses import Response
 
 logger = structlog.get_logger()
 
-SKIP_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
-
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Log HTTP requests with method, path, status code, and latency."""
+
+    SKIP_PATHS: frozenset[str] = frozenset(
+        {"/health", "/docs", "/openapi.json", "/redoc"}
+    )
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         """Process request and log timing information."""
-        if request.url.path in SKIP_PATHS:
+        if request.url.path in self.SKIP_PATHS:
             return await call_next(request)
 
         start = time.perf_counter()

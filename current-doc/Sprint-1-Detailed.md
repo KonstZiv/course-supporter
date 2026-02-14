@@ -19,9 +19,10 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 - **Epic 1: DONE** — merged to main, 17 тестів (9 config + 8 ORM)
 - **Epic 2: DONE** — merged to main, 67 тестів (14 providers + 22 registry + 24 router + 7 logging)
 - **Epic 3: DONE** — merged to main, 101 тест (11 schemas + 17 video + 11 whisper + 13 presentation + 11 text + 8 web + 13 merge + 17 repository)
-- **Total tests: 185**, `make check` зелений
-- **Migrations: 2** (initial schema + action/strategy refactor)
-- **Next: Epic 4** (Architect Agent)
+- **Epic 4: DONE** — merged to main, 55 тестів (16 models + 12 prompt + 11 agent + 16 repository)
+- **Total tests: 240**, `make check` зелений
+- **Migrations: 3** (initial schema + action/strategy refactor + learning fields)
+- **Next: Epic 5** (API Layer)
 
 ---
 
@@ -117,18 +118,34 @@ src/course_supporter/storage/
 
 ---
 
-### Epic 4: Architect Agent (Методист)
+### Epic 4: Architect Agent (Методист) ✅
 
-AI-агент, що аналізує `CourseContext` і генерує структуру курсу.
+AI-агент, що аналізує `CourseContext` і генерує структуру курсу. Step-based архітектура для майбутньої міграції на chain/graph orchestration.
+
+**Фінальна структура:**
+
+```
+src/course_supporter/agents/
+├── __init__.py           # Public: ArchitectAgent, PreparedPrompt, PromptData, load_prompt, format_user_prompt
+├── architect.py          # ArchitectAgent (step-based: _prepare_prompts → _generate)
+└── prompt_loader.py      # PromptData (Pydantic), load_prompt(path), format_user_prompt(template, context)
+
+src/course_supporter/models/
+└── course.py             # +7 output models: CourseStructure, ModuleOutput, LessonOutput, ConceptOutput,
+                          #   ExerciseOutput, SlideRange, WebReference, ModuleDifficulty
+
+prompts/architect/
+└── v1.yaml               # Pedagogical system prompt + user prompt template (version: "1.0")
+```
 
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-019 | Pydantic-моделі output | `CourseStructure`, `Module`, `Lesson`, `Concept`, `Exercise`, `SlideRange`, `WebReference` |
-| S1-020 | System prompt v1 | Промпт у `prompts/architect/v1.yaml` |
-| S1-021 | ArchitectAgent клас | `async def run(context: CourseContext) -> CourseStructure` через ModelRouter |
-| S1-022 | Збереження структури курсу | Маппінг `CourseStructure` → ORM таблиці (modules, lessons, concepts, exercises) |
+| ID | Назва | Статус | Тести | Опис |
+| :---- | :---- | :---- | :---- | :---- |
+| S1-019 | Pydantic-моделі output | ✅ | 16 | 7 output моделей + `ModuleDifficulty`, learning fields (goal, knowledge, skills) |
+| S1-020 | System prompt v1 + prompt_loader | ✅ | 12 | `PromptData` Pydantic model, YAML loader, pedagogical prompt v1 |
+| S1-021 | ArchitectAgent клас | ✅ | 11 | Step-based: `_prepare_prompts` → `_generate`, `PreparedPrompt` NamedTuple |
+| S1-022 | Збереження структури курсу | ✅ | 16 | `CourseStructureRepository`, learning fields в ORM, Alembic migration |
 
 ---
 
@@ -172,7 +189,7 @@ Epic 1 (Bootstrap) ✅
   ↓
 Epic 2 (Model Registry) ✅
   ↓
-Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent)
+Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent) ✅
                                   ↓
                           Epic 5 (API Layer)
                                   ↓
@@ -182,8 +199,8 @@ Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent)
 - **Epic 1** — DONE. Блокувало все.
 - **Epic 2** — DONE. Блокувало Epic 3 та 4 (ModelRouter).
 - **Epic 3** — DONE. Блокувало Epic 4 (CourseContext → ArchitectAgent).
-- **Epic 4** — наступний. Потребує CourseContext з Epic 3.
-- **Epic 5** — інтеграція, потребує готових Epic 3 та 4.
+- **Epic 4** — DONE. Step-based ArchitectAgent, 55 тестів, 3 міграції.
+- **Epic 5** — наступний. Інтеграція: Ingestion → ArchitectAgent → API.
 - **Epic 6** — потребує робочий pipeline (Epic 5).
 
 ---

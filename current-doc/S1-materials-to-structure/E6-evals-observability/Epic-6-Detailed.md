@@ -368,15 +368,15 @@ tests/
 
 ## Контрольні точки
 
-- [ ] Structlog виводить JSON у production, colored console у dev
-- [ ] FastAPI middleware логує request/response (skip /health, /docs)
-- [ ] Test dataset (3 файли) підготовлений в `tests/fixtures/eval/`
-- [ ] Reference structure описує очікуваний output, валідується як `CourseStructure`
-- [ ] Eval script: `uv run python scripts/eval_architect.py --mock` виводить метрики
-- [ ] Eval script: `uv run python scripts/eval_architect.py` запускає реальний pipeline
-- [ ] Cost report API: `GET /api/v1/reports/cost` → JSON з summary + by_action/provider/model
-- [ ] Cost report CLI: `uv run python scripts/cost_report.py` → ASCII table
-- [ ] `make check` проходить (~326 тестів)
+- [x] Structlog виводить JSON у production, colored console у dev
+- [x] FastAPI middleware логує request/response (skip /health, /docs)
+- [x] Test dataset (3 файли) підготовлений в `tests/fixtures/eval/`
+- [x] Reference structure описує очікуваний output, валідується як `CourseStructure`
+- [x] Eval script: `uv run python scripts/eval_architect.py --mock` виводить метрики (overall 0.93)
+- [ ] Eval script: `uv run python scripts/eval_architect.py` запускає реальний pipeline (потребує API keys)
+- [x] Cost report API: `GET /api/v1/reports/cost` → JSON з summary + by_action/provider/model
+- [x] Cost report CLI: `uv run python scripts/cost_report.py` → ASCII table
+- [x] `make check` проходить (326 тестів)
 
 ## Залежності
 

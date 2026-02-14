@@ -21,9 +21,10 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 - **Epic 3: DONE** — merged to main, 101 тест (11 schemas + 17 video + 11 whisper + 13 presentation + 11 text + 8 web + 13 merge + 17 repository)
 - **Epic 4: DONE** — merged to main, 55 тестів (16 models + 12 prompt + 11 agent + 16 repository)
 - **Epic 5: DONE** — merged to main, 54 тести (8 health + 10 courses + 6 slide-mapping + 8 detail + 7 lesson + 6 materials + 3 ingestion task + 6 s3 client)
-- **Total tests: 294**, `make check` зелений
+- **Epic 6: DONE** — merged to main, 32 тести (7 logging + 3 eval reference + 13 comparator + 9 cost report)
+- **Total tests: 326**, `make check` зелений
 - **Migrations: 3** (initial schema + action/strategy refactor + learning fields)
-- **Next: Epic 6** (Evals & Observability)
+- **Sprint 1 COMPLETE** — всі 6 епіків завершені
 
 ---
 
@@ -186,19 +187,46 @@ src/course_supporter/storage/
 
 ---
 
-### Epic 6: Evals & Observability
+### Epic 6: Evals & Observability ✅
 
-Інструменти для вимірювання якості та витрат.
+Інструменти для вимірювання якості генерації та моніторингу: structured logging, eval pipeline, cost reporting.
+
+**Фінальна структура:**
+
+```
+src/course_supporter/
+├── logging_config.py          # configure_logging() — JSON/console
+├── evals/
+│   ├── __init__.py
+│   └── comparator.py          # StructureComparator (5 weighted metrics, fuzzy matching)
+├── models/
+│   └── reports.py             # CostSummary, GroupedCost, CostReport
+├── api/
+│   ├── middleware.py           # RequestLoggingMiddleware (SKIP_PATHS, latency)
+│   └── routes/
+│       └── reports.py          # GET /api/v1/reports/cost
+└── storage/
+    └── repositories.py        # +LLMCallRepository (SQL aggregations)
+
+scripts/
+├── eval_architect.py          # Eval CLI (--mock, --save-mock, --output, --threshold)
+└── cost_report.py             # Cost CLI (--json)
+
+tests/fixtures/eval/
+├── transcript.txt, slides.txt, tutorial.md   # Python basics dataset
+├── reference_structure.json                   # Gold standard (3 modules, 6 lessons, 13 concepts)
+└── mock_llm_response.json                     # Pre-saved mock (score 0.93)
+```
 
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-029 | Тестовий датасет | Відео + PDF + текст + веб-посилання |
-| S1-030 | Еталонна розбивка | Ручне структурування для порівняння |
-| S1-031 | Eval script | Порівняння output з еталоном |
-| S1-032 | Cost report | Агрегація `llm_calls`: вартість pipeline по моделях |
-| S1-033 | Structlog setup | Структуровані логи JSON |
+| ID | Назва | Статус | Тести | Опис |
+| :---- | :---- | :---- | :---- | :---- |
+| S1-033 | Structlog setup | ✅ | 7 | `configure_logging()` (JSON/console), `RequestLoggingMiddleware`, ANSI stripping в тестах |
+| S1-029 | Test dataset | ✅ | 0 | 3 fixture файли (transcript, slides, tutorial) — Python basics з перекриттям |
+| S1-030 | Reference structure | ✅ | 3 | Gold standard CourseStructure JSON, schema validation тести |
+| S1-031 | Eval script | ✅ | 13 | `StructureComparator` (5 метрик, fuzzy via SequenceMatcher), dual-mode CLI |
+| S1-032 | Cost report | ✅ | 9 | `LLMCallRepository` (SQL aggregations), API endpoint + CLI |
 
 ---
 
@@ -213,7 +241,7 @@ Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent) ✅
                                   ↓
                           Epic 5 (API Layer) ✅
                                   ↓
-                       Epic 6 (Evals & Observability)
+                       Epic 6 (Evals & Observability) ✅
 ```
 
 - **Epic 1** — DONE. Блокувало все.
@@ -221,7 +249,7 @@ Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent) ✅
 - **Epic 3** — DONE. Блокувало Epic 4 (CourseContext → ArchitectAgent).
 - **Epic 4** — DONE. Step-based ArchitectAgent, 55 тестів, 3 міграції.
 - **Epic 5** — DONE. FastAPI + S3Client + background ingestion, 54 тести.
-- **Epic 6** — наступний. Потребує робочий pipeline (Epic 5 ✅).
+- **Epic 6** — DONE. Structlog, eval pipeline, cost report, 32 тести.
 
 ---
 

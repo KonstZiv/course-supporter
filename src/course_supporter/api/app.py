@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
+from course_supporter.api.routes.reports import router as reports_router
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
 from course_supporter.logging_config import configure_logging
@@ -87,3 +88,4 @@ async def unhandled_exception_handler(
 
 
 app.include_router(courses_router, prefix="/api/v1")
+app.include_router(reports_router, prefix="/api/v1")

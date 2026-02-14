@@ -156,6 +156,16 @@ class TestUpdateStatus:
         assert result.status == "error"
         assert result.error_message == "Something broke"
 
+    async def test_processing_to_error_without_message(self) -> None:
+        """processing → error without error_message raises ValueError."""
+        mat = _make_material(status="processing")
+        session = AsyncMock()
+        session.get.return_value = mat
+
+        repo = SourceMaterialRepository(session)
+        with pytest.raises(ValueError, match="error_message is required"):
+            await repo.update_status(mat.id, "error")
+
     async def test_invalid_transition(self) -> None:
         """pending → done raises ValueError."""
         mat = _make_material(status="pending")

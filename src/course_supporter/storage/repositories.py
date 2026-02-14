@@ -5,13 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import SourceMaterial
-
-logger = structlog.get_logger()
 
 # Valid status transitions: current_status → set of allowed next statuses
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -143,7 +140,11 @@ class SourceMaterialRepository:
         if status == "done":
             material.processed_at = datetime.now(UTC)
 
-        if status == "error" and error_message:
+        if status == "error":
+            if error_message is None:
+                raise ValueError(
+                    "error_message is required when transitioning to 'error'"
+                )
             material.error_message = error_message
 
         if content_snapshot is not None:

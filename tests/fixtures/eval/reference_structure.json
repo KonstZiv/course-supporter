@@ -1,0 +1,257 @@
+{
+  "title": "Python Basics: Variables, Functions, and Loops",
+  "description": "A beginner-level course covering the three foundational building blocks of Python programming: variable assignment and data types, function definition and invocation, and loop constructs for iteration.",
+  "learning_goal": "Understand and apply Python variables, functions, and loops to write simple programs.",
+  "expected_knowledge": [
+    "Python's dynamic typing system and built-in data types",
+    "Function definition syntax including parameters and return values",
+    "Differences between for loops and while loops"
+  ],
+  "expected_skills": [
+    "Create and manipulate variables of different types",
+    "Write reusable functions with parameters and return values",
+    "Use for and while loops to iterate over data"
+  ],
+  "modules": [
+    {
+      "title": "Variables and Data Types",
+      "description": "Learn how to store data in variables and work with Python's built-in types.",
+      "learning_goal": "Understand variable assignment, dynamic typing, and type conversion.",
+      "expected_knowledge": [
+        "Variable assignment with the = operator",
+        "Built-in types: str, int, float, bool, None",
+        "Type checking with type() and conversion functions"
+      ],
+      "expected_skills": [
+        "Assign values to variables",
+        "Convert between data types safely"
+      ],
+      "difficulty": "easy",
+      "lessons": [
+        {
+          "title": "Creating Variables and Assigning Values",
+          "video_start_timecode": "00:00:25",
+          "video_end_timecode": "00:01:45",
+          "slide_range": {"start": 3, "end": 5},
+          "concepts": [
+            {
+              "title": "Variable Assignment",
+              "definition": "A variable is a name that refers to a value in memory, created using the = operator.",
+              "examples": ["name = \"Alice\"", "age = 30", "price = 19.99"],
+              "timecodes": ["00:00:25", "00:01:00"],
+              "slide_references": [3, 5]
+            },
+            {
+              "title": "Dynamic Typing",
+              "definition": "Python infers the type of a variable from the value assigned to it, without explicit type declarations.",
+              "examples": ["x = 42  # int", "x = \"hello\"  # now str"],
+              "timecodes": ["00:00:25"],
+              "slide_references": [3]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Create variables of each built-in type (str, int, float, bool) and print their types using the type() function.",
+              "reference_solution": "name = \"Alice\"\nage = 30\nheight = 1.75\nis_student = True\nfor var in [name, age, height, is_student]:\n    print(type(var))",
+              "grading_criteria": "All four types correctly assigned and printed.",
+              "difficulty_level": 1
+            }
+          ]
+        },
+        {
+          "title": "Data Types and Type Conversion",
+          "video_start_timecode": "00:01:45",
+          "video_end_timecode": "00:03:45",
+          "slide_range": {"start": 4, "end": 7},
+          "concepts": [
+            {
+              "title": "Built-in Data Types",
+              "definition": "Python's core data types include str, int, float, bool, and NoneType.",
+              "examples": ["\"hello\"  # str", "42  # int", "3.14  # float", "True  # bool"],
+              "timecodes": ["00:01:45"],
+              "slide_references": [4]
+            },
+            {
+              "title": "Type Conversion",
+              "definition": "Converting a value from one type to another using functions like int(), str(), and float().",
+              "examples": ["int(\"42\")  # 42", "str(100)  # \"100\"", "float(\"3.14\")  # 3.14"],
+              "timecodes": ["00:03:00"],
+              "slide_references": [6]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Write a program that reads a number as a string, converts it to an integer, doubles it, and prints the result as a string.",
+              "reference_solution": "num_str = \"21\"\nresult = int(num_str) * 2\nprint(str(result))",
+              "grading_criteria": "Correct use of int() and str() conversions with arithmetic.",
+              "difficulty_level": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Functions",
+      "description": "Learn to define, call, and compose functions for reusable code.",
+      "learning_goal": "Define functions with parameters and return values to organize code.",
+      "expected_knowledge": [
+        "def keyword and function definition syntax",
+        "Parameters, default values, and keyword arguments",
+        "The return statement and None"
+      ],
+      "expected_skills": [
+        "Define and call functions",
+        "Use default parameter values",
+        "Return values from functions"
+      ],
+      "difficulty": "medium",
+      "lessons": [
+        {
+          "title": "Defining and Calling Functions",
+          "video_start_timecode": "00:03:45",
+          "video_end_timecode": "00:05:30",
+          "slide_range": {"start": 8, "end": 10},
+          "concepts": [
+            {
+              "title": "Function Definition",
+              "definition": "A function is defined using the def keyword, followed by a name, parameters in parentheses, and a colon.",
+              "examples": ["def greet(name):\n    return f\"Hello, {name}!\""],
+              "timecodes": ["00:03:45", "00:04:15"],
+              "slide_references": [8, 9]
+            },
+            {
+              "title": "Parameters and Default Values",
+              "definition": "Functions accept parameters as inputs, which can have default values specified with = in the definition.",
+              "examples": ["def power(base, exponent=2):\n    return base ** exponent"],
+              "timecodes": ["00:04:50"],
+              "slide_references": [10]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Write a function greet(name, greeting='Hello') that returns a formatted greeting string. Test it with and without the default parameter.",
+              "reference_solution": "def greet(name, greeting=\"Hello\"):\n    return f\"{greeting}, {name}!\"\n\nprint(greet(\"Alice\"))\nprint(greet(\"Bob\", \"Hi\"))",
+              "grading_criteria": "Function uses default parameter correctly; both calls produce expected output.",
+              "difficulty_level": 2
+            }
+          ]
+        },
+        {
+          "title": "Return Values and Practical Functions",
+          "video_start_timecode": "00:05:30",
+          "video_end_timecode": "00:06:45",
+          "slide_range": {"start": 11, "end": 12},
+          "concepts": [
+            {
+              "title": "The return Statement",
+              "definition": "The return statement sends a value back to the caller and terminates function execution. Without it, a function returns None.",
+              "examples": ["def add(a, b):\n    return a + b", "return a // b, a % b  # multiple values"],
+              "timecodes": ["00:05:30"],
+              "slide_references": [12]
+            },
+            {
+              "title": "Practical Function Design",
+              "definition": "Well-designed functions handle edge cases, have clear inputs and outputs, and can be composed together.",
+              "examples": ["def calculate_average(numbers):\n    if not numbers:\n        return 0\n    return sum(numbers) / len(numbers)"],
+              "timecodes": ["00:06:00"],
+              "slide_references": [11]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Write a function calculate_average(numbers) that returns the average of a list. Handle the empty list case by returning 0.",
+              "reference_solution": "def calculate_average(numbers):\n    if not numbers:\n        return 0\n    return sum(numbers) / len(numbers)\n\nprint(calculate_average([10, 20, 30]))\nprint(calculate_average([]))",
+              "grading_criteria": "Correct average calculation; returns 0 for empty list.",
+              "difficulty_level": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Loops and Iteration",
+      "description": "Learn to repeat operations using for and while loops with flow control.",
+      "learning_goal": "Use loops to iterate over data and control execution flow.",
+      "expected_knowledge": [
+        "for loop syntax with sequences and range()",
+        "while loop syntax with condition checking",
+        "break and continue statements"
+      ],
+      "expected_skills": [
+        "Write for loops over lists and ranges",
+        "Write while loops with proper termination",
+        "Use break and continue for flow control"
+      ],
+      "difficulty": "medium",
+      "lessons": [
+        {
+          "title": "For Loops and the range() Function",
+          "video_start_timecode": "00:06:45",
+          "video_end_timecode": "00:08:20",
+          "slide_range": {"start": 13, "end": 14},
+          "concepts": [
+            {
+              "title": "For Loop",
+              "definition": "A for loop iterates over each item in a sequence (list, string, range), executing the loop body for each item.",
+              "examples": ["for fruit in [\"apple\", \"banana\"]:\n    print(fruit)", "for i in range(5):\n    print(i)"],
+              "timecodes": ["00:07:15"],
+              "slide_references": [13]
+            },
+            {
+              "title": "The range() Function",
+              "definition": "range() generates a sequence of numbers for use in for loops, accepting start, stop, and step arguments.",
+              "examples": ["range(5)  # 0,1,2,3,4", "range(1, 6)  # 1,2,3,4,5", "range(0, 10, 2)  # 0,2,4,6,8"],
+              "timecodes": ["00:07:50"],
+              "slide_references": [14]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Use a for loop with range() to print all even numbers from 0 to 20 (inclusive).",
+              "reference_solution": "for i in range(0, 21, 2):\n    print(i)",
+              "grading_criteria": "Correct use of range with step; prints 0, 2, 4, ..., 20.",
+              "difficulty_level": 2
+            }
+          ]
+        },
+        {
+          "title": "While Loops and Loop Control",
+          "video_start_timecode": "00:08:20",
+          "video_end_timecode": "00:10:00",
+          "slide_range": {"start": 15, "end": 17},
+          "concepts": [
+            {
+              "title": "While Loop",
+              "definition": "A while loop repeats its body as long as a boolean condition remains True.",
+              "examples": ["count = 0\nwhile count < 5:\n    print(count)\n    count += 1"],
+              "timecodes": ["00:08:20"],
+              "slide_references": [15]
+            },
+            {
+              "title": "Break and Continue",
+              "definition": "break exits the loop immediately; continue skips the current iteration and proceeds to the next.",
+              "examples": ["if n == 5: break", "if n % 2 == 0: continue"],
+              "timecodes": ["00:08:55"],
+              "slide_references": [16]
+            },
+            {
+              "title": "Nested Loops",
+              "definition": "Loops placed inside other loops, where the inner loop runs completely for each iteration of the outer loop.",
+              "examples": ["for i in range(3):\n    for j in range(3):\n        print(i, j)"],
+              "timecodes": ["00:09:30"],
+              "slide_references": [17]
+            }
+          ],
+          "exercises": [
+            {
+              "description": "Write a function find_common_elements(list1, list2) that uses a loop to find and return elements present in both lists.",
+              "reference_solution": "def find_common_elements(list1, list2):\n    common = []\n    for item in list1:\n        if item in list2:\n            common.append(item)\n    return common\n\nprint(find_common_elements([1,2,3,4], [3,4,5,6]))",
+              "grading_criteria": "Correctly uses loop and conditional; returns shared elements.",
+              "difficulty_level": 3
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

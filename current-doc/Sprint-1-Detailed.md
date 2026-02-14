@@ -20,9 +20,10 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 - **Epic 2: DONE** — merged to main, 67 тестів (14 providers + 22 registry + 24 router + 7 logging)
 - **Epic 3: DONE** — merged to main, 101 тест (11 schemas + 17 video + 11 whisper + 13 presentation + 11 text + 8 web + 13 merge + 17 repository)
 - **Epic 4: DONE** — merged to main, 55 тестів (16 models + 12 prompt + 11 agent + 16 repository)
-- **Total tests: 240**, `make check` зелений
+- **Epic 5: DONE** — merged to main, 54 тести (8 health + 10 courses + 6 slide-mapping + 8 detail + 7 lesson + 6 materials + 3 ingestion task + 6 s3 client)
+- **Total tests: 294**, `make check` зелений
 - **Migrations: 3** (initial schema + action/strategy refactor + learning fields)
-- **Next: Epic 5** (API Layer)
+- **Next: Epic 6** (Evals & Observability)
 
 ---
 
@@ -149,20 +150,39 @@ prompts/architect/
 
 ---
 
-### Epic 5: API Layer
+### Epic 5: API Layer ✅
 
-REST API для взаємодії з системою.
+REST API для взаємодії з системою. Після цього епіку — можна через HTTP створити курс, завантажити матеріали, запустити Ingestion pipeline, отримати структуровану програму курсу.
+
+**Фінальна структура:**
+
+```
+src/course_supporter/api/
+├── __init__.py           # Public: app
+├── app.py                # FastAPI app, lifespan (DB + ModelRouter + S3Client), CORS, health, error handler
+├── deps.py               # Dependencies: get_session, get_model_router, get_s3_client
+├── schemas.py            # Request/Response Pydantic models (CourseCreateRequest, CourseResponse, etc.)
+├── tasks.py              # Background ingestion task (PROCESSOR_MAP, ingest_material)
+└── routes/
+    ├── __init__.py
+    └── courses.py         # 5 endpoints: POST /courses, GET /courses/{id}, POST /slide-mapping,
+                           #   GET /lessons/{id}, POST /materials
+
+src/course_supporter/storage/
+├── s3.py                 # Async S3Client (aiobotocore, async context manager)
+└── repositories.py       # +CourseRepository, +SlideVideoMappingRepository, +LessonRepository
+```
 
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-023 | FastAPI bootstrap | CORS, health check, error handling, OpenAPI docs |
-| S1-024 | POST /courses | Створення курсу з матеріалами, запуск pipeline |
-| S1-025 | POST /courses/{id}/materials | Додавання матеріалу, re-run pipeline |
-| S1-026 | POST /courses/{id}/slide-mapping | Ручний маппінг слайдів до таймкодів |
-| S1-027 | GET /courses/{id} | Повна структура курсу |
-| S1-028 | GET /courses/{id}/lessons/{id} | Окремий урок з деталями |
+| ID | Назва | Статус | Тести | Опис |
+| :---- | :---- | :---- | :---- | :---- |
+| S1-023 | FastAPI bootstrap | ✅ | 8 | Lifespan (DB pool + ModelRouter + S3Client), CORS, health endpoint, error handler, structlog |
+| S1-024 | POST /courses | ✅ | 10 | `CourseRepository` CRUD, `CourseCreateRequest`/`CourseResponse` schemas, 201 response |
+| S1-025 | POST /courses/{id}/materials | ✅ | 15 | S3Client (aiobotocore), file upload + URL, background `ingest_material` task, PROCESSOR_MAP |
+| S1-026 | POST /courses/{id}/slide-mapping | ✅ | 6 | `SlideVideoMappingRepository.batch_create()`, bulk insert, 201 response |
+| S1-027 | GET /courses/{id} | ✅ | 8 | Nested eager loading (`selectinload` chains), `CourseDetailResponse` з modules/lessons/concepts |
+| S1-028 | GET /courses/{id}/lessons/{id} | ✅ | 7 | `LessonRepository.get_by_id_for_course()`, JOIN Module for ownership, `LessonDetailResponse` |
 
 ---
 
@@ -191,7 +211,7 @@ Epic 2 (Model Registry) ✅
   ↓
 Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent) ✅
                                   ↓
-                          Epic 5 (API Layer)
+                          Epic 5 (API Layer) ✅
                                   ↓
                        Epic 6 (Evals & Observability)
 ```
@@ -200,8 +220,8 @@ Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent) ✅
 - **Epic 2** — DONE. Блокувало Epic 3 та 4 (ModelRouter).
 - **Epic 3** — DONE. Блокувало Epic 4 (CourseContext → ArchitectAgent).
 - **Epic 4** — DONE. Step-based ArchitectAgent, 55 тестів, 3 міграції.
-- **Epic 5** — наступний. Інтеграція: Ingestion → ArchitectAgent → API.
-- **Epic 6** — потребує робочий pipeline (Epic 5).
+- **Epic 5** — DONE. FastAPI + S3Client + background ingestion, 54 тести.
+- **Epic 6** — наступний. Потребує робочий pipeline (Epic 5 ✅).
 
 ---
 

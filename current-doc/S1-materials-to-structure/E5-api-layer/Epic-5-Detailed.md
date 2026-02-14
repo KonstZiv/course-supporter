@@ -1,4 +1,4 @@
-# Epic 5: API Layer (FastAPI)
+# Epic 5: API Layer (FastAPI) ✅
 
 ## Мета
 
@@ -11,33 +11,59 @@ REST API для взаємодії з системою. Після цього е
 - **Epic 3 ✅**: Ingestion pipeline (SourceProcessors → MergeStep → CourseContext)
 - **Epic 4 ✅**: ArchitectAgent (step-based: CourseContext → CourseStructure), CourseStructureRepository (→ DB), 55 тестів, 3 міграції
 
-## Що робимо
+## Що зроблено
 
-Шість задач:
+Шість задач, 54 тести:
 
-1. **FastAPI bootstrap** (S1-023) — `api/app.py` з lifespan (DB pool, ModelRouter init), health endpoint `/health`, CORS middleware, error handlers. `uvicorn` entrypoint.
-2. **POST /courses** (S1-024) — створення курсу. Request: `{title, description}`. Response: `Course` з `id`. Зберігає в DB через repository.
-3. **POST /courses/{id}/materials** (S1-025) — завантаження матеріалів. Приймає `UploadFile` або URL. Створює `SourceMaterial`, запускає Ingestion pipeline (background task). Response: `SourceMaterial` зі статусом `pending`.
-4. **POST /courses/{id}/slide-mapping** (S1-026) — завантаження slide-video mapping. Request: `list[SlideVideoMapEntry]`. Response: створені `SlideVideoMapping` записи.
-5. **GET /courses/{id}** (S1-027) — отримання курсу з повною структурою (modules → lessons → concepts → exercises). Response: nested JSON. Includes source_materials status.
-6. **GET /courses/{id}/lessons/{lesson_id}** (S1-028) — деталі уроку з concepts, exercises, cross-references. Response: `LessonDetail` з nested concepts та exercises.
+1. **FastAPI bootstrap** (S1-023) ✅ — `api/app.py` з lifespan (DB pool, ModelRouter, S3Client init), health endpoint `/health`, CORS middleware (з `settings.cors_allowed_origins`), global error handler, structlog logging. 8 тестів.
+2. **POST /courses** (S1-024) ✅ — створення курсу. `CourseRepository` з CRUD (create, get_by_id, list_all, get_with_structure). Pydantic schemas: `CourseCreateRequest`, `CourseResponse`. 10 тестів.
+3. **POST /courses/{id}/materials** (S1-025) ✅ — завантаження матеріалів. `S3Client` (aiobotocore async context manager) для file upload. `ingest_material` background task з `PROCESSOR_MAP`. Multipart form: file або URL. 15 тестів (6 materials + 3 ingestion task + 6 s3 client).
+4. **POST /courses/{id}/slide-mapping** (S1-026) ✅ — `SlideVideoMappingRepository.batch_create()`. Bulk insert з 201 response. 6 тестів.
+5. **GET /courses/{id}** (S1-027) ✅ — nested eager loading через `selectinload` chains (avoids cartesian product). `CourseDetailResponse` з modules → lessons → concepts/exercises. 8 тестів.
+6. **GET /courses/{id}/lessons/{lesson_id}** (S1-028) ✅ — `LessonRepository.get_by_id_for_course()` з JOIN Module для перевірки ownership. `LessonDetailResponse`. 7 тестів.
 
-## Для чого
+## Фінальна структура
 
-API — єдиний спосіб взаємодії зовнішніх клієнтів із системою. Без нього Ingestion + ArchitectAgent працюють лише через скрипти. FastAPI дає автоматичну OpenAPI документацію, валідацію request/response, async підтримку.
+```
+src/course_supporter/api/
+├── __init__.py           # Public: app
+├── app.py                # FastAPI app, lifespan (DB + ModelRouter + S3Client), CORS, health, error handler
+├── deps.py               # Dependencies: get_session (re-export), get_model_router, get_s3_client (cast())
+├── schemas.py            # Request/Response Pydantic models
+├── tasks.py              # Background: PROCESSOR_MAP, ingest_material()
+└── routes/
+    ├── __init__.py
+    └── courses.py         # 5 endpoints on APIRouter(tags=["courses"])
+
+src/course_supporter/storage/
+├── s3.py                 # S3Client (aiobotocore, async context manager, ensure_bucket)
+└── repositories.py       # +CourseRepository, +SlideVideoMappingRepository, +LessonRepository
+```
 
 ## Контрольні точки
 
-- [ ] FastAPI app запускається з `uvicorn`, `/health` повертає `200`
-- [ ] CORS, error handlers, lifespan (DB + ModelRouter) налаштовані
-- [ ] `POST /courses` створює курс у DB
-- [ ] `POST /courses/{id}/materials` приймає файл/URL, створює SourceMaterial
-- [ ] Background task запускає Ingestion pipeline
-- [ ] `POST /courses/{id}/slide-mapping` зберігає SlideVideoMapEntry → ORM
-- [ ] `GET /courses/{id}` повертає курс із повною вкладеною структурою
-- [ ] `GET /courses/{id}/lessons/{lesson_id}` повертає деталі уроку
-- [ ] Unit + integration тести з `httpx.AsyncClient` (TestClient)
-- [ ] `make check` проходить
+- [x] FastAPI app запускається з `uvicorn`, `/health` повертає `200`
+- [x] CORS, error handlers, lifespan (DB + ModelRouter + S3Client) налаштовані
+- [x] `POST /courses` створює курс у DB
+- [x] `POST /courses/{id}/materials` приймає файл/URL, створює SourceMaterial
+- [x] Background task запускає Ingestion pipeline
+- [x] `POST /courses/{id}/slide-mapping` зберігає SlideVideoMapEntry → ORM
+- [x] `GET /courses/{id}` повертає курс із повною вкладеною структурою
+- [x] `GET /courses/{id}/lessons/{lesson_id}` повертає деталі уроку
+- [x] Unit тести з `httpx.AsyncClient` (ASGITransport)
+- [x] `make check` проходить (294 тести)
+
+## Архітектурні рішення
+
+- **`httpx.AsyncClient` + `ASGITransport`** для API тестів — без реального сервера
+- **`app.dependency_overrides`** для мокання DB session, S3 client
+- **`selectinload` chains** замість `joinedload` — уникаємо cartesian product для nested structures
+- **`cast()` в deps.py** замість `type: ignore[no-any-return]` — чистіший типізований код
+- **`PROCESSOR_MAP` dict** — mapping SourceType → ProcessorClass на рівні модуля
+- **Two-session pattern** в `ingest_material` — основна сесія для processing, окрема для error handling (після rollback)
+- **`elif` для type narrowing** — `elif source_url is not None:` замість `assert` для природного mypy narrowing
+- **`async with` S3Client в lifespan** — клієнт живе весь час роботи додатку, `yield` всередині context manager
+- **CORS з config** — `settings.cors_allowed_origins` з `["*"]` дефолтом для MVP
 
 ## Залежності
 
@@ -46,19 +72,20 @@ API — єдиний спосіб взаємодії зовнішніх кліє
 
 ## Задачі
 
-| ID | Назва | Естімейт | Примітка |
-|:---|:---|:---|:---|
-| S1-023 | FastAPI bootstrap | 0.5 дня | lifespan, health, CORS, errors |
-| S1-024 | POST /courses | 0.5 дня | CourseRepository.create() |
-| S1-025 | POST /courses/{id}/materials | 1 день | Upload + background Ingestion |
-| S1-026 | POST /courses/{id}/slide-mapping | 0.5 дня | Batch create SlideVideoMapping |
-| S1-027 | GET /courses/{id} | 0.5 дня | Nested eager loading |
-| S1-028 | GET /courses/{id}/lessons/{lesson_id} | 0.5 дня | Lesson detail with cross-refs |
+| ID | Назва | Статус | Тести | Опис |
+|:---|:---|:---|:---|:---|
+| S1-023 | FastAPI bootstrap | ✅ | 8 | Lifespan (DB + ModelRouter + S3Client), CORS, health, error handler, structlog |
+| S1-024 | POST /courses | ✅ | 10 | CourseRepository CRUD, CourseCreateRequest/CourseResponse, 201 |
+| S1-025 | POST /courses/{id}/materials | ✅ | 15 | S3Client (aiobotocore), file upload + URL, background ingest_material |
+| S1-026 | POST /courses/{id}/slide-mapping | ✅ | 6 | SlideVideoMappingRepository.batch_create(), bulk insert |
+| S1-027 | GET /courses/{id} | ✅ | 8 | Nested selectinload chains, CourseDetailResponse |
+| S1-028 | GET /courses/{id}/lessons/{id} | ✅ | 7 | LessonRepository, JOIN Module ownership, LessonDetailResponse |
 
-**Загалом: ~3.5 дні**
+**Загалом: 54 тести, 294 сумарно**
 
-## Ризики
+## Ризики (фактичний результат)
 
-- **Background tasks** — FastAPI `BackgroundTasks` підходить для MVP, але для production потрібен Celery/ARQ. Мітигація: абстрагувати за інтерфейсом.
-- **File uploads** — великі відео (~1GB) можуть timeout. Мітигація: streaming upload, S3 presigned URLs (post-MVP).
-- **N+1 queries** — nested course structure. Мітигація: `selectinload` / `joinedload` для eager loading.
+- **Background tasks** — використано FastAPI `BackgroundTasks` для MVP. Для production потрібен Celery/ARQ — залишається в backlog.
+- **File uploads** — S3Client з aiobotocore, streaming upload не реалізовано (post-MVP).
+- **N+1 queries** — вирішено через `selectinload` chains, працює ефективно.
+- **aiobotocore typing** — бібліотека не типізована, використовується `Any` для client objects.

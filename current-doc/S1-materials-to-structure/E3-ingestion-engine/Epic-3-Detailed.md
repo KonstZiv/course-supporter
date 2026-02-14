@@ -35,17 +35,17 @@ Ingestion — це "вхідна воронка" системи. Якість р
 
 ## Контрольні точки
 
-- [ ] `SourceProcessor` ABC визначає контракт для всіх процесорів
-- [ ] `SourceDocument` та `ContentChunk` Pydantic-моделі валідують output процесорів
-- [ ] VideoProcessor (primary): відео → таймкодований транскрипт через ModelRouter (`video_analysis` action)
-- [ ] VideoProcessor (fallback): те саме через FFmpeg + Whisper при помилці Gemini
-- [ ] PresentationProcessor: PDF/PPTX → текст + slide images → ModelRouter (`presentation_analysis` action) для діаграм
-- [ ] TextProcessor: MD/DOCX/HTML → chunked plain text (без LLM)
-- [ ] WebProcessor: URL → extracted content + snapshot (без LLM)
-- [ ] MergeStep: кілька SourceDocument → CourseContext з cross-references
-- [ ] SourceMaterial repository: CRUD + статус-машина працює коректно
-- [ ] Unit-тести з mocked LLM responses
-- [ ] `make check` проходить
+- [x] `SourceProcessor` ABC визначає контракт для всіх процесорів
+- [x] `SourceDocument` та `ContentChunk` Pydantic-моделі валідують output процесорів
+- [x] VideoProcessor (primary): відео → таймкодований транскрипт через ModelRouter (`video_analysis` action)
+- [x] VideoProcessor (fallback): те саме через FFmpeg + Whisper при помилці Gemini
+- [x] PresentationProcessor: PDF/PPTX → текст + slide images → ModelRouter (`presentation_analysis` action) для діаграм
+- [x] TextProcessor: MD/DOCX/HTML → chunked plain text (без LLM)
+- [x] WebProcessor: URL → extracted content + snapshot (без LLM)
+- [x] MergeStep: кілька SourceDocument → CourseContext з cross-references
+- [x] SourceMaterial repository: CRUD + статус-машина працює коректно
+- [x] Unit-тести з mocked LLM responses — **101 тест** (11+17+11+13+11+8+13+17)
+- [x] `make check` проходить
 
 ## Залежності
 
@@ -63,16 +63,18 @@ Ingestion — це "вхідна воронка" системи. Якість р
 
 | ID | Назва | Естімейт | Примітка |
 |:---|:---|:---|:---|
-| S1-011 | SourceProcessor інтерфейс | 0.25 дня | [spec](T1-source-processor/T011-source-processor.md) · [issue](T1-source-processor/T011-github-issue.md) — ABC + schemas (~8 тестів) |
-| S1-012 | VideoProcessor (primary) | 0.5 дня | [spec](T2-video-primary/T012-video-primary.md) · [issue](T2-video-primary/T012-github-issue.md) — GeminiVideoProcessor + VideoProcessor shell (~8 тестів) |
-| S1-013 | VideoProcessor (fallback) | 0.5 дня | [spec](T3-video-fallback/T013-video-fallback.md) · [issue](T3-video-fallback/T013-github-issue.md) — WhisperVideoProcessor + fallback (~7 тестів) |
-| S1-014 | PresentationProcessor | 0.5 дня | [spec](T4-presentation/T014-presentation.md) · [issue](T4-presentation/T014-github-issue.md) — PDF + PPTX + Vision LLM (~10 тестів) |
-| S1-015 | TextProcessor | 0.25 дня | [spec](T5-text/T015-text.md) · [issue](T5-text/T015-github-issue.md) — MD/DOCX/HTML/TXT, без LLM (~9 тестів) |
-| S1-016 | WebProcessor | 0.25 дня | [spec](T6-web/T016-web.md) · [issue](T6-web/T016-github-issue.md) — trafilatura, без LLM (~7 тестів) |
-| S1-017 | MergeStep | 0.5 дня | [spec](T7-merge/T017-merge.md) · [issue](T7-merge/T017-github-issue.md) — sync merge + cross-references (~7 тестів) |
-| S1-018 | SourceMaterial persistence | 0.25 дня | [spec](T8-source-persistence/T018-source-persistence.md) · [issue](T8-source-persistence/T018-github-issue.md) — Repository + status machine (~8 тестів) |
+| ID | Назва | Статус | Тести | Примітка |
+|:---|:---|:---|:---|:---|
+| S1-011 | SourceProcessor інтерфейс | ✅ | 11 | [spec](T1-source-processor/T011-source-processor.md) · [issue](T1-source-processor/T011-github-issue.md) — ABC + schemas |
+| S1-012 | VideoProcessor (primary) | ✅ | 17 | [spec](T2-video-primary/T012-video-primary.md) · [issue](T2-video-primary/T012-github-issue.md) — GeminiVideoProcessor + VideoProcessor shell |
+| S1-013 | VideoProcessor (fallback) | ✅ | 11 | [spec](T3-video-fallback/T013-video-fallback.md) · [issue](T3-video-fallback/T013-github-issue.md) — WhisperVideoProcessor + fallback |
+| S1-014 | PresentationProcessor | ✅ | 13 | [spec](T4-presentation/T014-presentation.md) · [issue](T4-presentation/T014-github-issue.md) — PDF + PPTX + Vision LLM |
+| S1-015 | TextProcessor | ✅ | 11 | [spec](T5-text/T015-text.md) · [issue](T5-text/T015-github-issue.md) — MD/DOCX/HTML/TXT, без LLM |
+| S1-016 | WebProcessor | ✅ | 8 | [spec](T6-web/T016-web.md) · [issue](T6-web/T016-github-issue.md) — trafilatura, без LLM |
+| S1-017 | MergeStep | ✅ | 13 | [spec](T7-merge/T017-merge.md) · [issue](T7-merge/T017-github-issue.md) — sync merge + cross-references |
+| S1-018 | SourceMaterial persistence | ✅ | 17 | [spec](T8-source-persistence/T018-source-persistence.md) · [issue](T8-source-persistence/T018-github-issue.md) — Repository + status machine |
 
-**Загалом: 3–4 дні** (найбільший епік спрінту)
+**Загалом: 101 тест, Epic 3 DONE**
 
 ## Ризики
 
@@ -114,7 +116,7 @@ Fallback: Gemini fails → Whisper; обидва fail → raise останню �
 
 ### 4. Тестування ✅
 
-Unit-тести мокають `ModelRouter`, SDK calls (fitz, pptx, docx, trafilatura, whisper), FFmpeg subprocess. Інтеграційні тести з реальними API — `tests/evals/`. Очікувана кількість тестів: ~64 нових (8+8+7+10+9+7+7+8).
+Unit-тести мокають `ModelRouter`, SDK calls (fitz, pptx, docx, trafilatura, whisper), FFmpeg subprocess. Інтеграційні тести з реальними API — `tests/evals/`. Фактична кількість тестів: **101** (11+17+11+13+11+8+13+17).
 
 ### 5. Custom exceptions ✅
 

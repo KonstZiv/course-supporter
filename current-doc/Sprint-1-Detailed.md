@@ -18,9 +18,10 @@ API endpoint `POST /courses`, який приймає набір матеріа�
 
 - **Epic 1: DONE** — merged to main, 17 тестів (9 config + 8 ORM)
 - **Epic 2: DONE** — merged to main, 67 тестів (14 providers + 22 registry + 24 router + 7 logging)
-- **Total tests: 84**, `make check` зелений
+- **Epic 3: DONE** — merged to main, 101 тест (11 schemas + 17 video + 11 whisper + 13 presentation + 11 text + 8 web + 13 merge + 17 repository)
+- **Total tests: 185**, `make check` зелений
 - **Migrations: 2** (initial schema + action/strategy refactor)
-- **Next: Epic 3** (Ingestion Engine)
+- **Next: Epic 4** (Architect Agent)
 
 ---
 
@@ -77,22 +78,42 @@ src/course_supporter/llm/
 
 ---
 
-### Epic 3: Ingestion Engine
+### Epic 3: Ingestion Engine ✅
 
 Обробка всіх типів матеріалів курсу. Після цього епіку — система може прийняти відео, PDF/PPTX, текст або URL і перетворити кожне джерело на уніфікований `SourceDocument`.
 
+**Фінальна структура:**
+
+```
+src/course_supporter/ingestion/
+├── __init__.py           # Public exports
+├── base.py               # SourceProcessor ABC, ProcessingError, UnsupportedFormatError
+├── video.py              # GeminiVideoProcessor, WhisperVideoProcessor, VideoProcessor (composition)
+├── presentation.py       # PresentationProcessor (PDF via fitz, PPTX via python-pptx, Vision LLM)
+├── text.py               # TextProcessor (MD, DOCX, HTML, TXT → HEADING + PARAGRAPH chunks)
+├── web.py                # WebProcessor (trafilatura → WEB_CONTENT chunks)
+└── merge.py              # MergeStep (sort by priority, cross-reference slides ↔ video timecodes)
+
+src/course_supporter/models/
+├── source.py             # SourceType, ChunkType (StrEnum), ContentChunk, SourceDocument
+└── course.py             # SlideVideoMapEntry, CourseContext
+
+src/course_supporter/storage/
+└── repositories.py       # SourceMaterialRepository (CRUD + status machine)
+```
+
 **Задачі:**
 
-| ID | Назва | Опис |
-| :---- | :---- | :---- |
-| S1-011 | SourceProcessor інтерфейс | ABC з методом `async def process(source_url) -> SourceDocument`. Pydantic-моделі: `SourceDocument`, `ContentChunk` |
-| S1-012 | VideoProcessor (primary) | Обробка відео через Gemini Vision: завантаження через File API, таймкодований транскрипт зі structured output |
-| S1-013 | VideoProcessor (fallback) | FFmpeg нарізка на сегменти → Whisper v3 STT → об'єднання у таймкодований транскрипт |
-| S1-014 | PresentationProcessor | PDF (PyMuPDF) та PPTX (python-pptx): витягування тексту, рендеринг слайдів, Vision LLM для діаграм |
-| S1-015 | TextProcessor | MD, DOCX, HTML → plain text з чанкуванням по структурі |
-| S1-016 | WebProcessor | Fetch HTML → trafilatura → content extraction → snapshot + URL |
-| S1-017 | MergeStep | Об'єднання кількох `SourceDocument` у `CourseContext`. Інтеграція `SlideVideoMapping` |
-| S1-018 | SourceMaterial persistence | CRUD для `source_materials`: статус-машина (pending → processing → done/error) |
+| ID | Назва | Статус | Тести | Опис |
+| :---- | :---- | :---- | :---- | :---- |
+| S1-011 | SourceProcessor інтерфейс | ✅ | 11 | ABC + Pydantic schemas (SourceDocument, ContentChunk, CourseContext) |
+| S1-012 | VideoProcessor (primary) | ✅ | 17 | GeminiVideoProcessor + VideoProcessor composition shell |
+| S1-013 | VideoProcessor (fallback) | ✅ | 11 | WhisperVideoProcessor (FFmpeg + Whisper), auto-fallback |
+| S1-014 | PresentationProcessor | ✅ | 13 | PDF (PyMuPDF) + PPTX (python-pptx) + optional Vision LLM |
+| S1-015 | TextProcessor | ✅ | 11 | MD/DOCX/HTML/TXT → HEADING + PARAGRAPH chunks, без LLM |
+| S1-016 | WebProcessor | ✅ | 8 | trafilatura → WEB_CONTENT chunks + content snapshot |
+| S1-017 | MergeStep | ✅ | 13 | Sync merge + cross-references (slides ↔ video timecodes) |
+| S1-018 | SourceMaterial persistence | ✅ | 17 | Repository CRUD + status machine (pending → processing → done/error) |
 
 ---
 
@@ -151,7 +172,7 @@ Epic 1 (Bootstrap) ✅
   ↓
 Epic 2 (Model Registry) ✅
   ↓
-Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
+Epic 3 (Ingestion) ✅ ──→ Epic 4 (Architect Agent)
                                   ↓
                           Epic 5 (API Layer)
                                   ↓
@@ -160,7 +181,8 @@ Epic 3 (Ingestion) ──→ Epic 4 (Architect Agent)
 
 - **Epic 1** — DONE. Блокувало все.
 - **Epic 2** — DONE. Блокувало Epic 3 та 4 (ModelRouter).
-- **Epic 3 та 4** — можна частково паралелити (Pydantic-моделі з Epic 4 не залежать від Ingestion).
+- **Epic 3** — DONE. Блокувало Epic 4 (CourseContext → ArchitectAgent).
+- **Epic 4** — наступний. Потребує CourseContext з Epic 3.
 - **Epic 5** — інтеграція, потребує готових Epic 3 та 4.
 - **Epic 6** — потребує робочий pipeline (Epic 5).
 

@@ -140,7 +140,8 @@ async def create_material(
             key, content, file.content_type or "application/octet-stream"
         )
     else:
-        actual_url = source_url  # type: ignore[assignment]
+        assert source_url is not None  # guaranteed by earlier validation
+        actual_url = source_url
 
     repo = SourceMaterialRepository(session)
     material = await repo.create(

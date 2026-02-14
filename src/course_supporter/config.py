@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # --- App ---
     environment: Environment = Environment.DEVELOPMENT
     log_level: str = "DEBUG"
-    cors_allowed_origins: list[str] = ["*"]
+    cors_allowed_origins: list[str] = ["*"]  # TODO: restrict for production
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"

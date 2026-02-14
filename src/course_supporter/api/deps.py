@@ -1,5 +1,7 @@
 """FastAPI dependency injection."""
 
+from typing import cast
+
 from fastapi import Request
 
 from course_supporter.llm.router import ModelRouter
@@ -14,7 +16,7 @@ async def get_model_router(request: Request) -> ModelRouter:
 
     Initialized during lifespan startup.
     """
-    return request.app.state.model_router  # type: ignore[no-any-return]
+    return cast(ModelRouter, request.app.state.model_router)
 
 
 async def get_s3_client(request: Request) -> S3Client:
@@ -22,4 +24,4 @@ async def get_s3_client(request: Request) -> S3Client:
 
     Initialized during lifespan startup.
     """
-    return request.app.state.s3_client  # type: ignore[no-any-return]
+    return cast(S3Client, request.app.state.s3_client)

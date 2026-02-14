@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
@@ -28,7 +28,7 @@ async def ingest_material(
     material_id: uuid.UUID,
     source_type: str,
     source_url: str,
-    session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Process a source material in the background.
 

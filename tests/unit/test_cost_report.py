@@ -222,10 +222,7 @@ class TestCostReportAPI:
             ) as mock_repo_cls,
         ):
             repo_instance = AsyncMock()
-            repo_instance.get_summary.return_value = _mock_repo.summary
-            repo_instance.get_by_action.return_value = _mock_repo.by_action
-            repo_instance.get_by_provider.return_value = _mock_repo.by_provider
-            repo_instance.get_by_model.return_value = _mock_repo.by_model
+            repo_instance.get_full_report.return_value = _mock_repo
             mock_repo_cls.return_value = repo_instance
 
             async with AsyncClient(
@@ -257,10 +254,7 @@ class TestCostReportAPI:
             ) as mock_repo_cls,
         ):
             repo_instance = AsyncMock()
-            repo_instance.get_summary.return_value = _mock_repo.summary
-            repo_instance.get_by_action.return_value = _mock_repo.by_action
-            repo_instance.get_by_provider.return_value = _mock_repo.by_provider
-            repo_instance.get_by_model.return_value = _mock_repo.by_model
+            repo_instance.get_full_report.return_value = _mock_repo
             mock_repo_cls.return_value = repo_instance
 
             async with AsyncClient(

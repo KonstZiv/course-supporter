@@ -32,16 +32,7 @@ async def fetch_report() -> CostReport:
     """Fetch cost report from database."""
     async with async_session() as session:
         repo = LLMCallRepository(session)
-        summary = await repo.get_summary()
-        by_action = await repo.get_by_action()
-        by_provider = await repo.get_by_provider()
-        by_model = await repo.get_by_model()
-    return CostReport(
-        summary=summary,
-        by_action=by_action,
-        by_provider=by_provider,
-        by_model=by_model,
-    )
+        return await repo.get_full_report()
 
 
 def print_table(report: CostReport) -> str:

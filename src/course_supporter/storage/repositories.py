@@ -18,7 +18,7 @@ from course_supporter.models.course import (
     ModuleOutput,
     SlideVideoMapEntry,
 )
-from course_supporter.models.reports import CostSummary, GroupedCost
+from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
 from course_supporter.storage.orm import (
     Concept,
     Course,
@@ -520,6 +520,15 @@ class LLMCallRepository:
             total_tokens_in=int(row.total_tokens_in),
             total_tokens_out=int(row.total_tokens_out),
             avg_latency_ms=float(row.avg_latency_ms),
+        )
+
+    async def get_full_report(self) -> CostReport:
+        """Get complete cost report with summary and all breakdowns."""
+        return CostReport(
+            summary=await self.get_summary(),
+            by_action=await self.get_by_action(),
+            by_provider=await self.get_by_provider(),
+            by_model=await self.get_by_model(),
         )
 
     async def get_by_action(self) -> list[GroupedCost]:

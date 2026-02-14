@@ -26,7 +26,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         start = time.perf_counter()
         response = await call_next(request)
-        latency_ms = int((time.perf_counter() - start) * 1000)
+        latency_ms = round((time.perf_counter() - start) * 1000)
 
         logger.info(
             "http_request",

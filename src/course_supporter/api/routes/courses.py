@@ -139,8 +139,7 @@ async def create_material(
         actual_url = await s3.upload_file(
             key, content, file.content_type or "application/octet-stream"
         )
-    else:
-        assert source_url is not None  # guaranteed by earlier validation
+    elif source_url is not None:
         actual_url = source_url
 
     repo = SourceMaterialRepository(session)

@@ -141,7 +141,7 @@ class SourceMaterialRepository:
             material.processed_at = datetime.now(UTC)
 
         if status == "error":
-            if error_message is None:
+            if not error_message:
                 raise ValueError(
                     "error_message is required when transitioning to 'error'"
                 )

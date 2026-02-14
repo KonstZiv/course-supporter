@@ -103,7 +103,8 @@ class TestRequestLoggingMiddleware:
 
     async def test_middleware_logs_request(self, test_app) -> None:
         """Middleware logs method, path, status_code, latency_ms."""
-        with patch("course_supporter.api.middleware.logger") as mock_logger:
+        with patch("course_supporter.api.middleware.structlog") as mock_structlog:
+            mock_logger = mock_structlog.get_logger.return_value
             async with AsyncClient(
                 transport=ASGITransport(app=test_app),
                 base_url="http://test",
@@ -120,7 +121,8 @@ class TestRequestLoggingMiddleware:
 
     async def test_middleware_skips_health(self, test_app) -> None:
         """Middleware does not log requests to /health."""
-        with patch("course_supporter.api.middleware.logger") as mock_logger:
+        with patch("course_supporter.api.middleware.structlog") as mock_structlog:
+            mock_logger = mock_structlog.get_logger.return_value
             async with AsyncClient(
                 transport=ASGITransport(app=test_app),
                 base_url="http://test",
@@ -131,7 +133,8 @@ class TestRequestLoggingMiddleware:
 
     async def test_middleware_skips_docs(self, test_app) -> None:
         """Middleware does not log requests to /docs."""
-        with patch("course_supporter.api.middleware.logger") as mock_logger:
+        with patch("course_supporter.api.middleware.structlog") as mock_structlog:
+            mock_logger = mock_structlog.get_logger.return_value
             async with AsyncClient(
                 transport=ASGITransport(app=test_app),
                 base_url="http://test",

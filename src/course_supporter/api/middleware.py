@@ -7,8 +7,6 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
-logger = structlog.get_logger()
-
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Log HTTP requests with method, path, status code, and latency."""
@@ -28,7 +26,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         latency_ms = round((time.perf_counter() - start) * 1000)
 
-        logger.info(
+        structlog.get_logger().info(
             "http_request",
             method=request.method,
             path=request.url.path,

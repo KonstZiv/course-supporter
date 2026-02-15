@@ -208,15 +208,56 @@ class TestUpdateStatus:
 
         assert result.content_snapshot == "<html>snapshot</html>"
 
-    async def test_terminal_state_error(self) -> None:
-        """error → any raises ValueError."""
+    async def test_error_to_pending_retry(self) -> None:
+        """error → pending resets for retry and clears error_message."""
+        mat = _make_material(status="error")
+        mat.error_message = "transient S3 failure"
+        session = AsyncMock()
+        session.get.return_value = mat
+
+        repo = SourceMaterialRepository(session)
+        result = await repo.update_status(mat.id, "pending")
+
+        assert result.status == "pending"
+        assert result.error_message is None
+        session.flush.assert_awaited()
+
+    async def test_error_to_processing_blocked(self) -> None:
+        """error → processing is not allowed (must go through pending)."""
         mat = _make_material(status="error")
         session = AsyncMock()
         session.get.return_value = mat
 
         repo = SourceMaterialRepository(session)
         with pytest.raises(ValueError, match="Invalid status transition"):
-            await repo.update_status(mat.id, "pending")
+            await repo.update_status(mat.id, "processing")
+
+
+class TestRetry:
+    """Tests for SourceMaterialRepository.retry convenience method."""
+
+    async def test_retry_resets_to_pending(self) -> None:
+        """retry() transitions error → pending."""
+        mat = _make_material(status="error")
+        mat.error_message = "API timeout"
+        session = AsyncMock()
+        session.get.return_value = mat
+
+        repo = SourceMaterialRepository(session)
+        result = await repo.retry(mat.id)
+
+        assert result.status == "pending"
+        assert result.error_message is None
+
+    async def test_retry_from_non_error_raises(self) -> None:
+        """retry() on non-error material raises ValueError."""
+        mat = _make_material(status="done")
+        session = AsyncMock()
+        session.get.return_value = mat
+
+        repo = SourceMaterialRepository(session)
+        with pytest.raises(ValueError, match="Invalid status transition"):
+            await repo.retry(mat.id)
 
 
 class TestDelete:

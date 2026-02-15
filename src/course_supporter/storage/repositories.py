@@ -35,8 +35,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"processing"},
     "processing": {"done", "error"},
     "done": set(),  # terminal state
-    # TODO: consider error → pending for retry workflow
-    "error": set(),  # terminal state
+    "error": {"pending"},  # retry workflow
 }
 
 
@@ -308,11 +307,31 @@ class SourceMaterialRepository:
                 )
             material.error_message = error_message
 
+        if status == "pending":
+            material.error_message = None
+
         if content_snapshot is not None:
             material.content_snapshot = content_snapshot
 
         await self._session.flush()
         return material
+
+    async def retry(self, material_id: uuid.UUID) -> SourceMaterial:
+        """Reset errored material back to pending for re-processing.
+
+        Convenience method for the error -> pending transition.
+        Clears error_message.
+
+        Args:
+            material_id: UUID of the source material.
+
+        Returns:
+            Updated SourceMaterial with status 'pending'.
+
+        Raises:
+            ValueError: If material not found or not in 'error' status.
+        """
+        return await self.update_status(material_id, "pending")
 
     async def delete(self, material_id: uuid.UUID) -> None:
         """Delete a source material by ID.

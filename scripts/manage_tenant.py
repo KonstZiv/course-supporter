@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
@@ -214,7 +215,7 @@ def main() -> None:
     p.add_argument("--name", required=True, help="Tenant name")
 
     args = parser.parse_args()
-    commands: dict[str, object] = {
+    commands: dict[str, Callable[[argparse.Namespace], None]] = {
         "create-tenant": create_tenant,
         "create-key": create_key,
         "list-tenants": list_tenants,
@@ -222,8 +223,7 @@ def main() -> None:
         "revoke-key": revoke_key,
         "deactivate-tenant": deactivate_tenant,
     }
-    handler = commands[args.command]
-    handler(args)  # type: ignore[operator]
+    commands[args.command](args)
 
 
 if __name__ == "__main__":

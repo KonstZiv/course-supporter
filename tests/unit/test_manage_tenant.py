@@ -159,12 +159,9 @@ class TestListTenants:
         from scripts.manage_tenant import list_tenants
 
         rows = [
-            MagicMock(name="DevOps School", is_active=True, key_count=1),
-            MagicMock(name="Python Academy", is_active=True, key_count=2),
+            MagicMock(is_active=True, key_count=1, **{"name": "DevOps School"}),
+            MagicMock(is_active=True, key_count=2, **{"name": "Python Academy"}),
         ]
-        # MagicMock(name=...) sets the mock's internal name, not .name attribute
-        rows[0].name = "DevOps School"
-        rows[1].name = "Python Academy"
 
         mock_result = MagicMock()
         mock_result.all.return_value = rows

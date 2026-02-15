@@ -19,7 +19,7 @@ from course_supporter.storage.repositories import (
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
     tenant_name="test-tenant",
-    scopes=["courses:write"],
+    scopes=["prep"],
     rate_limit_prep=100,
     rate_limit_check=1000,
     key_prefix="cs_test",

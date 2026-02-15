@@ -1,4 +1,4 @@
-# PD-001: Tenant & API Key ORM Models — Detail
+# PD-001: Tenant & API Key ORM Models — Detail ✅
 
 ## Контекст
 
@@ -8,7 +8,7 @@ Course Supporter обслуговує кілька компаній-клієнт
 
 ### Tenant
 
-Додати до `src/course_supporter/storage/orm.py`:
+`src/course_supporter/storage/orm.py`:
 
 ```python
 class Tenant(Base):
@@ -43,7 +43,7 @@ class APIKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     key_prefix: Mapped[str] = mapped_column(String(16))
     label: Mapped[str] = mapped_column(String(100), default="default")
-    scopes: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    scopes: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     rate_limit_prep: Mapped[int] = mapped_column(Integer, default=60)
     rate_limit_check: Mapped[int] = mapped_column(Integer, default=300)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -56,6 +56,8 @@ class APIKey(Base):
     tenant: Mapped["Tenant"] = relationship(back_populates="api_keys")
 ```
 
+> **Примітка:** `scopes` має тип `Mapped[list[Any]]` (не `list[str]`) через обмеження mypy strict mode з JSONB.
+
 ## API Key Format
 
 ```
@@ -65,19 +67,11 @@ cs_live_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
 └── prefix: "cs" (Course Supporter)
 ```
 
-Утилітні функції для key generation (додати в `src/course_supporter/auth/__init__.py` або `src/course_supporter/auth/keys.py`):
+Утилітні функції в `src/course_supporter/auth/keys.py`:
 
 ```python
-import hashlib
-import secrets
-
-
 def generate_api_key(environment: str = "live") -> tuple[str, str, str]:
-    """Generate API key, return (full_key, key_hash, key_prefix).
-
-    Full key is shown only once at creation time.
-    Only hash and prefix are stored in DB.
-    """
+    """Generate API key, return (full_key, key_hash, key_prefix)."""
     random_part = secrets.token_hex(16)
     full_key = f"cs_{environment}_{random_part}"
     key_hash = hashlib.sha256(full_key.encode()).hexdigest()
@@ -92,9 +86,7 @@ def hash_api_key(key: str) -> str:
 
 ## Alembic Migration
 
-```bash
-make migrate msg="add_tenants_and_api_keys"
-```
+Файл: `migrations/versions/bb847e98ee7b_add_tenants_and_api_keys.py`
 
 Результат міграції:
 - Таблиця `tenants` з полями id, name, is_active, created_at, updated_at
@@ -107,7 +99,7 @@ make migrate msg="add_tenants_and_api_keys"
 ```
 src/course_supporter/
 ├── auth/
-│   ├── __init__.py       # Public exports: generate_api_key, hash_api_key
+│   ├── __init__.py       # Public exports: TenantContext, generate_api_key, hash_api_key
 │   └── keys.py           # Key generation and hashing utilities
 └── storage/
     └── orm.py            # + Tenant, APIKey models
@@ -115,26 +107,18 @@ src/course_supporter/
 
 ## Тести
 
-Файл: `tests/unit/test_tenant_models.py`
+Файл: `tests/unit/test_tenant_models.py` — **14 тестів**
 
-1. **test_tenant_create** — створення Tenant з name, перевірка defaults (is_active=True, timestamps)
-2. **test_tenant_unique_name** — дублікат name → IntegrityError
-3. **test_api_key_create** — створення APIKey з tenant_id, scopes, rate limits
-4. **test_api_key_hash_unique** — дублікат key_hash → IntegrityError
-5. **test_cascade_delete** — видалення tenant каскадно видаляє api_keys
-6. **test_generate_api_key_format** — перевірка формату `cs_live_<32hex>`
-7. **test_generate_api_key_uniqueness** — два виклики → різні ключі
-8. **test_hash_api_key_deterministic** — однаковий input → однаковий hash
-
-Очікувана кількість тестів: **8**
+Tenant ORM tests: create, unique name, relationships, is_active default, timestamps.
+APIKey ORM tests: create, hash unique, cascade delete, scopes JSONB, rate limits defaults.
+Key utility tests: format validation, uniqueness, hash determinism.
 
 ## Definition of Done
 
-- [ ] `Tenant` та `APIKey` моделі додані до `storage/orm.py`
-- [ ] `auth/keys.py` з `generate_api_key()` та `hash_api_key()`
-- [ ] Alembic міграція створює обидві таблиці
-- [ ] Unique constraint на `api_keys.key_hash`
-- [ ] FK з CASCADE delete
-- [ ] 8 тестів зелені
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] `Tenant` та `APIKey` моделі додані до `storage/orm.py`
+- [x] `auth/keys.py` з `generate_api_key()` та `hash_api_key()`
+- [x] Alembic міграція створює обидві таблиці
+- [x] Unique constraint на `api_keys.key_hash`
+- [x] FK з CASCADE delete
+- [x] 14 тестів зелені
+- [x] `make check` зелений

@@ -1,4 +1,4 @@
-# PD-003: API Key Auth Middleware — Detail
+# PD-003: API Key Auth Middleware — Detail ✅
 
 ## Контекст
 
@@ -12,21 +12,17 @@ Request
   → SHA-256 hash
   → DB: SELECT api_keys JOIN tenants WHERE key_hash = ? AND api_key.is_active AND tenant.is_active
   → Check expires_at
-  → Set request.state: tenant_id, scopes, rate_limits
+  → Return TenantContext
   → Endpoint
 ```
 
 ## Реалізація
 
-### Pydantic model для auth context
+### TenantContext dataclass
+
+`src/course_supporter/auth/context.py`:
 
 ```python
-# src/course_supporter/auth/context.py
-
-from dataclasses import dataclass
-import uuid
-
-
 @dataclass(frozen=True)
 class TenantContext:
     """Authenticated tenant context, injected into every request."""
@@ -35,31 +31,29 @@ class TenantContext:
     scopes: list[str]
     rate_limit_prep: int
     rate_limit_check: int
-    key_prefix: str  # для логування
+    key_prefix: str
 ```
 
 ### FastAPI Dependency
 
+`src/course_supporter/api/deps.py`:
+
 ```python
-# src/course_supporter/api/deps.py — доповнення
-
-from fastapi import Depends, HTTPException, Security
-from fastapi.security import APIKeyHeader
-
-from course_supporter.auth.context import TenantContext
-from course_supporter.auth.keys import hash_api_key
-
 api_key_header = APIKeyHeader(name="X-API-Key")
+
+# Module-level to avoid ruff B008 (function call in default argument)
+_get_session = Depends(get_session)
 
 
 async def get_current_tenant(
     api_key: str = Security(api_key_header),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = _get_session,
 ) -> TenantContext:
     """Authenticate request via API key, return tenant context.
 
     Raises:
-        HTTPException 401: missing, invalid, inactive, or expired key.
+        HTTPException 401: Invalid API key (not found, inactive tenant/key).
+        HTTPException 401: API key expired.
     """
     key_hash = hash_api_key(api_key)
 
@@ -95,69 +89,54 @@ async def get_current_tenant(
     )
 ```
 
-### Використання в endpoints
-
-```python
-@router.post("/courses")
-async def create_course(
-    body: CourseCreateRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
-    session: AsyncSession = Depends(get_session),
-) -> CourseResponse:
-    repo = CourseRepository(session, tenant_id=tenant.tenant_id)
-    ...
-```
-
 ### Health endpoint — без auth
 
 ```python
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Health check — no auth required."""
     return {"status": "ok"}
 ```
 
-`/health` та `/docs` виключені з auth — вони не використовують `Depends(get_current_tenant)`.
+`/health` та `/docs` не використовують `Depends(get_current_tenant)` — працюють без auth.
 
 ### Swagger UI integration
 
-`APIKeyHeader` автоматично додає "Authorize" кнопку в Swagger UI. Користувач вводить ключ один раз, далі всі запити йдуть з ним.
+`APIKeyHeader` автоматично додає "Authorize" кнопку в Swagger UI.
 
 ## Структура файлів
 
 ```
 src/course_supporter/auth/
-├── __init__.py           # Public: TenantContext, get_current_tenant
+├── __init__.py           # Exports: TenantContext, generate_api_key, hash_api_key
+│                         # NOTE: require_scope NOT exported (circular import avoidance)
 ├── context.py            # TenantContext dataclass
-└── keys.py               # generate_api_key, hash_api_key (з PD-001)
+└── keys.py               # generate_api_key, hash_api_key
 
 src/course_supporter/api/
-└── deps.py               # + get_current_tenant dependency
+└── deps.py               # get_current_tenant, get_session, get_model_router, get_s3_client
 ```
+
+> **Важливо:** `require_scope` НЕ re-exported з `auth/__init__.py` щоб уникнути circular import: `auth/__init__` → `auth/scopes` → `api/deps` → `auth/context`.
 
 ## Тести
 
-Файл: `tests/unit/test_auth_middleware.py`
+Файл: `tests/unit/test_auth_middleware.py` — **8 тестів**
 
-Використовуємо `httpx.AsyncClient` + FastAPI `TestClient` з мокнутою DB session.
-
-1. **test_missing_api_key_header** — запит без header → 401
-2. **test_invalid_api_key** — запит з неіснуючим ключем → 401
-3. **test_inactive_api_key** — ключ з `is_active=False` → 401
-4. **test_inactive_tenant** — tenant з `is_active=False` → 401
-5. **test_expired_api_key** — ключ з `expires_at` в минулому → 401
-6. **test_valid_api_key** — валідний ключ → 200, tenant context правильний
-7. **test_tenant_context_fields** — перевірка всіх полів TenantContext
-8. **test_health_no_auth** — `/health` працює без ключа
-
-Очікувана кількість тестів: **8**
+1. `test_missing_api_key_returns_401` — запит без header → 401
+2. `test_invalid_api_key_returns_401` — неіснуючий ключ → 401
+3. `test_inactive_api_key_returns_401` — ключ з `is_active=False` → 401
+4. `test_inactive_tenant_returns_401` — tenant з `is_active=False` → 401
+5. `test_expired_api_key_returns_401` — expired key → 401 "API key expired"
+6. `test_valid_api_key_returns_200` — валідний ключ → 200
+7. `test_tenant_context_fields` — всі поля TenantContext правильні
+8. `test_health_no_auth_required` — `/health` працює без ключа
 
 ## Definition of Done
 
-- [ ] `TenantContext` dataclass
-- [ ] `get_current_tenant` dependency
-- [ ] `APIKeyHeader` для Swagger UI
-- [ ] Health endpoint без auth
-- [ ] 8 тестів зелені
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] `TenantContext` frozen dataclass
+- [x] `get_current_tenant` dependency з SHA-256 lookup
+- [x] `APIKeyHeader` для Swagger UI
+- [x] Health endpoint без auth
+- [x] `_get_session` module-level (ruff B008)
+- [x] 8 тестів зелені
+- [x] `make check` зелений

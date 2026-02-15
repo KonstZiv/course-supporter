@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -10,8 +11,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from course_supporter.api.deps import get_current_tenant
+from course_supporter.auth.context import TenantContext
 from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
 from course_supporter.storage.repositories import LLMCallRepository
+
+STUB_TENANT = TenantContext(
+    tenant_id=uuid.uuid4(),
+    tenant_name="test-tenant",
+    scopes=[],
+    rate_limit_prep=100,
+    rate_limit_check=1000,
+    key_prefix="cs_test",
+)
 
 
 def _mock_row(**kwargs: Any) -> MagicMock:
@@ -213,24 +225,28 @@ class TestCostReportAPI:
             session = AsyncMock()
             yield session
 
-        with (
-            patch(
-                "course_supporter.api.routes.reports.async_session",
-                mock_session_ctx,
-            ),
-            patch(
-                "course_supporter.api.routes.reports.LLMCallRepository",
-            ) as mock_repo_cls,
-        ):
-            repo_instance = AsyncMock()
-            repo_instance.get_full_report.return_value = _mock_repo
-            mock_repo_cls.return_value = repo_instance
+        app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
+        try:
+            with (
+                patch(
+                    "course_supporter.api.routes.reports.async_session",
+                    mock_session_ctx,
+                ),
+                patch(
+                    "course_supporter.api.routes.reports.LLMCallRepository",
+                ) as mock_repo_cls,
+            ):
+                repo_instance = AsyncMock()
+                repo_instance.get_full_report.return_value = _mock_repo
+                mock_repo_cls.return_value = repo_instance
 
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-            ) as client:
-                response = await client.get("/api/v1/reports/cost")
+                async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="http://test",
+                ) as client:
+                    response = await client.get("/api/v1/reports/cost")
+        finally:
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
 
@@ -245,24 +261,28 @@ class TestCostReportAPI:
             session = AsyncMock()
             yield session
 
-        with (
-            patch(
-                "course_supporter.api.routes.reports.async_session",
-                mock_session_ctx,
-            ),
-            patch(
-                "course_supporter.api.routes.reports.LLMCallRepository",
-            ) as mock_repo_cls,
-        ):
-            repo_instance = AsyncMock()
-            repo_instance.get_full_report.return_value = _mock_repo
-            mock_repo_cls.return_value = repo_instance
+        app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
+        try:
+            with (
+                patch(
+                    "course_supporter.api.routes.reports.async_session",
+                    mock_session_ctx,
+                ),
+                patch(
+                    "course_supporter.api.routes.reports.LLMCallRepository",
+                ) as mock_repo_cls,
+            ):
+                repo_instance = AsyncMock()
+                repo_instance.get_full_report.return_value = _mock_repo
+                mock_repo_cls.return_value = repo_instance
 
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-            ) as client:
-                response = await client.get("/api/v1/reports/cost")
+                async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="http://test",
+                ) as client:
+                    response = await client.get("/api/v1/reports/cost")
+        finally:
+            app.dependency_overrides.clear()
 
         data = response.json()
         report = CostReport.model_validate(data)

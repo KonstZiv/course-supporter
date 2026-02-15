@@ -8,8 +8,19 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
+from course_supporter.api.deps import get_current_tenant
+from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.repositories import CourseRepository
+
+STUB_TENANT = TenantContext(
+    tenant_id=uuid.uuid4(),
+    tenant_name="test-tenant",
+    scopes=["courses:read"],
+    rate_limit_prep=100,
+    rate_limit_check=1000,
+    key_prefix="cs_test",
+)
 
 
 def _make_concept_mock(*, title: str = "Variables") -> MagicMock:
@@ -112,6 +123,7 @@ def mock_session() -> AsyncMock:
 @pytest.fixture()
 async def client(mock_session: AsyncMock) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
+    app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

@@ -1,5 +1,6 @@
 """Tests for FastAPI bootstrap: health, CORS, error handling."""
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,7 +8,18 @@ from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
+from course_supporter.api.deps import get_current_tenant
+from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
+
+STUB_TENANT = TenantContext(
+    tenant_id=uuid.uuid4(),
+    tenant_name="test-tenant",
+    scopes=[],
+    rate_limit_prep=100,
+    rate_limit_check=1000,
+    key_prefix="cs_test",
+)
 
 
 @pytest.fixture()
@@ -21,6 +33,7 @@ def mock_session() -> AsyncMock:
 async def client(mock_session: AsyncMock) -> AsyncClient:
     """AsyncClient that skips real DB and ModelRouter."""
     app.dependency_overrides[get_session] = lambda: mock_session
+    app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

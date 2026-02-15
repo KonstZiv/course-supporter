@@ -1,5 +1,6 @@
 """FastAPI application with lifespan management."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
 from course_supporter.api.routes.reports import router as reports_router
+from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
 from course_supporter.logging_config import configure_logging
@@ -19,6 +21,17 @@ from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
 
+CLEANUP_INTERVAL_SECONDS = 300
+
+
+async def _cleanup_loop(limiter: InMemoryRateLimiter) -> None:
+    """Periodic cleanup of expired rate limit entries."""
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        cleaned = limiter.cleanup()
+        if cleaned:
+            logger.debug("rate_limiter_cleanup", keys_removed=cleaned)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -26,7 +39,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     Startup:
         - Create ModelRouter with DB logging enabled.
+        - Start rate limiter cleanup task.
     Shutdown:
+        - Cancel cleanup task.
         - Dispose database engine (close connection pool).
     """
     configure_logging(
@@ -34,6 +49,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         log_level=settings.log_level,
     )
     app.state.model_router = create_model_router(settings, async_session)
+
+    # Start rate limiter cleanup loop
+    from course_supporter.auth.scopes import rate_limiter
+
+    cleanup_task = asyncio.create_task(_cleanup_loop(rate_limiter))
 
     s3 = S3Client(
         endpoint_url=settings.s3_endpoint,
@@ -47,6 +67,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
         logger.info("app_started", environment=str(settings.environment))
         yield
+
+    cleanup_task.cancel()
     await engine.dispose()
     logger.info("app_stopped")
 

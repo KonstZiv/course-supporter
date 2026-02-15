@@ -7,6 +7,12 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
+from scripts.manage_tenant import (
+    create_key,
+    create_tenant,
+    list_tenants,
+    revoke_key,
+)
 
 from course_supporter.storage.orm import APIKey, Tenant
 
@@ -35,8 +41,6 @@ class TestCreateTenant:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """create-tenant creates tenant with correct name."""
-        from scripts.manage_tenant import create_tenant
-
         # No existing tenant
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -63,7 +67,6 @@ class TestCreateKey:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """create-key outputs the full key for saving."""
-        from scripts.manage_tenant import create_key
 
         tenant = MagicMock(spec=Tenant)
         tenant.id = uuid.uuid4()
@@ -101,7 +104,6 @@ class TestCreateKey:
         self, _patch_session: MagicMock, mock_session: MagicMock
     ) -> None:
         """create-key exits with error for unknown tenant."""
-        from scripts.manage_tenant import create_key
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -128,7 +130,6 @@ class TestRevokeKey:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """revoke-key deactivates key by prefix."""
-        from scripts.manage_tenant import revoke_key
 
         key = MagicMock(spec=APIKey)
         key.key_prefix = "cs_live_a1b2"
@@ -156,7 +157,6 @@ class TestListTenants:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """list-tenants displays tenants with key counts."""
-        from scripts.manage_tenant import list_tenants
 
         rows = [
             MagicMock(is_active=True, key_count=1, **{"name": "DevOps School"}),

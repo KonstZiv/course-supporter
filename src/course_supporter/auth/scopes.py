@@ -35,11 +35,7 @@ def require_scope(
         tenant: TenantContext = _tenant_dep,
     ) -> TenantContext:
         # 1. Scope check
-        matched_scope: str | None = None
-        for s in required_scopes:
-            if s in tenant.scopes:
-                matched_scope = s
-                break
+        matched_scope = next((s for s in required_scopes if s in tenant.scopes), None)
         if matched_scope is None:
             raise HTTPException(
                 status_code=403,

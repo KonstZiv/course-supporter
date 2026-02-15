@@ -40,49 +40,58 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 
 
 class CourseRepository:
-    """Repository for Course CRUD operations."""
+    """Tenant-scoped repository for Course CRUD operations.
 
-    def __init__(self, session: AsyncSession) -> None:
+    All queries are automatically filtered by tenant_id to ensure
+    data isolation between tenants.
+    """
+
+    def __init__(self, session: AsyncSession, tenant_id: uuid.UUID) -> None:
         self._session = session
+        self._tenant_id = tenant_id
 
     async def create(
         self,
         *,
-        tenant_id: uuid.UUID,
         title: str,
         description: str | None = None,
     ) -> Course:
-        """Create a new course.
+        """Create a new course for the current tenant.
 
         Args:
-            tenant_id: UUID of the owning tenant.
             title: Course title.
             description: Optional course description.
 
         Returns:
             The newly created Course ORM instance.
         """
-        course = Course(tenant_id=tenant_id, title=title, description=description)
+        course = Course(tenant_id=self._tenant_id, title=title, description=description)
         self._session.add(course)
         await self._session.flush()
         return course
 
     async def get_by_id(self, course_id: uuid.UUID) -> Course | None:
-        """Get course by primary key.
+        """Get course by primary key, scoped to current tenant.
 
         Args:
             course_id: UUID of the course.
 
         Returns:
-            Course if found, None otherwise.
+            Course if found and belongs to tenant, None otherwise.
         """
-        return await self._session.get(Course, course_id)
+        stmt = select(Course).where(
+            Course.id == course_id,
+            Course.tenant_id == self._tenant_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_with_structure(self, course_id: uuid.UUID) -> Course | None:
         """Get course with all nested structure eagerly loaded.
 
         Uses selectinload to avoid cartesian product issues
         that joinedload would cause with multiple collections.
+        Scoped to current tenant.
 
         Args:
             course_id: UUID of the course.
@@ -93,7 +102,10 @@ class CourseRepository:
         """
         stmt = (
             select(Course)
-            .where(Course.id == course_id)
+            .where(
+                Course.id == course_id,
+                Course.tenant_id == self._tenant_id,
+            )
             .options(
                 selectinload(Course.source_materials),
                 selectinload(Course.modules)
@@ -113,7 +125,7 @@ class CourseRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> list[Course]:
-        """List courses ordered by creation date (newest first).
+        """List courses for current tenant, ordered by creation date (newest first).
 
         Args:
             limit: Maximum number of results.
@@ -124,6 +136,7 @@ class CourseRepository:
         """
         stmt = (
             select(Course)
+            .where(Course.tenant_id == self._tenant_id)
             .order_by(Course.created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -515,13 +528,20 @@ class LessonRepository:
 
 
 class LLMCallRepository:
-    """Repository for LLM call analytics and cost reporting."""
+    """Repository for LLM call analytics and cost reporting.
 
-    def __init__(self, session: AsyncSession) -> None:
+    Optionally scoped by tenant_id. When tenant_id is provided,
+    all queries filter by it. When None, returns all records.
+    """
+
+    def __init__(
+        self, session: AsyncSession, tenant_id: uuid.UUID | None = None
+    ) -> None:
         self._session = session
+        self._tenant_id = tenant_id
 
     async def get_summary(self) -> CostSummary:
-        """Get aggregate summary of all LLM calls."""
+        """Get aggregate summary of LLM calls."""
         stmt = select(
             func.count().label("total_calls"),
             func.count().filter(LLMCall.success.is_(True)).label("successful_calls"),
@@ -531,6 +551,8 @@ class LLMCallRepository:
             func.coalesce(func.sum(LLMCall.tokens_out), 0).label("total_tokens_out"),
             func.coalesce(func.avg(LLMCall.latency_ms), 0.0).label("avg_latency_ms"),
         ).select_from(LLMCall)
+        if self._tenant_id is not None:
+            stmt = stmt.where(LLMCall.tenant_id == self._tenant_id)
         result = await self._session.execute(stmt)
         row = result.one()
         return CostSummary(
@@ -584,6 +606,8 @@ class LLMCallRepository:
             .group_by(group_column)
             .order_by(func.count().desc())
         )
+        if self._tenant_id is not None:
+            stmt = stmt.where(LLMCall.tenant_id == self._tenant_id)
         result = await self._session.execute(stmt)
         return [
             GroupedCost(

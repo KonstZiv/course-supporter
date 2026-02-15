@@ -19,5 +19,5 @@ SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
 async def get_cost_report(tenant: SharedDep) -> CostReport:
     """Get LLM call cost report with summary and breakdowns."""
     async with async_session() as session:
-        repo = LLMCallRepository(session)
+        repo = LLMCallRepository(session, tenant.tenant_id)
         return await repo.get_full_report()

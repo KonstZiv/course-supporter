@@ -221,7 +221,7 @@ class TestCourseRepositoryGetWithStructure:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = course
         mock_session.execute.return_value = mock_result
-        repo = CourseRepository(mock_session)
+        repo = CourseRepository(mock_session, uuid.uuid4())
         result = await repo.get_with_structure(course.id)
         assert result == course
         mock_session.execute.assert_awaited_once()
@@ -234,6 +234,6 @@ class TestCourseRepositoryGetWithStructure:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_session.execute.return_value = mock_result
-        repo = CourseRepository(mock_session)
+        repo = CourseRepository(mock_session, uuid.uuid4())
         result = await repo.get_with_structure(uuid.uuid4())
         assert result is None

@@ -40,11 +40,11 @@ class TestLLMCallTenant:
     """Tests for tenant_id on LLMCall model."""
 
     def test_llm_call_has_tenant_id_column(self) -> None:
-        """LLMCall table has tenant_id FK column."""
+        """LLMCall table has nullable tenant_id FK column."""
         table = LLMCall.__table__
         col = table.c.tenant_id
         assert col is not None
-        assert col.nullable is False
+        assert col.nullable is True
 
     def test_llm_call_with_tenant(self) -> None:
         """LLMCall accepts tenant_id at construction."""

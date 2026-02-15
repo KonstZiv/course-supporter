@@ -281,7 +281,7 @@ class LLMCall(Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     action: Mapped[str] = mapped_column(String(100), default="")
@@ -300,4 +300,4 @@ class LLMCall(Base):
     )
 
     # Relationships
-    tenant: Mapped["Tenant"] = relationship()
+    tenant: Mapped["Tenant | None"] = relationship()

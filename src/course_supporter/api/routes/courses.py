@@ -47,10 +47,8 @@ async def create_course(
     session: SessionDep,
 ) -> CourseResponse:
     """Create a new course."""
-    repo = CourseRepository(session)
-    course = await repo.create(
-        tenant_id=tenant.tenant_id, title=body.title, description=body.description
-    )
+    repo = CourseRepository(session, tenant.tenant_id)
+    course = await repo.create(title=body.title, description=body.description)
     await session.commit()
     return CourseResponse.model_validate(course)
 
@@ -62,7 +60,7 @@ async def get_course(
     session: SessionDep,
 ) -> CourseDetailResponse:
     """Get course by ID with full nested structure."""
-    repo = CourseRepository(session)
+    repo = CourseRepository(session, tenant.tenant_id)
     course = await repo.get_with_structure(course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -77,7 +75,7 @@ async def create_slide_mapping(
     session: SessionDep,
 ) -> SlideVideoMapResponse:
     """Create slide-video mappings for a course."""
-    course_repo = CourseRepository(session)
+    course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -135,7 +133,7 @@ async def create_material(
             detail="Either source_url or file must be provided",
         )
 
-    course_repo = CourseRepository(session)
+    course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")

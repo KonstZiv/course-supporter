@@ -134,25 +134,29 @@ class TestCourseRepository:
     @pytest.mark.asyncio
     async def test_create_flushes_session(self, mock_session: AsyncMock) -> None:
         """create() calls flush, not commit."""
-        repo = CourseRepository(mock_session)
-        await repo.create(tenant_id=uuid.uuid4(), title="Test")
+        repo = CourseRepository(mock_session, uuid.uuid4())
+        await repo.create(title="Test")
         mock_session.flush.assert_awaited_once()
         mock_session.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_by_id_returns_course(self, mock_session: AsyncMock) -> None:
-        """get_by_id() delegates to session.get()."""
+        """get_by_id() executes tenant-scoped select query."""
         course = _make_course_mock()
-        mock_session.get.return_value = course
-        repo = CourseRepository(mock_session)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = course
+        mock_session.execute.return_value = mock_result
+        repo = CourseRepository(mock_session, uuid.uuid4())
         result = await repo.get_by_id(course.id)
         assert result == course
 
     @pytest.mark.asyncio
     async def test_get_by_id_returns_none(self, mock_session: AsyncMock) -> None:
         """get_by_id() returns None for missing course."""
-        mock_session.get.return_value = None
-        repo = CourseRepository(mock_session)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = mock_result
+        repo = CourseRepository(mock_session, uuid.uuid4())
         result = await repo.get_by_id(uuid.uuid4())
         assert result is None
 
@@ -165,6 +169,6 @@ class TestCourseRepository:
             _make_course_mock(title="ML 201"),
         ]
         mock_session.execute.return_value = mock_result
-        repo = CourseRepository(mock_session)
+        repo = CourseRepository(mock_session, uuid.uuid4())
         courses = await repo.list_all()
         assert len(courses) == 2

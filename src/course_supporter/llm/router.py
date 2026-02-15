@@ -24,7 +24,7 @@ _RouterResult = LLMResponse | tuple[Any, LLMResponse]
 
 # TypeVar for call_fn-dependent chain methods — lets mypy infer
 # concrete return type (LLMResponse or tuple) from the call_fn signature.
-_T = TypeVar("_T", LLMResponse, tuple[Any, LLMResponse])
+_CallResult = TypeVar("_CallResult", LLMResponse, tuple[Any, LLMResponse])
 
 
 class AllModelsFailedError(Exception):
@@ -137,8 +137,8 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
-    ) -> _T:
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_CallResult]],
+    ) -> _CallResult:
         """Two-level fallback: requested strategy -> default."""
         errors: list[tuple[str, str]] = []
         strategies_tried: list[str] = []
@@ -184,9 +184,9 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_CallResult]],
         errors: list[tuple[str, str]],
-    ) -> _T | None:
+    ) -> _CallResult | None:
         """Walk the model chain, calling call_fn for each active provider."""
         chain = self._registry.get_chain(action, strategy)
         for model_cfg in chain:
@@ -232,11 +232,11 @@ class ModelRouter:
         provider: LLMProvider,
         request: LLMRequest,
         model_cfg: ModelConfig,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_CallResult]],
         errors: list[tuple[str, str]],
         action: str,
         strategy: str,
-    ) -> _T | None:
+    ) -> _CallResult | None:
         """Retry call_fn up to max_attempts on transient errors."""
         for attempt in range(1, self._max_attempts + 1):
             try:

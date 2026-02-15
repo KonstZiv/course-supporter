@@ -33,7 +33,9 @@ async def get_current_tenant(
     """Authenticate request via API key, return tenant context.
 
     Raises:
-        HTTPException 401: missing, invalid, inactive, or expired key.
+        HTTPException 401: missing, invalid, or inactive key
+            (detail: "Invalid API key"), or expired key
+            (detail: "API key expired").
     """
     key_hash = hash_api_key(api_key)
 

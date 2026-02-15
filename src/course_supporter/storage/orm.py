@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models for all Sprint 1 entities."""
+"""SQLAlchemy ORM models for all project entities."""
 
 import uuid
 from datetime import datetime
@@ -28,6 +28,53 @@ def _uuid7() -> uuid.UUID:
 
 class Base(DeclarativeBase):
     """Base class for all ORM models."""
+
+
+# ──────────────────────────────────────────────
+# Multi-Tenant Auth
+# ──────────────────────────────────────────────
+
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    api_keys: Mapped[list["APIKey"]] = relationship(
+        back_populates="tenant", cascade="all, delete-orphan"
+    )
+
+
+class APIKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE")
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    key_prefix: Mapped[str] = mapped_column(String(16))
+    label: Mapped[str] = mapped_column(String(100), default="default")
+    scopes: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    rate_limit_prep: Mapped[int] = mapped_column(Integer, default=60)
+    rate_limit_check: Mapped[int] = mapped_column(Integer, default=300)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    tenant: Mapped["Tenant"] = relationship(back_populates="api_keys")
 
 
 # ──────────────────────────────────────────────

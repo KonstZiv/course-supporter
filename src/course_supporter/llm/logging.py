@@ -7,6 +7,8 @@ is persisted to the llm_calls table in a separate DB session.
 DB errors are swallowed and logged -- LLM call flow is never interrupted.
 """
 
+import uuid
+
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,12 +22,14 @@ logger = structlog.get_logger()
 
 def create_log_callback(
     session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: uuid.UUID | None = None,
 ) -> LogCallback:
     """Create a LogCallback that persists LLM calls to the database.
 
     Args:
         session_factory: Async session factory for creating isolated
             DB sessions per log entry.
+        tenant_id: Optional tenant UUID to record on each LLM call.
 
     Returns:
         Async callback matching ModelRouter's LogCallback signature.
@@ -37,6 +41,7 @@ def create_log_callback(
         error_message: str | None,
     ) -> None:
         record = LLMCall(
+            tenant_id=tenant_id,
             action=response.action,
             strategy=response.strategy,
             provider=response.provider,

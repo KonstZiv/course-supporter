@@ -1,6 +1,5 @@
 """Tests for rate limiting (PD-005)."""
 
-import time
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -48,23 +47,26 @@ class TestInMemoryRateLimiter:
 
     def test_window_expires(self) -> None:
         """After window expires, old requests are not counted."""
-        limiter = InMemoryRateLimiter(window_seconds=1)
+        limiter = InMemoryRateLimiter(window_seconds=60)
+        base_time = 1000.0
 
-        # Fill up the limit
-        for _ in range(5):
-            limiter.check("tenant:prep", limit=5)
+        with patch("course_supporter.auth.rate_limiter.time.monotonic") as mock_time:
+            # Fill up the limit at t=1000
+            mock_time.return_value = base_time
+            for _ in range(5):
+                limiter.check("tenant:prep", limit=5)
 
-        # Should be blocked
-        allowed, _retry = limiter.check("tenant:prep", limit=5)
-        assert allowed is False
+            # Should be blocked at t=1000
+            allowed, _retry = limiter.check("tenant:prep", limit=5)
+            assert allowed is False
 
-        # Wait for window to expire
-        time.sleep(1.1)
+            # Advance past the window (60s)
+            mock_time.return_value = base_time + 61.0
 
-        # Should be allowed again
-        allowed, retry_after = limiter.check("tenant:prep", limit=5)
-        assert allowed is True
-        assert retry_after == 0
+            # Should be allowed again
+            allowed, retry_after = limiter.check("tenant:prep", limit=5)
+            assert allowed is True
+            assert retry_after == 0
 
     def test_different_keys_independent(self) -> None:
         """Different tenants have independent rate limits."""
@@ -83,16 +85,19 @@ class TestInMemoryRateLimiter:
 
     def test_cleanup_removes_expired(self) -> None:
         """Cleanup removes keys with all expired entries."""
-        limiter = InMemoryRateLimiter(window_seconds=1)
+        limiter = InMemoryRateLimiter(window_seconds=60)
+        base_time = 1000.0
 
-        limiter.check("tenant:prep", limit=10)
-        limiter.check("tenant:check", limit=10)
+        with patch("course_supporter.auth.rate_limiter.time.monotonic") as mock_time:
+            mock_time.return_value = base_time
+            limiter.check("tenant:prep", limit=10)
+            limiter.check("tenant:check", limit=10)
 
-        # Wait for window to expire
-        time.sleep(1.1)
+            # Advance past the window
+            mock_time.return_value = base_time + 61.0
 
-        cleaned = limiter.cleanup()
-        assert cleaned == 2
+            cleaned = limiter.cleanup()
+            assert cleaned == 2
 
         # Verify internal state is clean
         assert len(limiter._requests) == 0

@@ -43,7 +43,11 @@ async def create_course(
 ) -> CourseResponse:
     """Create a new course."""
     repo = CourseRepository(session)
-    course = await repo.create(title=body.title, description=body.description)
+    # TODO(PD-003): replace stub with tenant_id from auth middleware
+    tenant_id = body.tenant_id
+    course = await repo.create(
+        tenant_id=tenant_id, title=body.title, description=body.description
+    )
     await session.commit()
     return CourseResponse.model_validate(course)
 

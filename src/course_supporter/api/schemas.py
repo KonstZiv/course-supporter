@@ -13,6 +13,8 @@ from course_supporter.models.course import SlideVideoMapEntry
 class CourseCreateRequest(BaseModel):
     """Request body for POST /courses."""
 
+    # TODO(PD-003): remove tenant_id from body; extract from auth token
+    tenant_id: uuid.UUID
     title: str = Field(..., min_length=1, max_length=500)
     description: str | None = None
 

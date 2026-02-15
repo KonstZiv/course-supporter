@@ -68,10 +68,10 @@ class TestORMModels:
         columns = {c.name for c in Concept.__table__.columns}
         assert "embedding" in columns
 
-    def test_llm_call_not_linked_to_course(self) -> None:
-        """LLMCall is independent — no FK to courses."""
+    def test_llm_call_linked_to_tenant(self) -> None:
+        """LLMCall has FK to tenants for billing."""
         fks = {fk.target_fullname for fk in LLMCall.__table__.foreign_keys}
-        assert len(fks) == 0
+        assert fks == {"tenants.id"}
 
     def test_slide_video_mapping_fk(self) -> None:
         """SlideVideoMapping has FK to courses."""

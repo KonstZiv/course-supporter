@@ -48,19 +48,21 @@ class CourseRepository:
     async def create(
         self,
         *,
+        tenant_id: uuid.UUID,
         title: str,
         description: str | None = None,
     ) -> Course:
         """Create a new course.
 
         Args:
+            tenant_id: UUID of the owning tenant.
             title: Course title.
             description: Optional course description.
 
         Returns:
             The newly created Course ORM instance.
         """
-        course = Course(title=title, description=description)
+        course = Course(tenant_id=tenant_id, title=title, description=description)
         self._session.add(course)
         await self._session.flush()
         return course

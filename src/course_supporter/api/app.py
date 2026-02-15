@@ -13,6 +13,7 @@ from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
 from course_supporter.api.routes.reports import router as reports_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
+from course_supporter.auth.scopes import rate_limiter
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
 from course_supporter.logging_config import configure_logging
@@ -51,8 +52,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.model_router = create_model_router(settings, async_session)
 
     # Start rate limiter cleanup loop
-    from course_supporter.auth.scopes import rate_limiter
-
     cleanup_task = asyncio.create_task(_cleanup_loop(rate_limiter))
 
     s3 = S3Client(

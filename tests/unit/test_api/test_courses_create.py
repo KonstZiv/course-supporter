@@ -11,6 +11,8 @@ from course_supporter.api.app import app
 from course_supporter.storage.database import get_session
 from course_supporter.storage.repositories import CourseRepository
 
+STUB_TENANT_ID = str(uuid.uuid4())
+
 
 def _make_course_mock(
     *,
@@ -52,7 +54,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=_make_course_mock()):
             response = await client.post(
                 "/api/v1/courses",
-                json={"title": "Python 101"},
+                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
             )
         assert response.status_code == 201
 
@@ -63,7 +65,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=course):
             response = await client.post(
                 "/api/v1/courses",
-                json={"title": "Python 101"},
+                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
             )
         data = response.json()
         assert data["id"] == str(course.id)
@@ -75,7 +77,11 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=course):
             response = await client.post(
                 "/api/v1/courses",
-                json={"title": "Python 101", "description": "Intro to Python"},
+                json={
+                    "tenant_id": STUB_TENANT_ID,
+                    "title": "Python 101",
+                    "description": "Intro to Python",
+                },
             )
         assert response.status_code == 201
         assert response.json()["description"] == "Intro to Python"
@@ -87,7 +93,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=course):
             response = await client.post(
                 "/api/v1/courses",
-                json={"title": "Python 101"},
+                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
             )
         assert response.status_code == 201
         assert response.json()["description"] is None
@@ -99,7 +105,7 @@ class TestCreateCourseAPI:
         """POST /api/v1/courses rejects empty title."""
         response = await client.post(
             "/api/v1/courses",
-            json={"title": ""},
+            json={"tenant_id": STUB_TENANT_ID, "title": ""},
         )
         assert response.status_code == 422
 
@@ -110,7 +116,7 @@ class TestCreateCourseAPI:
         """POST /api/v1/courses rejects missing title."""
         response = await client.post(
             "/api/v1/courses",
-            json={},
+            json={"tenant_id": STUB_TENANT_ID},
         )
         assert response.status_code == 422
 
@@ -120,7 +126,7 @@ class TestCourseRepository:
     async def test_create_flushes_session(self, mock_session: AsyncMock) -> None:
         """create() calls flush, not commit."""
         repo = CourseRepository(mock_session)
-        await repo.create(title="Test")
+        await repo.create(tenant_id=uuid.uuid4(), title="Test")
         mock_session.flush.assert_awaited_once()
         mock_session.commit.assert_not_called()
 

@@ -86,6 +86,9 @@ class Course(Base):
     __tablename__ = "courses"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
     learning_goal: Mapped[str | None] = mapped_column(Text)
@@ -99,6 +102,7 @@ class Course(Base):
     )
 
     # Relationships
+    tenant: Mapped["Tenant"] = relationship()
     source_materials: Mapped[list["SourceMaterial"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
@@ -277,6 +281,9 @@ class LLMCall(Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
     action: Mapped[str] = mapped_column(String(100), default="")
     strategy: Mapped[str] = mapped_column(String(50), default="default")
     provider: Mapped[str] = mapped_column(String(50))
@@ -291,3 +298,6 @@ class LLMCall(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+    # Relationships
+    tenant: Mapped["Tenant"] = relationship()

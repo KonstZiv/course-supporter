@@ -6,7 +6,7 @@ Two-level fallback:
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar
 
 import structlog
 from pydantic import BaseModel
@@ -19,9 +19,12 @@ logger = structlog.get_logger()
 
 LogCallback = Callable[[LLMResponse, bool, str | None], Awaitable[None]]
 
-# Return type for _execute_with_fallback and internal chain methods.
-# complete() returns LLMResponse, complete_structured() returns tuple.
+# Return type for helper methods that inspect result via isinstance.
 _RouterResult = LLMResponse | tuple[Any, LLMResponse]
+
+# TypeVar for call_fn-dependent chain methods — lets mypy infer
+# concrete return type (LLMResponse or tuple) from the call_fn signature.
+_T = TypeVar("_T", LLMResponse, tuple[Any, LLMResponse])
 
 
 class AllModelsFailedError(Exception):
@@ -87,13 +90,12 @@ class ModelRouter:
         async def call_fn(provider: LLMProvider, req: LLMRequest) -> LLMResponse:
             return await provider.complete(req)
 
-        result = await self._execute_with_fallback(
+        return await self._execute_with_fallback(
             action,
             strategy,
             request,
             call_fn,
         )
-        return result  # type: ignore[return-value]
 
     async def complete_structured(
         self,
@@ -121,13 +123,12 @@ class ModelRouter:
         ) -> tuple[Any, LLMResponse]:
             return await provider.complete_structured(req, response_schema)
 
-        result = await self._execute_with_fallback(
+        return await self._execute_with_fallback(
             action,
             strategy,
             request,
             call_fn,
         )
-        return result  # type: ignore[return-value]
 
     # -- internal: strategy fallback ------------------------------------
 
@@ -136,8 +137,8 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
-    ) -> _RouterResult:
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
+    ) -> _T:
         """Two-level fallback: requested strategy -> default."""
         errors: list[tuple[str, str]] = []
         strategies_tried: list[str] = []
@@ -183,9 +184,9 @@ class ModelRouter:
         action: str,
         strategy: str,
         request: LLMRequest,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
         errors: list[tuple[str, str]],
-    ) -> _RouterResult | None:
+    ) -> _T | None:
         """Walk the model chain, calling call_fn for each active provider."""
         chain = self._registry.get_chain(action, strategy)
         for model_cfg in chain:
@@ -231,11 +232,11 @@ class ModelRouter:
         provider: LLMProvider,
         request: LLMRequest,
         model_cfg: ModelConfig,
-        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_RouterResult]],
+        call_fn: Callable[[LLMProvider, LLMRequest], Awaitable[_T]],
         errors: list[tuple[str, str]],
         action: str,
         strategy: str,
-    ) -> _RouterResult | None:
+    ) -> _T | None:
         """Retry call_fn up to max_attempts on transient errors."""
         for attempt in range(1, self._max_attempts + 1):
             try:

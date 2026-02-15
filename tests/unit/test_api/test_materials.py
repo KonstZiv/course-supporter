@@ -9,11 +9,21 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_s3_client
+from course_supporter.api.deps import get_current_tenant, get_s3_client
+from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.repositories import (
     CourseRepository,
     SourceMaterialRepository,
+)
+
+STUB_TENANT = TenantContext(
+    tenant_id=uuid.uuid4(),
+    tenant_name="test-tenant",
+    scopes=["courses:write"],
+    rate_limit_prep=100,
+    rate_limit_check=1000,
+    key_prefix="cs_test",
 )
 
 INGEST_TASK = "course_supporter.api.routes.courses.ingest_material"
@@ -57,6 +67,7 @@ def mock_s3() -> AsyncMock:
 async def client(mock_session: AsyncMock, mock_s3: AsyncMock) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_s3_client] = lambda: mock_s3
+    app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

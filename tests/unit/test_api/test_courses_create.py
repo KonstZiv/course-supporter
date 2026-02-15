@@ -8,10 +8,19 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
+from course_supporter.api.deps import get_current_tenant
+from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.repositories import CourseRepository
 
-STUB_TENANT_ID = str(uuid.uuid4())
+STUB_TENANT = TenantContext(
+    tenant_id=uuid.uuid4(),
+    tenant_name="test-tenant",
+    scopes=["courses:write"],
+    rate_limit_prep=100,
+    rate_limit_check=1000,
+    key_prefix="cs_test",
+)
 
 
 def _make_course_mock(
@@ -39,6 +48,7 @@ def mock_session() -> AsyncMock:
 @pytest.fixture()
 async def client(mock_session: AsyncMock) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
+    app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -54,7 +64,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=_make_course_mock()):
             response = await client.post(
                 "/api/v1/courses",
-                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
+                json={"title": "Python 101"},
             )
         assert response.status_code == 201
 
@@ -65,7 +75,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=course):
             response = await client.post(
                 "/api/v1/courses",
-                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
+                json={"title": "Python 101"},
             )
         data = response.json()
         assert data["id"] == str(course.id)
@@ -78,7 +88,6 @@ class TestCreateCourseAPI:
             response = await client.post(
                 "/api/v1/courses",
                 json={
-                    "tenant_id": STUB_TENANT_ID,
                     "title": "Python 101",
                     "description": "Intro to Python",
                 },
@@ -93,7 +102,7 @@ class TestCreateCourseAPI:
         with patch.object(CourseRepository, "create", return_value=course):
             response = await client.post(
                 "/api/v1/courses",
-                json={"tenant_id": STUB_TENANT_ID, "title": "Python 101"},
+                json={"title": "Python 101"},
             )
         assert response.status_code == 201
         assert response.json()["description"] is None
@@ -105,7 +114,7 @@ class TestCreateCourseAPI:
         """POST /api/v1/courses rejects empty title."""
         response = await client.post(
             "/api/v1/courses",
-            json={"tenant_id": STUB_TENANT_ID, "title": ""},
+            json={"title": ""},
         )
         assert response.status_code == 422
 
@@ -116,7 +125,7 @@ class TestCreateCourseAPI:
         """POST /api/v1/courses rejects missing title."""
         response = await client.post(
             "/api/v1/courses",
-            json={"tenant_id": STUB_TENANT_ID},
+            json={},
         )
         assert response.status_code == 422
 

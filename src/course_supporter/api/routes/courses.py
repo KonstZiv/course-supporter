@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_current_tenant, get_s3_client, get_session
+from course_supporter.api.deps import get_s3_client, get_session
 from course_supporter.api.schemas import (
     CourseCreateRequest,
     CourseDetailResponse,
@@ -19,6 +19,7 @@ from course_supporter.api.schemas import (
 )
 from course_supporter.api.tasks import ingest_material
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.scopes import require_scope
 from course_supporter.models.source import SourceType
 from course_supporter.storage.database import async_session
 from course_supporter.storage.repositories import (
@@ -33,7 +34,8 @@ router = APIRouter(tags=["courses"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
-TenantDep = Annotated[TenantContext, Depends(get_current_tenant)]
+PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
+SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
 
 VALID_SOURCE_TYPES = {t.value for t in SourceType}
 
@@ -41,7 +43,7 @@ VALID_SOURCE_TYPES = {t.value for t in SourceType}
 @router.post("/courses", status_code=201)
 async def create_course(
     body: CourseCreateRequest,
-    tenant: TenantDep,
+    tenant: PrepDep,
     session: SessionDep,
 ) -> CourseResponse:
     """Create a new course."""
@@ -56,7 +58,7 @@ async def create_course(
 @router.get("/courses/{course_id}")
 async def get_course(
     course_id: uuid.UUID,
-    tenant: TenantDep,
+    tenant: SharedDep,
     session: SessionDep,
 ) -> CourseDetailResponse:
     """Get course by ID with full nested structure."""
@@ -71,7 +73,7 @@ async def get_course(
 async def create_slide_mapping(
     course_id: uuid.UUID,
     body: SlideVideoMapRequest,
-    tenant: TenantDep,
+    tenant: PrepDep,
     session: SessionDep,
 ) -> SlideVideoMapResponse:
     """Create slide-video mappings for a course."""
@@ -93,7 +95,7 @@ async def create_slide_mapping(
 async def get_lesson(
     course_id: uuid.UUID,
     lesson_id: uuid.UUID,
-    tenant: TenantDep,
+    tenant: SharedDep,
     session: SessionDep,
 ) -> LessonDetailResponse:
     """Get lesson by ID within a course."""
@@ -108,7 +110,7 @@ async def get_lesson(
 async def create_material(
     course_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    tenant: TenantDep,
+    tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
     source_type: Annotated[str, Form()],

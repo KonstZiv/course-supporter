@@ -10,6 +10,8 @@ import pytest
 from scripts.manage_tenant import (
     create_key,
     create_tenant,
+    deactivate_tenant,
+    list_keys,
     list_tenants,
     revoke_key,
 )
@@ -175,3 +177,69 @@ class TestListTenants:
         assert "Python Academy" in captured.out
         assert "2 keys" in captured.out
         assert "1 key)" in captured.out  # singular
+
+
+class TestListKeys:
+    def test_list_keys(
+        self,
+        _patch_session: MagicMock,
+        mock_session: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """list-keys displays keys for a tenant."""
+        tenant = MagicMock(spec=Tenant)
+        tenant.id = uuid.uuid4()
+
+        key1 = MagicMock(spec=APIKey)
+        key1.key_prefix = "cs_live_a1b2"
+        key1.label = "production"
+        key1.scopes = ["prep", "check"]
+        key1.is_active = True
+
+        key2 = MagicMock(spec=APIKey)
+        key2.key_prefix = "cs_live_x9y8"
+        key2.label = "staging"
+        key2.scopes = ["prep"]
+        key2.is_active = False
+
+        # First call: find tenant; second call: list keys
+        result_tenant = MagicMock()
+        result_tenant.scalar_one_or_none.return_value = tenant
+        result_keys = MagicMock()
+        result_keys.scalars.return_value.all.return_value = [key1, key2]
+        mock_session.execute.side_effect = [result_tenant, result_keys]
+
+        args = argparse.Namespace(tenant="Test Tenant")
+        list_keys(args)
+
+        captured = capsys.readouterr()
+        assert "cs_live_a1b2" in captured.out
+        assert "production" in captured.out
+        assert "active" in captured.out
+        assert "cs_live_x9y8" in captured.out
+        assert "revoked" in captured.out
+
+
+class TestDeactivateTenant:
+    def test_deactivate_tenant(
+        self,
+        _patch_session: MagicMock,
+        mock_session: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """deactivate-tenant sets tenant inactive."""
+        tenant = MagicMock(spec=Tenant)
+        tenant.is_active = True
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = tenant
+        mock_session.execute.return_value = mock_result
+
+        args = argparse.Namespace(name="Python Academy")
+        deactivate_tenant(args)
+
+        assert tenant.is_active is False
+        mock_session.commit.assert_called_once()
+
+        captured = capsys.readouterr()
+        assert "Tenant deactivated: Python Academy" in captured.out

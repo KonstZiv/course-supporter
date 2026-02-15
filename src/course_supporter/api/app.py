@@ -29,7 +29,7 @@ async def _cleanup_loop(limiter: InMemoryRateLimiter) -> None:
     """Periodic cleanup of expired rate limit entries."""
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-        cleaned = limiter.cleanup()
+        cleaned = await asyncio.to_thread(limiter.cleanup)
         if cleaned:
             logger.debug("rate_limiter_cleanup", keys_removed=cleaned)
 

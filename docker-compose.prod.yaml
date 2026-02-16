@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: course-supporter-app
+    restart: unless-stopped
+    env_file: .env.prod
+    depends_on:
+      postgres-cs:
+        condition: service_healthy
+    networks:
+      - default
+      - shared-net
+    # No ports — nginx proxies via shared-net
+
+  postgres-cs:
+    image: pgvector/pgvector:pg17
+    container_name: course-supporter-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-course_supporter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-course_supporter}
+    volumes:
+      - pgdata-cs:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-course_supporter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+networks:
+  shared-net:
+    external: true
+
+volumes:
+  pgdata-cs:

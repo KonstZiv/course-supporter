@@ -89,13 +89,22 @@ class S3Client:
         return url
 
     async def ensure_bucket(self) -> None:
-        """Create the bucket if it doesn't exist."""
+        """Verify that the bucket exists.
+
+        On B2/production the bucket must be pre-created via provider console.
+        On MinIO/dev the bucket is created by minio-init container.
+        """
         if self._client is None:
             msg = "S3Client not initialized. Use 'async with S3Client(...)'"
             raise RuntimeError(msg)
 
         try:
             await self._client.head_bucket(Bucket=self._bucket)
+            logger.info("s3_bucket_verified", bucket=self._bucket)
         except Exception:
-            await self._client.create_bucket(Bucket=self._bucket)
-            logger.info("s3_bucket_created", bucket=self._bucket)
+            logger.error(
+                "s3_bucket_not_found",
+                bucket=self._bucket,
+                hint="Create bucket manually in provider console (B2/MinIO)",
+            )
+            raise

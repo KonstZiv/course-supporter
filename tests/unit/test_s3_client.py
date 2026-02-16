@@ -65,8 +65,8 @@ class TestS3Client:
         )
 
     @pytest.mark.asyncio
-    async def test_ensure_bucket_creates_if_missing(self) -> None:
-        """ensure_bucket() creates bucket when head_bucket fails."""
+    async def test_ensure_bucket_raises_if_missing(self) -> None:
+        """ensure_bucket() raises when bucket not found."""
         from unittest.mock import AsyncMock
 
         client = S3Client(
@@ -78,9 +78,8 @@ class TestS3Client:
         client._client = AsyncMock()
         client._client.head_bucket.side_effect = Exception("Not found")
 
-        await client.ensure_bucket()
-
-        client._client.create_bucket.assert_awaited_once_with(Bucket="my-bucket")
+        with pytest.raises(Exception, match="Not found"):
+            await client.ensure_bucket()
 
     @pytest.mark.asyncio
     async def test_ensure_bucket_skips_if_exists(self) -> None:

@@ -65,9 +65,11 @@ class TestS3Client:
         )
 
     @pytest.mark.asyncio
-    async def test_ensure_bucket_creates_if_missing(self) -> None:
-        """ensure_bucket() creates bucket when head_bucket fails."""
+    async def test_ensure_bucket_raises_if_missing(self) -> None:
+        """ensure_bucket() raises ClientError when bucket not found."""
         from unittest.mock import AsyncMock
+
+        from botocore.exceptions import ClientError
 
         client = S3Client(
             endpoint_url="http://localhost:9000",
@@ -76,11 +78,13 @@ class TestS3Client:
             bucket="my-bucket",
         )
         client._client = AsyncMock()
-        client._client.head_bucket.side_effect = Exception("Not found")
+        client._client.head_bucket.side_effect = ClientError(
+            error_response={"Error": {"Code": "404", "Message": "Not Found"}},
+            operation_name="HeadBucket",
+        )
 
-        await client.ensure_bucket()
-
-        client._client.create_bucket.assert_awaited_once_with(Bucket="my-bucket")
+        with pytest.raises(ClientError):
+            await client.ensure_bucket()
 
     @pytest.mark.asyncio
     async def test_ensure_bucket_skips_if_exists(self) -> None:

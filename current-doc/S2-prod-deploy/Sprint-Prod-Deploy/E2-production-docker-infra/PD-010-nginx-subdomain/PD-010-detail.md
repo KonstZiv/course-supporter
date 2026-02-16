@@ -118,26 +118,29 @@ docker compose --env-file .env.prod -f docker-compose.prod.yaml run --rm certbot
 
 ### Крок 3: Повний конфіг з HTTPS
 
-Додати HTTPS server block з `resolver` + security headers + upload timeouts (повний snippet вище).
+Додати HTTPS server block з `resolver` + TLS hardening + security headers + upload timeouts (повний snippet вище).
 
 ```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yaml exec nginx nginx -t
 docker compose --env-file .env.prod -f docker-compose.prod.yaml exec nginx nginx -s reload
 ```
 
-## Тестування
+## Результати верифікації
 
-```bash
-# Перевірити що Django продовжує працювати:
+```
+dig api.pythoncourse.me +short
+  → pythoncourse.me.
+  → 81.17.140.55
+
+curl -sI https://api.pythoncourse.me/
+  → 502 (nginx OK, app not yet deployed)
+  → X-Content-Type-Options: nosniff
+  → X-Frame-Options: DENY
+  → X-XSS-Protection: 1; mode=block
+  → Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+
 curl -I https://pythoncourse.me
-
-# api.pythoncourse.me — поверне 502 поки course-supporter-app не запущений:
-curl -I https://api.pythoncourse.me/health
-
-# Після запуску course-supporter-app — перевірити headers:
-#   X-Content-Type-Options: nosniff
-#   X-Frame-Options: DENY
-#   X-XSS-Protection: 1; mode=block
+  → 200 OK (Django working)
 ```
 
 ## Конфігураційні деталі
@@ -160,6 +163,7 @@ curl -I https://api.pythoncourse.me/health
 - [x] `nginx -t` проходить
 - [x] `pythoncourse.me` продовжує працювати
 - [x] Timeouts та body size для 1GB
-- [x] Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection)
+- [x] Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS)
+- [x] TLS hardening (TLSv1.2/1.3, modern ciphers, OCSP stapling)
 - [ ] `api.pythoncourse.me` проксює до app (верифікація після запуску course-supporter-app)
 - [x] Документ оновлений відповідно до фінальної реалізації

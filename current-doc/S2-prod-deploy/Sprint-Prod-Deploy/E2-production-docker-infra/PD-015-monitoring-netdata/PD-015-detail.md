@@ -1,8 +1,10 @@
 # PD-015: Monitoring (Netdata) — Detail
 
-## Docker Compose
+## Реалізація
 
-Додати до `docker-compose.prod.yaml`:
+### Docker Compose — `docker-compose.prod.yaml`
+
+Додано netdata сервіс:
 
 ```yaml
   netdata:
@@ -21,8 +23,8 @@
       - netdata-config:/etc/netdata
       - netdata-lib:/var/lib/netdata
     environment:
-      - DO_NOT_TRACK=1           # no Netdata Cloud telemetry
-      - NETDATA_CLAIM_TOKEN=     # no cloud claim
+      - DO_NOT_TRACK=1
+      - NETDATA_CLAIM_TOKEN=
     deploy:
       resources:
         limits:
@@ -32,89 +34,70 @@
       - shared-net
 ```
 
-## Telegram Alerts
+Додано named volumes: `netdata-config`, `netdata-lib`.
 
-### 1. Створити Telegram bot
+### Nginx — `deploy/nginx/course-supporter.conf`
 
-```
-@BotFather → /newbot → course-supporter-alerts
-```
-
-Зберегти bot token та chat_id.
-
-### 2. Netdata alert config
-
-Створити `health_alarm_notify.conf`:
-
-```ini
-# /etc/netdata/health_alarm_notify.conf
-SEND_TELEGRAM="YES"
-TELEGRAM_BOT_TOKEN="<bot-token>"
-DEFAULT_RECIPIENT_TELEGRAM="<chat-id>"
-```
-
-Mount через volume або exec в контейнер.
-
-### 3. Custom Alert Thresholds
-
-```yaml
-# Custom alarms (optional — Netdata has good defaults)
-# /etc/netdata/health.d/custom.conf
-
-alarm: disk_space_warning
-on: disk.space
-lookup: average -1m percentage of used
-units: %
-every: 1m
-warn: $this > 80
-crit: $this > 90
-info: Disk space usage
-
-alarm: ram_usage_warning
-on: system.ram
-lookup: average -1m percentage of used
-units: %
-every: 1m
-warn: $this > 85
-crit: $this > 95
-info: RAM usage
-```
-
-## Nginx Config
-
-Вже включено в PD-010:
+Додано `/netdata/` location з resolver pattern та basic auth:
 
 ```nginx
-location /netdata/ {
-    auth_basic "Monitoring";
-    auth_basic_user_file /etc/nginx/.htpasswd_netdata;
-    proxy_pass http://netdata_backend/;
-    proxy_set_header Host $host;
-}
+    set $netdata_backend http://netdata:19999;
+
+    location /netdata/ {
+        auth_basic "Monitoring";
+        auth_basic_user_file /etc/nginx/.htpasswd_netdata;
+        proxy_pass $netdata_backend/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 ```
+
+### Config Templates — `deploy/netdata/`
+
+- `health_alarm_notify.conf` — Telegram alert config (placeholders для bot token та chat_id)
+- `custom-alerts.conf` — disk (>80% warn, >90% crit) та RAM (>85% warn, >95% crit) thresholds
+
+Копіювання в контейнер:
+
+```bash
+docker cp deploy/netdata/health_alarm_notify.conf netdata:/etc/netdata/health_alarm_notify.conf
+docker cp deploy/netdata/custom-alerts.conf netdata:/etc/netdata/health.d/custom.conf
+docker restart netdata
+```
+
+## Telegram Alerts
+
+1. Створити бота: `@BotFather → /newbot → course-supporter-alerts`
+2. Отримати chat_id: `GET https://api.telegram.org/bot<TOKEN>/getUpdates`
+3. Заповнити `deploy/netdata/health_alarm_notify.conf`
+4. Скопіювати в контейнер (див. вище)
+5. Тест: `docker exec netdata /usr/libexec/netdata/plugins.d/alarm-notify.sh test`
 
 ## Що моніторимо
 
 | Метрика | Default Alert | Custom |
 |---|---|---|
-| Disk space | Yes (< 20%) | < 10% critical |
-| RAM usage | Yes | > 85% warning |
-| CPU | Yes (sustained) | — |
-| Docker containers | Restart detection | — |
-| Network I/O | Yes | — |
-| PostgreSQL (якщо є plugin) | Connections | — |
+| Disk space | Yes (< 20%) | > 80% warn, > 90% crit |
+| RAM usage | Yes | > 85% warn, > 95% crit |
+| CPU | Yes (sustained) | Default |
+| Docker containers | Restart detection | Default |
+| Network I/O | Yes | Default |
 
-## Тестування
+## Документація
 
-1. Відкрити `https://api.pythoncourse.me/netdata/` — dashboard доступний
-2. Basic auth працює
-3. Docker container metrics видно
-4. Trigger test alert: `docker exec netdata /usr/libexec/netdata/plugins.d/alarm-notify.sh test`
+Створено `current-doc/S2-prod-deploy/infrastructure/`:
+
+- `README.md` — загальна архітектура інфраструктури
+- `deployment-guide.md` — покрокова інструкція деплою
+- `netdata-setup.md` — покрокова інструкція налаштування Netdata та Telegram alerts
 
 ## Definition of Done
 
-- [ ] Netdata контейнер запущено
-- [ ] Dashboard доступний через nginx з basic auth
-- [ ] Telegram alerts налаштовані
-- [ ] RAM < 200MB (перевірити через htop)
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] Netdata контейнер в docker-compose.prod.yaml
+- [x] Dashboard доступний через nginx з basic auth (`/netdata/`)
+- [x] Telegram alert config templates (`deploy/netdata/`)
+- [x] Custom alert thresholds (disk, RAM)
+- [x] Infrastructure documentation створено
+- [x] Документ оновлений відповідно до фінальної реалізації

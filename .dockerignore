@@ -1,51 +1,28 @@
-# Documentation (not needed in containers)
-current-doc/
-
-# Git
-.git/
-.gitignore
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# Environment
+.git
+.github
+.venv
+__pycache__
+*.pyc
 .env
-.env.local
-.env.example
-
-# Python artifacts
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-.venv/
-
-# Testing & quality tools
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+.env.*
+tests/
+.ruff_cache
+.mypy_cache
+.pytest_cache
+*.egg-info
+docker-compose*.yaml
+Makefile
+.pre-commit-config.yaml
+current-doc/
+past-sprints-doc/
+.DS_Store
 htmlcov/
 .coverage
 .coverage.*
-
-# Docker volumes (bind mount fallback)
+dist/
+build/
 postgres_data/
 minio_data/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Media files (large, stored in S3)
 *.mp4
 *.mp3
 *.wav
-
-# Pre-commit
-.pre-commit-config.yaml
-
-# CI
-.github/

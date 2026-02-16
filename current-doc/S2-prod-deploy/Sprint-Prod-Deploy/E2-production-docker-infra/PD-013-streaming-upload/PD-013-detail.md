@@ -185,14 +185,20 @@ B2 підтримує S3 multipart upload API. Мінімальний розмі
 5. **test_upload_smart_large_uses_multipart** — > threshold → multipart
 6. **test_upload_file_chunks_generator** — правильно yield-ить chunks
 
-Очікувана кількість тестів: **6**
+Реалізовані тести: **8** (4 upload_stream + 3 upload_smart + 1 upload_file_chunks)
+
+## Результати
+
+```
+make check → 393 passed (385 existing + 8 new)
+```
 
 ## Definition of Done
 
-- [ ] `S3Client.upload_stream()` з multipart
-- [ ] `upload_smart()` вибирає стратегію
-- [ ] Abort on failure (cleanup)
-- [ ] Upload endpoint використовує streaming
-- [ ] 6 тестів зелені
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] `S3Client.upload_stream()` з multipart
+- [x] `upload_smart()` вибирає стратегію (< 50MB → simple, інакше → multipart)
+- [x] Abort on failure (cleanup)
+- [x] Upload endpoint використовує streaming (`upload_smart` + `upload_file_chunks`)
+- [x] 8 тестів зелені
+- [x] `make check` зелений (393 passed)
+- [x] Документ оновлений відповідно до фінальної реалізації

@@ -35,6 +35,16 @@ server {
     ssl_certificate /etc/letsencrypt/live/api.pythoncourse.me/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/api.pythoncourse.me/privkey.pem;
 
+    # TLS hardening
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
     client_max_body_size 1G;
     client_body_timeout 900s;
     proxy_read_timeout 900s;
@@ -58,6 +68,7 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options DENY always;
         add_header X-XSS-Protection "1; mode=block" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
     }
 }
 ```
@@ -107,26 +118,29 @@ docker compose --env-file .env.prod -f docker-compose.prod.yaml run --rm certbot
 
 ### Крок 3: Повний конфіг з HTTPS
 
-Додати HTTPS server block з `resolver` + security headers + upload timeouts (повний snippet вище).
+Додати HTTPS server block з `resolver` + TLS hardening + security headers + upload timeouts (повний snippet вище).
 
 ```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yaml exec nginx nginx -t
 docker compose --env-file .env.prod -f docker-compose.prod.yaml exec nginx nginx -s reload
 ```
 
-## Тестування
+## Результати верифікації
 
-```bash
-# Перевірити що Django продовжує працювати:
+```
+dig api.pythoncourse.me +short
+  → pythoncourse.me.
+  → 81.17.140.55
+
+curl -sI https://api.pythoncourse.me/
+  → 502 (nginx OK, app not yet deployed)
+  → X-Content-Type-Options: nosniff
+  → X-Frame-Options: DENY
+  → X-XSS-Protection: 1; mode=block
+  → Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+
 curl -I https://pythoncourse.me
-
-# api.pythoncourse.me — поверне 502 поки course-supporter-app не запущений:
-curl -I https://api.pythoncourse.me/health
-
-# Після запуску course-supporter-app — перевірити headers:
-#   X-Content-Type-Options: nosniff
-#   X-Frame-Options: DENY
-#   X-XSS-Protection: 1; mode=block
+  → 200 OK (Django working)
 ```
 
 ## Конфігураційні деталі
@@ -149,6 +163,7 @@ curl -I https://api.pythoncourse.me/health
 - [x] `nginx -t` проходить
 - [x] `pythoncourse.me` продовжує працювати
 - [x] Timeouts та body size для 1GB
-- [x] Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection)
+- [x] Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS)
+- [x] TLS hardening (TLSv1.2/1.3, modern ciphers, OCSP stapling)
 - [ ] `api.pythoncourse.me` проксює до app (верифікація після запуску course-supporter-app)
 - [x] Документ оновлений відповідно до фінальної реалізації

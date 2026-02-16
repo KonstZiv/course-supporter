@@ -1,6 +1,9 @@
 """Tests for FastAPI bootstrap: health, CORS, error handling."""
 
 import uuid
+from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
+from typing import NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -22,6 +25,49 @@ STUB_TENANT = TenantContext(
 )
 
 
+class HealthMocks(NamedTuple):
+    """Mocks returned by mock_health_deps context manager."""
+
+    db_session: AsyncMock
+    s3_client: AsyncMock
+
+
+@contextmanager
+def mock_health_deps(
+    *,
+    db_error: Exception | None = None,
+    s3_error: Exception | None = None,
+) -> Generator[HealthMocks]:
+    """Mock DB and S3 dependencies for health check tests.
+
+    Args:
+        db_error: If set, async_session __aenter__ raises this exception.
+        s3_error: If set, s3_client.check_connectivity raises this exception.
+    """
+    mock_s3 = AsyncMock()
+    if s3_error:
+        mock_s3.check_connectivity = AsyncMock(side_effect=s3_error)
+    else:
+        mock_s3.check_connectivity = AsyncMock()
+
+    mock_db_session = AsyncMock()
+    mock_db_session.execute = AsyncMock()
+
+    with patch("course_supporter.api.app.async_session") as mock_session_factory:
+        if db_error:
+            mock_session_factory.return_value.__aenter__ = AsyncMock(
+                side_effect=db_error
+            )
+        else:
+            mock_session_factory.return_value.__aenter__ = AsyncMock(
+                return_value=mock_db_session
+            )
+        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        app.state.s3_client = mock_s3
+
+        yield HealthMocks(db_session=mock_db_session, s3_client=mock_s3)
+
+
 @pytest.fixture()
 def mock_session() -> AsyncMock:
     session = AsyncMock()
@@ -30,7 +76,7 @@ def mock_session() -> AsyncMock:
 
 
 @pytest.fixture()
-async def client(mock_session: AsyncMock) -> AsyncClient:
+async def client(mock_session: AsyncMock) -> AsyncGenerator[AsyncClient]:
     """AsyncClient that skips real DB and ModelRouter."""
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
@@ -38,17 +84,60 @@ async def client(mock_session: AsyncMock) -> AsyncClient:
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as ac:
-        yield ac  # type: ignore[misc]
+        yield ac
     app.dependency_overrides.clear()
 
 
 class TestHealth:
     @pytest.mark.asyncio
-    async def test_health_returns_200(self, client: AsyncClient) -> None:
-        """GET /health returns 200 with status ok."""
-        response = await client.get("/health")
+    async def test_health_all_ok(self, client: AsyncClient) -> None:
+        """GET /health returns 200 when DB and S3 are reachable."""
+        with mock_health_deps():
+            response = await client.get("/health")
+
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["checks"]["db"] == "ok"
+        assert data["checks"]["s3"] == "ok"
+        assert "timestamp" in data
+
+    @pytest.mark.asyncio
+    async def test_health_db_down(self, client: AsyncClient) -> None:
+        """GET /health returns 503 when DB is unreachable."""
+        with mock_health_deps(db_error=TimeoutError("db timeout")):
+            response = await client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert "error" in data["checks"]["db"]
+        assert data["checks"]["s3"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_health_s3_down(self, client: AsyncClient) -> None:
+        """GET /health returns 503 when S3 is unreachable."""
+        with mock_health_deps(s3_error=ConnectionError("s3 down")):
+            response = await client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["db"] == "ok"
+        assert "error" in data["checks"]["s3"]
+
+    @pytest.mark.asyncio
+    async def test_health_no_auth(self) -> None:
+        """GET /health is accessible without API key."""
+        with mock_health_deps():
+            # No dependency overrides — no auth bypass
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as ac:
+                response = await ac.get("/health")
+
+        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_health_method_not_allowed(self, client: AsyncClient) -> None:

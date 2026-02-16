@@ -228,6 +228,14 @@ class S3Client:
         url = f"{self._endpoint_url}/{self._bucket}/{key}"
         return url, total
 
+    async def check_connectivity(self) -> None:
+        """Verify S3 bucket is accessible."""
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        await self._client.head_bucket(Bucket=self._bucket)
+
     async def ensure_bucket(self) -> None:
         """Verify that the bucket exists.
 

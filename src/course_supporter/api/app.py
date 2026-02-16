@@ -3,11 +3,15 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import structlog
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
@@ -92,10 +96,58 @@ app.add_middleware(
 )
 
 
+HEALTH_CHECK_TIMEOUT = 5.0
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "ok"}
+async def health() -> JSONResponse:
+    """Deep health check — verifies DB and S3 connectivity."""
+    checks: dict[str, str] = {}
+    overall = "ok"
+
+    # DB check
+    try:
+        async with async_session() as session:
+            await asyncio.wait_for(
+                session.execute(text("SELECT 1")),
+                timeout=HEALTH_CHECK_TIMEOUT,
+            )
+        checks["db"] = "ok"
+    except (TimeoutError, OperationalError, SQLAlchemyError) as e:
+        logger.warning("health_check_db_error", error=type(e).__name__)
+        checks["db"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+    except Exception as e:
+        logger.error("health_check_db_unexpected", error=str(e), exc_info=True)
+        checks["db"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+
+    # S3 check
+    try:
+        s3_client = app.state.s3_client
+        await asyncio.wait_for(
+            s3_client.check_connectivity(),
+            timeout=HEALTH_CHECK_TIMEOUT,
+        )
+        checks["s3"] = "ok"
+    except (TimeoutError, ClientError) as e:
+        logger.warning("health_check_s3_error", error=type(e).__name__)
+        checks["s3"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+    except Exception as e:
+        logger.error("health_check_s3_unexpected", error=str(e), exc_info=True)
+        checks["s3"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+
+    status_code = 200 if overall == "ok" else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": overall,
+            "checks": checks,
+            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        },
+    )
 
 
 @app.exception_handler(Exception)

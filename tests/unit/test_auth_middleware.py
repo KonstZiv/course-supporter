@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
 from course_supporter.storage.database import get_session
+from tests.unit.test_api.test_health import mock_health_deps
 
 
 def _make_api_key_record(
@@ -190,6 +191,8 @@ class TestAuthMiddleware:
     @pytest.mark.asyncio
     async def test_health_no_auth(self, client: AsyncClient) -> None:
         """GET /health works without API key."""
-        response = await client.get("/health")
+        with mock_health_deps():
+            response = await client.get("/health")
+
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json()["status"] == "ok"

@@ -6,10 +6,12 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
@@ -100,6 +102,7 @@ HEALTH_CHECK_TIMEOUT = 5.0
 @app.get("/health")
 async def health() -> JSONResponse:
     """Deep health check — verifies DB and S3 connectivity."""
+    log = structlog.get_logger()
     checks: dict[str, str] = {}
     overall = "ok"
 
@@ -111,7 +114,12 @@ async def health() -> JSONResponse:
                 timeout=HEALTH_CHECK_TIMEOUT,
             )
         checks["db"] = "ok"
+    except (TimeoutError, OperationalError, SQLAlchemyError) as e:
+        log.warning("health_check_db_error", error=type(e).__name__)
+        checks["db"] = f"error: {type(e).__name__}"
+        overall = "degraded"
     except Exception as e:
+        log.error("health_check_db_unexpected", error=type(e).__name__)
         checks["db"] = f"error: {type(e).__name__}"
         overall = "degraded"
 
@@ -123,7 +131,12 @@ async def health() -> JSONResponse:
             timeout=HEALTH_CHECK_TIMEOUT,
         )
         checks["s3"] = "ok"
+    except (TimeoutError, ClientError) as e:
+        log.warning("health_check_s3_error", error=type(e).__name__)
+        checks["s3"] = f"error: {type(e).__name__}"
+        overall = "degraded"
     except Exception as e:
+        log.error("health_check_s3_unexpected", error=type(e).__name__)
         checks["s3"] = f"error: {type(e).__name__}"
         overall = "degraded"
 

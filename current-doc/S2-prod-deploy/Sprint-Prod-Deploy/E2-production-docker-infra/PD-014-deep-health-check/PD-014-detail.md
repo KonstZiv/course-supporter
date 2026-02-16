@@ -24,7 +24,12 @@ async def health() -> JSONResponse:
                 timeout=HEALTH_CHECK_TIMEOUT,
             )
         checks["db"] = "ok"
+    except (TimeoutError, OperationalError, SQLAlchemyError) as e:
+        log.warning("health_check_db_error", error=type(e).__name__)
+        checks["db"] = f"error: {type(e).__name__}"
+        overall = "degraded"
     except Exception as e:
+        log.error("health_check_db_unexpected", error=type(e).__name__)
         checks["db"] = f"error: {type(e).__name__}"
         overall = "degraded"
 
@@ -36,7 +41,12 @@ async def health() -> JSONResponse:
             timeout=HEALTH_CHECK_TIMEOUT,
         )
         checks["s3"] = "ok"
+    except (TimeoutError, ClientError) as e:
+        log.warning("health_check_s3_error", error=type(e).__name__)
+        checks["s3"] = f"error: {type(e).__name__}"
+        overall = "degraded"
     except Exception as e:
+        log.error("health_check_s3_unexpected", error=type(e).__name__)
         checks["s3"] = f"error: {type(e).__name__}"
         overall = "degraded"
 

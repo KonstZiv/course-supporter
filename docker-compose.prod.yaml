@@ -32,9 +32,38 @@ services:
     networks:
       - default
 
+  netdata:
+    image: netdata/netdata:stable
+    container_name: netdata
+    restart: unless-stopped
+    hostname: course-supporter-vps
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - netdata-config:/etc/netdata
+      - netdata-lib:/var/lib/netdata
+    environment:
+      - DO_NOT_TRACK=1
+      - NETDATA_CLAIM_TOKEN=
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+    networks:
+      - default
+      - shared-net
+    # No ports — nginx proxies via shared-net at /netdata/
+
 networks:
   shared-net:
     external: true
 
 volumes:
   pgdata-cs:
+  netdata-config:
+  netdata-lib:

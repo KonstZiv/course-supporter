@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 from aiobotocore.session import get_session as get_aio_session
 from botocore.exceptions import ClientError
+from fastapi import UploadFile
 
 logger = structlog.get_logger()
 
@@ -252,7 +253,7 @@ class S3Client:
 
 
 async def upload_file_chunks(
-    file: Any,
+    file: UploadFile,
     chunk_size: int = MULTIPART_CHUNK_SIZE,
 ) -> AsyncIterator[bytes]:
     """Async generator yielding chunks from a FastAPI UploadFile."""

@@ -102,7 +102,6 @@ HEALTH_CHECK_TIMEOUT = 5.0
 @app.get("/health")
 async def health() -> JSONResponse:
     """Deep health check — verifies DB and S3 connectivity."""
-    log = structlog.get_logger()
     checks: dict[str, str] = {}
     overall = "ok"
 
@@ -115,11 +114,11 @@ async def health() -> JSONResponse:
             )
         checks["db"] = "ok"
     except (TimeoutError, OperationalError, SQLAlchemyError) as e:
-        log.warning("health_check_db_error", error=type(e).__name__)
+        logger.warning("health_check_db_error", error=type(e).__name__)
         checks["db"] = f"error: {type(e).__name__}"
         overall = "degraded"
     except Exception as e:
-        log.error("health_check_db_unexpected", error=type(e).__name__)
+        logger.error("health_check_db_unexpected", error=str(e), exc_info=True)
         checks["db"] = f"error: {type(e).__name__}"
         overall = "degraded"
 
@@ -132,11 +131,11 @@ async def health() -> JSONResponse:
         )
         checks["s3"] = "ok"
     except (TimeoutError, ClientError) as e:
-        log.warning("health_check_s3_error", error=type(e).__name__)
+        logger.warning("health_check_s3_error", error=type(e).__name__)
         checks["s3"] = f"error: {type(e).__name__}"
         overall = "degraded"
     except Exception as e:
-        log.error("health_check_s3_unexpected", error=type(e).__name__)
+        logger.error("health_check_s3_unexpected", error=str(e), exc_info=True)
         checks["s3"] = f"error: {type(e).__name__}"
         overall = "degraded"
 

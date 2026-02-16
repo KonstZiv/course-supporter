@@ -108,6 +108,6 @@ class S3Client:
                 logger.error(
                     "s3_bucket_not_found",
                     bucket=self._bucket,
-                    hint="Create bucket manually in provider console (B2/MinIO)",
+                    hint="Create in B2 console or check minio-init in dev",
                 )
             raise

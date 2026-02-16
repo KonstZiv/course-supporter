@@ -60,6 +60,9 @@ def mock_s3() -> AsyncMock:
     s3.upload_file = AsyncMock(
         return_value="http://localhost:9000/course-materials/key/file.pdf"
     )
+    s3.upload_smart = AsyncMock(
+        return_value=("http://localhost:9000/course-materials/key/file.pdf", 11)
+    )
     return s3
 
 
@@ -129,7 +132,7 @@ class TestCreateMaterialAPI:
                 },
             )
         assert response.status_code == 201
-        mock_s3.upload_file.assert_awaited_once()
+        mock_s3.upload_smart.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_create_material_course_not_found(self, client: AsyncClient) -> None:

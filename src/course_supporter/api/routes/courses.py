@@ -28,7 +28,7 @@ from course_supporter.storage.repositories import (
     SlideVideoMappingRepository,
     SourceMaterialRepository,
 )
-from course_supporter.storage.s3 import S3Client
+from course_supporter.storage.s3 import S3Client, upload_file_chunks
 
 router = APIRouter(tags=["courses"])
 
@@ -143,10 +143,13 @@ async def create_material(
 
     if file is not None:
         filename = file.filename
-        content = await file.read()
         key = f"{course_id}/{uuid.uuid4()}/{filename or 'upload'}"
-        actual_url = await s3.upload_file(
-            key, content, file.content_type or "application/octet-stream"
+        content_type = file.content_type or "application/octet-stream"
+        actual_url, _ = await s3.upload_smart(
+            stream=upload_file_chunks(file),
+            key=key,
+            content_type=content_type,
+            file_size=file.size,
         )
     elif source_url is not None:
         actual_url = source_url

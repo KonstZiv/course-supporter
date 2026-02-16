@@ -94,6 +94,18 @@ docker-compose*.yaml
 Makefile
 .pre-commit-config.yaml
 current-doc/
+past-sprints-doc/
+.DS_Store
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+postgres_data/
+minio_data/
+*.mp4
+*.mp3
+*.wav
 ```
 
 ## Тести
@@ -105,12 +117,22 @@ current-doc/
 3. `docker images course-supporter` → size < 500MB
 4. `docker run --rm course-supporter pip list` → no pytest, ruff, mypy
 
+## Результати верифікації
+
+```
+docker build -t course-supporter .         → OK
+docker run --rm course-supporter whoami    → app
+docker images course-supporter             → 494MB (< 500MB)
+docker run --rm course-supporter pip list  → no pytest, ruff, mypy
+make check                                 → 385 passed
+```
+
 ## Definition of Done
 
-- [ ] Dockerfile працює
-- [ ] .dockerignore створений
-- [ ] uv.lock закомічений
-- [ ] Non-root user
-- [ ] Image < 500MB
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] Dockerfile працює
+- [x] .dockerignore створений
+- [x] uv.lock закомічений
+- [x] Non-root user
+- [x] Image < 500MB (494MB)
+- [x] `make check` зелений
+- [x] Документ оновлений відповідно до фінальної реалізації

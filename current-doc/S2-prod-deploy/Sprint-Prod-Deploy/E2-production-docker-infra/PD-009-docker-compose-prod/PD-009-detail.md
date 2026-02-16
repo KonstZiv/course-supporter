@@ -99,11 +99,18 @@ docker compose -f docker-compose.prod.yaml up -d app
 docker compose -f docker-compose.prod.yaml exec app alembic upgrade head
 ```
 
+## Результати верифікації
+
+```
+docker compose -f docker-compose.prod.yaml config  → valid (з .env.prod)
+make check                                          → 385 passed
+```
+
 ## Definition of Done
 
-- [ ] `docker-compose.prod.yaml` працює
-- [ ] `.env.prod.example` з усіма змінними
-- [ ] App підключається до `shared-net`
-- [ ] PostgreSQL з healthcheck та persistent volume
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] `docker-compose.prod.yaml` працює
+- [x] `.env.prod.example` з усіма змінними
+- [x] App підключається до `shared-net`
+- [x] PostgreSQL з healthcheck та persistent volume
+- [x] `make check` зелений
+- [x] Документ оновлений відповідно до фінальної реалізації

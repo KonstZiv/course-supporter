@@ -56,7 +56,7 @@ async def health() -> JSONResponse:
         content={
             "status": overall,
             "checks": checks,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     )
 ```
@@ -94,6 +94,10 @@ async def check_connectivity(self) -> None:
 ## Тести
 
 Файл: `tests/unit/test_api/test_health.py`
+
+Спільна утиліта `mock_health_deps()` — context manager для мокування DB та S3 залежностей.
+Параметри: `db_error`, `s3_error` — опціональні exceptions для імітації збоїв.
+Перевикористовується в `test_auth_middleware.py::test_health_no_auth`.
 
 1. **test_health_all_ok** — мокнуті DB та S3 ok → 200, status=ok, checks=ok, timestamp present
 2. **test_health_db_down** — DB TimeoutError → 503, status=degraded, db=error, s3=ok

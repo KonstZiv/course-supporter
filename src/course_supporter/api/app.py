@@ -146,7 +146,7 @@ async def health() -> JSONResponse:
         content={
             "status": overall,
             "checks": checks,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     )
 

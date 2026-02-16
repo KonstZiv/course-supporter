@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
 from course_supporter.storage.database import get_session
+from tests.unit.test_api.test_health import mock_health_deps
 
 
 def _make_api_key_record(
@@ -190,21 +191,7 @@ class TestAuthMiddleware:
     @pytest.mark.asyncio
     async def test_health_no_auth(self, client: AsyncClient) -> None:
         """GET /health works without API key."""
-        mock_s3 = AsyncMock()
-        mock_s3.check_connectivity = AsyncMock()
-
-        mock_db_session = AsyncMock()
-        mock_db_session.execute = AsyncMock()
-
-        with patch(
-            "course_supporter.api.app.async_session",
-        ) as mock_session_factory:
-            mock_session_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_db_session
-            )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            app.state.s3_client = mock_s3
-
+        with mock_health_deps():
             response = await client.get("/health")
 
         assert response.status_code == 200

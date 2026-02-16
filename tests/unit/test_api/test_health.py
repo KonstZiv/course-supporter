@@ -1,7 +1,9 @@
 """Tests for FastAPI bootstrap: health, CORS, error handling."""
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
+from typing import NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,6 +23,49 @@ STUB_TENANT = TenantContext(
     rate_limit_check=1000,
     key_prefix="cs_test",
 )
+
+
+class HealthMocks(NamedTuple):
+    """Mocks returned by mock_health_deps context manager."""
+
+    db_session: AsyncMock
+    s3_client: AsyncMock
+
+
+@contextmanager
+def mock_health_deps(
+    *,
+    db_error: Exception | None = None,
+    s3_error: Exception | None = None,
+) -> Generator[HealthMocks]:
+    """Mock DB and S3 dependencies for health check tests.
+
+    Args:
+        db_error: If set, async_session __aenter__ raises this exception.
+        s3_error: If set, s3_client.check_connectivity raises this exception.
+    """
+    mock_s3 = AsyncMock()
+    if s3_error:
+        mock_s3.check_connectivity = AsyncMock(side_effect=s3_error)
+    else:
+        mock_s3.check_connectivity = AsyncMock()
+
+    mock_db_session = AsyncMock()
+    mock_db_session.execute = AsyncMock()
+
+    with patch("course_supporter.api.app.async_session") as mock_session_factory:
+        if db_error:
+            mock_session_factory.return_value.__aenter__ = AsyncMock(
+                side_effect=db_error
+            )
+        else:
+            mock_session_factory.return_value.__aenter__ = AsyncMock(
+                return_value=mock_db_session
+            )
+        mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        app.state.s3_client = mock_s3
+
+        yield HealthMocks(db_session=mock_db_session, s3_client=mock_s3)
 
 
 @pytest.fixture()
@@ -47,23 +92,7 @@ class TestHealth:
     @pytest.mark.asyncio
     async def test_health_all_ok(self, client: AsyncClient) -> None:
         """GET /health returns 200 when DB and S3 are reachable."""
-        mock_s3 = AsyncMock()
-        mock_s3.check_connectivity = AsyncMock()
-
-        mock_db_session = AsyncMock()
-        mock_db_session.execute = AsyncMock()
-
-        with (
-            patch(
-                "course_supporter.api.app.async_session",
-            ) as mock_session_factory,
-        ):
-            mock_session_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_db_session
-            )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            app.state.s3_client = mock_s3
-
+        with mock_health_deps():
             response = await client.get("/health")
 
         assert response.status_code == 200
@@ -76,20 +105,7 @@ class TestHealth:
     @pytest.mark.asyncio
     async def test_health_db_down(self, client: AsyncClient) -> None:
         """GET /health returns 503 when DB is unreachable."""
-        mock_s3 = AsyncMock()
-        mock_s3.check_connectivity = AsyncMock()
-
-        with (
-            patch(
-                "course_supporter.api.app.async_session",
-            ) as mock_session_factory,
-        ):
-            mock_session_factory.return_value.__aenter__ = AsyncMock(
-                side_effect=TimeoutError("db timeout")
-            )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            app.state.s3_client = mock_s3
-
+        with mock_health_deps(db_error=TimeoutError("db timeout")):
             response = await client.get("/health")
 
         assert response.status_code == 503
@@ -101,23 +117,7 @@ class TestHealth:
     @pytest.mark.asyncio
     async def test_health_s3_down(self, client: AsyncClient) -> None:
         """GET /health returns 503 when S3 is unreachable."""
-        mock_s3 = AsyncMock()
-        mock_s3.check_connectivity = AsyncMock(side_effect=ConnectionError("s3 down"))
-
-        mock_db_session = AsyncMock()
-        mock_db_session.execute = AsyncMock()
-
-        with (
-            patch(
-                "course_supporter.api.app.async_session",
-            ) as mock_session_factory,
-        ):
-            mock_session_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_db_session
-            )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            app.state.s3_client = mock_s3
-
+        with mock_health_deps(s3_error=ConnectionError("s3 down")):
             response = await client.get("/health")
 
         assert response.status_code == 503
@@ -129,23 +129,7 @@ class TestHealth:
     @pytest.mark.asyncio
     async def test_health_no_auth(self) -> None:
         """GET /health is accessible without API key."""
-        mock_s3 = AsyncMock()
-        mock_s3.check_connectivity = AsyncMock()
-
-        mock_db_session = AsyncMock()
-        mock_db_session.execute = AsyncMock()
-
-        with (
-            patch(
-                "course_supporter.api.app.async_session",
-            ) as mock_session_factory,
-        ):
-            mock_session_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_db_session
-            )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            app.state.s3_client = mock_s3
-
+        with mock_health_deps():
             # No dependency overrides — no auth bypass
             async with AsyncClient(
                 transport=ASGITransport(app=app),

@@ -33,7 +33,7 @@ class S3Client:
         secret_key: str,
         bucket: str,
     ) -> None:
-        self._endpoint_url = endpoint_url
+        self._endpoint_url = endpoint_url.rstrip("/")
         self._access_key = access_key
         self._secret_key = secret_key
         self._bucket = bucket

@@ -145,7 +145,7 @@ server {
 Reload nginx:
 
 ```bash
-# Replace 'nginx' with actual container name if different (check with: docker ps)
+# Nginx runs as a separate container (not part of docker-compose.prod.yaml)
 docker exec nginx nginx -s reload
 ```
 
@@ -158,7 +158,7 @@ certbot certonly --webroot -w /var/www/html -d api.pythoncourse.me
 Update nginx config with certificate paths, then reload:
 
 ```bash
-# Replace 'nginx' with actual container name if different (check with: docker ps)
+# Nginx runs as a separate container (not part of docker-compose.prod.yaml)
 docker exec nginx nginx -s reload
 ```
 
@@ -353,8 +353,7 @@ docker compose -f docker-compose.prod.yaml exec -T app alembic downgrade -1
 | **502 Bad Gateway** | `docker compose -f docker-compose.prod.yaml ps` — is app running? | `docker compose -f docker-compose.prod.yaml up -d app` |
 | **DB connection refused** | `docker compose -f docker-compose.prod.yaml logs postgres-cs` | Check `POSTGRES_HOST=postgres-cs` in `.env.prod` |
 | **S3 upload failure** | Health check shows `"s3": "error: ..."` | Verify B2 credentials and endpoint in `.env.prod` |
-| **SSL certificate expired** | `certbot certificates` | `certbot renew && # Replace 'nginx' with actual container name if different (check with: docker ps)
-docker exec nginx nginx -s reload` |
+| **SSL certificate expired** | `certbot certificates` | `certbot renew && docker exec nginx nginx -s reload` |
 | **OOM kill** | `docker compose -f docker-compose.prod.yaml ps -q app \| xargs docker inspect \| jq '.[0].State.OOMKilled'` | Reduce workers, check memory-heavy operations |
 | **Slow responses** | Check app logs for `latency_ms` values | Review LLM provider latency, check DB query times |
 | **Rate limit hit (429)** | Response includes `Retry-After` header | Wait or adjust rate limits via `create-key` |

@@ -51,10 +51,10 @@ sudo -u deploy-course-supporter bash -c '
 ### 2.4. Create Docker network
 
 ```bash
-docker network create shared-net
+docker network inspect shared-net >/dev/null 2>&1 || docker network create shared-net
 ```
 
-> This network is shared with the main nginx proxy. Skip if it already exists.
+> This network is shared with the main nginx proxy. The command is a no-op if it already exists.
 
 ### 2.5. Configure environment
 
@@ -83,17 +83,60 @@ docker compose -f docker-compose.prod.yaml exec -T app alembic upgrade head
 
 ### 2.8. Configure nginx
 
-Copy the reference config and adapt:
+Add a server block for `api.pythoncourse.me`. Full reference: `deploy/nginx/course-supporter.conf`.
 
-```bash
-# Reference snippet: deploy/nginx/course-supporter.conf
-# Add server block to your nginx config for api.pythoncourse.me
+Key parts:
+
+```nginx
+# HTTP → HTTPS redirect
+server {
+    listen 80;
+    server_name api.pythoncourse.me;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS
+server {
+    listen 443 ssl;
+    server_name api.pythoncourse.me;
+
+    ssl_certificate /etc/letsencrypt/live/api.pythoncourse.me/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.pythoncourse.me/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 1G;
+    proxy_request_buffering off;
+
+    # Docker DNS — resolve at request time, not at startup
+    resolver 127.0.0.11 valid=30s;
+    set $course_supporter http://course-supporter-app:8000;
+    set $netdata_backend http://netdata:19999;
+
+    location / {
+        proxy_pass $course_supporter;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /netdata/ {
+        auth_basic "Monitoring";
+        auth_basic_user_file /etc/nginx/.htpasswd_netdata;
+        proxy_pass $netdata_backend/;
+        proxy_set_header Host $host;
+    }
+}
 ```
 
-Key points:
-- `proxy_pass` to `http://course-supporter-app:8000` via `shared-net`
-- Use `resolver 127.0.0.11 valid=30s` for Docker DNS
-- Add `/netdata/` location with basic auth (see [Monitoring](#6-monitoring))
+> See `deploy/nginx/course-supporter.conf` for TLS hardening, security headers, and upload timeouts.
 
 Reload nginx:
 
@@ -169,7 +212,7 @@ curl -sf https://api.pythoncourse.me/health | jq .
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ENVIRONMENT` | Yes | `production` | `production` for JSON logging and debug off |
+| `ENVIRONMENT` | Yes | (Must be set) | `production` for JSON logging and debug off |
 | `LOG_LEVEL` | No | `INFO` | Python log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `CORS_ALLOWED_ORIGINS` | No | `[]` | JSON list of allowed origins, e.g. `["https://pythoncourse.me"]` |
 | `CORS_ALLOW_CREDENTIALS` | No | `false` | Allow credentials in CORS |
@@ -305,7 +348,7 @@ docker compose -f docker-compose.prod.yaml exec -T app alembic downgrade -1
 | **DB connection refused** | `docker compose -f docker-compose.prod.yaml logs postgres-cs` | Check `POSTGRES_HOST=postgres-cs` in `.env.prod` |
 | **S3 upload failure** | Health check shows `"s3": "error: ..."` | Verify B2 credentials and endpoint in `.env.prod` |
 | **SSL certificate expired** | `certbot certificates` | `certbot renew && docker exec nginx nginx -s reload` |
-| **OOM kill** | `docker inspect course-supporter-app-1 \| jq '.[0].State.OOMKilled'` | Reduce workers, check memory-heavy operations |
+| **OOM kill** | `docker compose -f docker-compose.prod.yaml ps -q app \| xargs docker inspect \| jq '.[0].State.OOMKilled'` | Reduce workers, check memory-heavy operations |
 | **Slow responses** | Check app logs for `latency_ms` values | Review LLM provider latency, check DB query times |
 | **Rate limit hit (429)** | Response includes `Retry-After` header | Wait or adjust rate limits via `create-key` |
 

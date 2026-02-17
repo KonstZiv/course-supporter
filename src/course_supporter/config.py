@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
     # --- CORS ---
     cors_allowed_origins: list[str] = []
-    cors_allow_credentials: bool = True
-    cors_allowed_methods: list[str] = ["GET", "POST", "PUT", "DELETE"]
+    cors_allow_credentials: bool = False
+    cors_allowed_methods: list[str] = ["GET", "POST"]
     cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key"]
 
     # --- PostgreSQL ---

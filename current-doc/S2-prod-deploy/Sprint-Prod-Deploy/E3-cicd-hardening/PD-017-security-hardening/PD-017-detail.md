@@ -7,8 +7,8 @@
 ```python
 # config.py — defaults (deny all в production):
 cors_allowed_origins: list[str] = []
-cors_allow_credentials: bool = True
-cors_allowed_methods: list[str] = ["GET", "POST", "PUT", "DELETE"]
+cors_allow_credentials: bool = False
+cors_allowed_methods: list[str] = ["GET", "POST"]
 cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key"]
 
 # app.py — CORSMiddleware читає з settings:
@@ -25,7 +25,7 @@ Env vars для `.env.prod`:
 ```
 CORS_ALLOWED_ORIGINS=["https://pythoncourse.me"]
 CORS_ALLOW_CREDENTIALS=true
-CORS_ALLOWED_METHODS=["GET","POST","PUT","DELETE"]
+CORS_ALLOWED_METHODS=["GET","POST"]
 CORS_ALLOWED_HEADERS=["Content-Type","X-API-Key"]
 ```
 

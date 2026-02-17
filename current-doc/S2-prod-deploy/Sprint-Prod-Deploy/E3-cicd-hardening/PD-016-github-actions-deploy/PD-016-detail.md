@@ -2,29 +2,19 @@
 
 ## Workflow
 
+Окремий workflow файл з manual dispatch (без автоматичного тригера на push).
+Запуск: GitHub Actions UI → "Deploy to Production" → "Run workflow".
+
 ```yaml
 # .github/workflows/deploy.yml
 name: Deploy to Production
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync
-      - run: uv run ruff check src/ tests/
-      - run: uv run mypy src/
-      - run: uv run pytest
-
   deploy:
-    needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -32,6 +22,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
           script: |
             set -e
             cd /opt/course-supporter
@@ -50,11 +41,28 @@ jobs:
                 alembic upgrade head
 
             echo "=== Health check ==="
-            sleep 5
-            curl -sf http://localhost:8000/health || exit 1
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:8000/health; then
+                echo ""
+                echo "Application is healthy."
+                break
+              fi
+              echo "Waiting for application to start... ($i/10)"
+              sleep 5
+              if [ "$i" -eq 10 ]; then
+                echo "Health check failed after 10 retries." >&2
+                exit 1
+              fi
+            done
 
             echo "=== Deploy complete: $(date) ==="
 ```
+
+Ключові деталі:
+- `workflow_dispatch` — тільки ручний запуск, без auto-deploy на push
+- `script_stop: true` — appleboy зупиняє скрипт при першій помилці
+- `-T` flag на `exec` — без TTY (CI середовище)
+- `curl -sf` — silent + fail on HTTP error
 
 ## GitHub Secrets
 
@@ -102,8 +110,8 @@ docker compose -f docker-compose.prod.yaml exec app alembic downgrade -1
 
 ## Definition of Done
 
-- [ ] Workflow файл створено
+- [x] Workflow файл створено (`.github/workflows/deploy.yml`)
 - [ ] GitHub Secrets налаштовані
-- [ ] Push to main → автодеплой
-- [ ] Health check після deploy
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [ ] Manual dispatch → deploy працює
+- [x] Health check після deploy (в скрипті)
+- [x] Документ оновлений відповідно до фінальної реалізації

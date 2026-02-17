@@ -1,0 +1,49 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            cd /opt/course-supporter
+
+            echo "=== Pull latest ==="
+            git pull origin main
+
+            echo "=== Build ==="
+            docker compose -f docker-compose.prod.yaml build app
+
+            echo "=== Deploy ==="
+            docker compose -f docker-compose.prod.yaml up -d app
+
+            echo "=== Migrations ==="
+            docker compose -f docker-compose.prod.yaml exec -T app \
+                alembic upgrade head
+
+            echo "=== Health check ==="
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:8000/health; then
+                echo ""
+                echo "Application is healthy."
+                break
+              fi
+              echo "Waiting for application to start... ($i/10)"
+              sleep 5
+              if [ "$i" -eq 10 ]; then
+                echo "Health check failed after 10 retries." >&2
+                exit 1
+              fi
+            done
+
+            echo "=== Deploy complete: $(date) ==="

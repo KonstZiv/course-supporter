@@ -39,6 +39,7 @@ def configure_logging(
     """
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),

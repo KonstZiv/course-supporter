@@ -80,15 +80,29 @@ docker compose -f docker-compose.prod.yaml exec app alembic upgrade head
 
 ## 6. Configure Nginx
 
-Copy nginx config to the Django project's nginx directory:
+The nginx reverse proxy runs in the Django project's compose. Our config snippet lives at
+`deploy/nginx/course-supporter.conf` — it is a **reference**, not auto-deployed.
+
+On each deploy, compare the reference with the active nginx config and apply any new
+directives (security headers, proxy settings, etc.).
 
 ```bash
-# Adjust path to your nginx config directory
+# Compare reference with active config
+diff deploy/nginx/course-supporter.conf /path/to/django-project/nginx/conf.d/course-supporter.conf
+
+# First-time: copy entire snippet
 cp deploy/nginx/course-supporter.conf /path/to/django-project/nginx/conf.d/
 
 # Reload nginx
 docker exec <nginx-container> nginx -s reload
 ```
+
+Required security headers (see `deploy/nginx/course-supporter.conf`):
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
+- `Referrer-Policy: strict-origin-when-cross-origin`
 
 ## 7. SSL Certificate (first time only)
 

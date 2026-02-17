@@ -93,6 +93,6 @@ Three layers:
 - Tenant data isolation via `tenant_id` scoping
 - Rate limiting per tenant per scope (prep/check)
 - TLS hardening (modern ciphers, HSTS, OCSP)
-- Security headers: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- Security headers: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS, Referrer-Policy
 - Netdata dashboard behind HTTP basic auth
 - No Docker socket exposed to app container (only to netdata for container metrics)

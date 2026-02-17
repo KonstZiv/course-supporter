@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = []
     cors_allow_credentials: bool = True
     cors_allowed_methods: list[str] = ["GET", "POST", "PUT", "DELETE"]
-    cors_allowed_headers: list[str] = ["*"]
+    cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key"]
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"

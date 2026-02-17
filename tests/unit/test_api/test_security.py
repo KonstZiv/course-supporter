@@ -86,7 +86,10 @@ class TestDebugMode:
             _env_file=None,
         )
         assert prod_settings.is_dev is False
-        # Verify app.debug is wired to settings.is_dev
+
+    def test_app_debug_wired_to_settings(self) -> None:
+        """app.debug is set from settings.is_dev at module level."""
         from course_supporter.config import settings
 
-        assert app.debug == settings.is_dev
+        # app.debug is set once at FastAPI() creation from settings.is_dev
+        assert app.debug is settings.is_dev

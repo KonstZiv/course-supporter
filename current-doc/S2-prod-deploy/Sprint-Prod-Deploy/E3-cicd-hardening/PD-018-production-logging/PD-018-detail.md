@@ -2,75 +2,21 @@
 
 ## Контекст
 
-Structlog вже використовується в проєкті. Потрібно налаштувати environment-aware rendering: JSON для production (Docker stdout), console для development.
+Structlog вже використовується в проєкті (S1-029). В цій задачі додано:
+- Sensitive data redaction processor
+- Explicit `colors=True` для development console output
+- Quiet noisy libraries (uvicorn.access, aiobotocore)
+- stdout як stream (для Docker logs)
+- 2 нових тести (redaction + log level filtering)
 
 ## Реалізація
 
-### Logging config
+### Файл: `src/course_supporter/logging_config.py`
 
 ```python
-# src/course_supporter/logging.py
-
-import logging
-import sys
-
-import structlog
-
-
-def setup_logging(*, json_format: bool = False, log_level: str = "INFO") -> None:
-    """Configure structlog with environment-appropriate renderer.
-
-    Args:
-        json_format: True for production (JSON lines), False for dev (console).
-        log_level: Logging level string.
-    """
-    shared_processors: list[structlog.types.Processor] = [
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.UnicodeDecoder(),
-        # Filter sensitive data
-        _redact_sensitive_keys,
-    ]
-
-    if json_format:
-        renderer = structlog.processors.JSONRenderer()
-    else:
-        renderer = structlog.dev.ConsoleRenderer(colors=True)
-
-    structlog.configure(
-        processors=[
-            *shared_processors,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
-
-    formatter = structlog.stdlib.ProcessorFormatter(
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            renderer,
-        ],
-    )
-
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
-
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(log_level)
-
-    # Quiet noisy libraries
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("aiobotocore").setLevel(logging.WARNING)
-
-
-SENSITIVE_KEYS = {"api_key", "key_hash", "password", "secret", "token", "authorization"}
+SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {"api_key", "key_hash", "password", "secret", "token", "authorization"}
+)
 
 
 def _redact_sensitive_keys(
@@ -85,28 +31,47 @@ def _redact_sensitive_keys(
     return event_dict
 ```
 
+Processor chain:
+1. `merge_contextvars` — request-scoped context
+2. `add_log_level` — level field
+3. `PositionalArgumentsFormatter` — format %s args
+4. `TimeStamper(fmt="iso")` — ISO timestamp
+5. `StackInfoRenderer` — stack traces
+6. `UnicodeDecoder` — bytes → str
+7. `_redact_sensitive_keys` — sensitive data filtering
+
+Renderer:
+- Production (`environment == "production"`): `JSONRenderer()` → JSON lines to stdout
+- Development: `ConsoleRenderer(colors=True)` → colored console output
+
+Noisy libraries quieted:
+- `uvicorn.access` → WARNING
+- `aiobotocore` → WARNING
+
 ### Integration в app lifespan
 
 ```python
-# src/course_supporter/api/app.py
-
-from course_supporter.logging import setup_logging
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    setup_logging(
-        json_format=settings.environment == "production",
-        log_level=settings.log_level,
-    )
-    ...
+# src/course_supporter/api/app.py — вже інтегровано раніше
+configure_logging(
+    environment=str(settings.environment),
+    log_level=settings.log_level,
+)
 ```
 
-### Config
+### Config (вже існує)
 
 ```python
-# config.py — додати якщо ще нема:
-environment: str = "development"  # "development" | "production"
-log_level: str = "INFO"
+# config.py
+environment: Environment = Environment.DEVELOPMENT  # StrEnum
+log_level: str = "DEBUG"
+```
+
+### Request Logging Middleware (вже існує)
+
+```python
+# src/course_supporter/api/middleware.py — RequestLoggingMiddleware
+# Логує: method, path, status_code, latency_ms
+# Пропускає: /health, /docs, /openapi.json, /redoc
 ```
 
 ## Output Examples
@@ -114,45 +79,22 @@ log_level: str = "INFO"
 ### Production (JSON)
 
 ```json
-{"event": "request_started", "method": "POST", "path": "/api/v1/courses", "tenant": "cs_live_a1b2", "timestamp": "2026-02-15T10:00:00Z", "level": "info"}
-{"event": "llm_call_complete", "provider": "gemini", "model": "gemini-2.0-flash", "duration_ms": 1234, "tokens": 500, "timestamp": "2026-02-15T10:00:01Z", "level": "info"}
+{"event": "http_request", "method": "POST", "path": "/api/v1/courses", "status_code": 201, "latency_ms": 45, "timestamp": "2026-02-17T10:00:00Z", "level": "info"}
+{"event": "llm_call_complete", "provider": "gemini", "model": "gemini-2.5-flash", "duration_ms": 1234, "tokens": 500, "timestamp": "2026-02-17T10:00:01Z", "level": "info"}
 ```
 
-### Development (Console)
+### Development (Console, з кольорами)
 
 ```
-2026-02-15 10:00:00 [info] request_started method=POST path=/api/v1/courses tenant=cs_live_a1b2
-2026-02-15 10:00:01 [info] llm_call_complete provider=gemini model=gemini-2.0-flash duration_ms=1234
-```
-
-## Request Logging Middleware
-
-Перевірити/додати middleware що логує кожен request:
-
-```python
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    structlog.contextvars.clear_contextvars()
-    structlog.contextvars.bind_contextvars(
-        request_id=str(uuid4())[:8],
-        method=request.method,
-        path=request.url.path,
-    )
-    # Add tenant info if authenticated
-    logger.info("request_started")
-    response = await call_next(request)
-    logger.info("request_completed", status=response.status_code)
-    return response
+2026-02-17T10:00:00Z [info] http_request method=POST path=/api/v1/courses status_code=201 latency_ms=45
+2026-02-17T10:00:01Z [info] llm_call_complete provider=gemini model=gemini-2.5-flash duration_ms=1234
 ```
 
 ## Sensitive Data Protection
 
-Ніколи не логувати:
-- Повний API key (тільки prefix `cs_live_a1b2`)
-- Passwords, secrets, tokens
-- Вміст файлів студентів
-
-Redaction працює автоматично через `_redact_sensitive_keys` processor.
+Автоматична redaction через `_redact_sensitive_keys` processor:
+- `api_key`, `key_hash`, `password`, `secret`, `token`, `authorization`
+- Значення замінюється на `***REDACTED***`
 
 ## Docker Logs
 
@@ -166,21 +108,30 @@ docker compose logs app --no-log-prefix | jq 'select(.level == "error")'
 
 ## Тести
 
-Файл: `tests/unit/test_logging.py`
+Файл: `tests/unit/test_logging_config.py` — **9 тестів**
 
-1. **test_json_format_production** — json_format=True → JSON output
-2. **test_console_format_dev** — json_format=False → console output
-3. **test_sensitive_keys_redacted** — api_key в event → "***REDACTED***"
-4. **test_log_level_respected** — DEBUG event з INFO level → не логується
+### TestConfigureLogging (6 тестів)
+1. **test_configure_production_json** — production → valid JSON output
+2. **test_configure_development_console** — development → human-readable console
+3. **test_configure_sets_log_level** — root logger level matches config
+4. **test_configure_includes_timestamp** — ISO timestamp in JSON output
+5. **test_sensitive_keys_redacted** — api_key/token → `***REDACTED***`
+6. **test_log_level_respected** — DEBUG event at INFO level → not emitted
 
-Очікувана кількість тестів: **4**
+### TestRequestLoggingMiddleware (3 тести)
+7. **test_middleware_logs_request** — logs method, path, status_code, latency_ms
+8. **test_middleware_skips_health** — /health not logged
+9. **test_middleware_skips_docs** — /docs not logged
 
 ## Definition of Done
 
-- [ ] Environment-aware logging setup
-- [ ] JSON renderer для production
-- [ ] Sensitive data redaction
-- [ ] Request logging middleware
-- [ ] 4 тести зелені
-- [ ] `make check` зелений
-- [ ] Документ оновлений відповідно до фінальної реалізації
+- [x] Environment-aware logging setup
+- [x] JSON renderer для production
+- [x] Console renderer з кольорами для development
+- [x] Sensitive data redaction (`_redact_sensitive_keys` processor)
+- [x] Noisy libraries quieted (uvicorn.access, aiobotocore)
+- [x] Request logging middleware
+- [x] stdout як output stream (Docker logs)
+- [x] 9 тестів зелені (6 config + 3 middleware)
+- [x] `make check` зелений (400 тестів)
+- [x] Документ оновлений відповідно до фінальної реалізації

@@ -224,10 +224,10 @@ curl -sf https://api.pythoncourse.me/health | jq .
 | `CORS_ALLOW_CREDENTIALS` | No | `false` | Allow credentials in CORS |
 | `CORS_ALLOWED_METHODS` | No | `["GET","POST"]` | Allowed HTTP methods |
 | `CORS_ALLOWED_HEADERS` | No | `["Content-Type","X-API-Key"]` | Allowed request headers |
-| `POSTGRES_USER` | Yes | `course_supporter` | PostgreSQL user |
+| `POSTGRES_USER` | No | `course_supporter` | PostgreSQL user |
 | `POSTGRES_PASSWORD` | Yes | — | PostgreSQL password |
-| `POSTGRES_DB` | Yes | `course_supporter` | PostgreSQL database name |
-| `POSTGRES_HOST` | Yes | `postgres-cs` | PostgreSQL host (Docker service name) |
+| `POSTGRES_DB` | No | `course_supporter` | PostgreSQL database name |
+| `POSTGRES_HOST` | Yes | — | PostgreSQL host (`postgres-cs` in Docker) |
 | `POSTGRES_PORT` | No | `5432` | PostgreSQL port |
 | `S3_ENDPOINT` | Yes | — | S3-compatible endpoint URL |
 | `S3_ACCESS_KEY` | Yes | — | S3 access key ID |

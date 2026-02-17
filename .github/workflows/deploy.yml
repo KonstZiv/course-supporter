@@ -49,7 +49,9 @@ jobs:
             echo "=== Deploy complete: $(date) ==="
 
       - name: Smoke test
-        if: ${{ secrets.SMOKE_TEST_API_KEY != '' }}
+        env:
+          SMOKE_KEY: ${{ secrets.SMOKE_TEST_API_KEY }}
+        if: env.SMOKE_KEY != ''
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}

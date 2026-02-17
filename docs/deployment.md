@@ -15,6 +15,7 @@ Production deployment for **Course Supporter API** on a shared VPS with Docker C
 - **LLM API keys**: at least one of Gemini, Anthropic, OpenAI, DeepSeek
 - **GitHub access**: deploy SSH key (read-only) added to the repository
 - **Nginx**: running on the VPS (shared with other services via `shared-net` Docker network)
+- **Optional**: `jq` for JSON filtering in shell commands (`sudo apt install jq`)
 
 ---
 
@@ -106,7 +107,11 @@ docker exec nginx nginx -s reload
 certbot certonly --webroot -w /var/www/certbot -d api.pythoncourse.me
 ```
 
-Update nginx config with certificate paths, then reload.
+Update nginx config with certificate paths, then reload:
+
+```bash
+docker exec nginx nginx -s reload
+```
 
 ### 2.10. Create first tenant
 
@@ -164,8 +169,8 @@ curl -sf https://api.pythoncourse.me/health | jq .
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ENVIRONMENT` | Yes | `development` | Set to `production` for JSON logging and debug off |
-| `LOG_LEVEL` | No | `DEBUG` | Python log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `ENVIRONMENT` | Yes | `production` | `production` for JSON logging and debug off |
+| `LOG_LEVEL` | No | `INFO` | Python log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `CORS_ALLOWED_ORIGINS` | No | `[]` | JSON list of allowed origins, e.g. `["https://pythoncourse.me"]` |
 | `CORS_ALLOW_CREDENTIALS` | No | `false` | Allow credentials in CORS |
 | `CORS_ALLOWED_METHODS` | No | `["GET","POST"]` | Allowed HTTP methods |
@@ -173,7 +178,7 @@ curl -sf https://api.pythoncourse.me/health | jq .
 | `POSTGRES_USER` | Yes | `course_supporter` | PostgreSQL user |
 | `POSTGRES_PASSWORD` | Yes | — | PostgreSQL password |
 | `POSTGRES_DB` | Yes | `course_supporter` | PostgreSQL database name |
-| `POSTGRES_HOST` | Yes | `localhost` | PostgreSQL host (`postgres-cs` in Docker) |
+| `POSTGRES_HOST` | Yes | `postgres-cs` | PostgreSQL host (Docker service name) |
 | `POSTGRES_PORT` | No | `5432` | PostgreSQL port |
 | `S3_ENDPOINT` | Yes | — | S3-compatible endpoint URL |
 | `S3_ACCESS_KEY` | Yes | — | S3 access key ID |

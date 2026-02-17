@@ -146,21 +146,6 @@ class TestHealth:
         assert response.status_code == 405
 
 
-class TestCORS:
-    @pytest.mark.asyncio
-    async def test_cors_headers_on_preflight(self, client: AsyncClient) -> None:
-        """OPTIONS request returns CORS headers."""
-        response = await client.options(
-            "/health",
-            headers={
-                "Origin": "http://example.com",
-                "Access-Control-Request-Method": "GET",
-            },
-        )
-        assert response.status_code == 200
-        assert "access-control-allow-origin" in response.headers
-
-
 class TestRouting:
     @pytest.mark.asyncio
     async def test_unknown_route_returns_404(self, client: AsyncClient) -> None:

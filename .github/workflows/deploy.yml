@@ -47,3 +47,17 @@ jobs:
             done
 
             echo "=== Deploy complete: $(date) ==="
+
+      - name: Smoke test
+        if: ${{ secrets.SMOKE_TEST_API_KEY != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd /opt/course-supporter
+            ./scripts/smoke_test.sh \
+                https://api.pythoncourse.me \
+                ${{ secrets.SMOKE_TEST_API_KEY }}

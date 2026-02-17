@@ -32,7 +32,18 @@ jobs:
                 alembic upgrade head
 
             echo "=== Health check ==="
-            sleep 5
-            curl -sf http://localhost:8000/health || exit 1
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:8000/health; then
+                echo ""
+                echo "Application is healthy."
+                break
+              fi
+              echo "Waiting for application to start... ($i/10)"
+              sleep 5
+              if [ "$i" -eq 10 ]; then
+                echo "Health check failed after 10 retries." >&2
+                exit 1
+              fi
+            done
 
             echo "=== Deploy complete: $(date) ==="

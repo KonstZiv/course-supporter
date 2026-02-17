@@ -15,8 +15,8 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
 
 
 def _redact_sensitive_keys(
-    logger: logging.Logger,
-    method_name: str,
+    _logger: logging.Logger,
+    _method_name: str,
     event_dict: structlog.types.EventDict,
 ) -> structlog.types.EventDict:
     """Redact values of sensitive keys in log events."""

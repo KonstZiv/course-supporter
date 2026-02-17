@@ -35,11 +35,13 @@ echo "================================"
 # --- 1. Health Check ---
 echo ""
 echo "1. Health Check"
-CODE=$(curl -s -o /tmp/smoke_health.json -w "%{http_code}" "$BASE_URL/health")
+HEALTH_FILE=$(mktemp)
+trap 'rm -f "$HEALTH_FILE"' EXIT
+CODE=$(curl -s -o "$HEALTH_FILE" -w "%{http_code}" "$BASE_URL/health")
 check "GET /health returns 200" 200 "$CODE"
 
-DB_STATUS=$(jq -r '.checks.db' /tmp/smoke_health.json 2>/dev/null || echo "unknown")
-S3_STATUS=$(jq -r '.checks.s3' /tmp/smoke_health.json 2>/dev/null || echo "unknown")
+DB_STATUS=$(jq -r '.checks.db' "$HEALTH_FILE" 2>/dev/null || echo "unknown")
+S3_STATUS=$(jq -r '.checks.s3' "$HEALTH_FILE" 2>/dev/null || echo "unknown")
 
 if [ "$DB_STATUS" = "ok" ]; then
     echo "  ✅ DB connectivity: ok"
@@ -92,7 +94,7 @@ else
     ((FAILED++))
 fi
 
-if echo "$HEADERS" | grep -qi "x-frame-options"; then
+if echo "$HEADERS" | grep -qi "x-frame-options:.*\(deny\|sameorigin\)"; then
     echo "  ✅ X-Frame-Options present"
     ((PASSED++))
 else

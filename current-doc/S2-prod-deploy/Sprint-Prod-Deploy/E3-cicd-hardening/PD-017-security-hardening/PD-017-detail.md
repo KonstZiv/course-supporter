@@ -26,7 +26,7 @@ Env vars для `.env.prod`:
 CORS_ALLOWED_ORIGINS=["https://pythoncourse.me"]
 CORS_ALLOW_CREDENTIALS=true
 CORS_ALLOWED_METHODS=["GET","POST","PUT","DELETE"]
-CORS_ALLOWED_HEADERS=["*"]
+CORS_ALLOWED_HEADERS=["Content-Type","X-API-Key"]
 ```
 
 ### 2. Debug mode — вимкнений в production

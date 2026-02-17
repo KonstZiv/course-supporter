@@ -12,6 +12,8 @@ from httpx import ASGITransport, AsyncClient
 
 from course_supporter.logging_config import configure_logging
 
+REDACTED = "***REDACTED***"
+
 
 @pytest.fixture(autouse=True)
 def _reset_structlog() -> None:
@@ -72,6 +74,38 @@ class TestConfigureLogging:
         assert "timestamp" in parsed
         # ISO format contains 'T' separator
         assert "T" in parsed["timestamp"]
+
+    def test_sensitive_keys_redacted(self) -> None:
+        """Sensitive keys are replaced with ***REDACTED*** in output."""
+        configure_logging(environment="production", log_level="DEBUG")
+
+        stream = StringIO()
+        root = logging.getLogger()
+        root.handlers[0].stream = stream
+
+        logger = structlog.get_logger()
+        logger.info("auth_event", api_key="sk-secret-123", token="tok-abc")
+
+        output = stream.getvalue()
+        parsed = json.loads(output)
+        assert parsed["api_key"] == REDACTED
+        assert parsed["token"] == REDACTED
+        assert "sk-secret-123" not in output
+        assert "tok-abc" not in output
+
+    def test_log_level_respected(self) -> None:
+        """Events below configured level are not emitted."""
+        configure_logging(environment="production", log_level="INFO")
+
+        stream = StringIO()
+        root = logging.getLogger()
+        root.handlers[0].stream = stream
+
+        logger = structlog.get_logger()
+        logger.debug("should_not_appear")
+
+        output = stream.getvalue()
+        assert output == ""
 
 
 class TestRequestLoggingMiddleware:

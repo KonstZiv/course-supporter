@@ -24,7 +24,7 @@ FROM python:3.13-slim
 
 # System dependencies for psycopg (libpq)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl \
+    libpq5 curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r app && useradd -r -g app -d /app app

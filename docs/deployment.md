@@ -74,15 +74,19 @@ See [Environment Variables Reference](#4-environment-variables-reference) for al
 
 ```bash
 cd /opt/course-supporter
-docker compose -f docker-compose.prod.yaml build
-docker compose -f docker-compose.prod.yaml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yaml build
+docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
 ```
 
 ### 2.7. Run database migrations
 
 ```bash
-docker compose -f docker-compose.prod.yaml exec -T app alembic upgrade head
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
+  python -m alembic upgrade head
 ```
+
+> **Note:** Use `python -m alembic` instead of bare `alembic` — uv generates entry-point scripts
+> with shebangs pointing to the builder stage path, which doesn't exist in the runtime image.
 
 ### 2.8. Configure nginx
 
@@ -165,10 +169,10 @@ docker exec nginx nginx -s reload
 ### 2.10. Create first tenant
 
 ```bash
-docker compose -f docker-compose.prod.yaml exec app \
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec app \
   python -m scripts.manage_tenant create-tenant --name "MyCompany"
 
-docker compose -f docker-compose.prod.yaml exec app \
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec app \
   python -m scripts.manage_tenant create-key \
     --tenant "MyCompany" --scopes prep,check --label production
 ```
@@ -196,19 +200,23 @@ Trigger manually via **Actions > Deploy > Run workflow** in GitHub.
 The workflow:
 1. SSH into VPS
 2. `git pull origin main`
-3. Build app image
-4. Restart app container
-5. Run migrations
-6. Health check with retries (10 attempts, 5s interval)
+3. Build app image (`docker compose --env-file .env.prod`)
+4. Start all containers (`up -d`)
+5. Run migrations (`python -m alembic upgrade head`)
+6. Health check via `docker exec` (10 attempts, 5s interval)
+
+> **Note:** Health check runs inside the app container via `docker exec` because
+> port 8000 is not exposed to the host — Nginx proxies via `shared-net` Docker network.
 
 ### Manual
 
 ```bash
 cd /opt/course-supporter
 git pull origin main
-docker compose -f docker-compose.prod.yaml build app
-docker compose -f docker-compose.prod.yaml up -d app
-docker compose -f docker-compose.prod.yaml exec -T app alembic upgrade head
+docker compose --env-file .env.prod -f docker-compose.prod.yaml build app
+docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
+  python -m alembic upgrade head
 curl -sf https://api.pythoncourse.me/health | jq .
 ```
 
@@ -248,7 +256,7 @@ All commands run inside the app container:
 
 ```bash
 # Prefix for all commands:
-docker compose -f docker-compose.prod.yaml exec app python -m scripts.manage_tenant
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec app python -m scripts.manage_tenant
 ```
 
 | Command | Options | Description |
@@ -288,13 +296,13 @@ Setup Telegram alerts — see `current-doc/S2-prod-deploy/infrastructure/netdata
 
 ```bash
 # Follow logs:
-docker compose -f docker-compose.prod.yaml logs -f app
+docker compose --env-file .env.prod -f docker-compose.prod.yaml logs -f app
 
 # Filter errors (JSON format in production):
-docker compose -f docker-compose.prod.yaml logs app --no-log-prefix | jq 'select(.level == "error")'
+docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --no-log-prefix | jq 'select(.level == "error")'
 
 # Last 50 lines:
-docker compose -f docker-compose.prod.yaml logs app --tail=50
+docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail=50
 ```
 
 ### External monitoring
@@ -308,14 +316,14 @@ Configure UptimeRobot (or similar) to ping `https://api.pythoncourse.me/health` 
 ### Database backup
 
 ```bash
-docker compose -f docker-compose.prod.yaml exec postgres-cs \
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec postgres-cs \
   pg_dump -U course_supporter course_supporter > backup_$(date +%Y%m%d).sql
 ```
 
 ### Database restore
 
 ```bash
-cat backup.sql | docker compose -f docker-compose.prod.yaml exec -T postgres-cs \
+cat backup.sql | docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T postgres-cs \
   psql -U course_supporter course_supporter
 ```
 
@@ -331,15 +339,16 @@ cat backup.sql | docker compose -f docker-compose.prod.yaml exec -T postgres-cs 
 cd /opt/course-supporter
 git log --oneline -5                    # find target commit
 git checkout <commit-hash>
-docker compose -f docker-compose.prod.yaml build app
-docker compose -f docker-compose.prod.yaml up -d app
+docker compose --env-file .env.prod -f docker-compose.prod.yaml build app
+docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d app
 curl -sf https://api.pythoncourse.me/health | jq .
 ```
 
 ### Migration rollback
 
 ```bash
-docker compose -f docker-compose.prod.yaml exec -T app alembic downgrade -1
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
+  python -m alembic downgrade -1
 ```
 
 > Always verify the target migration before running downgrade in production.
@@ -350,26 +359,28 @@ docker compose -f docker-compose.prod.yaml exec -T app alembic downgrade -1
 
 | Problem | Diagnosis | Solution |
 |---|---|---|
-| **502 Bad Gateway** | `docker compose -f docker-compose.prod.yaml ps` — is app running? | `docker compose -f docker-compose.prod.yaml up -d app` |
-| **DB connection refused** | `docker compose -f docker-compose.prod.yaml logs postgres-cs` | Check `POSTGRES_HOST=postgres-cs` in `.env.prod` |
+| **502 Bad Gateway** | `docker compose --env-file .env.prod -f docker-compose.prod.yaml ps` — is app running? | `docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d app` |
+| **DB connection refused** | `docker compose --env-file .env.prod -f docker-compose.prod.yaml logs postgres-cs` | Check `POSTGRES_HOST=postgres-cs` in `.env.prod` |
 | **S3 upload failure** | Health check shows `"s3": "error: ..."` | Verify B2 credentials and endpoint in `.env.prod` |
 | **SSL certificate expired** | `certbot certificates` | `certbot renew && docker exec nginx nginx -s reload` |
-| **OOM kill** | `docker compose -f docker-compose.prod.yaml ps -q app \| xargs docker inspect \| jq '.[0].State.OOMKilled'` | Reduce workers, check memory-heavy operations |
+| **OOM kill** | `docker compose --env-file .env.prod -f docker-compose.prod.yaml ps -q app \| xargs docker inspect \| jq '.[0].State.OOMKilled'` | Reduce workers, check memory-heavy operations |
 | **Slow responses** | Check app logs for `latency_ms` values | Review LLM provider latency, check DB query times |
 | **Rate limit hit (429)** | Response includes `Retry-After` header | Wait or adjust rate limits via `create-key` |
+| **Health check fails after DB recreate** | `health_check_db_error: OperationalError` in logs | App holds stale DB connection — restart app: `docker compose --env-file .env.prod -f docker-compose.prod.yaml restart app` |
+| **`alembic: no such file or directory`** | uv shebang points to builder stage path | Use `python -m alembic` instead of bare `alembic` |
 
 ### Useful debug commands
 
 ```bash
 # Container status:
-docker compose -f docker-compose.prod.yaml ps
+docker compose --env-file .env.prod -f docker-compose.prod.yaml ps
 
 # Database shell:
-docker compose -f docker-compose.prod.yaml exec postgres-cs \
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec postgres-cs \
   psql -U course_supporter course_supporter
 
 # App shell:
-docker compose -f docker-compose.prod.yaml exec app /bin/bash
+docker compose --env-file .env.prod -f docker-compose.prod.yaml exec app /bin/bash
 
 # Check disk space:
 df -h /var/lib/docker

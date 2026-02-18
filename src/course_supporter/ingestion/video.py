@@ -108,7 +108,23 @@ class GeminiVideoProcessor(SourceProcessor):
             contents=contents,
         )
 
-        # 3. Parse transcript into chunks
+        # 3. Check if Gemini actually saw the video
+        #    When video is too long or unavailable, Gemini returns
+        #    a hallucinated response with very few input tokens.
+        min_video_tokens = 1000
+        if (response.tokens_in or 0) < min_video_tokens:
+            logger.warning(
+                "gemini_video_not_processed",
+                source_url=source.source_url,
+                tokens_in=response.tokens_in,
+            )
+            raise ProcessingError(
+                f"Gemini did not process the video "
+                f"(tokens_in={response.tokens_in}, "
+                f"threshold={min_video_tokens})"
+            )
+
+        # 4. Parse transcript into chunks
         chunks = self._parse_transcript(response.content)
 
         logger.info(
@@ -231,18 +247,26 @@ class WhisperVideoProcessor(SourceProcessor):
             with contextlib.suppress(OSError):
                 Path(audio_path).unlink()  # noqa: ASYNC240
 
-    async def _extract_audio(self, video_path: str) -> str:
-        """Extract audio from video using FFmpeg.
+    async def _extract_audio(self, video_source: str) -> str:
+        """Extract audio from a video file or URL.
+
+        For URLs (http/https), downloads audio via yt-dlp first.
+        For local files, extracts audio directly via FFmpeg.
 
         Args:
-            video_path: Path to the video file.
+            video_source: Path or URL to the video.
 
         Returns:
             Path to the extracted WAV audio file.
 
         Raises:
-            ProcessingError: If FFmpeg is not found or fails.
+            ProcessingError: If yt-dlp/FFmpeg is not found or fails.
         """
+        if video_source.startswith(("http://", "https://")):
+            video_path = await self._download_audio(video_source)
+        else:
+            video_path = video_source
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             audio_path = tmp.name
 
@@ -274,8 +298,66 @@ class WhisperVideoProcessor(SourceProcessor):
             raise ProcessingError(
                 "FFmpeg not found. Install FFmpeg to use WhisperVideoProcessor."
             ) from None
+        finally:
+            # Clean up yt-dlp downloaded file
+            if video_source.startswith(("http://", "https://")):
+                with contextlib.suppress(OSError):
+                    Path(video_path).unlink()  # noqa: ASYNC240
 
         return audio_path
+
+    async def _download_audio(self, url: str) -> str:
+        """Download audio from a video URL using yt-dlp.
+
+        Downloads audio-only stream to a temporary file.
+        Supports YouTube, Vimeo, and hundreds of other sites.
+
+        Args:
+            url: Video URL.
+
+        Returns:
+            Path to the downloaded audio file.
+
+        Raises:
+            ProcessingError: If yt-dlp is not found or download fails.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".%(ext)s", delete=False) as tmp:
+            output_template = tmp.name.replace(".%(ext)s", ".%(ext)s")
+
+        # yt-dlp: extract audio only, best quality, no video
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "yt-dlp",
+                "--extract-audio",
+                "--audio-format",
+                "wav",
+                "--output",
+                output_template,
+                "--no-playlist",
+                "--quiet",
+                url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                raise ProcessingError(
+                    f"yt-dlp failed (code {process.returncode}): "
+                    f"{stderr.decode()[:500]}"
+                )
+        except FileNotFoundError:
+            raise ProcessingError(
+                "yt-dlp not found. Install yt-dlp to process video URLs."
+            ) from None
+
+        # yt-dlp replaces %(ext)s with actual extension
+        output_path = output_template.replace("%(ext)s", "wav")
+        if not Path(output_path).exists():  # noqa: ASYNC240
+            raise ProcessingError(f"yt-dlp output file not found: {output_path}")
+
+        logger.info("ytdlp_audio_downloaded", url=url, path=output_path)
+        return output_path
 
     async def _transcribe(self, audio_path: str) -> list[dict[str, Any]]:
         """Transcribe audio file using Whisper.

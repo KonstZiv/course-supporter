@@ -46,6 +46,7 @@ dependencies = [
 # Whisper pulls PyTorch (~2 GB), kept separate
 media = [
     "openai-whisper>=20240930",
+    "yt-dlp>=2024.0",
 ]
 
 [dependency-groups]

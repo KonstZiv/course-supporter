@@ -13,7 +13,6 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script_stop: true
           script: |
             set -e
             cd /opt/course-supporter
@@ -22,14 +21,14 @@ jobs:
             git pull origin main
 
             echo "=== Build ==="
-            docker compose -f docker-compose.prod.yaml build app
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app
 
             echo "=== Deploy ==="
-            docker compose -f docker-compose.prod.yaml up -d app
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
 
             echo "=== Migrations ==="
-            docker compose -f docker-compose.prod.yaml exec -T app \
-                alembic upgrade head
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
+                python -m alembic upgrade head
 
             echo "=== Health check ==="
             for i in $(seq 1 10); do
@@ -57,8 +56,8 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script_stop: true
           script: |
+            set -e
             cd /opt/course-supporter
             ./scripts/smoke_test.sh \
                 https://api.pythoncourse.me \

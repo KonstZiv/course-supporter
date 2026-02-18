@@ -88,11 +88,18 @@ class GeminiVideoProcessor(SourceProcessor):
         # 1. Build multimodal contents with video URL + prompt
         from google.genai import types as genai_types
 
-        video_part = genai_types.Part.from_uri(
-            file_uri=source.source_url,
-            mime_type="video/*",
-        )
-        contents = [video_part, TRANSCRIPT_PROMPT]
+        contents: list[Any] = [
+            genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        file_data=genai_types.FileData(
+                            file_uri=source.source_url,
+                        ),
+                    ),
+                    genai_types.Part(text=TRANSCRIPT_PROMPT),
+                ],
+            ),
+        ]
 
         # 2. Call LLM with video content
         response = await router.complete(

@@ -40,6 +40,7 @@ COPY --from=builder /build/alembic.ini .
 COPY --from=builder /build/scripts scripts/
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 

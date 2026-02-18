@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -13,6 +14,9 @@ from course_supporter.ingestion.video import VideoProcessor
 from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 from course_supporter.storage.repositories import SourceMaterialRepository
+
+if TYPE_CHECKING:
+    from course_supporter.llm.router import ModelRouter
 
 logger = structlog.get_logger()
 
@@ -29,6 +33,7 @@ async def ingest_material(
     source_type: str,
     source_url: str,
     session_factory: async_sessionmaker[AsyncSession],
+    router: ModelRouter | None = None,
 ) -> None:
     """Process a source material in the background.
 
@@ -43,6 +48,7 @@ async def ingest_material(
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or path to the source file (kept for logging).
         session_factory: Async session factory for DB access.
+        router: Optional ModelRouter for LLM-powered processing.
     """
     log = logger.bind(material_id=str(material_id), source_type=source_type)
     log.info("ingestion_started")
@@ -64,7 +70,7 @@ async def ingest_material(
                 raise ValueError(msg)
 
             processor = processor_cls()
-            doc = await processor.process(material)
+            doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
             await repo.update_status(material_id, "done", content_snapshot=content)

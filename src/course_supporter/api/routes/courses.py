@@ -7,7 +7,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_s3_client, get_session
+from course_supporter.api.deps import get_model_router, get_s3_client, get_session
 from course_supporter.api.schemas import (
     CourseCreateRequest,
     CourseDetailResponse,
@@ -21,6 +21,7 @@ from course_supporter.api.schemas import (
 from course_supporter.api.tasks import ingest_material
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
+from course_supporter.llm.router import ModelRouter
 from course_supporter.models.source import SourceType
 from course_supporter.storage.database import async_session
 from course_supporter.storage.repositories import (
@@ -38,6 +39,7 @@ router = APIRouter(tags=["courses"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
+RouterDep = Annotated[ModelRouter, Depends(get_model_router)]
 SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
 
 VALID_SOURCE_TYPES = {t.value for t in SourceType}
@@ -114,6 +116,7 @@ async def create_material(
     tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
+    model_router: RouterDep,
     source_type: Annotated[str, Form()],
     source_url: Annotated[str | None, Form()] = None,
     file: UploadFile | None = None,
@@ -173,6 +176,7 @@ async def create_material(
         source_type,
         actual_url,
         async_session,
+        model_router,
     )
 
     return MaterialCreateResponse.model_validate(material)

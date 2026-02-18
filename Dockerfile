@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd -r app && useradd -r -g app -d /app app
 WORKDIR /app
+RUN mkdir -p /app/.cache && chown app:app /app/.cache
 
 # Copy virtual environment and application
 COPY --from=builder /build/.venv .venv/
@@ -43,6 +44,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV XDG_CACHE_HOME="/app/.cache"
 
 USER app
 

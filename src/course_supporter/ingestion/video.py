@@ -325,9 +325,15 @@ class WhisperVideoProcessor(SourceProcessor):
             output_template = tmp.name.replace(".%(ext)s", ".%(ext)s")
 
         # yt-dlp: extract audio only, best quality, no video
+        # Use `python -m yt_dlp` instead of `yt-dlp` binary to avoid
+        # shebang issues in Docker multi-stage builds.
+        import sys
+
         try:
             process = await asyncio.create_subprocess_exec(
-                "yt-dlp",
+                sys.executable,
+                "-m",
+                "yt_dlp",
                 "--extract-audio",
                 "--audio-format",
                 "wav",

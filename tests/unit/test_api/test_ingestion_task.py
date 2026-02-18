@@ -56,6 +56,10 @@ class TestIngestMaterial:
             source_type=SourceType.WEB,
             source_url="https://example.com",
         )
+        mock_material = MagicMock()
+        mock_material.source_url = "https://example.com"
+        mock_material.source_type = SourceType.WEB
+
         mock_processor = MagicMock()
         mock_processor.return_value.process = AsyncMock(return_value=doc)
 
@@ -72,6 +76,7 @@ class TestIngestMaterial:
         ):
             mock_repo = mock_repo_cls.return_value
             mock_repo.update_status = AsyncMock()
+            mock_repo.get_by_id = AsyncMock(return_value=mock_material)
 
             await ingest_material(
                 material_id,
@@ -96,6 +101,10 @@ class TestIngestMaterial:
         error_session = AsyncMock()
         error_session.add = MagicMock()
 
+        mock_material = MagicMock()
+        mock_material.source_url = "https://example.com"
+        mock_material.source_type = SourceType.WEB
+
         mock_processor = MagicMock()
         mock_processor.return_value.process = AsyncMock(
             side_effect=RuntimeError("Processing failed")
@@ -117,6 +126,7 @@ class TestIngestMaterial:
             def make_repo(session: object) -> MagicMock:
                 repo = MagicMock()
                 repo.update_status = AsyncMock()
+                repo.get_by_id = AsyncMock(return_value=mock_material)
                 repo_instances.append(repo)
                 return repo
 

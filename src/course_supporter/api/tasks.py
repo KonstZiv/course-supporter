@@ -34,14 +34,14 @@ async def ingest_material(
 
     1. Transitions status to 'processing'.
     2. Selects processor by source_type.
-    3. Processes the source URL.
+    3. Loads SourceMaterial from DB and passes to processor.
     4. Saves content snapshot and transitions to 'done'.
     5. On error, transitions to 'error' with message.
 
     Args:
         material_id: UUID of the SourceMaterial record.
         source_type: One of 'video', 'presentation', 'text', 'web'.
-        source_url: URL or path to the source file.
+        source_url: URL or path to the source file (kept for logging).
         session_factory: Async session factory for DB access.
     """
     log = logger.bind(material_id=str(material_id), source_type=source_type)
@@ -58,8 +58,13 @@ async def ingest_material(
                 msg = f"No processor for source_type: {source_type}"
                 raise ValueError(msg)
 
+            material = await repo.get_by_id(material_id)
+            if material is None:
+                msg = f"SourceMaterial not found: {material_id}"
+                raise ValueError(msg)
+
             processor = processor_cls()
-            doc = await processor.process(source_url)
+            doc = await processor.process(material)
 
             content = doc.model_dump_json()
             await repo.update_status(material_id, "done", content_snapshot=content)

@@ -33,10 +33,14 @@ class GeminiProvider(LLMProvider):
             system_instruction=request.system_prompt,
         )
 
+        contents: str | list[Any] = (
+            request.contents if request.contents else request.prompt
+        )
+
         with self._measure_latency() as timer:
             response = await self._client.aio.models.generate_content(
                 model=model,
-                contents=request.prompt,
+                contents=contents,
                 config=config,
             )
 
@@ -65,10 +69,14 @@ class GeminiProvider(LLMProvider):
             response_schema=response_schema,
         )
 
+        contents: str | list[Any] = (
+            request.contents if request.contents else request.prompt
+        )
+
         with self._measure_latency() as timer:
             response = await self._client.aio.models.generate_content(
                 model=model,
-                contents=request.prompt,
+                contents=contents,
                 config=config,
             )
 

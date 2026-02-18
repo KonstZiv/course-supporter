@@ -76,6 +76,7 @@ class ModelRouter:
         temperature: float = 0.0,
         max_tokens: int = 4096,
         strategy: str = "default",
+        contents: list[Any] | None = None,
     ) -> LLMResponse:
         """Generate text completion with strategy-based fallback."""
         request = LLMRequest(
@@ -85,6 +86,7 @@ class ModelRouter:
             max_tokens=max_tokens,
             action=action,
             strategy=strategy,
+            contents=contents,
         )
 
         async def call_fn(provider: LLMProvider, req: LLMRequest) -> LLMResponse:

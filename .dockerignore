@@ -26,3 +26,4 @@ minio_data/
 *.mp4
 *.mp3
 *.wav
+.keys-issued-to-users

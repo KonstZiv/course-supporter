@@ -1,6 +1,7 @@
 """Shared schemas for LLM infrastructure."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,7 @@ class LLMRequest(BaseModel):
     max_tokens: int = 4096
     action: str = ""  # video_analysis, course_structuring, ...
     strategy: str = "default"  # default, quality, budget
+    contents: list[Any] | None = None  # multimodal: [url, text, Part, ...]
 
 
 class LLMResponse(BaseModel):

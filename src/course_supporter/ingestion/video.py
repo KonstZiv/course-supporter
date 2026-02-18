@@ -85,13 +85,20 @@ class GeminiVideoProcessor(SourceProcessor):
             source_url=source.source_url,
         )
 
-        # 1. Upload video to Gemini File API
-        video_file = await self._upload_video(source.source_url)
+        # 1. Build multimodal contents with video URL + prompt
+        from google.genai import types as genai_types
+
+        video_part = genai_types.Part.from_uri(
+            file_uri=source.source_url,
+            mime_type="video/*",
+        )
+        contents = [video_part, TRANSCRIPT_PROMPT]
 
         # 2. Call LLM with video content
         response = await router.complete(
             action="video_analysis",
-            prompt=f"Video file: {video_file}\n\n{TRANSCRIPT_PROMPT}",
+            prompt=TRANSCRIPT_PROMPT,
+            contents=contents,
         )
 
         # 3. Parse transcript into chunks
@@ -110,22 +117,6 @@ class GeminiVideoProcessor(SourceProcessor):
             chunks=chunks,
             metadata={"strategy": "gemini"},
         )
-
-    async def _upload_video(self, source_url: str) -> str:
-        """Upload video file to Gemini File API.
-
-        Args:
-            source_url: Path or URL to the video file.
-
-        Returns:
-            Gemini file reference string for use in prompts.
-
-        .. note::
-            Placeholder implementation. Real Gemini File API upload
-            (google.genai.Client().files.upload) will be added during
-            integration testing.
-        """
-        return source_url
 
     @staticmethod
     def _parse_transcript(raw_text: str) -> list[ContentChunk]:

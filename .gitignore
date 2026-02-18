@@ -213,3 +213,4 @@ minio_data/
 
 # PyCharm
 .idea/
+.keys-issued-to-users

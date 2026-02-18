@@ -32,7 +32,7 @@ jobs:
 
             echo "=== Health check ==="
             for i in $(seq 1 10); do
-              if curl -sf http://localhost:8000/health; then
+              if docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app curl -sf http://localhost:8000/health; then
                 echo ""
                 echo "Application is healthy."
                 break

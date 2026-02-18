@@ -8,6 +8,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install dependencies (cached layer)
 COPY pyproject.toml uv.lock .python-version ./
+ENV UV_LINK_MODE=copy
 RUN uv sync --no-dev --frozen --no-install-project
 
 # Copy application code

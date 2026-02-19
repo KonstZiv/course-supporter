@@ -334,6 +334,8 @@ class CourseStructureSnapshot(Base):
 
 Idempotency: unique на `(course_id, node_id, node_fingerprint, mode)`.
 
+**Apply snapshot → normalized tables:** коли snapshot "застосовується", його `structure` JSONB розпаковується в `modules` → `lessons` → `concepts` → `exercises`. `Module.snapshot_id` FK явно пов'язує активну структуру з джерельним snapshot.
+
 **Response codes:**
 
 ```
@@ -630,8 +632,12 @@ CREATE TABLE jobs (
     status VARCHAR(20) NOT NULL DEFAULT 'queued',
     arq_job_id VARCHAR(100),
     input_params JSONB,
-    result_ref UUID,
+    result_material_id UUID REFERENCES material_entries(id) ON DELETE SET NULL,
+    result_snapshot_id UUID REFERENCES course_structure_snapshots(id) ON DELETE SET NULL,
     depends_on JSONB,
+    CONSTRAINT chk_job_result_exclusive CHECK (
+        NOT (result_material_id IS NOT NULL AND result_snapshot_id IS NOT NULL)
+    ),
     error_message TEXT,
     queued_at TIMESTAMPTZ DEFAULT now(),
     started_at TIMESTAMPTZ,
@@ -688,6 +694,7 @@ CREATE UNIQUE INDEX uq_snapshots_identity
 ### Міграція існуючих даних
 
 ```sql
+-- 0. ALTER TABLE modules ADD COLUMN snapshot_id UUID REFERENCES course_structure_snapshots(id) ON DELETE SET NULL
 -- 1. Для кожного Course створити root MaterialNode
 -- 2. Перенести source_materials → material_entries (через root node)
 -- 3. Перенести slide_video_mappings → нова структура

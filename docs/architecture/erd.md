@@ -134,7 +134,8 @@ erDiagram
         string status "queued|active|complete|failed"
         string arq_job_id "ARQ internal ID"
         jsonb input_params
-        uuid result_ref "nullable, material_id or snapshot_id"
+        uuid result_material_id FK "nullable, CHECK: at most one result FK"
+        uuid result_snapshot_id FK "nullable, CHECK: at most one result FK"
         jsonb depends_on "nullable, list of job_ids"
         text error_message "nullable"
         timestamptz queued_at
@@ -146,6 +147,8 @@ erDiagram
     Course ||--o{ Job : "has jobs"
     MaterialNode ||--o{ Job : "scoped to node"
     MaterialEntry }o--o| Job : "pending_job_id"
+    Job }o--o| MaterialEntry : "result_material_id"
+    Job }o--o| CourseStructureSnapshot : "result_snapshot_id"
 
     %% ═══════════════════════════════════════
     %% Course Structure Snapshots
@@ -171,11 +174,14 @@ erDiagram
 
     %% ═══════════════════════════════════════
     %% Course Structure (generated output)
+    %% Snapshot stores raw LLM output as JSONB;
+    %% when "applied", unpacked into normalized tables below.
     %% ═══════════════════════════════════════
 
     Module {
         uuid id PK "UUIDv7"
         uuid course_id FK
+        uuid snapshot_id FK "nullable, source snapshot"
         string title
         text description "nullable"
         text learning_goal "nullable"
@@ -187,6 +193,7 @@ erDiagram
     }
 
     Course ||--o{ Module : "has modules"
+    CourseStructureSnapshot ||--o{ Module : "applied from"
 
     Lesson {
         uuid id PK "UUIDv7"

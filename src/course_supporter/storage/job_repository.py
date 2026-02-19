@@ -70,8 +70,12 @@ class JobRepository:
         error_message: str | None = None,
         result_material_id: uuid.UUID | None = None,
         result_snapshot_id: uuid.UUID | None = None,
+        now: datetime | None = None,
     ) -> Job:
         """Transition job to a new status with validation.
+
+        Args:
+            now: Override for current time (useful for testing).
 
         Raises:
             ValueError: If the transition is not allowed.
@@ -89,7 +93,7 @@ class JobRepository:
             )
             raise ValueError(msg)
 
-        now = datetime.now(UTC)
+        now = now or datetime.now(UTC)
         values: dict[str, object] = {"status": status}
 
         if status == "active":

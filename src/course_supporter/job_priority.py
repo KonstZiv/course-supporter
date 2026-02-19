@@ -50,7 +50,7 @@ def check_work_window(priority: JobPriority) -> None:
         return
 
     next_start = window.next_start()
-    defer_seconds = (next_start - window._now()).total_seconds()
+    defer_seconds = (next_start - window.now()).total_seconds()
     log = structlog.get_logger()
     log.info(
         "job_deferred_to_window",

@@ -18,10 +18,10 @@ def _window(
 
 
 def _with_now(window: WorkWindow, now: datetime) -> WorkWindow:
-    """Return a copy of window whose _now() returns a fixed datetime."""
+    """Return a copy of window whose now() returns a fixed datetime."""
 
     class Fixed(WorkWindow):
-        def _now(self) -> datetime:
+        def now(self) -> datetime:
             return now
 
     return Fixed(

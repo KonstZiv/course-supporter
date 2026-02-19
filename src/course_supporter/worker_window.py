@@ -47,7 +47,7 @@ class WorkWindow:
         """Window spans midnight (e.g. 22:00 → 06:00)."""
         return self.start > self.end
 
-    def _now(self) -> datetime:
+    def now(self) -> datetime:
         """Current time in the configured timezone."""
         return datetime.now(self.tz)
 
@@ -56,7 +56,7 @@ class WorkWindow:
         if not self.enabled:
             return True
 
-        current_time = self._now().time()
+        current_time = self.now().time()
 
         if self.is_overnight:
             # e.g. 22:00 → 06:00: active if after start OR before end
@@ -74,9 +74,9 @@ class WorkWindow:
         If the window is disabled, returns current time (always active).
         """
         if not self.enabled:
-            return self._now()
+            return self.now()
 
-        now = self._now()
+        now = self.now()
         today_start = now.replace(
             hour=self.start.hour,
             minute=self.start.minute,
@@ -102,7 +102,7 @@ class WorkWindow:
         if not self.is_active_now():
             return timedelta(0)
 
-        now = self._now()
+        now = self.now()
         today_end = now.replace(
             hour=self.end.hour,
             minute=self.end.minute,

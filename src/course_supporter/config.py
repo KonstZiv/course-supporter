@@ -59,6 +59,9 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
+    # --- Redis ---
+    redis_url: str = "redis://localhost:6379/0"
+
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"

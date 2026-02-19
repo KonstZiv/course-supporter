@@ -1,6 +1,6 @@
 """Tests for job priority and work window enforcement."""
 
-from datetime import time
+from datetime import UTC, datetime, time
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +12,28 @@ from course_supporter.job_priority import (
     get_work_window,
 )
 from course_supporter.worker_window import WorkWindow
+
+
+def _fixed_window(
+    start: time,
+    end: time,
+    now: datetime,
+    *,
+    enabled: bool = True,
+) -> WorkWindow:
+    """Create a WorkWindow with a fixed now() for deterministic tests."""
+    base = WorkWindow.from_settings(
+        start=start,
+        end=end,
+        tz_name="UTC",
+        enabled=enabled,
+    )
+
+    class Fixed(WorkWindow):
+        def now(self) -> datetime:
+            return now
+
+    return Fixed(start=base.start, end=base.end, tz=base.tz, enabled=base.enabled)
 
 
 class TestJobPriority:
@@ -37,26 +59,23 @@ class TestGetWorkWindow:
 class TestCheckWorkWindow:
     def test_immediate_always_passes(self) -> None:
         """IMMEDIATE jobs never raise Retry, even outside window."""
-        window = WorkWindow.from_settings(
+        window = _fixed_window(
             start=time(2, 0),
             end=time(6, 30),
-            tz_name="UTC",
-            enabled=True,
+            now=datetime(2026, 2, 19, 12, 0, tzinfo=UTC),
         )
         with patch(
             "course_supporter.job_priority.get_work_window",
             return_value=window,
         ):
-            # Should not raise regardless of current time
             check_work_window(JobPriority.IMMEDIATE)
 
     def test_normal_inside_window_passes(self) -> None:
         """NORMAL jobs pass when window is active."""
-        window = WorkWindow.from_settings(
-            start=time(0, 0),
-            end=time(23, 59),
-            tz_name="UTC",
-            enabled=True,
+        window = _fixed_window(
+            start=time(2, 0),
+            end=time(6, 30),
+            now=datetime(2026, 2, 19, 3, 0, tzinfo=UTC),
         )
         with patch(
             "course_supporter.job_priority.get_work_window",
@@ -66,11 +85,10 @@ class TestCheckWorkWindow:
 
     def test_normal_outside_window_raises_retry(self) -> None:
         """NORMAL jobs raise Retry with defer when outside window."""
-        window = WorkWindow.from_settings(
+        window = _fixed_window(
             start=time(2, 0),
-            end=time(2, 1),
-            tz_name="UTC",
-            enabled=True,
+            end=time(6, 30),
+            now=datetime(2026, 2, 19, 12, 0, tzinfo=UTC),
         )
         with (
             patch(
@@ -81,16 +99,15 @@ class TestCheckWorkWindow:
         ):
             check_work_window(JobPriority.NORMAL)
 
-        # defer_score is defer in milliseconds (arq internal)
         assert exc_info.value.defer_score is not None
         assert exc_info.value.defer_score > 0
 
     def test_normal_disabled_window_passes(self) -> None:
         """NORMAL jobs pass when window is disabled (24/7 mode)."""
-        window = WorkWindow.from_settings(
+        window = _fixed_window(
             start=time(2, 0),
             end=time(6, 30),
-            tz_name="UTC",
+            now=datetime(2026, 2, 19, 12, 0, tzinfo=UTC),
             enabled=False,
         )
         with patch(

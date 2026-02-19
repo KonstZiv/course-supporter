@@ -126,7 +126,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 1. **Router type safety** — needs `@overload` decorators for `_execute_with_fallback` instead of `type: ignore[return-value]`
 2. **`PROVIDER_CONFIG` string-based** — fragile `getattr(settings, config["key_attr"])`; refactor to `@dataclass ProviderFactoryConfig` with `Callable`
 3. **`error` as terminal state** — need `error → pending` transition for retry workflow
-4. **Empty `models/llm.py`** — leftover from early stage, to be removed
+4. **Empty `models/llm.py`** — leftover from early stage (removed in Sprint 1)
 5. **CORS `["*"]`** — addressed in Sprint 1 (PD-017 security hardening)
 
 ## What Stayed Out of Scope

@@ -3,7 +3,6 @@
 **Status:** Complete
 **Duration:** ~3 weeks
 **Tests:** 326
-**Code review score:** 8.5/10
 
 ---
 
@@ -28,7 +27,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - Alembic (sync template, psycopg v3) with 8 tables, UUIDv7 PKs
 - GitHub Actions CI: lint → typecheck → test
 
-**Result:** 6 tasks (S1-001 – S1-006), 17 tests.
+**Results:** 6 tasks (S1-001 – S1-006), 17 tests.
 
 ### Epic 2: Model Registry & LLM Infrastructure
 
@@ -42,7 +41,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - `LogCallback` for automatic DB logging of every call with cost/tokens
 - One-stop factory `create_model_router()`
 
-**Result:** 4 tasks (S1-007 – S1-010), 67 tests.
+**Results:** 4 tasks (S1-007 – S1-010), 67 tests.
 
 ### Epic 3: Ingestion Engine
 
@@ -58,7 +57,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - `MergeStep` — sync cross-references (slides ↔ timecodes)
 - `SourceMaterialRepository` with status machine (pending → processing → done/error)
 
-**Result:** 8 tasks (S1-011 – S1-018), 101 tests.
+**Results:** 8 tasks (S1-011 – S1-018), 101 tests.
 
 ### Epic 4: Architect Agent
 
@@ -71,7 +70,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - Step-based `ArchitectAgent` (`_prepare_prompts` → `_generate`)
 - `CourseStructureRepository` with replace strategy (clear + cascade delete)
 
-**Result:** 4 tasks (S1-019 – S1-022), 55 tests.
+**Results:** 4 tasks (S1-019 – S1-022), 55 tests.
 
 ### Epic 5: API Layer
 
@@ -85,7 +84,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - Background `ingest_material` task with `PROCESSOR_MAP`
 - `CourseRepository`, `SlideVideoMappingRepository`, `LessonRepository`
 
-**Result:** 6 tasks (S1-023 – S1-028), 54 tests.
+**Results:** 6 tasks (S1-023 – S1-028), 54 tests.
 
 ### Epic 6: Evals & Observability
 
@@ -100,7 +99,7 @@ Demo: `POST /courses` on a real Python tutorial produces a full course structure
 - Dual-mode eval CLI (`--mock` for CI, real LLM by default)
 - `LLMCallRepository` with SQL aggregation + cost report API endpoint
 
-**Result:** 5 tasks (S1-029 – S1-033), 32 tests.
+**Results:** 5 tasks (S1-029 – S1-033), 32 tests.
 
 ## Key Architecture Decisions
 

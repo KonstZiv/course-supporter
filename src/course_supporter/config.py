@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"
 
+    # --- Worker ---
+    worker_max_jobs: int = 2
+    worker_job_timeout: int = 1800
+    worker_max_tries: int = 3
+
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"

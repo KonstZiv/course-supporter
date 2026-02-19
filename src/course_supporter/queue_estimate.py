@@ -37,6 +37,9 @@ def _advance_through_window(
     If the window is disabled (24/7 mode), simply adds *work* to *start*.
     Otherwise, only counts time that falls inside open windows, jumping
     across closed periods as needed.
+
+    Uses arithmetic to skip full days when remaining work exceeds a
+    single window, so the cost is O(1) regardless of queue size.
     """
     if not window.enabled:
         return start + work
@@ -44,33 +47,46 @@ def _advance_through_window(
     remaining = work
     cursor = start
 
-    # Safety limit to prevent infinite loops on misconfiguration.
-    max_iterations = 400
-    for _ in range(max_iterations):
-        if remaining <= timedelta(0):
-            break
+    # Jump into the window if we're currently outside.
+    if not _time_in_window(cursor.time(), window):
+        cursor = _next_window_open(cursor, window)
 
-        # Jump to the next window opening if we're outside.
-        cursor_time = cursor.time()
+    # Consume whatever is left of the current window.
+    window_remaining = _time_until_close(cursor, window)
 
-        if not _time_in_window(cursor_time, window):
-            next_open = _next_window_open(cursor, window)
-            cursor = next_open
-            continue
+    if remaining <= window_remaining:
+        return cursor + remaining
 
-        # We're inside the window — calculate how long until it closes.
-        window_remaining = _time_until_close(cursor, window)
+    remaining -= window_remaining
+    cursor += window_remaining  # now at window close
 
-        if remaining <= window_remaining:
-            cursor += remaining
-            remaining = timedelta(0)
-        else:
-            # Consume this window and jump to next opening.
-            remaining -= window_remaining
-            cursor += window_remaining
-            # Now cursor is at window close — next iteration will jump.
+    # Calculate the duration of a single full window (hours per day).
+    daily_window = _window_duration(window)
+
+    # Skip full days arithmetically.
+    if remaining >= daily_window:
+        full_days = int(remaining / daily_window)
+        remaining -= daily_window * full_days
+        # Jump to the next window opening, then skip past full_days windows.
+        cursor = _next_window_open(cursor, window)
+        cursor += timedelta(days=full_days)
+
+    # At most one more partial window to consume.
+    if remaining > timedelta(0):
+        cursor = _next_window_open(cursor, window)
+        cursor += remaining
 
     return cursor
+
+
+def _window_duration(window: WorkWindow) -> timedelta:
+    """Duration of a single work window (one calendar day)."""
+    start_secs = window.start.hour * 3600 + window.start.minute * 60
+    end_secs = window.end.hour * 3600 + window.end.minute * 60
+    if window.is_overnight:
+        # e.g. 22:00-06:00 = 8h
+        return timedelta(seconds=(86400 - start_secs + end_secs))
+    return timedelta(seconds=(end_secs - start_secs))
 
 
 def _time_in_window(t: time, window: WorkWindow) -> bool:
@@ -88,7 +104,7 @@ def _next_window_open(cursor: datetime, window: WorkWindow) -> datetime:
         second=0,
         microsecond=0,
     )
-    if cursor < today_start:
+    if cursor <= today_start:
         return today_start
     return today_start + timedelta(days=1)
 

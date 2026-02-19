@@ -299,7 +299,7 @@ class Job(Base):
     input_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     result_material_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     result_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
-    depends_on: Mapped[list[Any] | None] = mapped_column(JSONB)
+    depends_on: Mapped[list[str] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

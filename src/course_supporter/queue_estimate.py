@@ -65,10 +65,13 @@ def _advance_through_window(
 
     # Skip full days arithmetically.
     if remaining >= daily_window:
+        # How many complete work windows fit into the remaining work.
         full_days = int(remaining / daily_window)
+        # Subtract the work consumed by these full windows.
         remaining -= daily_window * full_days
-        # Jump to the next window opening, then skip past full_days windows.
+        # Advance cursor to the next window opening after current close.
         cursor = _next_window_open(cursor, window)
+        # Skip forward by full_days calendar days (one window per day).
         cursor += timedelta(days=full_days)
 
     # At most one more partial window to consume.

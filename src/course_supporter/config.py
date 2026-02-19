@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     worker_max_jobs: int = 2
     worker_job_timeout: int = 1800
     worker_max_tries: int = 3
+    worker_heavy_window_start: str = "02:00"
+    worker_heavy_window_end: str = "06:30"
+    worker_heavy_window_enabled: bool = False
+    worker_heavy_window_tz: str = "UTC"
+    worker_immediate_override: bool = True
 
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"

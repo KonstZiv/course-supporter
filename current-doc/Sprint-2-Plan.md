@@ -334,7 +334,7 @@ class CourseStructureSnapshot(Base):
 
 Idempotency: unique на `(course_id, node_id, node_fingerprint, mode)`.
 
-**Apply snapshot → normalized tables:** коли snapshot "застосовується", його `structure` JSONB розпаковується в `modules` → `lessons` → `concepts` → `exercises`. `Module.snapshot_id` FK явно пов'язує активну структуру з джерельним snapshot.
+**Apply snapshot → normalized tables:** When a snapshot is "applied", its `structure` JSONB is unpacked into `modules` → `lessons` → `concepts` → `exercises`. `Module.snapshot_id` FK explicitly links the active structure to the source snapshot.
 
 **Response codes:**
 

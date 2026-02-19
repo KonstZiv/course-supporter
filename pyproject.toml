@@ -161,6 +161,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "requires_db: test needs a running PostgreSQL instance",
+]
 
 [tool.coverage.run]
 source = ["src/course_supporter"]

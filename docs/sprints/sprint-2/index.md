@@ -28,7 +28,7 @@ Arbitrary hierarchy of nodes. Materials can belong to any node (not just leaves)
 
 ```
 Course "Python for Beginners"
-  ├── syllabus.pdf                    ← material at course level
+  ├── syllabus.pdf                    ← material attached to a root node
   ├── "Intro to Python"
   │     ├── intro-video.mp4           ← material at section level
   │     ├── "Data Types"
@@ -40,7 +40,7 @@ Course "Python for Beginners"
         └── django-overview.pdf
 ```
 
-ORM: `MaterialNode(id, course_id, parent_id → self, title, description, order)`.
+ORM: `MaterialNode(id, course_id, parent_id → self, title, description, order)`. A course has one or more root nodes (`parent_id = NULL`). Materials at "course level" are attached to these root nodes.
 
 Fixed levels (Course → Module → Topic) don't cover arbitrary learning constructs. Adjacency list is the simplest implementation for async SQLAlchemy. PostgreSQL `WITH RECURSIVE` available for complex queries, but eager loading sufficient for typical depths of 3–5 levels.
 

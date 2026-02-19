@@ -1,0 +1,70 @@
+site_name: Course Supporter
+site_description: AI-powered course structuring and mentoring system
+site_url: https://kostyantynzivenko.github.io/course-supporter/
+repo_url: https://github.com/kostyantynzivenko/course-supporter
+repo_name: course-supporter
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search
+  - mermaid2
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: index.md
+  - Architecture:
+      - ERD: architecture/erd.md
+      - Decisions: architecture/decisions.md
+      - Infrastructure: architecture/infrastructure.md
+  - Sprints:
+      - Roadmap: sprints/index.md
+      - Sprint 0 — MVP: sprints/sprint-0/index.md
+      - Sprint 1 — Prod Deploy: sprints/sprint-1/index.md
+      - Sprint 2 — Material Tree: sprints/sprint-2/index.md
+  - API:
+      - Reference: api/reference.md
+      - Flow Guide: api/flow-guide.md
+      - Auth: api/auth.md
+  - Development:
+      - Setup: development/setup.md
+      - Testing: development/testing.md
+      - Deployment: development/deployment.md

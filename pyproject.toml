@@ -58,6 +58,10 @@ dev = [
     "httpx>=0.28",
     "types-pyyaml>=6.0.12.20250915",
 ]
+docs = [
+    "mkdocs-material>=9",
+    "mkdocs-mermaid2-plugin>=1",
+]
 
 [tool.uv]
 # PyTorch CPU-only: skip CUDA libs (~3.5GB -> ~200MB)

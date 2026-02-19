@@ -9,6 +9,8 @@ services:
     depends_on:
       postgres-cs:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - default
       - shared-net
@@ -26,6 +28,21 @@ services:
       - pgdata-cs:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-course_supporter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  redis:
+    image: redis:7-alpine
+    container_name: course-supporter-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,5 +82,6 @@ networks:
 
 volumes:
   pgdata-cs:
+  redis-data:
   netdata-config:
   netdata-lib:

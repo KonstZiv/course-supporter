@@ -102,14 +102,20 @@ class TestWorkerSettings:
         monkeypatch.setenv("WORKER_MAX_JOBS", "5")
         monkeypatch.setenv("WORKER_JOB_TIMEOUT", "600")
         monkeypatch.setenv("WORKER_MAX_TRIES", "1")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_START", "01:00")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_END", "05:00")
         monkeypatch.setenv("WORKER_HEAVY_WINDOW_ENABLED", "true")
         monkeypatch.setenv("WORKER_HEAVY_WINDOW_TZ", "Europe/Kyiv")
+        monkeypatch.setenv("WORKER_IMMEDIATE_OVERRIDE", "false")
         s = Settings(_env_file=None)
         assert s.worker_max_jobs == 5
         assert s.worker_job_timeout == 600
         assert s.worker_max_tries == 1
+        assert s.worker_heavy_window_start == "01:00"
+        assert s.worker_heavy_window_end == "05:00"
         assert s.worker_heavy_window_enabled is True
         assert s.worker_heavy_window_tz == "Europe/Kyiv"
+        assert s.worker_immediate_override is False
 
     def test_redis_url_default(self) -> None:
         s = Settings(_env_file=None)

@@ -30,6 +30,7 @@ theme:
 plugins:
   - search
   - mermaid2
+  - panzoom
 
 markdown_extensions:
   - admonition

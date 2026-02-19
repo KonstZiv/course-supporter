@@ -28,6 +28,7 @@ class TestORMModels:
             "concepts",
             "exercises",
             "llm_calls",
+            "jobs",
         }
         assert expected.issubset(table_names)
 

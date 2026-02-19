@@ -7,6 +7,7 @@ from typing import Any
 import uuid_utils as uuid7_lib
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -270,6 +271,45 @@ class Exercise(Base):
 
     # Relationships
     lesson: Mapped["Lesson"] = relationship(back_populates="exercises")
+
+
+# ──────────────────────────────────────────────
+# Job Tracking
+# ──────────────────────────────────────────────
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (result_material_id IS NOT NULL AND result_snapshot_id IS NOT NULL)",
+            name="chk_job_result_exclusive",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    course_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("courses.id", ondelete="SET NULL"), index=True
+    )
+    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    job_type: Mapped[str] = mapped_column(String(50))
+    priority: Mapped[str] = mapped_column(String(20), default="normal")
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    arq_job_id: Mapped[str | None] = mapped_column(String(100))
+    input_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    result_material_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    result_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    depends_on: Mapped[list[Any] | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    estimated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Relationships
+    course: Mapped["Course | None"] = relationship()
 
 
 # ──────────────────────────────────────────────

@@ -1,10 +1,12 @@
 """Centralized application configuration via environment variables."""
 
+import zoneinfo
+from datetime import time
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr, computed_field
+from pydantic import SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +68,21 @@ class Settings(BaseSettings):
     worker_max_jobs: int = 2
     worker_job_timeout: int = 1800
     worker_max_tries: int = 3
+    worker_heavy_window_start: time = time(2, 0)
+    worker_heavy_window_end: time = time(6, 30)
+    worker_heavy_window_enabled: bool = False
+    worker_heavy_window_tz: str = "UTC"
+    worker_immediate_override: bool = True
+
+    @field_validator("worker_heavy_window_tz")
+    @classmethod
+    def _validate_timezone(cls, v: str) -> str:
+        try:
+            zoneinfo.ZoneInfo(v)
+        except (zoneinfo.ZoneInfoNotFoundError, KeyError) as err:
+            msg = f"Invalid timezone: {v!r}"
+            raise ValueError(msg) from err
+        return v
 
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"

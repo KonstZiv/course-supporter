@@ -1,5 +1,7 @@
 """Tests for application configuration."""
 
+from datetime import time
+
 import pytest
 from pydantic import ValidationError
 
@@ -79,3 +81,56 @@ class TestSettings:
         s = Settings(environment="testing", _env_file=None)  # type: ignore[arg-type]
         assert s.is_testing is True
         assert s.is_dev is False
+
+
+class TestWorkerSettings:
+    """Test worker-related settings fields."""
+
+    def test_worker_defaults(self) -> None:
+        s = Settings(_env_file=None)
+        assert s.worker_max_jobs == 2
+        assert s.worker_job_timeout == 1800
+        assert s.worker_max_tries == 3
+
+    def test_worker_window_defaults(self) -> None:
+        s = Settings(_env_file=None)
+        assert s.worker_heavy_window_start == time(2, 0)
+        assert s.worker_heavy_window_end == time(6, 30)
+        assert s.worker_heavy_window_enabled is False
+        assert s.worker_heavy_window_tz == "UTC"
+        assert s.worker_immediate_override is True
+
+    def test_worker_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("WORKER_MAX_JOBS", "5")
+        monkeypatch.setenv("WORKER_JOB_TIMEOUT", "600")
+        monkeypatch.setenv("WORKER_MAX_TRIES", "1")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_START", "01:00")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_END", "05:00")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_ENABLED", "true")
+        monkeypatch.setenv("WORKER_HEAVY_WINDOW_TZ", "Europe/Kyiv")
+        monkeypatch.setenv("WORKER_IMMEDIATE_OVERRIDE", "false")
+        s = Settings(_env_file=None)
+        assert s.worker_max_jobs == 5
+        assert s.worker_job_timeout == 600
+        assert s.worker_max_tries == 1
+        assert s.worker_heavy_window_start == time(1, 0)
+        assert s.worker_heavy_window_end == time(5, 0)
+        assert s.worker_heavy_window_enabled is True
+        assert s.worker_heavy_window_tz == "Europe/Kyiv"
+        assert s.worker_immediate_override is False
+
+    def test_invalid_timezone_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid timezone"):
+            Settings(
+                worker_heavy_window_tz="Not/A/Timezone",
+                _env_file=None,
+            )
+
+    def test_redis_url_default(self) -> None:
+        s = Settings(_env_file=None)
+        assert s.redis_url == "redis://localhost:6379/0"
+
+    def test_redis_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("REDIS_URL", "redis://redis:6379/1")
+        s = Settings(_env_file=None)
+        assert s.redis_url == "redis://redis:6379/1"

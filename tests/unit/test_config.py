@@ -1,5 +1,7 @@
 """Tests for application configuration."""
 
+from datetime import time
+
 import pytest
 from pydantic import ValidationError
 
@@ -92,8 +94,8 @@ class TestWorkerSettings:
 
     def test_worker_window_defaults(self) -> None:
         s = Settings(_env_file=None)
-        assert s.worker_heavy_window_start == "02:00"
-        assert s.worker_heavy_window_end == "06:30"
+        assert s.worker_heavy_window_start == time(2, 0)
+        assert s.worker_heavy_window_end == time(6, 30)
         assert s.worker_heavy_window_enabled is False
         assert s.worker_heavy_window_tz == "UTC"
         assert s.worker_immediate_override is True
@@ -111,11 +113,18 @@ class TestWorkerSettings:
         assert s.worker_max_jobs == 5
         assert s.worker_job_timeout == 600
         assert s.worker_max_tries == 1
-        assert s.worker_heavy_window_start == "01:00"
-        assert s.worker_heavy_window_end == "05:00"
+        assert s.worker_heavy_window_start == time(1, 0)
+        assert s.worker_heavy_window_end == time(5, 0)
         assert s.worker_heavy_window_enabled is True
         assert s.worker_heavy_window_tz == "Europe/Kyiv"
         assert s.worker_immediate_override is False
+
+    def test_invalid_timezone_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid timezone"):
+            Settings(
+                worker_heavy_window_tz="Not/A/Timezone",
+                _env_file=None,
+            )
 
     def test_redis_url_default(self) -> None:
         s = Settings(_env_file=None)

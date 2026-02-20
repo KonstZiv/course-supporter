@@ -170,3 +170,4 @@ class MaterialCreateResponse(BaseModel):
     filename: str | None
     status: str
     created_at: datetime
+    job_id: uuid.UUID | None = None

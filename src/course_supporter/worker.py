@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 import structlog
 from arq.connections import RedisSettings
 
+from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
 
@@ -21,12 +22,41 @@ WorkerCtx = dict[str, Any]
 
 
 async def startup(ctx: WorkerCtx) -> None:
-    """Initialize worker resources on startup."""
+    """Initialize worker resources on startup.
+
+    Creates an async engine, session factory, and model router,
+    storing them in the worker context for use by task functions.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    from course_supporter.llm import create_model_router
+
     s = get_settings()
     configure_logging(
         environment=str(s.environment),
         log_level=s.log_level,
     )
+
+    engine = create_async_engine(
+        s.database_url,
+        pool_size=5,
+        max_overflow=10,
+    )
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    model_router = create_model_router(s, session_factory)
+
+    ctx["engine"] = engine
+    ctx["session_factory"] = session_factory
+    ctx["model_router"] = model_router
+
     log = structlog.get_logger()
     log.info("worker_started", redis_url=s.redis_url, max_jobs=s.worker_max_jobs)
 
@@ -34,6 +64,11 @@ async def startup(ctx: WorkerCtx) -> None:
 async def shutdown(ctx: WorkerCtx) -> None:
     """Clean up worker resources on shutdown."""
     log = structlog.get_logger()
+
+    engine = ctx.get("engine")
+    if engine is not None:
+        await engine.dispose()
+
     log.info("worker_stopped")
 
 
@@ -45,7 +80,7 @@ class WorkerSettings:
     redis_settings: RedisSettings = RedisSettings.from_dsn(
         _settings.redis_url,
     )
-    functions: ClassVar[list[Any]] = []
+    functions: ClassVar[list[Any]] = [arq_ingest_material]
     on_startup = startup
     on_shutdown = shutdown
 

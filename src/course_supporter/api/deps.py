@@ -18,7 +18,13 @@ from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Tenant
 from course_supporter.storage.s3 import S3Client
 
-__all__ = ["get_current_tenant", "get_model_router", "get_s3_client", "get_session"]
+__all__ = [
+    "get_arq_redis",
+    "get_current_tenant",
+    "get_model_router",
+    "get_s3_client",
+    "get_session",
+]
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -69,6 +75,15 @@ async def get_current_tenant(
         rate_limit_check=api_key_record.rate_limit_check,
         key_prefix=api_key_record.key_prefix,
     )
+
+
+async def get_arq_redis(request: Request) -> object:
+    """Retrieve ARQ Redis pool from app state.
+
+    Initialized during lifespan startup.
+    Returns ArqRedis but typed as object to avoid import at module level.
+    """
+    return request.app.state.arq_redis
 
 
 async def get_model_router(request: Request) -> ModelRouter:

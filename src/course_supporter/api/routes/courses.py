@@ -4,10 +4,10 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_model_router, get_s3_client, get_session
+from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
     CourseCreateRequest,
     CourseDetailResponse,
@@ -18,12 +18,10 @@ from course_supporter.api.schemas import (
     SlideVideoMapRequest,
     SlideVideoMapResponse,
 )
-from course_supporter.api.tasks import ingest_material
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
-from course_supporter.llm.router import ModelRouter
+from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.source import SourceType
-from course_supporter.storage.database import async_session
 from course_supporter.storage.repositories import (
     CourseRepository,
     LessonRepository,
@@ -39,8 +37,8 @@ router = APIRouter(tags=["courses"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
-RouterDep = Annotated[ModelRouter, Depends(get_model_router)]
 SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+ArqDep = Annotated[object, Depends(get_arq_redis)]
 
 VALID_SOURCE_TYPES = {t.value for t in SourceType}
 
@@ -112,11 +110,10 @@ async def get_lesson(
 @router.post("/courses/{course_id}/materials", status_code=201)
 async def create_material(
     course_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
-    model_router: RouterDep,
+    arq: ArqDep,
     source_type: Annotated[str, Form()],
     source_url: Annotated[str | None, Form()] = None,
     file: UploadFile | None = None,
@@ -125,7 +122,7 @@ async def create_material(
 
     Accepts either a URL or a file upload. If a file is provided,
     it is uploaded to S3/MinIO and the resulting URL is stored.
-    Background ingestion is triggered automatically.
+    Ingestion is enqueued via ARQ for background processing.
     """
     if source_type not in VALID_SOURCE_TYPES:
         raise HTTPException(
@@ -168,15 +165,23 @@ async def create_material(
         source_url=actual_url,
         filename=filename,
     )
+
+    job = await enqueue_ingestion(
+        redis=arq,  # type: ignore[arg-type]
+        session=session,
+        course_id=course_id,
+        material_id=material.id,
+        source_type=source_type,
+        source_url=actual_url,
+    )
     await session.commit()
 
-    background_tasks.add_task(
-        ingest_material,
-        material.id,
-        source_type,
-        actual_url,
-        async_session,
-        model_router,
+    return MaterialCreateResponse(
+        id=material.id,
+        source_type=material.source_type,
+        source_url=material.source_url,
+        filename=material.filename,
+        status=material.status,
+        created_at=material.created_at,
+        job_id=job.id,
     )
-
-    return MaterialCreateResponse.model_validate(material)

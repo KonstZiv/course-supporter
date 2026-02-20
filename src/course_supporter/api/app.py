@@ -58,6 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.model_router = create_model_router(settings, async_session)
 
+    # ARQ Redis pool for job enqueue
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    arq_redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    app.state.arq_redis = arq_redis
+
     # Start rate limiter cleanup loop
     cleanup_task = asyncio.create_task(_cleanup_loop(rate_limiter))
 
@@ -75,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         yield
 
     cleanup_task.cancel()
+    await arq_redis.aclose()
     await engine.dispose()
     logger.info("app_stopped")
 

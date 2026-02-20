@@ -140,6 +140,12 @@ DELETE /api/v1/courses/{id}/nodes/{node_id}                → delete (cascade c
 POST   /api/v1/courses/{id}/nodes/{node_id}/materials      → add material (file or URL)
 DELETE /api/v1/courses/{id}/materials/{material_id}         → delete material
 POST   /api/v1/courses/{id}/materials/{material_id}/retry   → retry ingestion
+
+File type validation per source_type:
+  video:        .mp4, .webm, .mkv, .avi (or URL)
+  presentation: .pdf, .pptx (or URL)
+  text:         .md, .markdown, .docx, .html, .htm, .txt (or URL)
+  web:          URL only (no file upload)
 ```
 
 ### Slide-Video Mapping

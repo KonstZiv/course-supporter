@@ -207,3 +207,103 @@ class TestCreateMaterialAPI:
                 },
             )
         assert response.json()["status"] == "pending"
+
+    async def test_web_source_type_rejects_file(self, client: AsyncClient) -> None:
+        """POST /materials rejects file upload for source_type 'web'."""
+        response = await client.post(
+            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            data={"source_type": "web"},
+            files={
+                "file": ("page.html", io.BytesIO(b"<html>"), "text/html"),
+            },
+        )
+        assert response.status_code == 422
+        assert "does not accept file uploads" in response.json()["detail"]
+
+    async def test_video_rejects_pdf_file(self, client: AsyncClient) -> None:
+        """POST /materials rejects .pdf file for source_type 'video'."""
+        response = await client.post(
+            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            data={"source_type": "video"},
+            files={
+                "file": (
+                    "slides.pdf",
+                    io.BytesIO(b"PDF content"),
+                    "application/pdf",
+                ),
+            },
+        )
+        assert response.status_code == 422
+        assert "'.pdf' is not allowed" in response.json()["detail"]
+        assert "'.mp4'" in response.json()["detail"]
+
+    async def test_presentation_rejects_mp4_file(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        """POST /materials rejects .mp4 file for source_type 'presentation'."""
+        response = await client.post(
+            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            data={"source_type": "presentation"},
+            files={
+                "file": (
+                    "video.mp4",
+                    io.BytesIO(b"video data"),
+                    "video/mp4",
+                ),
+            },
+        )
+        assert response.status_code == 422
+        assert "'.mp4' is not allowed" in response.json()["detail"]
+
+    async def test_text_accepts_docx(self, client: AsyncClient) -> None:
+        """POST /materials accepts .docx for source_type 'text'."""
+        material = _make_material_mock(
+            source_type="text",
+            source_url="http://localhost:9000/key/notes.docx",
+            filename="notes.docx",
+        )
+        job = _make_job_mock()
+        with (
+            patch.object(
+                CourseRepository,
+                "get_by_id",
+                return_value=MagicMock(),
+            ),
+            patch.object(
+                SourceMaterialRepository,
+                "create",
+                return_value=material,
+            ),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            response = await client.post(
+                f"/api/v1/courses/{uuid.uuid4()}/materials",
+                data={"source_type": "text"},
+                files={
+                    "file": (
+                        "notes.docx",
+                        io.BytesIO(b"docx data"),
+                        "application/vnd.openxmlformats",
+                    ),
+                },
+            )
+        assert response.status_code == 201
+
+    async def test_file_without_extension_rejected(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        """POST /materials rejects file without extension."""
+        response = await client.post(
+            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            data={"source_type": "video"},
+            files={
+                "file": (
+                    "videofile",
+                    io.BytesIO(b"data"),
+                    "application/octet-stream",
+                ),
+            },
+        )
+        assert response.status_code == 422

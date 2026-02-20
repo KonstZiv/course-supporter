@@ -40,13 +40,29 @@ logger = structlog.get_logger()
 
 router = APIRouter(tags=["courses"])
 
+
+# Allowed file extensions per source_type (lowercase, with dot).
+# web does not accept file uploads at all.
+def _file_extension(filename: str | None) -> str:
+    """Extract lowercase file extension from filename."""
+    if not filename or "." not in filename:
+        return ""
+    return "." + filename.rsplit(".", maxsplit=1)[-1].lower()
+
+
+ALLOWED_EXTENSIONS: dict[SourceType, frozenset[str]] = {
+    SourceType.VIDEO: frozenset({".mp4", ".webm", ".mkv", ".avi"}),
+    SourceType.PRESENTATION: frozenset({".pdf", ".pptx"}),
+    SourceType.TEXT: frozenset(
+        {".md", ".markdown", ".docx", ".html", ".htm", ".txt"},
+    ),
+}
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
-
-VALID_SOURCE_TYPES = {t.value for t in SourceType}
 
 
 @router.post("/courses", status_code=201)
@@ -169,27 +185,65 @@ async def create_material(
     session: SessionDep,
     s3: S3Dep,
     arq: ArqDep,
-    source_type: Annotated[str, Form()],
-    source_url: Annotated[str | None, Form()] = None,
-    file: UploadFile | None = None,
+    source_type: Annotated[
+        SourceType,
+        Form(description="Material type: video, presentation, text, or web."),
+    ],
+    source_url: Annotated[
+        str | None,
+        Form(description="URL to the source material. Required if no file."),
+    ] = None,
+    file: Annotated[
+        UploadFile | None,
+        Form(
+            description=(
+                "File upload (multipart). Accepted formats: "
+                "video (mp4, webm, mkv, avi), "
+                "presentation (pdf, pptx), "
+                "text (md, txt, docx, html). "
+                "Required if source_url is not provided."
+            ),
+        ),
+    ] = None,
 ) -> MaterialCreateResponse:
     """Create a source material for a course.
 
     Accepts either a URL or a file upload. If a file is provided,
     it is uploaded to S3/MinIO and the resulting URL is stored.
     Ingestion is enqueued via ARQ for background processing.
+
+    File type validation per source_type:
+
+    - **video**: .mp4, .webm, .mkv, .avi
+    - **presentation**: .pdf, .pptx
+    - **text**: .md, .markdown, .docx, .html, .htm, .txt
+    - **web**: URL only, file upload not allowed
     """
-    if source_type not in VALID_SOURCE_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid source_type. Must be one of: {sorted(VALID_SOURCE_TYPES)}",
-        )
 
     if source_url is None and file is None:
         raise HTTPException(
             status_code=422,
             detail="Either source_url or file must be provided",
         )
+
+    if file is not None:
+        if source_type == SourceType.WEB:
+            raise HTTPException(
+                status_code=422,
+                detail="source_type 'web' does not accept file uploads,"
+                " provide source_url instead.",
+            )
+        allowed = ALLOWED_EXTENSIONS.get(source_type, frozenset())
+        ext = _file_extension(file.filename)
+        if ext not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"File extension '{ext}' is not allowed "
+                    f"for source_type '{source_type}'. "
+                    f"Accepted: {sorted(allowed)}"
+                ),
+            )
 
     course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)

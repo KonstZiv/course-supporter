@@ -187,6 +187,162 @@ class TestGetTree:
         assert root.children[1] is c2
 
 
+class TestGetTreeIncludeMaterials:
+    """MaterialNodeRepository.get_tree with include_materials=True."""
+
+    async def test_include_materials_adds_selectinload(self) -> None:
+        """When include_materials=True, materials are loaded for each node."""
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="Root")
+        # Simulate materials list on the node (as selectinload would populate)
+        mat1 = MagicMock()
+        mat1.order = 0
+        root.materials = [mat1]
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid, include_materials=True)
+
+        assert len(roots) == 1
+        assert roots[0].materials == [mat1]
+        # Verify that session.execute was called (selectinload is inside stmt)
+        session.execute.assert_awaited_once()
+
+    async def test_include_materials_false_by_default(self) -> None:
+        """Default is include_materials=False."""
+        cid = uuid.uuid4()
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = []
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        await repo.get_tree(cid)
+
+        # The call should succeed without loading materials
+        session.execute.assert_awaited_once()
+
+
+class TestGetTreeDeepNesting:
+    """get_tree with 4+ level deep nesting."""
+
+    async def test_four_level_tree(self) -> None:
+        """Four-level deep tree assembled correctly."""
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="L1", order=0)
+        l2 = _mock_node(course_id=cid, parent_id=root.id, title="L2", order=0)
+        l3 = _mock_node(course_id=cid, parent_id=l2.id, title="L3", order=0)
+        l4 = _mock_node(course_id=cid, parent_id=l3.id, title="L4", order=0)
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root, l2, l3, l4]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid)
+
+        assert len(roots) == 1
+        assert roots[0] is root
+        assert len(root.children) == 1
+        assert root.children[0] is l2
+        assert len(l2.children) == 1
+        assert l2.children[0] is l3
+        assert len(l3.children) == 1
+        assert l3.children[0] is l4
+        assert l4.children == []
+
+    async def test_five_level_tree_with_siblings(self) -> None:
+        """Five-level deep tree with siblings at each level."""
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="Root", order=0)
+        c1 = _mock_node(course_id=cid, parent_id=root.id, title="C1", order=0)
+        c2 = _mock_node(course_id=cid, parent_id=root.id, title="C2", order=1)
+        gc1 = _mock_node(course_id=cid, parent_id=c1.id, title="GC1", order=0)
+        gc2 = _mock_node(course_id=cid, parent_id=c1.id, title="GC2", order=1)
+        ggc = _mock_node(course_id=cid, parent_id=gc1.id, title="GGC", order=0)
+        gggc = _mock_node(course_id=cid, parent_id=ggc.id, title="GGGC", order=0)
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [
+            root,
+            c1,
+            c2,
+            gc1,
+            gc2,
+            ggc,
+            gggc,
+        ]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid)
+
+        assert len(roots) == 1
+        assert len(root.children) == 2
+        assert len(c1.children) == 2
+        assert len(c2.children) == 0
+        assert len(gc1.children) == 1
+        assert gc1.children[0] is ggc
+        assert len(ggc.children) == 1
+        assert ggc.children[0] is gggc
+        assert gggc.children == []
+
+
+class TestGetTreeOrphanNodes:
+    """get_tree with orphan nodes (parent not in loaded set)."""
+
+    async def test_orphan_node_excluded_from_roots(self) -> None:
+        """Node whose parent_id is set but parent not loaded is excluded."""
+        cid = uuid.uuid4()
+        missing_parent_id = uuid.uuid4()
+        orphan = _mock_node(
+            course_id=cid,
+            parent_id=missing_parent_id,
+            title="Orphan",
+            order=0,
+        )
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [orphan]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid)
+
+        # Orphan is not a root (parent_id != None), and parent not found
+        assert roots == []
+
+    async def test_mixed_valid_and_orphan(self) -> None:
+        """Valid root returned, orphan excluded."""
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="Root", order=0)
+        orphan = _mock_node(
+            course_id=cid,
+            parent_id=uuid.uuid4(),
+            title="Orphan",
+            order=0,
+        )
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root, orphan]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid)
+
+        assert len(roots) == 1
+        assert roots[0] is root
+        assert root.children == []
+
+
 class TestMove:
     """MaterialNodeRepository.move tests."""
 

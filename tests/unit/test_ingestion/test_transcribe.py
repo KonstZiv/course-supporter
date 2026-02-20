@@ -181,6 +181,19 @@ class TestLocalTranscribeErrors:
         ):
             await local_transcribe("/tmp/a.wav", TranscribeParams())
 
+    async def test_transcribe_failure_wraps_in_processing_error(self) -> None:
+        """Runtime error during transcription is wrapped in ProcessingError."""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("corrupted audio")
+        mock_module = MagicMock()
+        mock_module.load_model.return_value = mock_model
+
+        with (
+            patch.dict("sys.modules", {"whisper": mock_module}),
+            pytest.raises(ProcessingError, match="Transcription failed"),
+        ):
+            await local_transcribe("/tmp/bad.wav", TranscribeParams())
+
 
 class TestTranscribeParamsValidation:
     def test_default_params(self) -> None:

@@ -70,10 +70,14 @@ async def local_transcribe(
     if params.language is not None:
         transcribe_kwargs["language"] = params.language
 
-    result = await loop.run_in_executor(
-        None,
-        lambda: model.transcribe(audio_path, **transcribe_kwargs),
-    )
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: model.transcribe(audio_path, **transcribe_kwargs),
+        )
+    except Exception as exc:
+        logger.error("whisper_transcription_failed", error=str(exc))
+        raise ProcessingError(f"Transcription failed: {exc}") from exc
 
     raw_segments: list[dict[str, Any]] = result.get("segments", [])
     detected_language: str | None = result.get("language")

@@ -186,13 +186,12 @@ class MaterialNodeRepository:
             raise ValueError(msg)
 
         # Get siblings (including this node), ordered
+        # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = (
             select(MaterialNode)
             .where(
                 MaterialNode.course_id == node.course_id,
-                MaterialNode.parent_id == node.parent_id
-                if node.parent_id is not None
-                else MaterialNode.parent_id.is_(None),
+                MaterialNode.parent_id == node.parent_id,
             )
             .order_by(MaterialNode.order)
         )
@@ -270,13 +269,10 @@ class MaterialNodeRepository:
         parent_id: uuid.UUID | None,
     ) -> int:
         """Get next order value for siblings under the given parent."""
-        if parent_id is not None:
-            where = MaterialNode.parent_id == parent_id
-        else:
-            where = MaterialNode.parent_id.is_(None)
-
+        # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = select(func.coalesce(func.max(MaterialNode.order) + 1, 0)).where(
-            MaterialNode.course_id == course_id, where
+            MaterialNode.course_id == course_id,
+            MaterialNode.parent_id == parent_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()

@@ -690,31 +690,23 @@ class TestKnownHash:
 
     async def test_material_known_sha256(self) -> None:
         """Material fingerprint matches independently computed sha256."""
-        content = "Hello, World!"
-        expected = hashlib.sha256(content.encode()).hexdigest()
         known = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
-        assert expected == known
-
-        entry = _make_entry(processed_content=content)
+        entry = _make_entry(processed_content="Hello, World!")
         session = AsyncMock()
         svc = FingerprintService(session)
 
         result = await svc.ensure_material_fp(entry)
-        assert result == expected
+        assert result == known
 
     async def test_empty_node_known_hash(self) -> None:
         """Empty node (no materials, no children) = sha256 of empty string."""
-        expected = hashlib.sha256(b"").hexdigest()
-        known = "e3b0c44298fc1c149afbf4c8996fb924"
-        known += "27ae41e4649b934ca495991b7852b855"
-        assert expected == known
-
+        known = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         node = _make_node()
         session = AsyncMock()
         svc = FingerprintService(session)
 
         result = await svc.ensure_node_fp(node)
-        assert result == expected
+        assert result == known
 
     async def test_node_with_one_material_known_hash(self) -> None:
         """Node with single material = sha256('m:<material_fp>')."""

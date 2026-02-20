@@ -129,8 +129,80 @@ class SourceMaterialResponse(BaseModel):
     created_at: datetime
 
 
+class MaterialEntrySummaryResponse(BaseModel):
+    """Compact material entry within the course detail tree.
+
+    A lighter version of ``MaterialEntryResponse`` omitting
+    ``pending_job_id`` and ``updated_at`` to keep the tree
+    payload concise. Includes the derived ``state`` field.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
+    source_type: str = Field(
+        description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    source_url: str = Field(description="URL or S3 path to the raw material.")
+    filename: str | None = Field(description="Original filename, if available.")
+    order: int = Field(description="0-based position among sibling materials.")
+    state: str = Field(
+        description=(
+            "Derived lifecycle state: "
+            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
+        ),
+    )
+    error_message: str | None = Field(
+        description="Error from the last failed processing attempt, if any."
+    )
+    created_at: datetime = Field(description="When this entry was created.")
+
+
+class NodeWithMaterialsResponse(BaseModel):
+    """Recursive tree node with attached materials.
+
+    Used in ``CourseDetailResponse.material_tree`` to provide
+    the full hierarchical view including materials at each level.
+
+    Example (abbreviated)::
+
+        {
+            "title": "Module 1",
+            "materials": [{"source_type": "video", "state": "ready", ...}],
+            "children": [
+                {"title": "Lesson 1.1", "materials": [...], "children": []}
+            ]
+        }
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
+    title: str = Field(description="Node title.")
+    description: str | None = Field(description="Optional node description.")
+    order: int = Field(description="0-based position among siblings.")
+    node_fingerprint: str | None = Field(
+        description="Merkle hash of this node's content. ``null`` if not computed."
+    )
+    materials: list[MaterialEntrySummaryResponse] = Field(
+        default_factory=list,
+        description="Materials attached directly to this node.",
+    )
+    children: list[NodeWithMaterialsResponse] = Field(
+        default_factory=list,
+        description="Child nodes, recursively nested.",
+    )
+    created_at: datetime = Field(description="When this node was created.")
+    updated_at: datetime = Field(description="When this node was last modified.")
+
+
 class CourseDetailResponse(BaseModel):
-    """Full course detail with nested structure."""
+    """Full course detail with nested structure.
+
+    Includes the legacy ``source_materials`` flat list (for backward
+    compatibility) and the new ``material_tree`` with recursive nodes,
+    attached materials, and derived states.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,6 +214,13 @@ class CourseDetailResponse(BaseModel):
     updated_at: datetime
     modules: list[ModuleResponse]
     source_materials: list[SourceMaterialResponse]
+    material_tree: list[NodeWithMaterialsResponse] = Field(
+        default_factory=list,
+        description=(
+            "Hierarchical material tree with nested children and "
+            "attached materials. Empty list if no tree has been built."
+        ),
+    )
 
 
 class LessonDetailResponse(BaseModel):

@@ -17,6 +17,7 @@ from course_supporter.api.schemas import (
     CourseResponse,
     LessonDetailResponse,
     MaterialCreateResponse,
+    NodeWithMaterialsResponse,
     SlideVideoMapItemResponse,
     SlideVideoMapRequest,
     SlideVideoMapResponse,
@@ -25,6 +26,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.source import SourceType
+from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import (
     CourseRepository,
     LessonRepository,
@@ -65,12 +67,24 @@ async def get_course(
     tenant: SharedDep,
     session: SessionDep,
 ) -> CourseDetailResponse:
-    """Get course by ID with full nested structure."""
+    """Get course by ID with full nested structure.
+
+    Returns course metadata, legacy source materials, module
+    hierarchy, and the material tree with attached entries
+    and their lifecycle states.
+    """
     repo = CourseRepository(session, tenant.tenant_id)
     course = await repo.get_with_structure(course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
-    return CourseDetailResponse.model_validate(course)
+
+    node_repo = MaterialNodeRepository(session)
+    tree_roots = await node_repo.get_tree(course_id, include_materials=True)
+    tree = [NodeWithMaterialsResponse.model_validate(r) for r in tree_roots]
+
+    response = CourseDetailResponse.model_validate(course)
+    response.material_tree = tree
+    return response
 
 
 @router.post("/courses/{course_id}/slide-mapping", status_code=201)

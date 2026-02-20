@@ -13,6 +13,7 @@ from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.storage.database import get_session
+from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import CourseRepository
 
 
@@ -137,8 +138,11 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with patch.object(
-                    CourseRepository, "get_with_structure", return_value=course
+                with (
+                    patch.object(
+                        CourseRepository, "get_with_structure", return_value=course
+                    ),
+                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
                 ):
                     response = await client.get(f"/api/v1/courses/{course.id}")
             assert response.status_code == 200
@@ -160,8 +164,11 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with patch.object(
-                    CourseRepository, "get_with_structure", return_value=course
+                with (
+                    patch.object(
+                        CourseRepository, "get_with_structure", return_value=course
+                    ),
+                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
                 ):
                     response = await client.get(f"/api/v1/courses/{course.id}")
             assert response.status_code == 200
@@ -194,8 +201,11 @@ class TestScopeEnforcement:
                 course.modules = []
                 course.source_materials = []
                 course.learning_goal = None
-                with patch.object(
-                    CourseRepository, "get_with_structure", return_value=course
+                with (
+                    patch.object(
+                        CourseRepository, "get_with_structure", return_value=course
+                    ),
+                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
                 ):
                     resp_shared = await client.get(f"/api/v1/courses/{course.id}")
                 assert resp_shared.status_code == 200

@@ -213,7 +213,7 @@ The workflow:
 ```bash
 cd /opt/course-supporter
 git pull origin main
-docker compose --env-file .env.prod -f docker-compose.prod.yaml build app
+docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker
 docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
 docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
   python -m alembic upgrade head
@@ -245,6 +245,14 @@ curl -sf https://api.pythoncourse.me/health | jq .
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key |
 | `OPENAI_API_KEY` | No | — | OpenAI API key |
 | `DEEPSEEK_API_KEY` | No | — | DeepSeek API key |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection string (`redis://redis:6379/0` in Docker) |
+| `WORKER_MAX_JOBS` | No | `1` | Concurrent jobs per worker. Default 1 to avoid OOM (Whisper uses ~5 GB RAM) |
+| `WORKER_JOB_TIMEOUT` | No | `21600` | Max seconds per job (6h — enough for 4h video transcription on CPU) |
+| `WORKER_MAX_TRIES` | No | `3` | Retry attempts per failed job |
+| `WORKER_HEAVY_WINDOW_ENABLED` | No | `false` | Restrict heavy jobs to a time window |
+| `WORKER_HEAVY_WINDOW_START` | No | `02:00` | Window start (24h format) |
+| `WORKER_HEAVY_WINDOW_END` | No | `06:30` | Window end (24h format) |
+| `WORKER_HEAVY_WINDOW_TZ` | No | `UTC` | Timezone for the work window |
 
 > At least one LLM API key is required for the ArchitectAgent to function.
 
@@ -280,7 +288,7 @@ Optional rate limit flags for `create-key`:
 
 ```bash
 curl -sf https://api.pythoncourse.me/health | jq .
-# Returns: {"status": "ok", "checks": {"db": "ok", "s3": "ok"}, "timestamp": "..."}
+# Returns: {"status": "ok", "checks": {"db": "ok", "s3": "ok", "redis": "ok"}, "timestamp": "..."}
 # HTTP 200 = healthy, HTTP 503 = degraded
 ```
 
@@ -303,6 +311,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --no-lo
 
 # Last 50 lines:
 docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail=50
+
+# Worker logs (job processing):
+docker compose --env-file .env.prod -f docker-compose.prod.yaml logs -f worker
 ```
 
 ### External monitoring
@@ -367,6 +378,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
 | **Slow responses** | Check app logs for `latency_ms` values | Review LLM provider latency, check DB query times |
 | **Rate limit hit (429)** | Response includes `Retry-After` header | Wait or adjust rate limits via `create-key` |
 | **Health check fails after DB recreate** | `health_check_db_error: OperationalError` in logs | App holds stale DB connection — restart app: `docker compose --env-file .env.prod -f docker-compose.prod.yaml restart app` |
+| **Worker not processing jobs** | `docker compose ... logs worker --tail=20` | Check `REDIS_URL` in `.env.prod`, verify Redis is healthy |
+| **Job timeout on long video** | `worker_job_timeout` too low for Whisper on CPU | Increase `WORKER_JOB_TIMEOUT` (default 21600 = 6h, enough for ~4h video) |
+| **Worker OOM killed** | `docker inspect ... \| jq '.[0].State.OOMKilled'` | Reduce `WORKER_MAX_JOBS` to 1 (default). Whisper `medium` uses ~5 GB RAM |
 | **`alembic: no such file or directory`** | uv shebang points to builder stage path | Use `python -m alembic` instead of bare `alembic` |
 
 ### Useful debug commands

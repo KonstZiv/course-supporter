@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # --- Worker ---
-    worker_max_jobs: int = 2
-    worker_job_timeout: int = 1800
+    worker_max_jobs: int = 1
+    worker_job_timeout: int = 21600
     worker_max_tries: int = 3
     worker_heavy_window_start: time = time(2, 0)
     worker_heavy_window_end: time = time(6, 30)

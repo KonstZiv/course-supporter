@@ -88,8 +88,8 @@ class TestWorkerSettings:
 
     def test_worker_defaults(self) -> None:
         s = Settings(_env_file=None)
-        assert s.worker_max_jobs == 2
-        assert s.worker_job_timeout == 1800
+        assert s.worker_max_jobs == 1
+        assert s.worker_job_timeout == 21600
         assert s.worker_max_tries == 3
 
     def test_worker_window_defaults(self) -> None:

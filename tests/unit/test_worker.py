@@ -21,10 +21,10 @@ class TestWorkerSettings:
         assert rs.database == 0
 
     def test_max_jobs_default(self) -> None:
-        assert WorkerSettings.max_jobs == 2
+        assert WorkerSettings.max_jobs == 1
 
     def test_job_timeout_default(self) -> None:
-        assert WorkerSettings.job_timeout == 1800
+        assert WorkerSettings.job_timeout == 21600
 
     def test_max_tries_default(self) -> None:
         assert WorkerSettings.max_tries == 3

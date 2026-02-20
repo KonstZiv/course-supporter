@@ -116,8 +116,8 @@ All production config via `.env.prod` (not committed). See `.env.example` for te
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
-| `WORKER_MAX_JOBS` | `2` | Concurrent jobs per worker |
-| `WORKER_JOB_TIMEOUT` | `1800` | Max seconds per job |
+| `WORKER_MAX_JOBS` | `1` | Concurrent jobs per worker (1 to avoid OOM with Whisper ~5 GB RAM) |
+| `WORKER_JOB_TIMEOUT` | `21600` | Max seconds per job (6h — enough for 4h video transcription on CPU) |
 | `WORKER_MAX_TRIES` | `3` | Retry attempts per job |
 | `WORKER_HEAVY_WINDOW_ENABLED` | `false` | Restrict heavy jobs to time window |
 | `WORKER_HEAVY_WINDOW_START` | `02:00` | Window start (24h format) |

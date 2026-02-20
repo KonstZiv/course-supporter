@@ -11,6 +11,7 @@ Can be swapped for a Lambda-based implementation later.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -49,6 +50,9 @@ async def local_transcribe(
         language=params.language,
     )
     logger.info("whisper_transcription_start")
+
+    if not Path(audio_path).exists():  # noqa: ASYNC240
+        raise ProcessingError(f"Audio file not found: {audio_path}")
 
     try:
         import whisper

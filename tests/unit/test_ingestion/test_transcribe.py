@@ -1,5 +1,6 @@
 """Tests for local_transcribe heavy step."""
 
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +20,14 @@ from course_supporter.ingestion.transcribe import local_transcribe
 def _clear_model_cache() -> None:
     """Clear Whisper model cache between tests."""
     transcribe_mod._MODEL_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fake_audio_exists() -> Iterator[None]:
+    """Patch Path.exists to return True for fake audio paths in tests."""
+    with patch("course_supporter.ingestion.transcribe.Path") as mock_path:
+        mock_path.return_value.exists.return_value = True
+        yield
 
 
 def _mock_whisper(
@@ -173,6 +182,15 @@ class TestLocalTranscribeEdgeCases:
 
 
 class TestLocalTranscribeErrors:
+    async def test_file_not_found(self) -> None:
+        """Non-existent audio file raises ProcessingError before loading model."""
+        with (
+            patch("course_supporter.ingestion.transcribe.Path") as mock_path,
+            pytest.raises(ProcessingError, match="Audio file not found"),
+        ):
+            mock_path.return_value.exists.return_value = False
+            await local_transcribe("/nonexistent/audio.wav", TranscribeParams())
+
     async def test_whisper_not_installed(self) -> None:
         """When whisper package is not installed, raises ProcessingError."""
         with (

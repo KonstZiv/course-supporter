@@ -171,3 +171,25 @@ class MaterialCreateResponse(BaseModel):
     status: str
     created_at: datetime
     job_id: uuid.UUID | None = None
+
+
+# --- Jobs ---
+
+
+class JobResponse(BaseModel):
+    """Response for GET /jobs/{job_id}."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    job_type: str
+    priority: str
+    status: str
+    course_id: uuid.UUID | None
+    node_id: uuid.UUID | None
+    arq_job_id: str | None
+    error_message: str | None
+    queued_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    estimated_at: datetime | None

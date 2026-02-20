@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.courses import router as courses_router
+from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.reports import router as reports_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
@@ -172,4 +173,5 @@ async def unhandled_exception_handler(
 
 
 app.include_router(courses_router, prefix="/api/v1")
+app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(reports_router, prefix="/api/v1")

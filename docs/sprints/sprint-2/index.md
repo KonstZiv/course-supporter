@@ -1,8 +1,9 @@
 # Sprint 2 — Material Tree, Task Queue, Structure Generation
 
 **Status:** In Progress
-**Estimate:** 4–5 weeks
+**Estimate:** 4-5 weeks
 **Previous sprint:** [Sprint 1 — Production Deploy](../sprint-1/index.md) (407 tests, live on `api.pythoncourse.me`)
+**Current test count:** 723 passed, 27 skipped
 
 ---
 
@@ -176,17 +177,21 @@ GET    /health                                             → deep health (DB +
 
 ## Epics
 
-### Epic 0: Project Documentation Infrastructure (1–2 days)
+### Epic 0: Project Documentation Infrastructure (1-2 days) -- COMPLETE
 
 Docs site on GitHub Pages (mkdocs). ERD, sprint descriptions. Executed **first** — all subsequent epics are documented in this system.
 
-### Epic 1: Infrastructure — ARQ + Redis (4–5 days)
+### Epic 1: Infrastructure -- ARQ + Redis (4-5 days) -- COMPLETE
 
 Task queue with persistence, concurrency control, work window, job tracking, estimates. Redis container + ARQ worker in docker-compose (dev and prod).
 
-### Epic 2: MaterialTree + MaterialEntry (4–5 days)
+**Completed tasks:** S2-001 (Redis in docker-compose), S2-002 (ARQ worker setup), S2-003 (worker config), S2-004 (WorkWindow service), S2-005 (job priorities), S2-006 (Job ORM + repository), S2-007 (queue estimate service), S2-008 (replace BackgroundTasks with ARQ enqueue), S2-009 (ingestion completion callback), S2-010 (IngestionCallback integration), S2-011 (Job API endpoint), S2-012 (worker integration tests).
+
+### Epic 2: MaterialTree + MaterialEntry (4-5 days) -- COMPLETE
 
 Recursive tree of nodes, MaterialEntry with raw/processed separation and pending receipt. Tree API endpoints, course detail with full tree.
+
+**Completed tasks:** S2-013 (MaterialNode ORM), S2-014 (MaterialNodeRepository), S2-015 (MaterialEntry ORM), S2-016 (MaterialEntryRepository), S2-017 (Node API endpoints), S2-018 (Node API tests), S2-019 (Job API tests), S2-020 (Materials endpoint refactor), S2-021 (Course detail with tree), S2-022 (List courses endpoint), S2-023 (Tree + MaterialEntry unit tests).
 
 ### Epic 3: Merkle Fingerprints (2–3 days)
 

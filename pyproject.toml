@@ -163,6 +163,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "requires_db: test needs a running PostgreSQL instance",
+    "requires_redis: test needs a running Redis instance",
 ]
 
 [tool.coverage.run]

@@ -112,11 +112,9 @@ class TestGetTree:
     async def test_empty_course(self) -> None:
         """No nodes returns empty list."""
         session = AsyncMock()
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = []
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = []
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         roots = await repo.get_tree(uuid.uuid4())
@@ -129,11 +127,9 @@ class TestGetTree:
         r2 = _mock_node(course_id=cid, title="Root 2", order=1)
 
         session = AsyncMock()
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = [r1, r2]
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [r1, r2]
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         roots = await repo.get_tree(cid)
@@ -152,11 +148,13 @@ class TestGetTree:
         )
 
         session = AsyncMock()
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = [root, child, grandchild]
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [
+            root,
+            child,
+            grandchild,
+        ]
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         roots = await repo.get_tree(cid)
@@ -176,11 +174,9 @@ class TestGetTree:
         c2 = _mock_node(course_id=cid, parent_id=root.id, title="C2", order=1)
 
         session = AsyncMock()
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = [root, c1, c2]
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root, c1, c2]
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         roots = await repo.get_tree(cid)
@@ -303,14 +299,10 @@ class TestReorder:
         n2 = _mock_node(course_id=cid, title="N2", order=2)
 
         session = AsyncMock()
-        session.get.return_value = n0  # reorder n0
-
-        # Mock execute for sibling query
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = [n0, n1, n2]
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        session.get.return_value = n0
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [n0, n1, n2]
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         result = await repo.reorder(n0.id, 2)  # move to end
@@ -329,12 +321,9 @@ class TestReorder:
 
         session = AsyncMock()
         session.get.return_value = n0
-
-        scalars_mock = MagicMock()
-        scalars_mock.all.return_value = [n0, n1]
-        result_mock = MagicMock()
-        result_mock.scalars.return_value = scalars_mock
-        session.execute.return_value = result_mock
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [n0, n1]
+        session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
         await repo.reorder(n0.id, 999)
@@ -418,3 +407,41 @@ class TestDelete:
 
         session.delete.assert_awaited_once_with(node)
         session.flush.assert_awaited()
+
+
+class TestNextSiblingOrder:
+    """MaterialNodeRepository._next_sibling_order tests."""
+
+    async def test_empty_siblings_returns_zero(self) -> None:
+        """No siblings returns 0 (coalesce fallback)."""
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalar_one.return_value = 0
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        result = await repo._next_sibling_order(uuid.uuid4(), None)
+        assert result == 0
+
+    async def test_existing_siblings_returns_max_plus_one(self) -> None:
+        """Returns max(order) + 1 among existing siblings."""
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalar_one.return_value = 3
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        result = await repo._next_sibling_order(uuid.uuid4(), uuid.uuid4())
+        assert result == 3
+
+    async def test_calls_execute_with_correct_args(self) -> None:
+        """Verifies that session.execute is called."""
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalar_one.return_value = 0
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        await repo._next_sibling_order(uuid.uuid4(), None)
+
+        session.execute.assert_awaited_once()

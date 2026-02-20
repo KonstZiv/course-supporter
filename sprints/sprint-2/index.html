@@ -1,0 +1,1212 @@
+
+<!DOCTYPE html>
+
+<html class="no-js" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<meta content="AI-powered course structuring and mentoring system" name="description"/>
+<link href="https://kostyantynzivenko.github.io/course-supporter/sprints/sprint-2/" rel="canonical"/>
+<link href="../sprint-1/" rel="prev"/>
+<link href="../../api/reference/" rel="next"/>
+<link href="../../assets/images/favicon.png" rel="icon"/>
+<meta content="mkdocs-1.6.1, mkdocs-material-9.7.2" name="generator"/>
+<title>Sprint 2 — Material Tree - Course Supporter</title>
+<link href="../../assets/stylesheets/main.484c7ddc.min.css" rel="stylesheet"/>
+<link href="../../assets/stylesheets/palette.ab4e12ef.min.css" rel="stylesheet"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback" rel="stylesheet"/>
+<style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+<link href="../../assets/stylesheets/panzoom.css" rel="stylesheet"/>
+<script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+<meta name="panzoom-theme" content="material">
+<meta name="panzoom-data" content='{"selectors": [".d2", ".mermaid"], "initial_zoom_level": 1.0}'> </head>
+<body data-md-color-accent="indigo" data-md-color-primary="indigo" data-md-color-scheme="default" dir="ltr">
+<input autocomplete="off" class="md-toggle" data-md-toggle="drawer" id="__drawer" type="checkbox"/>
+<input autocomplete="off" class="md-toggle" data-md-toggle="search" id="__search" type="checkbox"/>
+<label class="md-overlay" for="__drawer"></label>
+<div data-md-component="skip">
+<a class="md-skip" href="#sprint-2-material-tree-task-queue-structure-generation">
+          Skip to content
+        </a>
+</div>
+<div data-md-component="announce">
+</div>
+<header class="md-header md-header--shadow" data-md-component="header">
+<nav aria-label="Header" class="md-header__inner md-grid">
+<a aria-label="Course Supporter" class="md-header__button md-logo" data-md-component="logo" href="../.." title="Course Supporter">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+<label class="md-header__button md-icon" for="__drawer">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+</label>
+<div class="md-header__title" data-md-component="header-title">
+<div class="md-header__ellipsis">
+<div class="md-header__topic">
+<span class="md-ellipsis">
+            Course Supporter
+          </span>
+</div>
+<div class="md-header__topic" data-md-component="header-topic">
+<span class="md-ellipsis">
+            
+              Sprint 2 — Material Tree
+            
+          </span>
+</div>
+</div>
+</div>
+<form class="md-header__option" data-md-component="palette">
+<input aria-label="Switch to dark mode" class="md-option" data-md-color-accent="indigo" data-md-color-media="" data-md-color-primary="indigo" data-md-color-scheme="default" id="__palette_0" name="__palette" type="radio"/>
+<label class="md-header__button md-icon" for="__palette_1" hidden="" title="Switch to dark mode">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+</label>
+<input aria-label="Switch to light mode" class="md-option" data-md-color-accent="indigo" data-md-color-media="" data-md-color-primary="indigo" data-md-color-scheme="slate" id="__palette_1" name="__palette" type="radio"/>
+<label class="md-header__button md-icon" for="__palette_0" hidden="" title="Switch to light mode">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+</label>
+</form>
+<script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+<label class="md-header__button md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+</label>
+<div class="md-search" data-md-component="search" role="dialog">
+<label class="md-search__overlay" for="__search"></label>
+<div class="md-search__inner" role="search">
+<form class="md-search__form" name="search">
+<input aria-label="Search" autocapitalize="off" autocomplete="off" autocorrect="off" class="md-search__input" data-md-component="search-query" name="query" placeholder="Search" required="" spellcheck="false" type="text"/>
+<label class="md-search__icon md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+</label>
+<nav aria-label="Search" class="md-search__options">
+<button aria-label="Clear" class="md-search__icon md-icon" tabindex="-1" title="Clear" type="reset">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+</button>
+</nav>
+</form>
+<div class="md-search__output">
+<div class="md-search__scrollwrap" data-md-scrollfix="" tabindex="0">
+<div class="md-search-result" data-md-component="search-result">
+<div class="md-search-result__meta">
+            Initializing search
+          </div>
+<ol class="md-search-result__list" role="presentation"></ol>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="md-header__source">
+<a class="md-source" data-md-component="source" href="https://github.com/kostyantynzivenko/course-supporter" title="Go to repository">
+<div class="md-source__icon md-icon">
+<svg viewbox="0 0 448 512" xmlns="http://www.w3.org/2000/svg"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+</div>
+<div class="md-source__repository">
+    course-supporter
+  </div>
+</a>
+</div>
+</nav>
+</header>
+<div class="md-container" data-md-component="container">
+<main class="md-main" data-md-component="main">
+<div class="md-main__inner md-grid">
+<div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Navigation" class="md-nav md-nav--primary" data-md-level="0">
+<label class="md-nav__title" for="__drawer">
+<a aria-label="Course Supporter" class="md-nav__button md-logo" data-md-component="logo" href="../.." title="Course Supporter">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+    Course Supporter
+  </label>
+<div class="md-nav__source">
+<a class="md-source" data-md-component="source" href="https://github.com/kostyantynzivenko/course-supporter" title="Go to repository">
+<div class="md-source__icon md-icon">
+<svg viewbox="0 0 448 512" xmlns="http://www.w3.org/2000/svg"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+</div>
+<div class="md-source__repository">
+    course-supporter
+  </div>
+</a>
+</div>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="../..">
+<span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item md-nav__item--section md-nav__item--nested">
+<input class="md-nav__toggle md-toggle md-toggle--indeterminate" id="__nav_2" type="checkbox"/>
+<label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+<span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<nav aria-expanded="false" aria-labelledby="__nav_2_label" class="md-nav" data-md-level="1">
+<label class="md-nav__title" for="__nav_2">
+<span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../architecture/erd/">
+<span class="md-ellipsis">
+    
+  
+    ERD
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../architecture/decisions/">
+<span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../architecture/infrastructure/">
+<span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+<input checked="" class="md-nav__toggle md-toggle" id="__nav_3" type="checkbox"/>
+<label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+<span class="md-ellipsis">
+    
+  
+    Sprints
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<nav aria-expanded="true" aria-labelledby="__nav_3_label" class="md-nav" data-md-level="1">
+<label class="md-nav__title" for="__nav_3">
+<span class="md-nav__icon md-icon"></span>
+            
+  
+    Sprints
+  
+
+          </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="../">
+<span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../sprint-0/">
+<span class="md-ellipsis">
+    
+  
+    Sprint 0 — MVP
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../sprint-1/">
+<span class="md-ellipsis">
+    
+  
+    Sprint 1 — Prod Deploy
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item md-nav__item--active">
+<input class="md-nav__toggle md-toggle" id="__toc" type="checkbox"/>
+<label class="md-nav__link md-nav__link--active" for="__toc">
+<span class="md-ellipsis">
+    
+  
+    Sprint 2 — Material Tree
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<a class="md-nav__link md-nav__link--active" href="./">
+<span class="md-ellipsis">
+    
+  
+    Sprint 2 — Material Tree
+  
+
+    
+  </span>
+</a>
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#goal">
+<span class="md-ellipsis">
+      
+        Goal
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#motivation">
+<span class="md-ellipsis">
+      
+        Motivation
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#architecture-decisions">
+<span class="md-ellipsis">
+      
+        Architecture Decisions
+      
+    </span>
+</a>
+<nav aria-label="Architecture Decisions" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-1-materialtree-recursive-adjacency-list">
+<span class="md-ellipsis">
+      
+        AR-1: MaterialTree (recursive adjacency list)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-2-materialentry-replaces-sourcematerial">
+<span class="md-ellipsis">
+      
+        AR-2: MaterialEntry (replaces SourceMaterial)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-3-task-queue-arq-redis">
+<span class="md-ellipsis">
+      
+        AR-3: Task Queue (ARQ + Redis)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-4-merkle-fingerprints">
+<span class="md-ellipsis">
+      
+        AR-4: Merkle Fingerprints
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-5-heavy-steps-extraction-serverless-ready">
+<span class="md-ellipsis">
+      
+        AR-5: Heavy Steps Extraction (serverless-ready)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-6-structure-generation-per-node-cascading">
+<span class="md-ellipsis">
+      
+        AR-6: Structure Generation — per-node, cascading
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-7-slidevideomapping-explicit-references-deferred-validation">
+<span class="md-ellipsis">
+      
+        AR-7: SlideVideoMapping — explicit references + deferred validation
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#target-api">
+<span class="md-ellipsis">
+      
+        Target API
+      
+    </span>
+</a>
+<nav aria-label="Target API" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#material-tree-management">
+<span class="md-ellipsis">
+      
+        Material Tree Management
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#slide-video-mapping">
+<span class="md-ellipsis">
+      
+        Slide-Video Mapping
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#structure-generation">
+<span class="md-ellipsis">
+      
+        Structure Generation
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#jobs-reports">
+<span class="md-ellipsis">
+      
+        Jobs &amp; Reports
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epics">
+<span class="md-ellipsis">
+      
+        Epics
+      
+    </span>
+</a>
+<nav aria-label="Epics" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-0-project-documentation-infrastructure-1-2-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 0: Project Documentation Infrastructure (1-2 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-1-infrastructure-arq-redis-4-5-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 1: Infrastructure -- ARQ + Redis (4-5 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-2-materialtree-materialentry-4-5-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 2: MaterialTree + MaterialEntry (4-5 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-3-merkle-fingerprints-23-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 3: Merkle Fingerprints (2–3 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-4-heavy-steps-extraction-23-days">
+<span class="md-ellipsis">
+      
+        Epic 4: Heavy Steps Extraction (2–3 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-5-slidevideomapping-redesign-34-days">
+<span class="md-ellipsis">
+      
+        Epic 5: SlideVideoMapping Redesign (3–4 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-6-structure-generation-pipeline-34-days">
+<span class="md-ellipsis">
+      
+        Epic 6: Structure Generation Pipeline (3–4 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-7-integration-documentation-12-days">
+<span class="md-ellipsis">
+      
+        Epic 7: Integration Documentation (1–2 days)
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-dependencies">
+<span class="md-ellipsis">
+      
+        Epic Dependencies
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#new-dependencies">
+<span class="md-ellipsis">
+      
+        New Dependencies
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#database-changes">
+<span class="md-ellipsis">
+      
+        Database Changes
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item md-nav__item--section md-nav__item--nested">
+<input class="md-nav__toggle md-toggle md-toggle--indeterminate" id="__nav_4" type="checkbox"/>
+<label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+<span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<nav aria-expanded="false" aria-labelledby="__nav_4_label" class="md-nav" data-md-level="1">
+<label class="md-nav__title" for="__nav_4">
+<span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../api/reference/">
+<span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../api/flow-guide/">
+<span class="md-ellipsis">
+    
+  
+    Flow Guide
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../api/auth/">
+<span class="md-ellipsis">
+    
+  
+    Auth
+  
+
+    
+  </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item md-nav__item--section md-nav__item--nested">
+<input class="md-nav__toggle md-toggle md-toggle--indeterminate" id="__nav_5" type="checkbox"/>
+<label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+<span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<nav aria-expanded="false" aria-labelledby="__nav_5_label" class="md-nav" data-md-level="1">
+<label class="md-nav__title" for="__nav_5">
+<span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../development/setup/">
+<span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../development/testing/">
+<span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="../../development/deployment/">
+<span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#goal">
+<span class="md-ellipsis">
+      
+        Goal
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#motivation">
+<span class="md-ellipsis">
+      
+        Motivation
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#architecture-decisions">
+<span class="md-ellipsis">
+      
+        Architecture Decisions
+      
+    </span>
+</a>
+<nav aria-label="Architecture Decisions" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-1-materialtree-recursive-adjacency-list">
+<span class="md-ellipsis">
+      
+        AR-1: MaterialTree (recursive adjacency list)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-2-materialentry-replaces-sourcematerial">
+<span class="md-ellipsis">
+      
+        AR-2: MaterialEntry (replaces SourceMaterial)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-3-task-queue-arq-redis">
+<span class="md-ellipsis">
+      
+        AR-3: Task Queue (ARQ + Redis)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-4-merkle-fingerprints">
+<span class="md-ellipsis">
+      
+        AR-4: Merkle Fingerprints
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-5-heavy-steps-extraction-serverless-ready">
+<span class="md-ellipsis">
+      
+        AR-5: Heavy Steps Extraction (serverless-ready)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-6-structure-generation-per-node-cascading">
+<span class="md-ellipsis">
+      
+        AR-6: Structure Generation — per-node, cascading
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#ar-7-slidevideomapping-explicit-references-deferred-validation">
+<span class="md-ellipsis">
+      
+        AR-7: SlideVideoMapping — explicit references + deferred validation
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#target-api">
+<span class="md-ellipsis">
+      
+        Target API
+      
+    </span>
+</a>
+<nav aria-label="Target API" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#material-tree-management">
+<span class="md-ellipsis">
+      
+        Material Tree Management
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#slide-video-mapping">
+<span class="md-ellipsis">
+      
+        Slide-Video Mapping
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#structure-generation">
+<span class="md-ellipsis">
+      
+        Structure Generation
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#jobs-reports">
+<span class="md-ellipsis">
+      
+        Jobs &amp; Reports
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epics">
+<span class="md-ellipsis">
+      
+        Epics
+      
+    </span>
+</a>
+<nav aria-label="Epics" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-0-project-documentation-infrastructure-1-2-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 0: Project Documentation Infrastructure (1-2 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-1-infrastructure-arq-redis-4-5-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 1: Infrastructure -- ARQ + Redis (4-5 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-2-materialtree-materialentry-4-5-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 2: MaterialTree + MaterialEntry (4-5 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-3-merkle-fingerprints-23-days-complete">
+<span class="md-ellipsis">
+      
+        Epic 3: Merkle Fingerprints (2–3 days) -- COMPLETE
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-4-heavy-steps-extraction-23-days">
+<span class="md-ellipsis">
+      
+        Epic 4: Heavy Steps Extraction (2–3 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-5-slidevideomapping-redesign-34-days">
+<span class="md-ellipsis">
+      
+        Epic 5: SlideVideoMapping Redesign (3–4 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-6-structure-generation-pipeline-34-days">
+<span class="md-ellipsis">
+      
+        Epic 6: Structure Generation Pipeline (3–4 days)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-7-integration-documentation-12-days">
+<span class="md-ellipsis">
+      
+        Epic 7: Integration Documentation (1–2 days)
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#epic-dependencies">
+<span class="md-ellipsis">
+      
+        Epic Dependencies
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#new-dependencies">
+<span class="md-ellipsis">
+      
+        New Dependencies
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#database-changes">
+<span class="md-ellipsis">
+      
+        Database Changes
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-content" data-md-component="content">
+<article class="md-content__inner md-typeset">
+<h1 id="sprint-2-material-tree-task-queue-structure-generation">Sprint 2 — Material Tree, Task Queue, Structure Generation<a class="headerlink" href="#sprint-2-material-tree-task-queue-structure-generation" title="Permanent link">¶</a></h1>
+<p><strong>Status:</strong> In Progress
+<strong>Estimate:</strong> 4-5 weeks
+<strong>Previous sprint:</strong> <a href="../sprint-1/">Sprint 1 — Production Deploy</a> (407 tests, live on <code>api.pythoncourse.me</code>)
+<strong>Current test count:</strong> 783 passed, 27 skipped</p>
+<hr/>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">¶</a></h2>
+<p>Intuitive course material flow + production-ready processing with a task queue + per-node structure generation.</p>
+<h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">¶</a></h2>
+<p>Sprint 1 delivered a working MVP, but:</p>
+<ol>
+<li><strong>No intuitive flow</strong> — flat list of materials, no hierarchy, no explicit generation trigger</li>
+<li><strong>Fire-and-forget processing</strong> — <code>BackgroundTasks</code> without queue, no concurrency control, tasks lost on restart</li>
+<li><strong>Heavy ops not isolated</strong> — whisper/vision baked into processors, impossible to extract to serverless</li>
+<li><strong>No version control</strong> — unclear if course structure matches the current set of materials</li>
+<li><strong>External team waiting</strong> — needs documentation of flow + endpoints to start integration</li>
+</ol>
+<h2 id="architecture-decisions">Architecture Decisions<a class="headerlink" href="#architecture-decisions" title="Permanent link">¶</a></h2>
+<h3 id="ar-1-materialtree-recursive-adjacency-list">AR-1: MaterialTree (recursive adjacency list)<a class="headerlink" href="#ar-1-materialtree-recursive-adjacency-list" title="Permanent link">¶</a></h3>
+<p>Arbitrary hierarchy of nodes. Materials can belong to any node (not just leaves):</p>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-0-1" id="__codelineno-0-1" name="__codelineno-0-1"></a>Course "Python for Beginners"
+<a href="#__codelineno-0-2" id="__codelineno-0-2" name="__codelineno-0-2"></a>  ├── syllabus.pdf                    ← material attached to a root node
+<a href="#__codelineno-0-3" id="__codelineno-0-3" name="__codelineno-0-3"></a>  ├── "Intro to Python"
+<a href="#__codelineno-0-4" id="__codelineno-0-4" name="__codelineno-0-4"></a>  │     ├── intro-video.mp4           ← material at section level
+<a href="#__codelineno-0-5" id="__codelineno-0-5" name="__codelineno-0-5"></a>  │     ├── "Data Types"
+<a href="#__codelineno-0-6" id="__codelineno-0-6" name="__codelineno-0-6"></a>  │     │     ├── types-slides.pdf
+<a href="#__codelineno-0-7" id="__codelineno-0-7" name="__codelineno-0-7"></a>  │     │     └── types-article.html
+<a href="#__codelineno-0-8" id="__codelineno-0-8" name="__codelineno-0-8"></a>  │     └── "Loops"
+<a href="#__codelineno-0-9" id="__codelineno-0-9" name="__codelineno-0-9"></a>  │           └── loops-video.mp4
+<a href="#__codelineno-0-10" id="__codelineno-0-10" name="__codelineno-0-10"></a>  └── "Web Development"
+<a href="#__codelineno-0-11" id="__codelineno-0-11" name="__codelineno-0-11"></a>        └── django-overview.pdf
+</code></pre></div>
+<p>ORM: <code>MaterialNode(id, course_id, parent_id → self, title, description, order)</code>. A course has one or more root nodes (<code>parent_id = NULL</code>). Materials at "course level" are attached to these root nodes.</p>
+<p>Fixed levels (Course → Module → Topic) don't cover arbitrary learning constructs. Adjacency list is the simplest implementation for async SQLAlchemy. PostgreSQL <code>WITH RECURSIVE</code> available for complex queries, but eager loading sufficient for typical depths of 3–5 levels.</p>
+<h3 id="ar-2-materialentry-replaces-sourcematerial">AR-2: MaterialEntry (replaces SourceMaterial)<a class="headerlink" href="#ar-2-materialentry-replaces-sourcematerial" title="Permanent link">¶</a></h3>
+<p>Instead of a single <code>SourceMaterial</code> mixing raw, processed, and status — separation into clear layers with a "receipt" for processing submission:</p>
+<ul>
+<li><strong>Raw layer</strong> — <code>source_url</code>, <code>filename</code>, <code>raw_hash</code> (lazy cached sha256), <code>raw_size_bytes</code></li>
+<li><strong>Processed layer</strong> — <code>processed_content</code> (SourceDocument JSON), <code>processed_hash</code>, <code>processed_at</code></li>
+<li><strong>Pending receipt</strong> — <code>pending_job_id</code> FK → jobs, <code>pending_since</code></li>
+<li><strong>State</strong> — derived property: <code>RAW</code> → <code>PENDING</code> → <code>READY</code> / <code>INTEGRITY_BROKEN</code> / <code>ERROR</code></li>
+</ul>
+<p>The pending receipt enables diagnostics: <code>pending_since = 40 min ago</code> → suspicious → <code>GET /jobs/{pending_job_id}</code> → see the problem.</p>
+<h3 id="ar-3-task-queue-arq-redis">AR-3: Task Queue (ARQ + Redis)<a class="headerlink" href="#ar-3-task-queue-arq-redis" title="Permanent link">¶</a></h3>
+<p>Replace <code>BackgroundTasks</code> with ARQ:</p>
+<ul>
+<li>Redis for persistence (jobs survive restarts)</li>
+<li><code>max_jobs</code> for concurrency control (whisper is CPU/RAM heavy)</li>
+<li>Retry with backoff for transient errors</li>
+<li>Job status tracking (queued → active → complete/failed)</li>
+<li>Job dependencies (<code>depends_on</code> — structure generation waits for ingestion)</li>
+<li><strong>Work window</strong> — heavy jobs (whisper, vision) only during configured time window; light jobs (fingerprint, LLM calls) always</li>
+<li><strong>Queue estimates</strong> — position, avg duration, window-aware estimated start/complete</li>
+</ul>
+<p>Infrastructure: +1 Redis container (~50 MB RAM), +1 worker process (~100–200 MB).</p>
+<h3 id="ar-4-merkle-fingerprints">AR-4: Merkle Fingerprints<a class="headerlink" href="#ar-4-merkle-fingerprints" title="Permanent link">¶</a></h3>
+<p>Two-level fingerprint system with bottom-up cascade invalidation:</p>
+<ul>
+<li><strong>Material fingerprint</strong> (<code>content_fingerprint</code>): <code>sha256(processed_content)</code>. Lazy cached in <code>MaterialEntry</code>.</li>
+<li><strong>Node fingerprint</strong> (<code>node_fingerprint</code>): hash of child material fingerprints + child node fingerprints. Lazy cached in <code>MaterialNode</code>.</li>
+<li><strong>Course fingerprint</strong>: hash of root node fingerprints.</li>
+</ul>
+<p>Any modification → invalidates fingerprints from the change point up to the root. <code>fingerprint: null</code> at any level → something changed below. Drill-down to the specific material.</p>
+<p>See <a href="../../architecture/erd/">ERD</a> for the full schema.</p>
+<h3 id="ar-5-heavy-steps-extraction-serverless-ready">AR-5: Heavy Steps Extraction (serverless-ready)<a class="headerlink" href="#ar-5-heavy-steps-extraction-serverless-ready" title="Permanent link">¶</a></h3>
+<p>Separation into heavy (serverless-ready) and light (on-premise) operations:</p>
+<table>
+<thead>
+<tr>
+<th>Heavy (serverless-ready)</th>
+<th>Light (on-premise)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Whisper transcription</td>
+<td>Merge documents</td>
+</tr>
+<tr>
+<td>Slide/image → description (vision)</td>
+<td>Architect agent (LLM call)</td>
+</tr>
+<tr>
+<td>PDF OCR</td>
+<td>Fingerprint calculation</td>
+</tr>
+<tr>
+<td>Video frame extraction</td>
+<td>CRUD, status management</td>
+</tr>
+</tbody>
+</table>
+<p>Each heavy step is an injectable callable with a clean contract. <code>SourceProcessor</code> becomes an orchestrator: prepare input → call heavy step → package result. When Lambda arrives — only change the heavy step implementation.</p>
+<h3 id="ar-6-structure-generation-per-node-cascading">AR-6: Structure Generation — per-node, cascading<a class="headerlink" href="#ar-6-structure-generation-per-node-cascading" title="Permanent link">¶</a></h3>
+<p>Generation can be triggered for any level of the tree. Cascades through the entire subtree from the target node down.</p>
+<p><strong>Two modes:</strong></p>
+<ul>
+<li><strong>"free"</strong> — methodologist builds optimal structure freely. Input tree is context only.</li>
+<li><strong>"guided"</strong> — methodologist preserves input tree as constraint, enriches it.</li>
+</ul>
+<p><strong>Cascade logic:</strong> find stale materials → enqueue ingestion jobs → enqueue structure generation with <code>depends_on</code> → return 202 Accepted with plan + estimates.</p>
+<p><strong>Conflict detection:</strong> 409 Conflict only when a new generation overlaps with an active job's subtree scope.</p>
+<p><strong>Idempotency:</strong> same <code>(node_id, fingerprint, mode)</code> → 200 OK with existing snapshot.</p>
+<p><strong>Apply snapshot → normalized tables:</strong> When a snapshot is "applied", its <code>structure</code> JSONB is unpacked into <code>modules</code> → <code>lessons</code> → <code>concepts</code> → <code>exercises</code>. <code>Module.snapshot_id</code> FK explicitly links the active structure to the source snapshot.</p>
+<h3 id="ar-7-slidevideomapping-explicit-references-deferred-validation">AR-7: SlideVideoMapping — explicit references + deferred validation<a class="headerlink" href="#ar-7-slidevideomapping-explicit-references-deferred-validation" title="Permanent link">¶</a></h3>
+<p>Mapping links a <strong>specific presentation</strong> to a <strong>specific video</strong> via FK to <code>MaterialEntry</code>. Three-level validation:</p>
+<ol>
+<li><strong>Structural (always)</strong> — both materials exist and belong to the node, correct <code>source_type</code>, valid timecode format</li>
+<li><strong>Content (when READY)</strong> — slide number within presentation range, timecode within video duration</li>
+<li><strong>Deferred (when not READY)</strong> — mapping created with <code>pending_validation</code> + <code>blocking_factors</code> JSONB; auto-revalidated when blocking material completes ingestion</li>
+</ol>
+<p>Batch upload supports partial success — per-item results with errors, hints, and resubmit guidance.</p>
+<h2 id="target-api">Target API<a class="headerlink" href="#target-api" title="Permanent link">¶</a></h2>
+<h3 id="material-tree-management">Material Tree Management<a class="headerlink" href="#material-tree-management" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-1-1" id="__codelineno-1-1" name="__codelineno-1-1"></a>POST   /api/v1/courses                                     → create course
+<a href="#__codelineno-1-2" id="__codelineno-1-2" name="__codelineno-1-2"></a>GET    /api/v1/courses                                     → list courses (pagination)
+<a href="#__codelineno-1-3" id="__codelineno-1-3" name="__codelineno-1-3"></a>GET    /api/v1/courses/{course_id}                         → course + tree + statuses + fingerprints
+<a href="#__codelineno-1-4" id="__codelineno-1-4" name="__codelineno-1-4"></a>DELETE /api/v1/courses/{course_id}                         → delete course (cascade)
+<a href="#__codelineno-1-5" id="__codelineno-1-5" name="__codelineno-1-5"></a>
+<a href="#__codelineno-1-6" id="__codelineno-1-6" name="__codelineno-1-6"></a>POST   /api/v1/courses/{id}/nodes                          → create root node
+<a href="#__codelineno-1-7" id="__codelineno-1-7" name="__codelineno-1-7"></a>POST   /api/v1/courses/{id}/nodes/{node_id}/children       → create child node
+<a href="#__codelineno-1-8" id="__codelineno-1-8" name="__codelineno-1-8"></a>PATCH  /api/v1/courses/{id}/nodes/{node_id}                → update (title, description, order, parent_id)
+<a href="#__codelineno-1-9" id="__codelineno-1-9" name="__codelineno-1-9"></a>DELETE /api/v1/courses/{id}/nodes/{node_id}                → delete (cascade children + materials)
+<a href="#__codelineno-1-10" id="__codelineno-1-10" name="__codelineno-1-10"></a>
+<a href="#__codelineno-1-11" id="__codelineno-1-11" name="__codelineno-1-11"></a>POST   /api/v1/courses/{id}/nodes/{node_id}/materials      → add material (file or URL)
+<a href="#__codelineno-1-12" id="__codelineno-1-12" name="__codelineno-1-12"></a>DELETE /api/v1/courses/{id}/materials/{material_id}         → delete material
+<a href="#__codelineno-1-13" id="__codelineno-1-13" name="__codelineno-1-13"></a>POST   /api/v1/courses/{id}/materials/{material_id}/retry   → retry ingestion
+<a href="#__codelineno-1-14" id="__codelineno-1-14" name="__codelineno-1-14"></a>
+<a href="#__codelineno-1-15" id="__codelineno-1-15" name="__codelineno-1-15"></a>File type validation per source_type:
+<a href="#__codelineno-1-16" id="__codelineno-1-16" name="__codelineno-1-16"></a>  video:        .mp4, .webm, .mkv, .avi (or URL)
+<a href="#__codelineno-1-17" id="__codelineno-1-17" name="__codelineno-1-17"></a>  presentation: .pdf, .pptx (or URL)
+<a href="#__codelineno-1-18" id="__codelineno-1-18" name="__codelineno-1-18"></a>  text:         .md, .markdown, .docx, .html, .htm, .txt (or URL)
+<a href="#__codelineno-1-19" id="__codelineno-1-19" name="__codelineno-1-19"></a>  web:          URL only (no file upload)
+</code></pre></div>
+<h3 id="slide-video-mapping">Slide-Video Mapping<a class="headerlink" href="#slide-video-mapping" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-2-1" id="__codelineno-2-1" name="__codelineno-2-1"></a>POST   /api/v1/courses/{id}/nodes/{node_id}/slide-mapping  → batch create (partial success)
+<a href="#__codelineno-2-2" id="__codelineno-2-2" name="__codelineno-2-2"></a>GET    /api/v1/courses/{id}/nodes/{node_id}/slide-mapping   → list mappings for node
+<a href="#__codelineno-2-3" id="__codelineno-2-3" name="__codelineno-2-3"></a>DELETE /api/v1/courses/{id}/slide-mapping/{mapping_id}      → delete mapping
+</code></pre></div>
+<h3 id="structure-generation">Structure Generation<a class="headerlink" href="#structure-generation" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-3-1" id="__codelineno-3-1" name="__codelineno-3-1"></a>POST   /api/v1/courses/{id}/structure/generate             → trigger for entire course
+<a href="#__codelineno-3-2" id="__codelineno-3-2" name="__codelineno-3-2"></a>POST   /api/v1/courses/{id}/nodes/{node_id}/structure/generate → trigger for subtree
+<a href="#__codelineno-3-3" id="__codelineno-3-3" name="__codelineno-3-3"></a>
+<a href="#__codelineno-3-4" id="__codelineno-3-4" name="__codelineno-3-4"></a>         body: { "mode": "free" | "guided" }
+<a href="#__codelineno-3-5" id="__codelineno-3-5" name="__codelineno-3-5"></a>
+<a href="#__codelineno-3-6" id="__codelineno-3-6" name="__codelineno-3-6"></a>         ← 200 OK:        snapshot with this fingerprint+mode already exists
+<a href="#__codelineno-3-7" id="__codelineno-3-7" name="__codelineno-3-7"></a>         ← 202 Accepted:  job created (with ingestion plan + estimate)
+<a href="#__codelineno-3-8" id="__codelineno-3-8" name="__codelineno-3-8"></a>         ← 409 Conflict:  active job overlaps with requested scope
+<a href="#__codelineno-3-9" id="__codelineno-3-9" name="__codelineno-3-9"></a>         ← 422 Unprocessable: no READY materials in scope
+<a href="#__codelineno-3-10" id="__codelineno-3-10" name="__codelineno-3-10"></a>
+<a href="#__codelineno-3-11" id="__codelineno-3-11" name="__codelineno-3-11"></a>GET    /api/v1/courses/{id}/structure                      → latest snapshot (course-level)
+<a href="#__codelineno-3-12" id="__codelineno-3-12" name="__codelineno-3-12"></a>GET    /api/v1/courses/{id}/nodes/{node_id}/structure       → latest snapshot (node-level)
+</code></pre></div>
+<h3 id="jobs-reports">Jobs &amp; Reports<a class="headerlink" href="#jobs-reports" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-4-1" id="__codelineno-4-1" name="__codelineno-4-1"></a>GET    /api/v1/jobs/{job_id}                               → status of any job
+<a href="#__codelineno-4-2" id="__codelineno-4-2" name="__codelineno-4-2"></a>GET    /api/v1/reports/cost                                → LLM cost report
+<a href="#__codelineno-4-3" id="__codelineno-4-3" name="__codelineno-4-3"></a>GET    /health                                             → deep health (DB + S3 + Redis)
+</code></pre></div>
+<h2 id="epics">Epics<a class="headerlink" href="#epics" title="Permanent link">¶</a></h2>
+<h3 id="epic-0-project-documentation-infrastructure-1-2-days-complete">Epic 0: Project Documentation Infrastructure (1-2 days) -- COMPLETE<a class="headerlink" href="#epic-0-project-documentation-infrastructure-1-2-days-complete" title="Permanent link">¶</a></h3>
+<p>Docs site on GitHub Pages (mkdocs). ERD, sprint descriptions. Executed <strong>first</strong> — all subsequent epics are documented in this system.</p>
+<h3 id="epic-1-infrastructure-arq-redis-4-5-days-complete">Epic 1: Infrastructure -- ARQ + Redis (4-5 days) -- COMPLETE<a class="headerlink" href="#epic-1-infrastructure-arq-redis-4-5-days-complete" title="Permanent link">¶</a></h3>
+<p>Task queue with persistence, concurrency control, work window, job tracking, estimates. Redis container + ARQ worker in docker-compose (dev and prod).</p>
+<p><strong>Completed tasks:</strong> S2-001 (Redis in docker-compose), S2-002 (ARQ worker setup), S2-003 (worker config), S2-004 (WorkWindow service), S2-005 (job priorities), S2-006 (Job ORM + repository), S2-007 (queue estimate service), S2-008 (replace BackgroundTasks with ARQ enqueue), S2-009 (ingestion completion callback), S2-010 (IngestionCallback integration), S2-011 (Job API endpoint), S2-012 (worker integration tests).</p>
+<h3 id="epic-2-materialtree-materialentry-4-5-days-complete">Epic 2: MaterialTree + MaterialEntry (4-5 days) -- COMPLETE<a class="headerlink" href="#epic-2-materialtree-materialentry-4-5-days-complete" title="Permanent link">¶</a></h3>
+<p>Recursive tree of nodes, MaterialEntry with raw/processed separation and pending receipt. Tree API endpoints, course detail with full tree.</p>
+<p><strong>Completed tasks:</strong> S2-013 (MaterialNode ORM), S2-014 (MaterialNodeRepository), S2-015 (MaterialEntry ORM), S2-016 (MaterialEntryRepository), S2-017 (Node API endpoints), S2-018 (Node API tests), S2-019 (Job API tests), S2-020 (Materials endpoint refactor), S2-021 (Course detail with tree), S2-022 (List courses endpoint), S2-023 (Tree + MaterialEntry unit tests).</p>
+<h3 id="epic-3-merkle-fingerprints-23-days-complete">Epic 3: Merkle Fingerprints (2–3 days) -- COMPLETE<a class="headerlink" href="#epic-3-merkle-fingerprints-23-days-complete" title="Permanent link">¶</a></h3>
+<p>Lazy cached fingerprints with bottom-up cascade invalidation. Material → node → course level. Auto-invalidation on CRUD operations.</p>
+<p><strong>Completed tasks:</strong> S2-024 (material-level fingerprint), S2-025 (node-level Merkle hash), S2-026 (course-level fingerprint), S2-027 (cascade invalidation), S2-028 (repository integration), S2-029 (fingerprint in API responses), S2-030 (fingerprint unit tests).</p>
+<h3 id="epic-4-heavy-steps-extraction-23-days">Epic 4: Heavy Steps Extraction (2–3 days)<a class="headerlink" href="#epic-4-heavy-steps-extraction-23-days" title="Permanent link">¶</a></h3>
+<p>Injectable heavy operations, serverless-ready boundary. Processors become orchestrators with DI.</p>
+<h3 id="epic-5-slidevideomapping-redesign-34-days">Epic 5: SlideVideoMapping Redesign (3–4 days)<a class="headerlink" href="#epic-5-slidevideomapping-redesign-34-days" title="Permanent link">¶</a></h3>
+<p>Explicit presentation ↔ video FK references, three-level validation, deferred validation with auto-revalidation on ingestion complete.</p>
+<h3 id="epic-6-structure-generation-pipeline-34-days">Epic 6: Structure Generation Pipeline (3–4 days)<a class="headerlink" href="#epic-6-structure-generation-pipeline-34-days" title="Permanent link">¶</a></h3>
+<p>Per-node trigger, cascading processing, fingerprint check, snapshot persistence, conflict detection, free/guided modes.</p>
+<h3 id="epic-7-integration-documentation-12-days">Epic 7: Integration Documentation (1–2 days)<a class="headerlink" href="#epic-7-integration-documentation-12-days" title="Permanent link">¶</a></h3>
+<p>Flow guide, API reference, auth guide, error handling guide. Published on docs site. Final polish + ops/infrastructure documentation.</p>
+<h2 id="epic-dependencies">Epic Dependencies<a class="headerlink" href="#epic-dependencies" title="Permanent link">¶</a></h2>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-5-1" id="__codelineno-5-1" name="__codelineno-5-1"></a>Epic 0 (Docs) ─── FIRST ──────────────────────────────────┐
+<a href="#__codelineno-5-2" id="__codelineno-5-2" name="__codelineno-5-2"></a>                                                            │
+<a href="#__codelineno-5-3" id="__codelineno-5-3" name="__codelineno-5-3"></a>Epic 1 (Queue) ────────────────────────┐                   │
+<a href="#__codelineno-5-4" id="__codelineno-5-4" name="__codelineno-5-4"></a>                                        │                   │
+<a href="#__codelineno-5-5" id="__codelineno-5-5" name="__codelineno-5-5"></a>Epic 2 (MaterialTree) ────────────────┤                   │
+<a href="#__codelineno-5-6" id="__codelineno-5-6" name="__codelineno-5-6"></a>                                        │                   │
+<a href="#__codelineno-5-7" id="__codelineno-5-7" name="__codelineno-5-7"></a>Epic 3 (Fingerprints) ── Epic 2 ──────┤                   │
+<a href="#__codelineno-5-8" id="__codelineno-5-8" name="__codelineno-5-8"></a>                                        ├──→ Epic 6 ───────│
+<a href="#__codelineno-5-9" id="__codelineno-5-9" name="__codelineno-5-9"></a>Epic 4 (Heavy Steps) ── Epic 1 ──────┤      │             │
+<a href="#__codelineno-5-10" id="__codelineno-5-10" name="__codelineno-5-10"></a>                                        │      └──→ Epic 7 ─┘
+<a href="#__codelineno-5-11" id="__codelineno-5-11" name="__codelineno-5-11"></a>Epic 5 (SlideVideoMapping) ── E1+E2 ──┘
+</code></pre></div>
+<p><strong>Recommended order:</strong></p>
+<ol>
+<li>Epic 0 (Docs) — first, 1–2 days</li>
+<li>Epic 1 (Queue) + Epic 2 (MaterialTree) — in parallel</li>
+<li>Epic 3 (Fingerprints) — after Epic 2</li>
+<li>Epic 4 (Heavy Steps) — in parallel with Epic 3</li>
+<li>Epic 5 (SlideVideoMapping) — after Epic 1 + Epic 2</li>
+<li>Epic 6 (Structure Generation) — after all previous</li>
+<li>Epic 7 (Integration Documentation) — in parallel with Epic 6</li>
+</ol>
+<h2 id="new-dependencies">New Dependencies<a class="headerlink" href="#new-dependencies" title="Permanent link">¶</a></h2>
+<div class="highlight"><pre><span></span><code><a href="#__codelineno-6-1" id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="k">[project]</span>
+<a href="#__codelineno-6-2" id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="n">dependencies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a href="#__codelineno-6-3" id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="c1"># ... existing ...</span>
+<a href="#__codelineno-6-4" id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="s2">"arq&gt;=0.26"</span><span class="p">,</span><span class="w">          </span><span class="c1"># task queue</span>
+<a href="#__codelineno-6-5" id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="s2">"redis[hiredis]&gt;=5"</span><span class="p">,</span><span class="w">  </span><span class="c1"># ARQ backend + fast connection</span>
+<a href="#__codelineno-6-6" id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="p">]</span>
+<a href="#__codelineno-6-7" id="__codelineno-6-7" name="__codelineno-6-7"></a>
+<a href="#__codelineno-6-8" id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="k">[dependency-groups]</span>
+<a href="#__codelineno-6-9" id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="n">docs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a href="#__codelineno-6-10" id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="s2">"mkdocs-material&gt;=9"</span><span class="p">,</span>
+<a href="#__codelineno-6-11" id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="s2">"mkdocs-mermaid2-plugin&gt;=1"</span><span class="p">,</span>
+<a href="#__codelineno-6-12" id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="s2">"mkdocs-panzoom-plugin&gt;=0.4"</span><span class="p">,</span>
+<a href="#__codelineno-6-13" id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="p">]</span>
+</code></pre></div>
+<h2 id="database-changes">Database Changes<a class="headerlink" href="#database-changes" title="Permanent link">¶</a></h2>
+<p>See <a href="../../architecture/erd/">ERD</a> for the full schema diagram.</p>
+<p>New tables: <code>material_nodes</code>, <code>material_entries</code>, <code>jobs</code>, redesigned <code>slide_video_mappings</code>, <code>course_structure_snapshots</code>.</p>
+<p>Existing table changes: <code>modules</code> gets <code>snapshot_id</code> FK.</p>
+<p>Migration strategy: drop old test data + create new tables (no production data to preserve).</p>
+</article>
+</div>
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+</div>
+<button class="md-top md-icon" data-md-component="top" hidden="" type="button">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"></path></svg>
+  Back to top
+</button>
+</main>
+<footer class="md-footer">
+<div class="md-footer-meta md-typeset">
+<div class="md-footer-meta__inner md-grid">
+<div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" rel="noopener" target="_blank">
+      Material for MkDocs
+    </a>
+</div>
+</div>
+</div>
+</footer>
+</div>
+<div class="md-dialog" data-md-component="dialog">
+<div class="md-dialog__inner md-typeset"></div>
+</div>
+<script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+<script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+<script src="../../assets/javascripts/panzoom.min.js"></script>
+<script src="../../assets/javascripts/zoompan.js"></script>
+</body>
+</html>

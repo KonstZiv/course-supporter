@@ -1,0 +1,2351 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="AI-powered course structuring and mentoring system">
+      
+      
+      
+        <link rel="canonical" href="https://kostyantynzivenko.github.io/course-supporter/development/deployment/">
+      
+      
+        <link rel="prev" href="../testing/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Deployment - Course Supporter</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/panzoom.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <meta name="panzoom-theme" content="material">
+<meta name="panzoom-data" content='{"selectors": [".d2", ".mermaid"], "initial_zoom_level": 1.0}'> </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#deployment-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Course Supporter" class="md-header__button md-logo" aria-label="Course Supporter" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Course Supporter
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Deployment
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/kostyantynzivenko/course-supporter" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    course-supporter
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Course Supporter" class="md-nav__button md-logo" aria-label="Course Supporter" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Course Supporter
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/kostyantynzivenko/course-supporter" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    course-supporter
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/erd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ERD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sprints
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sprints
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sprints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sprints/sprint-0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sprint 0 — MVP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sprints/sprint-1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sprint 1 — Prod Deploy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sprints/sprint-2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sprint 2 — Material Tree
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/flow-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Flow Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auth
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-first-deploy-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. First Deploy (from scratch)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. First Deploy (from scratch)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-create-deploy-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Create deploy user
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-generate-deploy-ssh-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Generate deploy SSH key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-clone-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. Clone repository
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-create-docker-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Create Docker network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-configure-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5. Configure environment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-build-and-start-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6. Build and start services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-run-database-migrations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7. Run database migrations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-configure-nginx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.8. Configure nginx
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-ssl-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.9. SSL certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#210-create-first-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.10. Create first tenant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#211-verify-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.11. Verify deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-subsequent-deploys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Subsequent Deploys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Subsequent Deploys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automated-github-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automated (GitHub Actions)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-environment-variables-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Environment Variables Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-tenant-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Tenant Management
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Monitoring
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#health-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netdata-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Netdata dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#application-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#external-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-backup-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Backup &amp; Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Backup &amp; Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database restore
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Rollback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Rollback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#application-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migration-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#useful-debug-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Useful debug commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-first-deploy-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. First Deploy (from scratch)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. First Deploy (from scratch)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-create-deploy-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Create deploy user
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-generate-deploy-ssh-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Generate deploy SSH key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-clone-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. Clone repository
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-create-docker-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Create Docker network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-configure-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5. Configure environment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-build-and-start-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6. Build and start services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-run-database-migrations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7. Run database migrations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-configure-nginx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.8. Configure nginx
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-ssl-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.9. SSL certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#210-create-first-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.10. Create first tenant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#211-verify-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.11. Verify deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-subsequent-deploys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Subsequent Deploys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Subsequent Deploys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automated-github-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automated (GitHub Actions)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-environment-variables-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Environment Variables Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-tenant-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Tenant Management
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Monitoring
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#health-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#netdata-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Netdata dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#application-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#external-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-backup-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Backup &amp; Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Backup &amp; Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database restore
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Rollback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Rollback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#application-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migration-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#useful-debug-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Useful debug commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="deployment-guide">Deployment Guide<a class="headerlink" href="#deployment-guide" title="Permanent link">&para;</a></h1>
+<p>Production deployment for <strong>Course Supporter API</strong> on a shared VPS with Docker Compose.</p>
+<p><strong>Domain:</strong> <code>api.pythoncourse.me</code>
+<strong>Architecture:</strong> FastAPI app + PostgreSQL (pgvector) + Backblaze B2 (S3) + Netdata monitoring, behind shared nginx reverse proxy.</p>
+<hr />
+<h2 id="1-prerequisites">1. Prerequisites<a class="headerlink" href="#1-prerequisites" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>VPS</strong>: Ubuntu 22.04/24.04 with Docker and Docker Compose v2 installed</li>
+<li><strong>Domain</strong>: DNS A-record pointing to VPS IP (e.g. <code>api.pythoncourse.me</code>)</li>
+<li><strong>Backblaze B2</strong>: account with bucket and application key (S3-compatible API)</li>
+<li><strong>LLM API keys</strong>: at least one of Gemini, Anthropic, OpenAI, DeepSeek</li>
+<li><strong>GitHub access</strong>: deploy SSH key (read-only) added to the repository</li>
+<li><strong>Nginx</strong>: running on the VPS (shared with other services via <code>shared-net</code> Docker network)</li>
+<li><strong>Optional</strong>: <code>jq</code> for JSON filtering in shell commands (<code>sudo apt install jq</code>)</li>
+</ul>
+<hr />
+<h2 id="2-first-deploy-from-scratch">2. First Deploy (from scratch)<a class="headerlink" href="#2-first-deploy-from-scratch" title="Permanent link">&para;</a></h2>
+<h3 id="21-create-deploy-user">2.1. Create deploy user<a class="headerlink" href="#21-create-deploy-user" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>sudo<span class="w"> </span>useradd<span class="w"> </span>-m<span class="w"> </span>-s<span class="w"> </span>/bin/bash<span class="w"> </span>deploy-course-supporter
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sudo<span class="w"> </span>usermod<span class="w"> </span>-aG<span class="w"> </span>docker<span class="w"> </span>deploy-course-supporter
+</code></pre></div>
+<h3 id="22-generate-deploy-ssh-key">2.2. Generate deploy SSH key<a class="headerlink" href="#22-generate-deploy-ssh-key" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sudo<span class="w"> </span>-u<span class="w"> </span>deploy-course-supporter<span class="w"> </span>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-f<span class="w"> </span>/home/deploy-course-supporter/.ssh/deploy_key<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;&quot;</span>
+</code></pre></div>
+<p>Add the public key to GitHub repository as a <strong>read-only deploy key</strong>.</p>
+<h3 id="23-clone-repository">2.3. Clone repository<a class="headerlink" href="#23-clone-repository" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>sudo<span class="w"> </span>chown<span class="w"> </span>deploy-course-supporter:deploy-course-supporter<span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>sudo<span class="w"> </span>-u<span class="w"> </span>deploy-course-supporter<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="s1">  GIT_SSH_COMMAND=&quot;ssh -i /home/deploy-course-supporter/.ssh/deploy_key&quot; \</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="s1">  git clone git@github.com:KonstZiv/course-supporter.git /opt/course-supporter</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="s1">&#39;</span>
+</code></pre></div>
+<blockquote>
+<p>All subsequent commands should be run as the <code>deploy-course-supporter</code> user:
+<code>sudo -i -u deploy-course-supporter</code></p>
+</blockquote>
+<h3 id="24-create-docker-network">2.4. Create Docker network<a class="headerlink" href="#24-create-docker-network" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>network<span class="w"> </span>inspect<span class="w"> </span>shared-net<span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span>docker<span class="w"> </span>network<span class="w"> </span>create<span class="w"> </span>shared-net
+</code></pre></div>
+<blockquote>
+<p>This network is shared with the main nginx proxy. The command is a no-op if it already exists.</p>
+</blockquote>
+<h3 id="25-configure-environment">2.5. Configure environment<a class="headerlink" href="#25-configure-environment" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>cp<span class="w"> </span>.env.prod.example<span class="w"> </span>.env.prod
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># Edit .env.prod with actual credentials:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>nano<span class="w"> </span>.env.prod
+</code></pre></div>
+<p>See <a href="#4-environment-variables-reference">Environment Variables Reference</a> for all variables.</p>
+<h3 id="26-build-and-start-services">2.6. Build and start services<a class="headerlink" href="#26-build-and-start-services" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>build
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<h3 id="27-run-database-migrations">2.7. Run database migrations<a class="headerlink" href="#27-run-database-migrations" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>alembic<span class="w"> </span>upgrade<span class="w"> </span>head
+</code></pre></div>
+<blockquote>
+<p><strong>Note:</strong> Use <code>python -m alembic</code> instead of bare <code>alembic</code> — uv generates entry-point scripts
+with shebangs pointing to the builder stage path, which doesn't exist in the runtime image.</p>
+</blockquote>
+<h3 id="28-configure-nginx">2.8. Configure nginx<a class="headerlink" href="#28-configure-nginx" title="Permanent link">&para;</a></h3>
+<p>Add a server block for <code>api.pythoncourse.me</code>. Full reference: <code>deploy/nginx/course-supporter.conf</code>.</p>
+<p>Key parts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># HTTP → HTTPS redirect</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">api.pythoncourse.me</span><span class="p">;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/.well-known/acme-challenge/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">        </span><span class="kn">root</span><span class="w"> </span><span class="s">/var/www/html</span><span class="p">;</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">        </span><span class="kn">return</span><span class="w"> </span><span class="mi">301</span><span class="w"> </span><span class="s">https://</span><span class="nv">$host$request_uri</span><span class="p">;</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="p">}</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="c1"># HTTPS</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="p">;</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">api.pythoncourse.me</span><span class="p">;</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">    </span><span class="kn">ssl_certificate</span><span class="w"> </span><span class="s">/etc/letsencrypt/live/api.pythoncourse.me/fullchain.pem</span><span class="p">;</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/etc/letsencrypt/live/api.pythoncourse.me/privkey.pem</span><span class="p">;</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">    </span><span class="kn">ssl_protocols</span><span class="w"> </span><span class="s">TLSv1.2</span><span class="w"> </span><span class="s">TLSv1.3</span><span class="p">;</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">    </span><span class="kn">client_max_body_size</span><span class="w"> </span><span class="s">1G</span><span class="p">;</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="w">    </span><span class="c1"># Stream uploads directly to upstream without disk buffering (video files up to 1GB)</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="w">    </span><span class="kn">proxy_request_buffering</span><span class="w"> </span><span class="no">off</span><span class="p">;</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="w">    </span><span class="c1"># Docker DNS — resolve at request time, not at startup</span>
+<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="w">    </span><span class="kn">resolver</span><span class="w"> </span><span class="mi">127</span><span class="s">.0.0.11</span><span class="w"> </span><span class="s">valid=30s</span><span class="p">;</span>
+<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="w">    </span><span class="kn">set</span><span class="w"> </span><span class="nv">$course_supporter</span><span class="w"> </span><span class="s">http://course-supporter-app:8000</span><span class="p">;</span>
+<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="w">    </span><span class="kn">set</span><span class="w"> </span><span class="nv">$netdata_backend</span><span class="w"> </span><span class="s">http://netdata:19999</span><span class="p">;</span>
+<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a>
+<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="nv">$course_supporter</span><span class="p">;</span>
+<a id="__codelineno-7-35" name="__codelineno-7-35" href="#__codelineno-7-35"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<a id="__codelineno-7-36" name="__codelineno-7-36" href="#__codelineno-7-36"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
+<a id="__codelineno-7-37" name="__codelineno-7-37" href="#__codelineno-7-37"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
+<a id="__codelineno-7-38" name="__codelineno-7-38" href="#__codelineno-7-38"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<a id="__codelineno-7-39" name="__codelineno-7-39" href="#__codelineno-7-39"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-40" name="__codelineno-7-40" href="#__codelineno-7-40"></a>
+<a id="__codelineno-7-41" name="__codelineno-7-41" href="#__codelineno-7-41"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/netdata/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-42" name="__codelineno-7-42" href="#__codelineno-7-42"></a><span class="w">        </span><span class="kn">auth_basic</span><span class="w"> </span><span class="s">&quot;Monitoring&quot;</span><span class="p">;</span>
+<a id="__codelineno-7-43" name="__codelineno-7-43" href="#__codelineno-7-43"></a><span class="w">        </span><span class="kn">auth_basic_user_file</span><span class="w"> </span><span class="s">/etc/nginx/.htpasswd_netdata</span><span class="p">;</span>
+<a id="__codelineno-7-44" name="__codelineno-7-44" href="#__codelineno-7-44"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="nv">$netdata_backend/</span><span class="p">;</span>
+<a id="__codelineno-7-45" name="__codelineno-7-45" href="#__codelineno-7-45"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<a id="__codelineno-7-46" name="__codelineno-7-46" href="#__codelineno-7-46"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-47" name="__codelineno-7-47" href="#__codelineno-7-47"></a><span class="p">}</span>
+</code></pre></div>
+<blockquote>
+<p>See <code>deploy/nginx/course-supporter.conf</code> for TLS hardening, security headers, and upload timeouts.</p>
+</blockquote>
+<p>Reload nginx:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Nginx runs as a separate container (not part of docker-compose.prod.yaml)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>nginx<span class="w"> </span>nginx<span class="w"> </span>-s<span class="w"> </span>reload
+</code></pre></div>
+<h3 id="29-ssl-certificate">2.9. SSL certificate<a class="headerlink" href="#29-ssl-certificate" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>certbot<span class="w"> </span>certonly<span class="w"> </span>--webroot<span class="w"> </span>-w<span class="w"> </span>/var/www/html<span class="w"> </span>-d<span class="w"> </span>api.pythoncourse.me
+</code></pre></div>
+<p>Update nginx config with certificate paths, then reload:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Nginx runs as a separate container (not part of docker-compose.prod.yaml)</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>nginx<span class="w"> </span>nginx<span class="w"> </span>-s<span class="w"> </span>reload
+</code></pre></div>
+<h3 id="210-create-first-tenant">2.10. Create first tenant<a class="headerlink" href="#210-create-first-tenant" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>scripts.manage_tenant<span class="w"> </span>create-tenant<span class="w"> </span>--name<span class="w"> </span><span class="s2">&quot;MyCompany&quot;</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>scripts.manage_tenant<span class="w"> </span>create-key<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span>--tenant<span class="w"> </span><span class="s2">&quot;MyCompany&quot;</span><span class="w"> </span>--scopes<span class="w"> </span>prep,check<span class="w"> </span>--label<span class="w"> </span>production
+</code></pre></div>
+<blockquote>
+<p>The API key is displayed <strong>once</strong> — save it immediately.</p>
+</blockquote>
+<h3 id="211-verify-deployment">2.11. Verify deployment<a class="headerlink" href="#211-verify-deployment" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Health check:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-sf<span class="w"> </span>https://api.pythoncourse.me/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Auth check:</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: cs_live_...&quot;</span><span class="w"> </span>https://api.pythoncourse.me/api/v1/courses
+</code></pre></div>
+<hr />
+<h2 id="3-subsequent-deploys">3. Subsequent Deploys<a class="headerlink" href="#3-subsequent-deploys" title="Permanent link">&para;</a></h2>
+<h3 id="automated-github-actions">Automated (GitHub Actions)<a class="headerlink" href="#automated-github-actions" title="Permanent link">&para;</a></h3>
+<p>Trigger manually via <strong>Actions &gt; Deploy &gt; Run workflow</strong> in GitHub.</p>
+<p>The workflow:
+1. SSH into VPS
+2. <code>git pull origin main</code>
+3. Build app image (<code>docker compose --env-file .env.prod</code>)
+4. Start all containers (<code>up -d</code>)
+5. Run migrations (<code>python -m alembic upgrade head</code>)
+6. Health check via <code>docker exec</code> (10 attempts, 5s interval)</p>
+<blockquote>
+<p><strong>Note:</strong> Health check runs inside the app container via <code>docker exec</code> because
+port 8000 is not exposed to the host — Nginx proxies via <code>shared-net</code> Docker network.</p>
+</blockquote>
+<h3 id="manual">Manual<a class="headerlink" href="#manual" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>git<span class="w"> </span>pull<span class="w"> </span>origin<span class="w"> </span>main
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>build<span class="w"> </span>app<span class="w"> </span>worker
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>up<span class="w"> </span>-d
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>alembic<span class="w"> </span>upgrade<span class="w"> </span>head
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>curl<span class="w"> </span>-sf<span class="w"> </span>https://api.pythoncourse.me/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<hr />
+<h2 id="4-environment-variables-reference">4. Environment Variables Reference<a class="headerlink" href="#4-environment-variables-reference" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ENVIRONMENT</code></td>
+<td>Yes</td>
+<td>(Must be set)</td>
+<td><code>production</code> for JSON logging and debug off</td>
+</tr>
+<tr>
+<td><code>LOG_LEVEL</code></td>
+<td>No</td>
+<td><code>INFO</code></td>
+<td>Python log level: <code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code>, <code>ERROR</code></td>
+</tr>
+<tr>
+<td><code>CORS_ALLOWED_ORIGINS</code></td>
+<td>No</td>
+<td><code>[]</code></td>
+<td>JSON list of allowed origins, e.g. <code>["https://pythoncourse.me"]</code></td>
+</tr>
+<tr>
+<td><code>CORS_ALLOW_CREDENTIALS</code></td>
+<td>No</td>
+<td><code>false</code></td>
+<td>Allow credentials in CORS</td>
+</tr>
+<tr>
+<td><code>CORS_ALLOWED_METHODS</code></td>
+<td>No</td>
+<td><code>["GET","POST"]</code></td>
+<td>Allowed HTTP methods</td>
+</tr>
+<tr>
+<td><code>CORS_ALLOWED_HEADERS</code></td>
+<td>No</td>
+<td><code>["Content-Type","X-API-Key"]</code></td>
+<td>Allowed request headers</td>
+</tr>
+<tr>
+<td><code>POSTGRES_USER</code></td>
+<td>No</td>
+<td><code>course_supporter</code></td>
+<td>PostgreSQL user</td>
+</tr>
+<tr>
+<td><code>POSTGRES_PASSWORD</code></td>
+<td>Yes</td>
+<td>—</td>
+<td>PostgreSQL password</td>
+</tr>
+<tr>
+<td><code>POSTGRES_DB</code></td>
+<td>No</td>
+<td><code>course_supporter</code></td>
+<td>PostgreSQL database name</td>
+</tr>
+<tr>
+<td><code>POSTGRES_HOST</code></td>
+<td>Yes</td>
+<td>—</td>
+<td>PostgreSQL host (<code>postgres-cs</code> in Docker)</td>
+</tr>
+<tr>
+<td><code>POSTGRES_PORT</code></td>
+<td>No</td>
+<td><code>5432</code></td>
+<td>PostgreSQL port</td>
+</tr>
+<tr>
+<td><code>S3_ENDPOINT</code></td>
+<td>Yes</td>
+<td>—</td>
+<td>S3-compatible endpoint URL</td>
+</tr>
+<tr>
+<td><code>S3_ACCESS_KEY</code></td>
+<td>Yes</td>
+<td>—</td>
+<td>S3 access key ID</td>
+</tr>
+<tr>
+<td><code>S3_SECRET_KEY</code></td>
+<td>Yes</td>
+<td>—</td>
+<td>S3 secret key</td>
+</tr>
+<tr>
+<td><code>S3_BUCKET</code></td>
+<td>Yes</td>
+<td><code>course-materials</code></td>
+<td>S3 bucket name</td>
+</tr>
+<tr>
+<td><code>GEMINI_API_KEY</code></td>
+<td>No</td>
+<td>—</td>
+<td>Google Gemini API key</td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td>No</td>
+<td>—</td>
+<td>Anthropic API key</td>
+</tr>
+<tr>
+<td><code>OPENAI_API_KEY</code></td>
+<td>No</td>
+<td>—</td>
+<td>OpenAI API key</td>
+</tr>
+<tr>
+<td><code>DEEPSEEK_API_KEY</code></td>
+<td>No</td>
+<td>—</td>
+<td>DeepSeek API key</td>
+</tr>
+<tr>
+<td><code>REDIS_URL</code></td>
+<td>No</td>
+<td><code>redis://localhost:6379/0</code></td>
+<td>Redis connection string (<code>redis://redis:6379/0</code> in Docker)</td>
+</tr>
+<tr>
+<td><code>WORKER_MAX_JOBS</code></td>
+<td>No</td>
+<td><code>1</code></td>
+<td>Concurrent jobs per worker. Default 1 to avoid OOM (Whisper uses ~5 GB RAM)</td>
+</tr>
+<tr>
+<td><code>WORKER_JOB_TIMEOUT</code></td>
+<td>No</td>
+<td><code>21600</code></td>
+<td>Max seconds per job (6h — enough for 4h video transcription on CPU)</td>
+</tr>
+<tr>
+<td><code>WORKER_MAX_TRIES</code></td>
+<td>No</td>
+<td><code>3</code></td>
+<td>Retry attempts per failed job</td>
+</tr>
+<tr>
+<td><code>WORKER_HEAVY_WINDOW_ENABLED</code></td>
+<td>No</td>
+<td><code>false</code></td>
+<td>Restrict heavy jobs to a time window</td>
+</tr>
+<tr>
+<td><code>WORKER_HEAVY_WINDOW_START</code></td>
+<td>No</td>
+<td><code>02:00</code></td>
+<td>Window start (24h format)</td>
+</tr>
+<tr>
+<td><code>WORKER_HEAVY_WINDOW_END</code></td>
+<td>No</td>
+<td><code>06:30</code></td>
+<td>Window end (24h format)</td>
+</tr>
+<tr>
+<td><code>WORKER_HEAVY_WINDOW_TZ</code></td>
+<td>No</td>
+<td><code>UTC</code></td>
+<td>Timezone for the work window</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>At least one LLM API key is required for the ArchitectAgent to function.</p>
+</blockquote>
+<hr />
+<h2 id="5-tenant-management">5. Tenant Management<a class="headerlink" href="#5-tenant-management" title="Permanent link">&para;</a></h2>
+<p>All commands run inside the app container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Prefix for all commands:</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>app<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>scripts.manage_tenant
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Options</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create-tenant</code></td>
+<td><code>--name "Company"</code></td>
+<td>Create a new tenant</td>
+</tr>
+<tr>
+<td><code>create-key</code></td>
+<td><code>--tenant "Company" --scopes prep,check --label prod</code></td>
+<td>Generate API key (shown once)</td>
+</tr>
+<tr>
+<td><code>list-tenants</code></td>
+<td>—</td>
+<td>List all tenants with status and key counts</td>
+</tr>
+<tr>
+<td><code>list-keys</code></td>
+<td><code>--tenant "Company"</code></td>
+<td>List keys for a tenant</td>
+</tr>
+<tr>
+<td><code>revoke-key</code></td>
+<td><code>--prefix cs_live_abc1</code></td>
+<td>Revoke a specific API key</td>
+</tr>
+<tr>
+<td><code>deactivate-tenant</code></td>
+<td><code>--name "Company"</code></td>
+<td>Deactivate tenant (all keys become invalid)</td>
+</tr>
+</tbody>
+</table>
+<p>Optional rate limit flags for <code>create-key</code>:
+- <code>--rate-prep 60</code> — requests per minute for prep scope
+- <code>--rate-check 300</code> — requests per minute for check scope</p>
+<hr />
+<h2 id="6-monitoring">6. Monitoring<a class="headerlink" href="#6-monitoring" title="Permanent link">&para;</a></h2>
+<h3 id="health-check">Health check<a class="headerlink" href="#health-check" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-sf<span class="w"> </span>https://api.pythoncourse.me/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># Returns: {&quot;status&quot;: &quot;ok&quot;, &quot;checks&quot;: {&quot;db&quot;: &quot;ok&quot;, &quot;s3&quot;: &quot;ok&quot;, &quot;redis&quot;: &quot;ok&quot;}, &quot;timestamp&quot;: &quot;...&quot;}</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="c1"># HTTP 200 = healthy, HTTP 503 = degraded</span>
+</code></pre></div>
+<h3 id="netdata-dashboard">Netdata dashboard<a class="headerlink" href="#netdata-dashboard" title="Permanent link">&para;</a></h3>
+<ul>
+<li>URL: <code>https://api.pythoncourse.me/netdata/</code></li>
+<li>Protected by HTTP basic auth (<code>.htpasswd_netdata</code>)</li>
+<li>Monitors: CPU, RAM, disk, Docker containers, network I/O</li>
+</ul>
+<p>Setup Telegram alerts — see <code>current-doc/S2-prod-deploy/infrastructure/netdata-setup.md</code>.</p>
+<h3 id="application-logs">Application logs<a class="headerlink" href="#application-logs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Follow logs:</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>app
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># Filter errors (JSON format in production):</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>logs<span class="w"> </span>app<span class="w"> </span>--no-log-prefix<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;select(.level == &quot;error&quot;)&#39;</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="c1"># Last 50 lines:</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>logs<span class="w"> </span>app<span class="w"> </span>--tail<span class="o">=</span><span class="m">50</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="c1"># Worker logs (job processing):</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>worker
+</code></pre></div>
+<h3 id="external-monitoring">External monitoring<a class="headerlink" href="#external-monitoring" title="Permanent link">&para;</a></h3>
+<p>Configure UptimeRobot (or similar) to ping <code>https://api.pythoncourse.me/health</code> every 5 minutes.</p>
+<hr />
+<h2 id="7-backup-restore">7. Backup &amp; Restore<a class="headerlink" href="#7-backup-restore" title="Permanent link">&para;</a></h2>
+<h3 id="database-backup">Database backup<a class="headerlink" href="#database-backup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-cs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>pg_dump<span class="w"> </span>-U<span class="w"> </span>course_supporter<span class="w"> </span>course_supporter<span class="w"> </span>&gt;<span class="w"> </span>backup_<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.sql
+</code></pre></div>
+<h3 id="database-restore">Database restore<a class="headerlink" href="#database-restore" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>cat<span class="w"> </span>backup.sql<span class="w"> </span><span class="p">|</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres-cs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>psql<span class="w"> </span>-U<span class="w"> </span>course_supporter<span class="w"> </span>course_supporter
+</code></pre></div>
+<blockquote>
+<p>S3 data (Backblaze B2) is managed externally and has its own versioning/lifecycle policies.</p>
+</blockquote>
+<hr />
+<h2 id="8-rollback">8. Rollback<a class="headerlink" href="#8-rollback" title="Permanent link">&para;</a></h2>
+<h3 id="application-rollback">Application rollback<a class="headerlink" href="#application-rollback" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/course-supporter
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>git<span class="w"> </span>log<span class="w"> </span>--oneline<span class="w"> </span>-5<span class="w">                    </span><span class="c1"># find target commit</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>git<span class="w"> </span>checkout<span class="w"> </span>&lt;commit-hash&gt;
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>build<span class="w"> </span>app
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>app
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>curl<span class="w"> </span>-sf<span class="w"> </span>https://api.pythoncourse.me/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<h3 id="migration-rollback">Migration rollback<a class="headerlink" href="#migration-rollback" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>alembic<span class="w"> </span>downgrade<span class="w"> </span>-1
+</code></pre></div>
+<blockquote>
+<p>Always verify the target migration before running downgrade in production.</p>
+</blockquote>
+<hr />
+<h2 id="9-troubleshooting">9. Troubleshooting<a class="headerlink" href="#9-troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Diagnosis</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>502 Bad Gateway</strong></td>
+<td><code>docker compose --env-file .env.prod -f docker-compose.prod.yaml ps</code> — is app running?</td>
+<td><code>docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d app</code></td>
+</tr>
+<tr>
+<td><strong>DB connection refused</strong></td>
+<td><code>docker compose --env-file .env.prod -f docker-compose.prod.yaml logs postgres-cs</code></td>
+<td>Check <code>POSTGRES_HOST=postgres-cs</code> in <code>.env.prod</code></td>
+</tr>
+<tr>
+<td><strong>S3 upload failure</strong></td>
+<td>Health check shows <code>"s3": "error: ..."</code></td>
+<td>Verify B2 credentials and endpoint in <code>.env.prod</code></td>
+</tr>
+<tr>
+<td><strong>SSL certificate expired</strong></td>
+<td><code>certbot certificates</code></td>
+<td><code>certbot renew &amp;&amp; docker exec nginx nginx -s reload</code></td>
+</tr>
+<tr>
+<td><strong>OOM kill</strong></td>
+<td><code>docker compose --env-file .env.prod -f docker-compose.prod.yaml ps -q app \| xargs docker inspect \| jq '.[0].State.OOMKilled'</code></td>
+<td>Reduce workers, check memory-heavy operations</td>
+</tr>
+<tr>
+<td><strong>Slow responses</strong></td>
+<td>Check app logs for <code>latency_ms</code> values</td>
+<td>Review LLM provider latency, check DB query times</td>
+</tr>
+<tr>
+<td><strong>Rate limit hit (429)</strong></td>
+<td>Response includes <code>Retry-After</code> header</td>
+<td>Wait or adjust rate limits via <code>create-key</code></td>
+</tr>
+<tr>
+<td><strong>Health check fails after DB recreate</strong></td>
+<td><code>health_check_db_error: OperationalError</code> in logs</td>
+<td>App holds stale DB connection — restart app: <code>docker compose --env-file .env.prod -f docker-compose.prod.yaml restart app</code></td>
+</tr>
+<tr>
+<td><strong>Worker not processing jobs</strong></td>
+<td><code>docker compose ... logs worker --tail=20</code></td>
+<td>Check <code>REDIS_URL</code> in <code>.env.prod</code>, verify Redis is healthy</td>
+</tr>
+<tr>
+<td><strong>Job timeout on long video</strong></td>
+<td><code>worker_job_timeout</code> too low for Whisper on CPU</td>
+<td>Increase <code>WORKER_JOB_TIMEOUT</code> (default 21600 = 6h, enough for ~4h video)</td>
+</tr>
+<tr>
+<td><strong>Worker OOM killed</strong></td>
+<td><code>docker inspect ... \| jq '.[0].State.OOMKilled'</code></td>
+<td>Reduce <code>WORKER_MAX_JOBS</code> to 1 (default). Whisper <code>medium</code> uses ~5 GB RAM</td>
+</tr>
+<tr>
+<td><strong><code>alembic: no such file or directory</code></strong></td>
+<td>uv shebang points to builder stage path</td>
+<td>Use <code>python -m alembic</code> instead of bare <code>alembic</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="useful-debug-commands">Useful debug commands<a class="headerlink" href="#useful-debug-commands" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Container status:</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span>ps
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># Database shell:</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-cs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">  </span>psql<span class="w"> </span>-U<span class="w"> </span>course_supporter<span class="w"> </span>course_supporter
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="c1"># App shell:</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>.env.prod<span class="w"> </span>-f<span class="w"> </span>docker-compose.prod.yaml<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>app<span class="w"> </span>/bin/bash
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>
+<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="c1"># Check disk space:</span>
+<a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>df<span class="w"> </span>-h<span class="w"> </span>/var/lib/docker
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/javascripts/panzoom.min.js"></script>
+      
+        <script src="../../assets/javascripts/zoompan.js"></script>
+      
+    
+  </body>
+</html>

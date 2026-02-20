@@ -36,8 +36,9 @@ async def arq_ingest_material(
 ) -> None:
     """ARQ task: process a source material with job tracking.
 
-    Called by the ARQ worker. Manages Job status transitions
-    alongside SourceMaterial processing.
+    Thin orchestrator: validates priority, transitions to active,
+    runs the processor, then delegates completion handling to
+    :class:`~course_supporter.ingestion_callback.IngestionCallback`.
 
     Args:
         ctx: ARQ worker context (session_factory, model_router, engine).
@@ -47,6 +48,7 @@ async def arq_ingest_material(
         source_url: URL or S3 path to the source file.
         priority: Job priority ('normal' or 'immediate').
     """
+    from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
     from course_supporter.storage.job_repository import JobRepository
 
@@ -56,6 +58,7 @@ async def arq_ingest_material(
     mid = uuid.UUID(material_id)
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     router: ModelRouter = ctx["model_router"]
+    callback = IngestionCallback(session_factory)
 
     log = structlog.get_logger().bind(
         job_id=job_id, material_id=material_id, source_type=source_type
@@ -84,22 +87,17 @@ async def arq_ingest_material(
             doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
-            await mat_repo.update_status(mid, "done", content_snapshot=content)
-            await job_repo.update_status(jid, "complete", result_material_id=mid)
-            await session.commit()
-            log.info("ingestion_done")
 
         except Exception as exc:
             await session.rollback()
-
-            async with session_factory() as error_session:
-                err_job_repo = JobRepository(error_session)
-                err_mat_repo = SourceMaterialRepository(error_session)
-                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
-                await err_mat_repo.update_status(mid, "error", error_message=str(exc))
-                await error_session.commit()
-
+            await callback.on_failure(
+                job_id=jid, material_id=mid, error_message=str(exc)
+            )
             log.error("ingestion_failed", error=str(exc))
+            return
+
+    await callback.on_success(job_id=jid, material_id=mid, content_json=content)
+    log.info("ingestion_done")
 
 
 async def ingest_material(

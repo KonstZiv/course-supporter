@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from course_supporter.ingestion import transcribe as transcribe_mod
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.ingestion.heavy_steps import (
     TranscribeParams,
@@ -12,6 +13,12 @@ from course_supporter.ingestion.heavy_steps import (
     WhisperModelSize,
 )
 from course_supporter.ingestion.transcribe import local_transcribe
+
+
+@pytest.fixture(autouse=True)
+def _clear_model_cache() -> None:
+    """Clear Whisper model cache between tests."""
+    transcribe_mod._MODEL_CACHE.clear()
 
 
 def _mock_whisper(
@@ -96,6 +103,32 @@ class TestLocalTranscribeSuccess:
         call_args = model.transcribe.call_args
         assert call_args[0][0] == "/tmp/a.wav"
         assert call_args[1] == {}
+
+    async def test_model_cached_across_calls(self) -> None:
+        """Second call with same model reuses cached model."""
+        mock = _mock_whisper([], language=None)
+
+        with patch.dict("sys.modules", {"whisper": mock}):
+            await local_transcribe("/tmp/a.wav", TranscribeParams())
+            await local_transcribe("/tmp/b.wav", TranscribeParams())
+
+        mock.load_model.assert_called_once_with("base")
+
+    async def test_different_model_loaded_separately(self) -> None:
+        """Different model sizes are loaded and cached independently."""
+        mock = _mock_whisper([], language=None)
+
+        with patch.dict("sys.modules", {"whisper": mock}):
+            await local_transcribe(
+                "/tmp/a.wav",
+                TranscribeParams(model_name=WhisperModelSize.BASE),
+            )
+            await local_transcribe(
+                "/tmp/b.wav",
+                TranscribeParams(model_name=WhisperModelSize.LARGE),
+            )
+
+        assert mock.load_model.call_count == 2
 
 
 class TestLocalTranscribeEdgeCases:

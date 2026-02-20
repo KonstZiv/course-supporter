@@ -22,6 +22,8 @@ from course_supporter.ingestion.heavy_steps import (
     TranscriptSegment,
 )
 
+_MODEL_CACHE: dict[str, Any] = {}
+
 
 async def local_transcribe(
     audio_path: str,
@@ -57,7 +59,12 @@ async def local_transcribe(
 
     loop = asyncio.get_running_loop()
 
-    model = await loop.run_in_executor(None, whisper.load_model, str(params.model_name))
+    model_name = str(params.model_name)
+    if model_name not in _MODEL_CACHE:
+        _MODEL_CACHE[model_name] = await loop.run_in_executor(
+            None, whisper.load_model, model_name
+        )
+    model = _MODEL_CACHE[model_name]
 
     transcribe_kwargs: dict[str, str] = {}
     if params.language is not None:

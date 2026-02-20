@@ -129,6 +129,7 @@ class MaterialEntryRepository:
         entry.processed_content = processed_content
         entry.processed_hash = processed_hash
         entry.processed_at = now
+        entry.content_fingerprint = None  # invalidate — content changed
         entry.pending_job_id = None
         entry.pending_since = None
         entry.error_message = None
@@ -185,6 +186,7 @@ class MaterialEntryRepository:
         entry.filename = filename
         entry.raw_hash = None
         entry.raw_size_bytes = None
+        entry.content_fingerprint = None  # invalidate — source changed
         await self._session.flush()
         return entry
 

@@ -359,3 +359,118 @@ class NodeTreeResponse(BaseModel):
     )
     created_at: datetime = Field(description="When this node was created.")
     updated_at: datetime = Field(description="When this node was last modified.")
+
+
+# --- Material Entries ---
+
+
+class MaterialEntryCreateRequest(BaseModel):
+    """Request body for adding a material to a tree node.
+
+    Creates a ``MaterialEntry`` under the specified node and
+    auto-enqueues ingestion. The response includes the ``job_id``
+    for tracking progress via ``GET /jobs/{job_id}``.
+
+    Example::
+
+        {
+            "source_type": "presentation",
+            "source_url": "https://example.com/slides.pdf",
+            "filename": "slides.pdf"
+        }
+    """
+
+    source_type: str = Field(
+        ...,
+        description=(
+            "Type of the source material. "
+            "Must be one of: ``video``, ``presentation``, ``text``, ``web``."
+        ),
+        examples=["video", "presentation", "text", "web"],
+    )
+    source_url: str = Field(
+        ...,
+        max_length=2000,
+        description=(
+            "URL or S3 path to the raw material. "
+            "For file uploads, this is populated by the upload endpoint."
+        ),
+        examples=["https://example.com/slides.pdf", "s3://bucket/key"],
+    )
+    filename: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Original filename for display purposes. Optional for URL-based materials."
+        ),
+        examples=["slides.pdf", "lecture-01.mp4"],
+    )
+
+
+class MaterialEntryResponse(BaseModel):
+    """Response schema for a single material entry.
+
+    The ``state`` field is a derived property computed from the entry's
+    internal fields (see ``MaterialState`` enum for possible values):
+
+    - ``raw`` — uploaded but not yet processed
+    - ``pending`` — ingestion job is in progress
+    - ``ready`` — processed successfully, hashes match
+    - ``integrity_broken`` — raw source changed after processing
+    - ``error`` — last processing attempt failed
+
+    Returned by list and detail operations.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
+    node_id: uuid.UUID = Field(description="Parent node this material belongs to.")
+    source_type: str = Field(
+        description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    source_url: str = Field(description="URL or S3 path to the raw material.")
+    filename: str | None = Field(description="Original filename, if available.")
+    order: int = Field(description="0-based position among sibling materials.")
+    state: str = Field(
+        description=(
+            "Derived lifecycle state: "
+            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
+        ),
+    )
+    error_message: str | None = Field(
+        description="Error message from the last failed processing attempt, if any."
+    )
+    pending_job_id: uuid.UUID | None = Field(
+        description="Job ID currently processing this material, or ``null``."
+    )
+    created_at: datetime = Field(description="When this entry was created.")
+    updated_at: datetime = Field(description="When this entry was last modified.")
+
+
+class MaterialEntryCreateResponse(BaseModel):
+    """Response for material entry creation.
+
+    Extends the base response with ``job_id`` — the ID of the
+    ingestion job that was auto-enqueued. Use
+    ``GET /api/v1/jobs/{job_id}`` to track processing status.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
+    node_id: uuid.UUID = Field(description="Parent node this material belongs to.")
+    source_type: str = Field(
+        description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    source_url: str = Field(description="URL or S3 path to the raw material.")
+    filename: str | None = Field(description="Original filename, if available.")
+    order: int = Field(description="0-based position among sibling materials.")
+    state: str = Field(
+        description="Derived lifecycle state (will be ``raw`` or ``pending``)."
+    )
+    job_id: uuid.UUID | None = Field(
+        default=None,
+        description="ID of the auto-enqueued ingestion job for progress tracking.",
+    )
+    created_at: datetime = Field(description="When this entry was created.")

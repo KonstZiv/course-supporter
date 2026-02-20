@@ -61,6 +61,7 @@ class Transcript(BaseModel):
     segments: list[TranscriptSegment]
     language: str | None = Field(
         default=None,
+        description="ISO 639-1 language code detected or used for transcription.",
         pattern=r"^[a-z]{2}$",
     )
 
@@ -82,6 +83,7 @@ class DescribeSlidesParams(BaseModel):
 
     dpi: int = Field(
         default=150,
+        gt=0,
         description="Resolution for rendering PDF pages to images.",
     )
     prompt: str = Field(

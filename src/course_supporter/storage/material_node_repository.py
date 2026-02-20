@@ -7,6 +7,7 @@ from enum import Enum, auto
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from course_supporter.storage.orm import MaterialNode
 
@@ -85,11 +86,21 @@ class MaterialNodeRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_tree(self, course_id: uuid.UUID) -> list[MaterialNode]:
+    async def get_tree(
+        self,
+        course_id: uuid.UUID,
+        *,
+        include_materials: bool = False,
+    ) -> list[MaterialNode]:
         """Load all nodes for a course and return root nodes with children populated.
 
         Loads all nodes in one query, then assembles the tree in Python.
         Children are sorted by ``order`` at each level.
+
+        Args:
+            course_id: Course to load the tree for.
+            include_materials: If True, eager-load ``MaterialEntry``
+                relationships (ordered by ``order``) for each node.
 
         Returns:
             List of root MaterialNode instances with ``children`` populated.
@@ -99,6 +110,8 @@ class MaterialNodeRepository:
             .where(MaterialNode.course_id == course_id)
             .order_by(MaterialNode.order)
         )
+        if include_materials:
+            stmt = stmt.options(selectinload(MaterialNode.materials))
         result = await self._session.execute(stmt)
         all_nodes = list(result.scalars().all())
 

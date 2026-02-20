@@ -171,6 +171,13 @@ class MaterialEntry(Base):
 
     __tablename__ = "material_entries"
 
+    def __repr__(self) -> str:
+        return (
+            f"<MaterialEntry(id={self.id}, "
+            f"source_type='{self.source_type}', "
+            f"node_id={self.node_id})>"
+        )
+
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     node_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True

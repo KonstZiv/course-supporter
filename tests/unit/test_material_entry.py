@@ -96,6 +96,20 @@ class TestMaterialEntryModel:
             col = table.c[col_name]
             assert col.type.length == 64, f"{col_name} should be 64 chars"  # type: ignore[union-attr]
 
+    def test_repr(self) -> None:
+        """__repr__ includes id, source_type, and node_id."""
+        node_id = _uuid7()
+        entry = MaterialEntry(
+            id=_uuid7(),
+            node_id=node_id,
+            source_type="web",
+            source_url="https://example.com",
+        )
+        r = repr(entry)
+        assert "MaterialEntry" in r
+        assert "web" in r
+        assert str(node_id) in r
+
     def test_source_type_reuses_enum(self) -> None:
         """source_type uses existing source_type_enum (shared with SourceMaterial)."""
         col = MaterialEntry.__table__.c.source_type

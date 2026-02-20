@@ -8,6 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import SlideVideoMapEntry
+from course_supporter.models.source import SourceType
 
 # --- Course ---
 
@@ -380,7 +381,7 @@ class MaterialEntryCreateRequest(BaseModel):
         }
     """
 
-    source_type: str = Field(
+    source_type: SourceType = Field(
         ...,
         description=(
             "Type of the source material. "

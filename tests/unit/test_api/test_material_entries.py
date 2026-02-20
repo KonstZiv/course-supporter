@@ -156,19 +156,15 @@ class TestCreateMaterial:
     async def test_invalid_source_type_returns_422(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
     ) -> None:
-        """Invalid source_type returns 422."""
-        with patch.object(
-            CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-        ):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
-                    "source_type": "invalid",
-                    "source_url": "https://example.com/doc.md",
-                },
-            )
+        """Invalid source_type is rejected by Pydantic validation."""
+        resp = await client.post(
+            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            json={
+                "source_type": "invalid",
+                "source_url": "https://example.com/doc.md",
+            },
+        )
         assert resp.status_code == 422
-        assert "source_type" in resp.json()["detail"]
 
     async def test_course_not_found_returns_404(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID

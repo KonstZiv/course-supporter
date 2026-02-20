@@ -36,7 +36,6 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
-from course_supporter.models.source import SourceType
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import MaterialEntry
@@ -50,8 +49,6 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
-
-VALID_SOURCE_TYPES = {t.value for t in SourceType}
 
 
 async def _require_course(
@@ -130,12 +127,6 @@ async def create_material(
     The material starts in ``raw`` state and transitions to
     ``pending`` once the ingestion job picks it up.
     """
-    if body.source_type not in VALID_SOURCE_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid source_type. Must be one of: {sorted(VALID_SOURCE_TYPES)}",
-        )
-
     await _require_course(session, tenant.tenant_id, course_id)
     await _require_node(session, node_id, course_id)
 

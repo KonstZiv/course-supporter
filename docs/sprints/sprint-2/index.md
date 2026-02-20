@@ -3,7 +3,7 @@
 **Status:** In Progress
 **Estimate:** 4-5 weeks
 **Previous sprint:** [Sprint 1 — Production Deploy](../sprint-1/index.md) (407 tests, live on `api.pythoncourse.me`)
-**Current test count:** 723 passed, 27 skipped
+**Current test count:** 783 passed, 27 skipped
 
 ---
 
@@ -199,9 +199,11 @@ Recursive tree of nodes, MaterialEntry with raw/processed separation and pending
 
 **Completed tasks:** S2-013 (MaterialNode ORM), S2-014 (MaterialNodeRepository), S2-015 (MaterialEntry ORM), S2-016 (MaterialEntryRepository), S2-017 (Node API endpoints), S2-018 (Node API tests), S2-019 (Job API tests), S2-020 (Materials endpoint refactor), S2-021 (Course detail with tree), S2-022 (List courses endpoint), S2-023 (Tree + MaterialEntry unit tests).
 
-### Epic 3: Merkle Fingerprints (2–3 days)
+### Epic 3: Merkle Fingerprints (2–3 days) -- COMPLETE
 
 Lazy cached fingerprints with bottom-up cascade invalidation. Material → node → course level. Auto-invalidation on CRUD operations.
+
+**Completed tasks:** S2-024 (material-level fingerprint), S2-025 (node-level Merkle hash), S2-026 (course-level fingerprint), S2-027 (cascade invalidation), S2-028 (repository integration), S2-029 (fingerprint in API responses), S2-030 (fingerprint unit tests).
 
 ### Epic 4: Heavy Steps Extraction (2–3 days)
 

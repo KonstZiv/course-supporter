@@ -30,6 +30,7 @@ class HealthMocks(NamedTuple):
 
     db_session: AsyncMock
     s3_client: AsyncMock
+    redis_client: AsyncMock
 
 
 @contextmanager
@@ -37,18 +38,26 @@ def mock_health_deps(
     *,
     db_error: Exception | None = None,
     s3_error: Exception | None = None,
+    redis_error: Exception | None = None,
 ) -> Generator[HealthMocks]:
-    """Mock DB and S3 dependencies for health check tests.
+    """Mock DB, S3 and Redis dependencies for health check tests.
 
     Args:
         db_error: If set, async_session __aenter__ raises this exception.
         s3_error: If set, s3_client.check_connectivity raises this exception.
+        redis_error: If set, arq_redis.ping raises this exception.
     """
     mock_s3 = AsyncMock()
     if s3_error:
         mock_s3.check_connectivity = AsyncMock(side_effect=s3_error)
     else:
         mock_s3.check_connectivity = AsyncMock()
+
+    mock_redis = AsyncMock()
+    if redis_error:
+        mock_redis.ping = AsyncMock(side_effect=redis_error)
+    else:
+        mock_redis.ping = AsyncMock(return_value=True)
 
     mock_db_session = AsyncMock()
     mock_db_session.execute = AsyncMock()
@@ -64,8 +73,11 @@ def mock_health_deps(
             )
         mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
         app.state.s3_client = mock_s3
+        app.state.arq_redis = mock_redis
 
-        yield HealthMocks(db_session=mock_db_session, s3_client=mock_s3)
+        yield HealthMocks(
+            db_session=mock_db_session, s3_client=mock_s3, redis_client=mock_redis
+        )
 
 
 @pytest.fixture()
@@ -91,7 +103,7 @@ async def client(mock_session: AsyncMock) -> AsyncGenerator[AsyncClient]:
 class TestHealth:
     @pytest.mark.asyncio
     async def test_health_all_ok(self, client: AsyncClient) -> None:
-        """GET /health returns 200 when DB and S3 are reachable."""
+        """GET /health returns 200 when DB, S3 and Redis are reachable."""
         with mock_health_deps():
             response = await client.get("/health")
 
@@ -100,6 +112,7 @@ class TestHealth:
         assert data["status"] == "ok"
         assert data["checks"]["db"] == "ok"
         assert data["checks"]["s3"] == "ok"
+        assert data["checks"]["redis"] == "ok"
         assert "timestamp" in data
 
     @pytest.mark.asyncio
@@ -113,6 +126,7 @@ class TestHealth:
         assert data["status"] == "degraded"
         assert "error" in data["checks"]["db"]
         assert data["checks"]["s3"] == "ok"
+        assert data["checks"]["redis"] == "ok"
 
     @pytest.mark.asyncio
     async def test_health_s3_down(self, client: AsyncClient) -> None:
@@ -125,6 +139,48 @@ class TestHealth:
         assert data["status"] == "degraded"
         assert data["checks"]["db"] == "ok"
         assert "error" in data["checks"]["s3"]
+        assert data["checks"]["redis"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_health_redis_down(self, client: AsyncClient) -> None:
+        """GET /health returns 503 when Redis is unreachable."""
+        with mock_health_deps(redis_error=ConnectionError("redis down")):
+            response = await client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["db"] == "ok"
+        assert data["checks"]["s3"] == "ok"
+        assert "error" in data["checks"]["redis"]
+
+    @pytest.mark.asyncio
+    async def test_health_redis_timeout(self, client: AsyncClient) -> None:
+        """GET /health returns 503 when Redis times out."""
+        with mock_health_deps(redis_error=TimeoutError("redis timeout")):
+            response = await client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert "TimeoutError" in data["checks"]["redis"]
+
+    @pytest.mark.asyncio
+    async def test_health_all_down(self, client: AsyncClient) -> None:
+        """GET /health returns 503 when all services are down."""
+        with mock_health_deps(
+            db_error=TimeoutError("db"),
+            s3_error=ConnectionError("s3"),
+            redis_error=ConnectionError("redis"),
+        ):
+            response = await client.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert "error" in data["checks"]["db"]
+        assert "error" in data["checks"]["s3"]
+        assert "error" in data["checks"]["redis"]
 
     @pytest.mark.asyncio
     async def test_health_no_auth(self) -> None:

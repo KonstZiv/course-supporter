@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from arq.connections import ArqRedis
 
 import pytest
 from sqlalchemy.ext.asyncio import (
@@ -207,7 +210,7 @@ async def committed_job_and_material(
 
 
 @pytest.fixture()
-async def arq_redis() -> AsyncGenerator[Any]:
+async def arq_redis() -> AsyncGenerator[ArqRedis]:
     """Create and close a real ArqRedis connection pool."""
     from arq.connections import RedisSettings, create_pool
 

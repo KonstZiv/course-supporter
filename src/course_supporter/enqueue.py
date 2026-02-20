@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
 
 import structlog
+from arq.connections import ArqRedis
 from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.job_priority import JobPriority
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import Job
-
-if TYPE_CHECKING:
-    from arq.connections import ArqRedis
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def enqueue_ingestion(
@@ -43,7 +40,9 @@ async def enqueue_ingestion(
     Returns:
         The created Job with ``arq_job_id`` set.
     """
-    log = structlog.get_logger()
+    log = structlog.get_logger().bind(
+        course_id=str(course_id), material_id=str(material_id)
+    )
     repo = JobRepository(session)
 
     job = await repo.create(

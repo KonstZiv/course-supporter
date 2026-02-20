@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
@@ -17,6 +17,9 @@ from course_supporter.llm.router import ModelRouter
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Tenant
 from course_supporter.storage.s3 import S3Client
+
+if TYPE_CHECKING:
+    from arq.connections import ArqRedis
 
 __all__ = [
     "get_arq_redis",
@@ -77,13 +80,12 @@ async def get_current_tenant(
     )
 
 
-async def get_arq_redis(request: Request) -> object:
+async def get_arq_redis(request: Request) -> ArqRedis:
     """Retrieve ARQ Redis pool from app state.
 
     Initialized during lifespan startup.
-    Returns ArqRedis but typed as object to avoid import at module level.
     """
-    return request.app.state.arq_redis
+    return cast("ArqRedis", request.app.state.arq_redis)
 
 
 async def get_model_router(request: Request) -> ModelRouter:

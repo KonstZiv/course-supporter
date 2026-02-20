@@ -1,9 +1,12 @@
 """Course management API endpoints."""
 
+from __future__ import annotations
+
 import uuid
 from typing import Annotated
 
 import structlog
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,7 +41,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
-ArqDep = Annotated[object, Depends(get_arq_redis)]
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 VALID_SOURCE_TYPES = {t.value for t in SourceType}
 
@@ -167,7 +170,7 @@ async def create_material(
     )
 
     job = await enqueue_ingestion(
-        redis=arq,  # type: ignore[arg-type]
+        redis=arq,
         session=session,
         course_id=course_id,
         material_id=material.id,

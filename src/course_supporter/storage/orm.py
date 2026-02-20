@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 import uuid_utils as uuid7_lib
@@ -161,12 +162,22 @@ class MaterialNode(Base):
     )
 
 
+class MaterialState(StrEnum):
+    """Derived state of a MaterialEntry (not stored in DB)."""
+
+    RAW = "raw"
+    PENDING = "pending"
+    READY = "ready"
+    INTEGRITY_BROKEN = "integrity_broken"
+    ERROR = "error"
+
+
 class MaterialEntry(Base):
     """A single material attached to a node in the material tree.
 
     Separates raw (uploaded) and processed (ingested) layers with a
     pending "receipt" that tracks whether an ingestion job is in flight.
-    State is derived, not stored — see ``MaterialState`` (S2-015).
+    State is derived via the ``state`` property — see ``MaterialState``.
     """
 
     __tablename__ = "material_entries"
@@ -216,6 +227,24 @@ class MaterialEntry(Base):
 
     # ── Errors ──
     error_message: Mapped[str | None] = mapped_column(Text)
+
+    # ── Derived state ──
+
+    @property
+    def state(self) -> MaterialState:
+        """Derive current state from entry fields.
+
+        Priority: ERROR > PENDING > RAW > INTEGRITY_BROKEN > READY.
+        """
+        if self.error_message:
+            return MaterialState.ERROR
+        if self.pending_job_id is not None:
+            return MaterialState.PENDING
+        if self.processed_content is None:
+            return MaterialState.RAW
+        if self.raw_hash and self.processed_hash != self.raw_hash:
+            return MaterialState.INTEGRITY_BROKEN
+        return MaterialState.READY
 
     # ── Timestamps ──
     created_at: Mapped[datetime] = mapped_column(

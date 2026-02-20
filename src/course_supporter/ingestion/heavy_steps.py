@@ -14,6 +14,7 @@ Processors become orchestrators that call these functions via DI.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -22,16 +23,27 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
+class WhisperModelSize(StrEnum):
+    """Available Whisper model sizes."""
+
+    TINY = "tiny"
+    BASE = "base"
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+
+
 class TranscribeParams(BaseModel):
     """Parameters for audio transcription."""
 
-    model_name: str = Field(
-        default="base",
-        description="Whisper model size: tiny, base, small, medium, large.",
+    model_name: WhisperModelSize = Field(
+        default=WhisperModelSize.BASE,
+        description="Whisper model size.",
     )
     language: str | None = Field(
         default=None,
         description="ISO 639-1 language code. None = auto-detect.",
+        pattern=r"^[a-z]{2}$",
     )
 
 
@@ -47,7 +59,10 @@ class Transcript(BaseModel):
     """Result of audio transcription."""
 
     segments: list[TranscriptSegment]
-    language: str | None = None
+    language: str | None = Field(
+        default=None,
+        pattern=r"^[a-z]{2}$",
+    )
 
 
 TranscribeFunc = Callable[[str, TranscribeParams], Awaitable[Transcript]]

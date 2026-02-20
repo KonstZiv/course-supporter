@@ -21,7 +21,7 @@ jobs:
             git pull origin main
 
             echo "=== Build ==="
-            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker
 
             echo "=== Deploy ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d

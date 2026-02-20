@@ -7,13 +7,14 @@ from typing import Annotated
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
     CourseCreateRequest,
     CourseDetailResponse,
+    CourseListResponse,
     CourseResponse,
     LessonDetailResponse,
     MaterialCreateResponse,
@@ -59,6 +60,43 @@ async def create_course(
     course = await repo.create(title=body.title, description=body.description)
     await session.commit()
     return CourseResponse.model_validate(course)
+
+
+@router.get("/courses")
+async def list_courses(
+    tenant: SharedDep,
+    session: SessionDep,
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum number of courses to return (1-100).",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Number of courses to skip for pagination.",
+    ),
+) -> CourseListResponse:
+    """List courses for the authenticated tenant.
+
+    Returns a paginated list of courses sorted by creation date
+    (newest first). Use ``limit`` and ``offset`` to page through
+    results. The ``total`` field indicates the overall count.
+
+    Args:
+        limit: Maximum number of courses per page (1-100, default 20).
+        offset: Number of courses to skip for pagination (default 0).
+    """
+    repo = CourseRepository(session, tenant.tenant_id)
+    courses = await repo.list_all(limit=limit, offset=offset)
+    total = await repo.count()
+    return CourseListResponse(
+        items=[CourseResponse.model_validate(c) for c in courses],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/courses/{course_id}")

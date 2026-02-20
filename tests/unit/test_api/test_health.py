@@ -212,12 +212,14 @@ class TestRouting:
     @pytest.mark.asyncio
     async def test_api_v1_prefix_registered(self, client: AsyncClient) -> None:
         """Routes are registered under /api/v1."""
-        # /api/v1/courses should exist (empty router, returns 405 for GET)
-        # At minimum, the prefix should not 404 for valid paths
-        response = await client.get("/api/v1/courses")
-        # May return 404 (no GET route) or 405 — but NOT a path-not-found error
-        # with no routes defined, FastAPI returns 404 for the path
-        assert response.status_code in (200, 404, 405)
+        from course_supporter.storage.repositories import CourseRepository
+
+        with (
+            patch.object(CourseRepository, "list_all", return_value=[]),
+            patch.object(CourseRepository, "count", return_value=0),
+        ):
+            response = await client.get("/api/v1/courses")
+        assert response.status_code == 200
 
 
 class TestErrorHandling:

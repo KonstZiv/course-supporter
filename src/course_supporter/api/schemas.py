@@ -32,6 +32,33 @@ class CourseResponse(BaseModel):
     updated_at: datetime
 
 
+class CourseListResponse(BaseModel):
+    """Paginated response for ``GET /courses``.
+
+    Contains a list of courses and pagination metadata.
+    Use ``limit`` and ``offset`` query parameters to page
+    through results.
+
+    Example::
+
+        {
+            "items": [{"id": "...", "title": "Python 101", ...}],
+            "total": 42,
+            "limit": 20,
+            "offset": 0
+        }
+    """
+
+    items: list[CourseResponse] = Field(
+        description="List of courses for the current page."
+    )
+    total: int = Field(
+        description="Total number of courses matching the query (across all pages)."
+    )
+    limit: int = Field(description="Maximum items per page (as requested).")
+    offset: int = Field(description="Number of items skipped (as requested).")
+
+
 # --- Slide-Video Mapping ---
 
 

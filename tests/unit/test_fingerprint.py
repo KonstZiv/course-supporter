@@ -683,3 +683,322 @@ class TestRepositoryCascadeInvalidation:
 
         # _invalidate_node_chain called with None → returns immediately
         mock_inv.assert_awaited_once_with(None)
+
+
+class TestKnownHash:
+    """Verify Merkle hashes against pre-computed known values."""
+
+    async def test_material_known_sha256(self) -> None:
+        """Material fingerprint matches independently computed sha256."""
+        known = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+        entry = _make_entry(processed_content="Hello, World!")
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_material_fp(entry)
+        assert result == known
+
+    async def test_empty_node_known_hash(self) -> None:
+        """Empty node (no materials, no children) = sha256 of empty string."""
+        known = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        node = _make_node()
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+        assert result == known
+
+    async def test_node_with_one_material_known_hash(self) -> None:
+        """Node with single material = sha256('m:<material_fp>')."""
+        content = "test"
+        mat_fp = hashlib.sha256(content.encode()).hexdigest()
+        expected = hashlib.sha256(f"m:{mat_fp}".encode()).hexdigest()
+
+        node = _make_node(materials=[_make_entry(processed_content=content)])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+        assert result == expected
+
+
+class TestEdgeCases:
+    """Edge case tests for fingerprint computation."""
+
+    async def test_empty_string_content(self) -> None:
+        """Empty string processed_content produces valid fingerprint."""
+        entry = _make_entry(processed_content="")
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_material_fp(entry)
+
+        expected = hashlib.sha256(b"").hexdigest()
+        assert result == expected
+        assert len(result) == 64
+
+    async def test_unicode_content(self) -> None:
+        """Unicode processed_content (Cyrillic, emoji) hashed correctly."""
+        content = "Привіт, 世界! 🎓"
+        entry = _make_entry(processed_content=content)
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_material_fp(entry)
+
+        expected = hashlib.sha256(content.encode()).hexdigest()
+        assert result == expected
+
+    async def test_very_deep_tree(self) -> None:
+        """Fingerprint propagates through 10-level deep tree."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        # Build chain: leaf → ... → root (10 levels)
+        leaf = _make_node(materials=[_make_entry(processed_content="deep")])
+        current = leaf
+        for _ in range(9):
+            current = _make_node(children=[current])
+        root = current
+
+        result = await svc.ensure_node_fp(root)
+
+        assert len(result) == 64
+        assert root.node_fingerprint == result
+        # Verify all intermediate nodes got fingerprints
+        node = root
+        for _ in range(10):
+            assert node.node_fingerprint is not None
+            if node.children:
+                node = node.children[0]
+
+    async def test_large_content(self) -> None:
+        """Large processed_content produces valid fingerprint."""
+        content = "x" * 1_000_000
+        entry = _make_entry(processed_content=content)
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_material_fp(entry)
+
+        expected = hashlib.sha256(content.encode()).hexdigest()
+        assert result == expected
+
+    async def test_node_all_materials_unprocessed(self) -> None:
+        """Node where all materials lack processed_content = empty hash."""
+        raw1 = _make_entry(processed_content=None)
+        raw2 = _make_entry(processed_content=None)
+        node = _make_node(materials=[raw1, raw2])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        # All materials skipped → same as empty node
+        expected = hashlib.sha256(b"").hexdigest()
+        assert result == expected
+
+
+class TestBranchIndependence:
+    """Verify changes in one branch don't affect another."""
+
+    async def test_invalidation_preserves_other_branch(self) -> None:
+        """Invalidating one branch leaves sibling branch fingerprints intact."""
+        # Tree:
+        #        root
+        #       /    \
+        #    branchA  branchB
+        #      |        |
+        #    leafA    leafB
+        leaf_a = _make_node(
+            materials=[_make_entry(processed_content="A")],
+            node_fingerprint="leaf_a_fp",
+        )
+        leaf_b = _make_node(
+            materials=[_make_entry(processed_content="B")],
+            node_fingerprint="leaf_b_fp",
+        )
+        branch_a = _make_node(children=[leaf_a], node_fingerprint="branch_a_fp")
+        branch_b = _make_node(children=[leaf_b], node_fingerprint="branch_b_fp")
+        root = _make_node(children=[branch_a, branch_b], node_fingerprint="root_fp")
+
+        leaf_a.parent_id = branch_a.id
+        branch_a.parent_id = root.id
+        leaf_b.parent_id = branch_b.id
+        branch_b.parent_id = root.id
+        root.parent_id = None
+
+        session = AsyncMock()
+        session.get = AsyncMock(
+            side_effect=lambda _cls, pid: {
+                branch_a.id: branch_a,
+                branch_b.id: branch_b,
+                root.id: root,
+            }.get(pid)
+        )
+
+        svc = FingerprintService(session)
+        await svc.invalidate_up(leaf_a)
+
+        # Branch A path invalidated
+        assert leaf_a.node_fingerprint is None
+        assert branch_a.node_fingerprint is None
+        assert root.node_fingerprint is None
+
+        # Branch B untouched
+        assert leaf_b.node_fingerprint == "leaf_b_fp"
+        assert branch_b.node_fingerprint == "branch_b_fp"
+
+    async def test_different_branches_produce_different_hashes(self) -> None:
+        """Two branches with different content have different fingerprints."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        branch_a = _make_node(materials=[_make_entry(processed_content="alpha")])
+        branch_b = _make_node(materials=[_make_entry(processed_content="beta")])
+
+        fp_a = await svc.ensure_node_fp(branch_a)
+        fp_b = await svc.ensure_node_fp(branch_b)
+
+        assert fp_a != fp_b
+
+    async def test_swapping_branches_changes_nothing(self) -> None:
+        """Swapping branch order doesn't change root fp (sorted parts)."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        root1 = _make_node(
+            children=[
+                _make_node(materials=[_make_entry(processed_content="A")]),
+                _make_node(materials=[_make_entry(processed_content="B")]),
+            ]
+        )
+        root2 = _make_node(
+            children=[
+                _make_node(materials=[_make_entry(processed_content="B")]),
+                _make_node(materials=[_make_entry(processed_content="A")]),
+            ]
+        )
+
+        fp1 = await svc.ensure_node_fp(root1)
+        fp2 = await svc.ensure_node_fp(root2)
+        assert fp1 == fp2
+
+
+class TestLazyCalculation:
+    """Verify fingerprints are only computed when needed."""
+
+    async def test_cached_subtree_not_recomputed(self) -> None:
+        """Child with cached fingerprint is not recomputed."""
+        child_fp = "c" * 64
+        child = _make_node(node_fingerprint=child_fp)
+        parent = _make_node(children=[child])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(parent)
+
+        # Parent computed using child's cached fp
+        expected = hashlib.sha256(f"n:{child_fp}".encode()).hexdigest()
+        assert result == expected
+        # Child's fingerprint wasn't changed
+        assert child.node_fingerprint == child_fp
+
+    async def test_mixed_cached_and_fresh(self) -> None:
+        """Node with one cached child and one fresh child works correctly."""
+        cached_fp = "d" * 64
+        cached_child = _make_node(node_fingerprint=cached_fp)
+        fresh_child = _make_node(materials=[_make_entry(processed_content="new")])
+        parent = _make_node(children=[cached_child, fresh_child])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(parent)
+
+        # Fresh child gets computed
+        fresh_fp = hashlib.sha256(
+            f"m:{hashlib.sha256(b'new').hexdigest()}".encode()
+        ).hexdigest()
+        parts = sorted([f"n:{cached_fp}", f"n:{fresh_fp}"])
+        expected = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+        assert result == expected
+
+    async def test_cached_material_not_recomputed(self) -> None:
+        """Material with existing content_fingerprint uses cached value."""
+        cached_fp = "e" * 64
+        mat = _make_entry(
+            processed_content="should not be hashed",
+            content_fingerprint=cached_fp,
+        )
+        node = _make_node(materials=[mat])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        expected = hashlib.sha256(f"m:{cached_fp}".encode()).hexdigest()
+        assert result == expected
+
+    async def test_ensure_course_fp_uses_cached_nodes(self) -> None:
+        """ensure_course_fp does not recompute cached root nodes."""
+        cached_fp = "f" * 64
+        root = _make_node(node_fingerprint=cached_fp)
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_course_fp([root])
+
+        expected = hashlib.sha256(cached_fp.encode()).hexdigest()
+        assert result == expected
+
+    async def test_no_flush_when_all_cached(self) -> None:
+        """ensure_node_fp with fully cached node does not flush."""
+        node = _make_node(node_fingerprint="a" * 64)
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        await svc.ensure_node_fp(node)
+        session.flush.assert_not_awaited()
+
+
+class TestCourseFpDeepTree:
+    """Course fingerprint with deep, complex trees."""
+
+    async def test_course_fp_with_deep_nested_tree(self) -> None:
+        """Course fp reflects entire nested tree structure."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        # Root → child → grandchild with material
+        grandchild = _make_node(materials=[_make_entry(processed_content="deep")])
+        child = _make_node(children=[grandchild])
+        root = _make_node(children=[child])
+
+        fp1 = await svc.ensure_course_fp([root])
+
+        # Change the deep material
+        grandchild2 = _make_node(materials=[_make_entry(processed_content="changed")])
+        child2 = _make_node(children=[grandchild2])
+        root2 = _make_node(children=[child2])
+
+        fp2 = await svc.ensure_course_fp([root2])
+
+        assert fp1 != fp2
+
+    async def test_course_fp_multiple_roots_with_subtrees(self) -> None:
+        """Course with multiple root nodes, each with subtrees."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        root_a = _make_node(
+            children=[
+                _make_node(materials=[_make_entry(processed_content="a1")]),
+                _make_node(materials=[_make_entry(processed_content="a2")]),
+            ]
+        )
+        root_b = _make_node(materials=[_make_entry(processed_content="b")])
+
+        result = await svc.ensure_course_fp([root_a, root_b])
+
+        assert len(result) == 64
+        assert isinstance(result, str)

@@ -77,6 +77,12 @@ First argument is the path to a WAV audio file on local disk.
 # Slide / image description (Vision LLM)
 # ---------------------------------------------------------------------------
 
+DEFAULT_SLIDE_DESCRIPTION_PROMPT = (
+    "Describe this slide. "
+    "Focus on diagrams, charts, and key visual elements. "
+    "Ignore decorative elements."
+)
+
 
 class DescribeSlidesParams(BaseModel):
     """Parameters for slide image description via Vision LLM."""
@@ -87,11 +93,7 @@ class DescribeSlidesParams(BaseModel):
         description="Resolution for rendering PDF pages to images.",
     )
     prompt: str = Field(
-        default=(
-            "Describe this slide. "
-            "Focus on diagrams, charts, and key visual elements. "
-            "Ignore decorative elements."
-        ),
+        default=DEFAULT_SLIDE_DESCRIPTION_PROMPT,
         description="Prompt sent to the Vision model for each slide.",
     )
 

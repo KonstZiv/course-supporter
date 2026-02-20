@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import MaterialEntry
+from course_supporter.storage.orm import MaterialEntry, MaterialNode
 
 
 class MaterialEntryRepository:
@@ -51,6 +51,7 @@ class MaterialEntryRepository:
         )
         self._session.add(entry)
         await self._session.flush()
+        await self._invalidate_node_chain(node_id)
         return entry
 
     async def get_by_id(self, entry_id: uuid.UUID) -> MaterialEntry | None:
@@ -134,6 +135,7 @@ class MaterialEntryRepository:
         entry.pending_since = None
         entry.error_message = None
         await self._session.flush()
+        await self._invalidate_node_chain(entry.node_id)
         return entry
 
     async def fail_processing(
@@ -188,6 +190,7 @@ class MaterialEntryRepository:
         entry.raw_size_bytes = None
         entry.content_fingerprint = None  # invalidate — source changed
         await self._session.flush()
+        await self._invalidate_node_chain(entry.node_id)
         return entry
 
     async def ensure_raw_hash(
@@ -215,16 +218,26 @@ class MaterialEntryRepository:
         return entry
 
     async def delete(self, entry_id: uuid.UUID) -> None:
-        """Delete an entry.
+        """Delete an entry and invalidate parent node fingerprints.
 
         Raises:
             ValueError: If entry not found.
         """
         entry = await self._require(entry_id)
+        node_id = entry.node_id
         await self._session.delete(entry)
         await self._session.flush()
+        await self._invalidate_node_chain(node_id)
 
     # ── Private helpers ──
+
+    async def _invalidate_node_chain(self, node_id: uuid.UUID) -> None:
+        """Invalidate fingerprints from node up to root."""
+        from course_supporter.fingerprint import FingerprintService
+
+        node = await self._session.get(MaterialNode, node_id)
+        if node is not None:
+            await FingerprintService(self._session).invalidate_up(node)
 
     async def _require(self, entry_id: uuid.UUID) -> MaterialEntry:
         """Get entry or raise ValueError."""

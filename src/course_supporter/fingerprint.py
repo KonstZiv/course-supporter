@@ -6,7 +6,7 @@ import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import MaterialEntry
+from course_supporter.storage.orm import MaterialEntry, MaterialNode
 
 
 class FingerprintService:
@@ -52,3 +52,46 @@ class FingerprintService:
         entry.content_fingerprint = fp
         await self._session.flush()
         return fp
+
+    async def ensure_node_fp(self, node: MaterialNode) -> str:
+        """Lazily compute and cache Merkle fingerprint for a node.
+
+        Combines material fingerprints (``m:<hex>``) and child node
+        fingerprints (``n:<hex>``) into a sorted list, joins with
+        newline, and hashes with SHA-256. Recurses into children
+        first (bottom-up).
+
+        Materials without ``processed_content`` are skipped — the
+        fingerprint reflects only processed materials.
+
+        The node's ``materials`` and ``children`` relationships must
+        be loaded before calling this method.
+
+        Args:
+            node: A loaded MaterialNode ORM instance with eagerly
+                loaded ``materials`` and ``children``.
+
+        Returns:
+            64-char lowercase hex SHA-256 digest.
+        """
+        if node.node_fingerprint is not None:
+            return node.node_fingerprint
+
+        parts: list[str] = []
+
+        # Material fingerprints (skip unprocessed)
+        for mat in node.materials:
+            if mat.processed_content is not None:
+                fp = await self.ensure_material_fp(mat)
+                parts.append(f"m:{fp}")
+
+        # Child node fingerprints (recursive)
+        for child in node.children:
+            fp = await self.ensure_node_fp(child)
+            parts.append(f"n:{fp}")
+
+        parts.sort()
+        digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+        node.node_fingerprint = digest
+        await self._session.flush()
+        return digest

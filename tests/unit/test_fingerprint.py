@@ -1,4 +1,4 @@
-"""Tests for FingerprintService — material level (S2-024)."""
+"""Tests for FingerprintService — material & node levels (S2-024, S2-025)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from course_supporter.fingerprint import FingerprintService
-from course_supporter.storage.orm import MaterialEntry
+from course_supporter.storage.orm import MaterialEntry, MaterialNode
 
 
 def _make_entry(
@@ -23,6 +23,21 @@ def _make_entry(
     entry.processed_content = processed_content
     entry.content_fingerprint = content_fingerprint
     return entry
+
+
+def _make_node(
+    *,
+    materials: list[MagicMock] | None = None,
+    children: list[MagicMock] | None = None,
+    node_fingerprint: str | None = None,
+) -> MagicMock:
+    """Create a mock MaterialNode with materials and children."""
+    node = MagicMock(spec=MaterialNode)
+    node.id = uuid.uuid4()
+    node.materials = materials or []
+    node.children = children or []
+    node.node_fingerprint = node_fingerprint
+    return node
 
 
 class TestEnsureMaterialFp:
@@ -169,3 +184,158 @@ class TestRepositoryInvalidation:
             )
 
         assert entry.content_fingerprint is None
+
+
+class TestEnsureNodeFp:
+    """Tests for ensure_node_fp — Merkle hash of a node subtree."""
+
+    async def test_empty_node(self) -> None:
+        """Empty node (no materials, no children) returns deterministic hash."""
+        node = _make_node()
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        expected = hashlib.sha256(b"").hexdigest()
+        assert result == expected
+        assert node.node_fingerprint == expected
+        session.flush.assert_awaited()
+
+    async def test_single_material(self) -> None:
+        """Node with one processed material includes its fingerprint."""
+        mat = _make_entry(processed_content="lesson text")
+        node = _make_node(materials=[mat])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        mat_fp = hashlib.sha256(b"lesson text").hexdigest()
+        expected = hashlib.sha256(f"m:{mat_fp}".encode()).hexdigest()
+        assert result == expected
+
+    async def test_skips_unprocessed_materials(self) -> None:
+        """Materials without processed_content are excluded."""
+        processed = _make_entry(processed_content="done")
+        raw = _make_entry(processed_content=None)
+        node = _make_node(materials=[processed, raw])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        # Same as node with only the processed material
+        node_single = _make_node(materials=[_make_entry(processed_content="done")])
+        result_single = await svc.ensure_node_fp(node_single)
+        assert result == result_single
+
+    async def test_single_child_node(self) -> None:
+        """Node with one child includes child's Merkle hash."""
+        child = _make_node(materials=[_make_entry(processed_content="child text")])
+        parent = _make_node(children=[child])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(parent)
+
+        # Child fp first
+        child_mat_fp = hashlib.sha256(b"child text").hexdigest()
+        child_fp = hashlib.sha256(f"m:{child_mat_fp}".encode()).hexdigest()
+        expected = hashlib.sha256(f"n:{child_fp}".encode()).hexdigest()
+        assert result == expected
+
+    async def test_nested_3_levels(self) -> None:
+        """Merkle hash propagates correctly through 3 levels."""
+        leaf = _make_node(materials=[_make_entry(processed_content="leaf")])
+        mid = _make_node(children=[leaf])
+        root = _make_node(children=[mid])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(root)
+
+        # Compute bottom-up
+        leaf_mat_fp = hashlib.sha256(b"leaf").hexdigest()
+        leaf_fp = hashlib.sha256(f"m:{leaf_mat_fp}".encode()).hexdigest()
+        mid_fp = hashlib.sha256(f"n:{leaf_fp}".encode()).hexdigest()
+        expected = hashlib.sha256(f"n:{mid_fp}".encode()).hexdigest()
+        assert result == expected
+
+    async def test_deterministic_same_data_same_hash(self) -> None:
+        """Same tree structure + content produces the same hash."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        node1 = _make_node(materials=[_make_entry(processed_content="aaa")])
+        node2 = _make_node(materials=[_make_entry(processed_content="aaa")])
+
+        fp1 = await svc.ensure_node_fp(node1)
+        fp2 = await svc.ensure_node_fp(node2)
+        assert fp1 == fp2
+
+    async def test_cache_hit_returns_existing(self) -> None:
+        """If node_fingerprint is already set, return it without recalc."""
+        cached = "b" * 64
+        node = _make_node(node_fingerprint=cached)
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(node)
+
+        assert result == cached
+        session.flush.assert_not_awaited()
+
+    async def test_invalidation_then_recalculate(self) -> None:
+        """After clearing node_fingerprint, next call recomputes."""
+        node = _make_node(materials=[_make_entry(processed_content="data")])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        fp1 = await svc.ensure_node_fp(node)
+        assert node.node_fingerprint == fp1
+
+        # Invalidate
+        node.node_fingerprint = None
+
+        fp2 = await svc.ensure_node_fp(node)
+        assert fp2 == fp1  # same data → same hash
+
+    async def test_parts_are_sorted(self) -> None:
+        """Material and child parts are sorted before hashing."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        mat_a = _make_entry(processed_content="aaa")
+        mat_b = _make_entry(processed_content="bbb")
+
+        # Order of materials should not affect fingerprint
+        node1 = _make_node(materials=[mat_a, mat_b])
+        node2 = _make_node(
+            materials=[
+                _make_entry(processed_content="bbb"),
+                _make_entry(processed_content="aaa"),
+            ],
+        )
+
+        fp1 = await svc.ensure_node_fp(node1)
+        fp2 = await svc.ensure_node_fp(node2)
+        assert fp1 == fp2
+
+    async def test_materials_and_children_mixed(self) -> None:
+        """Node with both materials and children combines all parts."""
+        child = _make_node(materials=[_make_entry(processed_content="child")])
+        mat = _make_entry(processed_content="parent mat")
+        parent = _make_node(materials=[mat], children=[child])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_node_fp(parent)
+
+        # Compute expected
+        mat_fp = hashlib.sha256(b"parent mat").hexdigest()
+        child_mat_fp = hashlib.sha256(b"child").hexdigest()
+        child_fp = hashlib.sha256(f"m:{child_mat_fp}".encode()).hexdigest()
+        parts = sorted([f"m:{mat_fp}", f"n:{child_fp}"])
+        expected = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+        assert result == expected

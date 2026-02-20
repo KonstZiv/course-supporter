@@ -422,3 +422,103 @@ class TestEnsureCourseFp:
         await svc.ensure_course_fp([root])
 
         session.flush.assert_awaited_once()
+
+
+class TestInvalidateUp:
+    """Tests for invalidate_up — cascade fingerprint invalidation."""
+
+    async def test_leaf_to_root_all_invalidated(self) -> None:
+        """All ancestors from leaf to root get node_fingerprint=None."""
+        leaf = _make_node(node_fingerprint="leaf_fp")
+        mid = _make_node(node_fingerprint="mid_fp")
+        root = _make_node(node_fingerprint="root_fp")
+
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
+
+        session = AsyncMock()
+        session.get = AsyncMock(
+            side_effect=lambda _cls, pid: {mid.id: mid, root.id: root}.get(pid)
+        )
+
+        svc = FingerprintService(session)
+        await svc.invalidate_up(leaf)
+
+        assert leaf.node_fingerprint is None
+        assert mid.node_fingerprint is None
+        assert root.node_fingerprint is None
+
+    async def test_root_node_only(self) -> None:
+        """Root node (no parent) gets invalidated, no further walk."""
+        root = _make_node(node_fingerprint="root_fp")
+        root.parent_id = None
+
+        session = AsyncMock()
+        svc = FingerprintService(session)
+        await svc.invalidate_up(root)
+
+        assert root.node_fingerprint is None
+        session.get.assert_not_awaited()
+
+    async def test_siblings_untouched(self) -> None:
+        """Sibling nodes are not affected by invalidation."""
+        leaf = _make_node(node_fingerprint="leaf_fp")
+        sibling = _make_node(node_fingerprint="sibling_fp")
+        parent = _make_node(node_fingerprint="parent_fp")
+
+        leaf.parent_id = parent.id
+        sibling.parent_id = parent.id
+        parent.parent_id = None
+
+        session = AsyncMock()
+        session.get = AsyncMock(
+            side_effect=lambda _cls, pid: {parent.id: parent}.get(pid)
+        )
+
+        svc = FingerprintService(session)
+        await svc.invalidate_up(leaf)
+
+        assert leaf.node_fingerprint is None
+        assert parent.node_fingerprint is None
+        assert sibling.node_fingerprint == "sibling_fp"  # untouched
+
+    async def test_single_flush_after_walk(self) -> None:
+        """Only one flush after the entire chain walk."""
+        leaf = _make_node(node_fingerprint="fp")
+        mid = _make_node(node_fingerprint="fp")
+        root = _make_node(node_fingerprint="fp")
+
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
+
+        session = AsyncMock()
+        session.get = AsyncMock(
+            side_effect=lambda _cls, pid: {mid.id: mid, root.id: root}.get(pid)
+        )
+
+        svc = FingerprintService(session)
+        await svc.invalidate_up(leaf)
+
+        session.flush.assert_awaited_once()
+
+    async def test_already_none_still_walks(self) -> None:
+        """Even if a node has fingerprint=None, walk continues upward."""
+        leaf = _make_node(node_fingerprint="fp")
+        mid = _make_node(node_fingerprint=None)  # already invalidated
+        root = _make_node(node_fingerprint="root_fp")
+
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
+
+        session = AsyncMock()
+        session.get = AsyncMock(
+            side_effect=lambda _cls, pid: {mid.id: mid, root.id: root}.get(pid)
+        )
+
+        svc = FingerprintService(session)
+        await svc.invalidate_up(leaf)
+
+        assert root.node_fingerprint is None  # still reached and cleared

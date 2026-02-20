@@ -80,6 +80,32 @@ class FingerprintService:
         await self._session.flush()
         return fp
 
+    async def ensure_course_fp(self, root_nodes: list[MaterialNode]) -> str:
+        """Compute Merkle fingerprint for an entire course.
+
+        Combines root-node fingerprints into a sorted list and hashes
+        them. Each root node's subtree is computed via
+        ``_compute_node_fp`` (bottom-up), then a single flush persists
+        all computed fingerprints.
+
+        Not stored in DB — computed on the fly from root nodes.
+
+        Args:
+            root_nodes: Root-level MaterialNode instances
+                (``parent_id is None``) with eagerly loaded subtrees.
+
+        Returns:
+            64-char lowercase hex SHA-256 digest.
+        """
+        parts: list[str] = []
+        for node in root_nodes:
+            fp = self._compute_node_fp(node)
+            parts.append(fp)
+        parts.sort()
+        digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+        await self._session.flush()
+        return digest
+
     # ── Internal compute (no flush) ──
 
     @staticmethod

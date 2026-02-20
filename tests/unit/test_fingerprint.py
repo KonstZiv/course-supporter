@@ -339,3 +339,86 @@ class TestEnsureNodeFp:
         parts = sorted([f"m:{mat_fp}", f"n:{child_fp}"])
         expected = hashlib.sha256("\n".join(parts).encode()).hexdigest()
         assert result == expected
+
+
+class TestEnsureCourseFp:
+    """Tests for ensure_course_fp — course-level Merkle hash."""
+
+    async def test_empty_course_no_roots(self) -> None:
+        """Course with no root nodes returns hash of empty string."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_course_fp([])
+
+        expected = hashlib.sha256(b"").hexdigest()
+        assert result == expected
+
+    async def test_single_root(self) -> None:
+        """Course with one root node returns hash of that root's fp."""
+        root = _make_node(materials=[_make_entry(processed_content="data")])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        result = await svc.ensure_course_fp([root])
+
+        root_fp = hashlib.sha256(
+            f"m:{hashlib.sha256(b'data').hexdigest()}".encode()
+        ).hexdigest()
+        expected = hashlib.sha256(root_fp.encode()).hexdigest()
+        assert result == expected
+
+    async def test_multiple_roots_sorted(self) -> None:
+        """Root node order does not affect course fingerprint."""
+        root_a = _make_node(materials=[_make_entry(processed_content="aaa")])
+        root_b = _make_node(materials=[_make_entry(processed_content="bbb")])
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        fp1 = await svc.ensure_course_fp([root_a, root_b])
+
+        # Reverse order
+        root_a2 = _make_node(materials=[_make_entry(processed_content="aaa")])
+        root_b2 = _make_node(materials=[_make_entry(processed_content="bbb")])
+        fp2 = await svc.ensure_course_fp([root_b2, root_a2])
+
+        assert fp1 == fp2
+
+    async def test_stable_when_nothing_changes(self) -> None:
+        """Same tree produces same course fingerprint."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        root1 = _make_node(materials=[_make_entry(processed_content="x")])
+        root2 = _make_node(materials=[_make_entry(processed_content="x")])
+
+        fp1 = await svc.ensure_course_fp([root1])
+        fp2 = await svc.ensure_course_fp([root2])
+        assert fp1 == fp2
+
+    async def test_changes_when_material_changes(self) -> None:
+        """Course fp changes when any material content changes."""
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        root_v1 = _make_node(materials=[_make_entry(processed_content="v1")])
+        root_v2 = _make_node(materials=[_make_entry(processed_content="v2")])
+
+        fp1 = await svc.ensure_course_fp([root_v1])
+        fp2 = await svc.ensure_course_fp([root_v2])
+        assert fp1 != fp2
+
+    async def test_single_flush(self) -> None:
+        """ensure_course_fp issues exactly one flush."""
+        root = _make_node(
+            children=[
+                _make_node(materials=[_make_entry(processed_content="a")]),
+                _make_node(materials=[_make_entry(processed_content="b")]),
+            ],
+        )
+        session = AsyncMock()
+        svc = FingerprintService(session)
+
+        await svc.ensure_course_fp([root])
+
+        session.flush.assert_awaited_once()

@@ -7,9 +7,9 @@ import pytest
 
 from course_supporter.ingestion_callback import IngestionCallback
 
-# Lazy imports in IngestionCallback methods — patch at SOURCE modules
-_MAT_REPO = "course_supporter.storage.repositories.SourceMaterialRepository"
-_JOB_REPO = "course_supporter.storage.job_repository.JobRepository"
+# Top-level imports in ingestion_callback — patch on the importing module
+_MAT_REPO = "course_supporter.ingestion_callback.SourceMaterialRepository"
+_JOB_REPO = "course_supporter.ingestion_callback.JobRepository"
 
 
 def _mock_session_factory() -> MagicMock:
@@ -406,10 +406,13 @@ class TestCallbackIntegrationWithArqTask:
 
         ctx = {"session_factory": factory, "model_router": router}
 
+        # arq_ingest_material has lazy import of JobRepository from storage
+        _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
-            patch(_JOB_REPO) as job_cls,
+            patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
             patch.dict(PROCESSOR_MAP, {"web": mock_processor}, clear=True),
         ):
@@ -449,10 +452,13 @@ class TestCallbackIntegrationWithArqTask:
 
         ctx = {"session_factory": factory, "model_router": router}
 
+        # arq_ingest_material has lazy import of JobRepository from storage
+        _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
-            patch(_JOB_REPO) as job_cls,
+            patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
         ):
             job_cls.return_value.update_status = AsyncMock()

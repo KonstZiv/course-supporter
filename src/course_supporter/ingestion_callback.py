@@ -26,6 +26,9 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.repositories import SourceMaterialRepository
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -60,9 +63,6 @@ class IngestionCallback:
             material_id: The SourceMaterial that was processed.
             content_json: Serialized SourceDocument JSON.
         """
-        from course_supporter.storage.job_repository import JobRepository
-        from course_supporter.storage.repositories import SourceMaterialRepository
-
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
         )
@@ -107,9 +107,6 @@ class IngestionCallback:
             material_id: The SourceMaterial that failed.
             error_message: Human-readable error description.
         """
-        from course_supporter.storage.job_repository import JobRepository
-        from course_supporter.storage.repositories import SourceMaterialRepository
-
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
         )

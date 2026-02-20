@@ -196,7 +196,6 @@ class TestGetTreeIncludeMaterials:
         root = _mock_node(course_id=cid, title="Root")
         # Simulate materials list on the node (as selectinload would populate)
         mat1 = MagicMock()
-        mat1.order = 0
         root.materials = [mat1]
 
         session = AsyncMock()

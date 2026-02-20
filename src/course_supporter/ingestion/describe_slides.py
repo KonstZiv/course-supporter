@@ -35,8 +35,10 @@ async def local_describe_slides(
 ) -> list[SlideDescription]:
     """Describe PDF slides using a Vision LLM.
 
-    Renders each PDF page to a PNG image at the configured DPI,
-    then sends each image to the Vision LLM for description.
+    Renders each PDF page to a PNG image at the configured DPI
+    (sequential — fitz is not thread-safe for concurrent document access),
+    then sends all images to the Vision LLM in parallel via asyncio.gather
+    (I/O-bound LLM calls benefit from concurrency).
 
     Individual slide failures are logged and skipped — they do not
     crash the entire batch.
@@ -80,23 +82,30 @@ async def local_describe_slides(
         page_count = len(doc)
         logger.info("slide_description_pdf_opened", page_count=page_count)
 
-        descriptions: list[SlideDescription] = []
-
+        # Phase 1: render all pages to PNG (sequential — fitz not thread-safe)
+        page_images: list[tuple[int, bytes]] = []
         for page_idx in range(page_count):
-            slide_number = page_idx + 1
-            description = await _describe_single_slide(
-                doc=doc,
-                page_idx=page_idx,
-                slide_number=slide_number,
-                params=params,
-                router=router,
-                loop=loop,
-                logger=logger,
+            image_bytes = await loop.run_in_executor(
+                None, _render_page_to_png, doc, page_idx, params.dpi
             )
-            if description is not None:
-                descriptions.append(description)
+            page_images.append((page_idx + 1, image_bytes))
     finally:
         doc.close()
+
+    # Phase 2: send all images to Vision LLM in parallel (I/O-bound)
+    tasks = [
+        _describe_with_llm(
+            slide_number=slide_number,
+            image_bytes=image_bytes,
+            params=params,
+            router=router,
+            logger=logger,
+        )
+        for slide_number, image_bytes in page_images
+    ]
+    results = await asyncio.gather(*tasks)
+
+    descriptions = [d for d in results if d is not None]
 
     logger.info(
         "slide_description_done",
@@ -106,29 +115,19 @@ async def local_describe_slides(
     return descriptions
 
 
-async def _describe_single_slide(
+async def _describe_with_llm(
     *,
-    doc: object,
-    page_idx: int,
     slide_number: int,
+    image_bytes: bytes,
     params: DescribeSlidesParams,
     router: ModelRouter,
-    loop: asyncio.AbstractEventLoop,
     logger: structlog.stdlib.BoundLogger,
 ) -> SlideDescription | None:
-    """Render and describe a single slide.
+    """Send a single slide image to Vision LLM for description.
 
-    Returns None if the slide fails (logged, not raised).
+    Returns None if the call fails (logged, not raised).
     """
     try:
-        image_bytes = await loop.run_in_executor(
-            None,
-            _render_page_to_png,
-            doc,
-            page_idx,
-            params.dpi,
-        )
-
         response = await router.complete(
             action="presentation_analysis",
             prompt=params.prompt,
@@ -158,9 +157,6 @@ async def _describe_single_slide(
 
 def _render_page_to_png(doc: object, page_idx: int, dpi: int) -> bytes:
     """Render a PDF page to PNG bytes (sync, runs in executor)."""
-    import fitz
-
-    # fitz.Document is not easily type-hinted; use getitem protocol
-    page: fitz.Page = doc[page_idx]  # type: ignore[index]
+    page = doc[page_idx]  # type: ignore[index]
     pixmap = page.get_pixmap(dpi=dpi)
     return bytes(pixmap.tobytes("png"))

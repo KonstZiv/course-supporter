@@ -248,6 +248,37 @@ class TestLocalDescribeSlidesEdgeCases:
 
         assert result == []
 
+    async def test_doc_closed_before_llm_calls(self) -> None:
+        """PDF document is closed before LLM calls start (two-phase design)."""
+        doc = _mock_fitz_doc(page_count=1)
+        fitz_mod = _mock_fitz_module(doc)
+
+        # Track call order
+        call_order: list[str] = []
+        original_close = doc.close
+
+        def track_close() -> None:
+            call_order.append("doc.close")
+            original_close()
+
+        doc.close = track_close
+
+        async def track_complete(**kwargs: object) -> MagicMock:
+            call_order.append("router.complete")
+            resp = MagicMock()
+            resp.content = "Description"
+            return resp
+
+        router = AsyncMock()
+        router.complete.side_effect = track_complete
+
+        with patch.dict("sys.modules", {"fitz": fitz_mod}):
+            await local_describe_slides(
+                "/tmp/slides.pdf", DescribeSlidesParams(), router=router
+            )
+
+        assert call_order == ["doc.close", "router.complete"]
+
 
 class TestLocalDescribeSlidesErrors:
     async def test_file_not_found(self) -> None:

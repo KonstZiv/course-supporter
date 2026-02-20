@@ -11,6 +11,10 @@ from sqlalchemy.orm import selectinload
 
 from course_supporter.storage.orm import MaterialNode
 
+# Lazy import helper to avoid circular dependency at module load time.
+# FingerprintService → orm.py ← MaterialNodeRepository → FingerprintService
+# Actual import deferred to _invalidate_node_chain().
+
 
 class _Unset(Enum):
     """Sentinel for distinguishing 'not provided' from None."""
@@ -169,9 +173,13 @@ class MaterialNodeRepository:
                 )
                 raise ValueError(msg)
 
+        old_parent_id = node.parent_id
         node.parent_id = new_parent_id
         node.order = await self._next_sibling_order(node.course_id, new_parent_id)
         await self._session.flush()
+        # Invalidate both old and new parent chains
+        await self._invalidate_node_chain(old_parent_id)
+        await self._invalidate_node_chain(new_parent_id)
         return node
 
     async def reorder(self, node_id: uuid.UUID, new_order: int) -> MaterialNode:
@@ -263,7 +271,7 @@ class MaterialNodeRepository:
         return node
 
     async def delete(self, node_id: uuid.UUID) -> None:
-        """Delete a node (children cascade via ORM).
+        """Delete a node (children cascade via ORM) and invalidate parent.
 
         Raises:
             ValueError: If node not found.
@@ -272,10 +280,22 @@ class MaterialNodeRepository:
         if node is None:
             msg = f"MaterialNode not found: {node_id}"
             raise ValueError(msg)
+        parent_id = node.parent_id
         await self._session.delete(node)
         await self._session.flush()
+        await self._invalidate_node_chain(parent_id)
 
     # ── Private helpers ──
+
+    async def _invalidate_node_chain(self, node_id: uuid.UUID | None) -> None:
+        """Invalidate fingerprints from node up to root."""
+        if node_id is None:
+            return
+        from course_supporter.fingerprint import FingerprintService
+
+        node = await self._session.get(MaterialNode, node_id)
+        if node is not None:
+            await FingerprintService(self._session).invalidate_up(node)
 
     async def _next_sibling_order(
         self,

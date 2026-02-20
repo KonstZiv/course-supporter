@@ -156,6 +156,7 @@ class TestRepositoryInvalidation:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mp.setattr(repo, "_invalidate_node_chain", AsyncMock())
             await repo.complete_processing(
                 entry.id,
                 processed_content="new content",
@@ -178,6 +179,7 @@ class TestRepositoryInvalidation:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mp.setattr(repo, "_invalidate_node_chain", AsyncMock())
             await repo.update_source(
                 entry.id,
                 source_url="https://new-url.com",
@@ -522,3 +524,162 @@ class TestInvalidateUp:
         await svc.invalidate_up(leaf)
 
         assert root.node_fingerprint is None  # still reached and cleared
+
+
+class TestRepositoryCascadeInvalidation:
+    """Tests for auto-invalidation in repository CRUD methods (S2-028)."""
+
+    async def test_entry_create_invalidates_node(self) -> None:
+        """MaterialEntryRepository.create triggers cascade invalidation."""
+        from course_supporter.storage.material_entry_repository import (
+            MaterialEntryRepository,
+        )
+
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            mp.setattr(repo, "_next_sibling_order", AsyncMock(return_value=0))
+            await repo.create(
+                node_id=uuid.uuid4(),
+                source_type="text",
+                source_url="https://example.com",
+            )
+
+        mock_inv.assert_awaited_once()
+
+    async def test_entry_complete_processing_invalidates_node(self) -> None:
+        """MaterialEntryRepository.complete_processing triggers cascade."""
+        from course_supporter.storage.material_entry_repository import (
+            MaterialEntryRepository,
+        )
+
+        entry = MagicMock(spec=MaterialEntry)
+        entry.node_id = uuid.uuid4()
+
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.complete_processing(
+                entry.id, processed_content="done", processed_hash="abc"
+            )
+
+        mock_inv.assert_awaited_once_with(entry.node_id)
+
+    async def test_entry_update_source_invalidates_node(self) -> None:
+        """MaterialEntryRepository.update_source triggers cascade."""
+        from course_supporter.storage.material_entry_repository import (
+            MaterialEntryRepository,
+        )
+
+        entry = MagicMock(spec=MaterialEntry)
+        entry.node_id = uuid.uuid4()
+
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.update_source(entry.id, source_url="https://new.com")
+
+        mock_inv.assert_awaited_once_with(entry.node_id)
+
+    async def test_entry_delete_invalidates_node(self) -> None:
+        """MaterialEntryRepository.delete triggers cascade."""
+        from course_supporter.storage.material_entry_repository import (
+            MaterialEntryRepository,
+        )
+
+        entry = MagicMock(spec=MaterialEntry)
+        entry.node_id = uuid.uuid4()
+
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.delete(entry.id)
+
+        mock_inv.assert_awaited_once_with(entry.node_id)
+
+    async def test_node_move_invalidates_old_and_new_parent(self) -> None:
+        """MaterialNodeRepository.move invalidates both parent chains."""
+        from course_supporter.storage.material_node_repository import (
+            MaterialNodeRepository,
+        )
+
+        old_parent_id = uuid.uuid4()
+        new_parent_id = uuid.uuid4()
+        node = MagicMock(spec=MaterialNode)
+        node.id = uuid.uuid4()
+        node.parent_id = old_parent_id
+        node.course_id = uuid.uuid4()
+
+        session = AsyncMock()
+        repo = MaterialNodeRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
+            mp.setattr(repo, "_is_descendant", AsyncMock(return_value=False))
+            mp.setattr(repo, "_next_sibling_order", AsyncMock(return_value=0))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.move(node.id, new_parent_id)
+
+        assert mock_inv.await_count == 2
+        mock_inv.assert_any_await(old_parent_id)
+        mock_inv.assert_any_await(new_parent_id)
+
+    async def test_node_delete_invalidates_parent(self) -> None:
+        """MaterialNodeRepository.delete invalidates parent chain."""
+        from course_supporter.storage.material_node_repository import (
+            MaterialNodeRepository,
+        )
+
+        parent_id = uuid.uuid4()
+        node = MagicMock(spec=MaterialNode)
+        node.id = uuid.uuid4()
+        node.parent_id = parent_id
+
+        session = AsyncMock()
+        repo = MaterialNodeRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.delete(node.id)
+
+        mock_inv.assert_awaited_once_with(parent_id)
+
+    async def test_node_delete_root_skips_invalidation(self) -> None:
+        """Deleting a root node (parent_id=None) skips invalidation."""
+        from course_supporter.storage.material_node_repository import (
+            MaterialNodeRepository,
+        )
+
+        node = MagicMock(spec=MaterialNode)
+        node.id = uuid.uuid4()
+        node.parent_id = None
+
+        session = AsyncMock()
+        repo = MaterialNodeRepository(session)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
+            mock_inv = AsyncMock()
+            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
+            await repo.delete(node.id)
+
+        # _invalidate_node_chain called with None → returns immediately
+        mock_inv.assert_awaited_once_with(None)

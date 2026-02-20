@@ -12,6 +12,16 @@ from course_supporter.storage.material_entry_repository import MaterialEntryRepo
 from course_supporter.storage.orm import MaterialEntry
 
 
+@pytest.fixture(autouse=True)
+def _no_cascade_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable fingerprint cascade invalidation in unit tests."""
+    monkeypatch.setattr(
+        MaterialEntryRepository,
+        "_invalidate_node_chain",
+        AsyncMock(),
+    )
+
+
 def _mock_entry(
     *,
     entry_id: uuid.UUID | None = None,

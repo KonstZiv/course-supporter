@@ -88,7 +88,7 @@ async def local_transcribe(
 
     segments: list[TranscriptSegment] = []
     for seg in raw_segments:
-        text = str(seg.get("text", "")).strip()
+        text = (seg.get("text") or "").strip()
         if not text:
             continue
         segments.append(

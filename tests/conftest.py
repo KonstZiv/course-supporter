@@ -21,17 +21,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    run_db = config.getoption("--run-db")
-    run_redis = config.getoption("--run-redis")
+    markers_to_check = {
+        "requires_db": ("--run-db", "needs --run-db flag"),
+        "requires_redis": ("--run-redis", "needs --run-redis flag"),
+    }
 
-    if not run_db:
-        skip_db = pytest.mark.skip(reason="needs --run-db flag")
-        for item in items:
-            if "requires_db" in item.keywords:
-                item.add_marker(skip_db)
-
-    if not run_redis:
-        skip_redis = pytest.mark.skip(reason="needs --run-redis flag")
-        for item in items:
-            if "requires_redis" in item.keywords:
-                item.add_marker(skip_redis)
+    for marker_name, (option_flag, reason_msg) in markers_to_check.items():
+        if not config.getoption(option_flag):
+            skip_marker = pytest.mark.skip(reason=reason_msg)
+            for item in items:
+                if marker_name in item.keywords:
+                    item.add_marker(skip_marker)

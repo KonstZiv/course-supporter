@@ -182,10 +182,16 @@ class TestLifespan:
     @pytest.mark.asyncio
     async def test_lifespan_creates_model_router(self) -> None:
         """Lifespan sets app.state.model_router."""
+        mock_arq = AsyncMock()
         with (
             patch("course_supporter.api.app.create_model_router") as mock_create,
             patch("course_supporter.api.app.engine") as mock_engine,
             patch("course_supporter.api.app.S3Client") as mock_s3_cls,
+            patch(
+                "course_supporter.api.app.create_pool",
+                new_callable=AsyncMock,
+                return_value=mock_arq,
+            ),
         ):
             mock_create.return_value = "fake_router"
             mock_engine.dispose = AsyncMock()
@@ -201,10 +207,16 @@ class TestLifespan:
     @pytest.mark.asyncio
     async def test_lifespan_disposes_engine(self) -> None:
         """Lifespan disposes engine on shutdown."""
+        mock_arq = AsyncMock()
         with (
             patch("course_supporter.api.app.create_model_router"),
             patch("course_supporter.api.app.engine") as mock_engine,
             patch("course_supporter.api.app.S3Client") as mock_s3_cls,
+            patch(
+                "course_supporter.api.app.create_pool",
+                new_callable=AsyncMock,
+                return_value=mock_arq,
+            ),
         ):
             mock_engine.dispose = AsyncMock()
             mock_s3 = AsyncMock()

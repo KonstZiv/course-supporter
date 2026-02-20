@@ -1,11 +1,11 @@
-"""Tests for background ingestion task."""
+"""Tests for background ingestion tasks (legacy and ARQ)."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from course_supporter.api.tasks import ingest_material
+from course_supporter.api.tasks import arq_ingest_material, ingest_material
 from course_supporter.models.source import SourceDocument, SourceType
 
 
@@ -47,8 +47,20 @@ def _make_two_session_factory(
     return MagicMock(side_effect=make_ctx)
 
 
+def _make_arq_ctx(
+    factory: MagicMock | None = None,
+    router: MagicMock | None = None,
+) -> dict[str, object]:
+    """Build an ARQ worker context dict for testing."""
+    return {
+        "session_factory": factory or _make_session_factory(),
+        "model_router": router,
+    }
+
+
 class TestIngestMaterial:
-    @pytest.mark.asyncio
+    """Tests for the legacy ingest_material function."""
+
     async def test_ingestion_success(self) -> None:
         """ingest_material() processes and transitions to done."""
         material_id = uuid.uuid4()
@@ -85,13 +97,11 @@ class TestIngestMaterial:
                 factory,
             )
 
-        # First call: processing, second call: done
         assert mock_repo.update_status.call_count == 2
         calls = mock_repo.update_status.call_args_list
         assert calls[0].args == (material_id, "processing")
         assert calls[1].args == (material_id, "done")
 
-    @pytest.mark.asyncio
     async def test_ingestion_error_sets_error_status(self) -> None:
         """ingest_material() transitions to error on failure."""
         material_id = uuid.uuid4()
@@ -139,7 +149,6 @@ class TestIngestMaterial:
                 factory,
             )
 
-        # Error repo should transition to error
         assert len(repo_instances) >= 2
         error_repo = repo_instances[-1]
         error_repo.update_status.assert_awaited_once()
@@ -147,7 +156,6 @@ class TestIngestMaterial:
         assert call_args.args[1] == "error"
         assert "Processing failed" in str(call_args.kwargs.get("error_message", ""))
 
-    @pytest.mark.asyncio
     async def test_ingestion_invalid_source_type(self) -> None:
         """ingest_material() fails for unknown source_type."""
         material_id = uuid.uuid4()
@@ -179,8 +187,192 @@ class TestIngestMaterial:
                 factory,
             )
 
-        # Error repo should report invalid source_type
         error_repo = repo_instances[-1]
         error_repo.update_status.assert_awaited_once()
         call_args = error_repo.update_status.call_args
         assert call_args.args[1] == "error"
+
+
+class TestArqIngestMaterial:
+    """Tests for the ARQ-based arq_ingest_material function."""
+
+    async def test_calls_check_work_window(self) -> None:
+        """arq_ingest_material calls check_work_window with correct priority."""
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        factory = _make_session_factory()
+        ctx = _make_arq_ctx(factory=factory)
+
+        with (
+            patch("course_supporter.job_priority.check_work_window") as mock_check,
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_repo_cls,
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_mat_repo_cls,
+            patch(
+                "course_supporter.api.tasks.PROCESSOR_MAP",
+                {
+                    SourceType.WEB: MagicMock(
+                        return_value=MagicMock(
+                            process=AsyncMock(
+                                return_value=SourceDocument(
+                                    source_type=SourceType.WEB,
+                                    source_url="https://example.com",
+                                )
+                            )
+                        )
+                    )
+                },
+            ),
+        ):
+            mock_job_repo_cls.return_value.update_status = AsyncMock()
+            mock_mat_repo_cls.return_value.update_status = AsyncMock()
+            mock_mat_repo_cls.return_value.get_by_id = AsyncMock(
+                return_value=MagicMock()
+            )
+
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com", "immediate"
+            )
+
+        from course_supporter.job_priority import JobPriority
+
+        mock_check.assert_called_once_with(JobPriority.IMMEDIATE)
+
+    async def test_success_transitions_job_and_material(self) -> None:
+        """On success: job queued→active→complete, material pending→processing→done."""
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        mid = uuid.UUID(material_id)
+        factory = _make_session_factory()
+        ctx = _make_arq_ctx(factory=factory)
+
+        doc = SourceDocument(
+            source_type=SourceType.WEB, source_url="https://example.com"
+        )
+        mock_processor = MagicMock()
+        mock_processor.return_value.process = AsyncMock(return_value=doc)
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_mat_cls,
+            patch(
+                "course_supporter.api.tasks.PROCESSOR_MAP",
+                {SourceType.WEB: mock_processor},
+            ),
+        ):
+            mock_job = mock_job_cls.return_value
+            mock_job.update_status = AsyncMock()
+            mock_mat = mock_mat_cls.return_value
+            mock_mat.update_status = AsyncMock()
+            mock_mat.get_by_id = AsyncMock(return_value=MagicMock())
+
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com"
+            )
+
+        # Job: queued→active, then active→complete
+        job_calls = mock_job.update_status.call_args_list
+        assert len(job_calls) == 2
+        assert job_calls[0].args == (uuid.UUID(job_id), "active")
+        assert job_calls[1].args == (uuid.UUID(job_id), "complete")
+        assert job_calls[1].kwargs.get("result_material_id") == mid
+
+        # Material: pending→processing, then processing→done
+        mat_calls = mock_mat.update_status.call_args_list
+        assert len(mat_calls) == 2
+        assert mat_calls[0].args == (mid, "processing")
+        assert mat_calls[1].args == (mid, "done")
+
+    async def test_error_transitions_to_failed(self) -> None:
+        """On error: job→failed, material→error via two-session pattern."""
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        jid = uuid.UUID(job_id)
+        mid = uuid.UUID(material_id)
+
+        main_session = AsyncMock()
+        main_session.add = MagicMock()
+        error_session = AsyncMock()
+        error_session.add = MagicMock()
+        factory = _make_two_session_factory(main_session, error_session)
+        ctx = _make_arq_ctx(factory=factory)
+
+        mock_processor = MagicMock()
+        mock_processor.return_value.process = AsyncMock(
+            side_effect=RuntimeError("boom")
+        )
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_mat_cls,
+            patch(
+                "course_supporter.api.tasks.PROCESSOR_MAP",
+                {SourceType.WEB: mock_processor},
+            ),
+        ):
+            job_repos: list[MagicMock] = []
+            mat_repos: list[MagicMock] = []
+
+            def make_job_repo(session: object) -> MagicMock:
+                repo = MagicMock()
+                repo.update_status = AsyncMock()
+                job_repos.append(repo)
+                return repo
+
+            def make_mat_repo(session: object) -> MagicMock:
+                repo = MagicMock()
+                repo.update_status = AsyncMock()
+                repo.get_by_id = AsyncMock(return_value=MagicMock())
+                mat_repos.append(repo)
+                return repo
+
+            mock_job_cls.side_effect = make_job_repo
+            mock_mat_cls.side_effect = make_mat_repo
+
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com"
+            )
+
+        # Error session repos
+        assert len(job_repos) >= 2
+        err_job = job_repos[-1]
+        err_job.update_status.assert_awaited_once()
+        assert err_job.update_status.call_args.args == (jid, "failed")
+        err_msg = err_job.update_status.call_args.kwargs.get("error_message")
+        assert "boom" in str(err_msg)
+
+        err_mat = mat_repos[-1]
+        err_mat.update_status.assert_awaited_once()
+        assert err_mat.update_status.call_args.args == (mid, "error")
+
+    async def test_retry_on_closed_window(self) -> None:
+        """NORMAL priority outside window raises arq.Retry."""
+        from arq import Retry
+
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        ctx = _make_arq_ctx()
+
+        with (
+            patch(
+                "course_supporter.job_priority.check_work_window",
+                side_effect=Retry(defer=3600.0),
+            ),
+            pytest.raises(Retry),
+        ):
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com", "normal"
+            )

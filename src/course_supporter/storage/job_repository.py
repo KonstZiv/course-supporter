@@ -120,6 +120,12 @@ class JobRepository:
             raise RuntimeError(msg)
         return updated
 
+    async def set_arq_job_id(self, job_id: uuid.UUID, arq_job_id: str) -> None:
+        """Set the ARQ job identifier after enqueue."""
+        stmt = update(Job).where(Job.id == job_id).values(arq_job_id=arq_job_id)
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def get_active_for_course(self, course_id: uuid.UUID) -> list[Job]:
         """Get all active (queued or running) jobs for a course."""
         stmt = (

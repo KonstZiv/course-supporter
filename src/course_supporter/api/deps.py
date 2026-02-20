@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
@@ -18,7 +18,16 @@ from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Tenant
 from course_supporter.storage.s3 import S3Client
 
-__all__ = ["get_current_tenant", "get_model_router", "get_s3_client", "get_session"]
+if TYPE_CHECKING:
+    from arq.connections import ArqRedis
+
+__all__ = [
+    "get_arq_redis",
+    "get_current_tenant",
+    "get_model_router",
+    "get_s3_client",
+    "get_session",
+]
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -69,6 +78,14 @@ async def get_current_tenant(
         rate_limit_check=api_key_record.rate_limit_check,
         key_prefix=api_key_record.key_prefix,
     )
+
+
+async def get_arq_redis(request: Request) -> ArqRedis:
+    """Retrieve ARQ Redis pool from app state.
+
+    Initialized during lifespan startup.
+    """
+    return cast("ArqRedis", request.app.state.arq_redis)
 
 
 async def get_model_router(request: Request) -> ModelRouter:

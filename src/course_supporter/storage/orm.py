@@ -113,6 +113,48 @@ class Course(Base):
     modules: Mapped[list["Module"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
+    material_nodes: Mapped[list["MaterialNode"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan"
+    )
+
+
+class MaterialNode(Base):
+    """Node in the material tree (recursive adjacency list).
+
+    Represents a folder-like grouping within a course. Materials
+    (MaterialEntry, added in S2-014) attach to nodes at any depth.
+    """
+
+    __tablename__ = "material_nodes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    order: Mapped[int] = mapped_column(Integer, default=0)
+    node_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    course: Mapped["Course"] = relationship(back_populates="material_nodes")
+    parent: Mapped["MaterialNode | None"] = relationship(
+        back_populates="children",
+        remote_side="MaterialNode.id",
+    )
+    children: Mapped[list["MaterialNode"]] = relationship(
+        back_populates="parent",
+        cascade="all, delete-orphan",
+    )
 
 
 class SourceMaterial(Base):

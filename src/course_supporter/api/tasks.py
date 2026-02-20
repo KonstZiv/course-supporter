@@ -28,8 +28,8 @@ PROCESSOR_MAP = {
 
 async def arq_ingest_material(
     ctx: dict[str, Any],
-    job_id: str,
-    material_id: str,
+    job_id: str,  # UUID as string (ARQ JSON serialization)
+    material_id: str,  # UUID as string (ARQ JSON serialization)
     source_type: str,
     source_url: str,
     priority: str = "normal",

@@ -59,7 +59,7 @@ async def local_transcribe(
 
     loop = asyncio.get_running_loop()
 
-    model_name = str(params.model_name)
+    model_name = params.model_name.value
     if model_name not in _MODEL_CACHE:
         _MODEL_CACHE[model_name] = await loop.run_in_executor(
             None, whisper.load_model, model_name
@@ -85,8 +85,8 @@ async def local_transcribe(
             continue
         segments.append(
             TranscriptSegment(
-                start_sec=round(float(seg.get("start", 0.0)), 2),
-                end_sec=round(float(seg.get("end", 0.0)), 2),
+                start_sec=round(float(seg.get("start") or 0.0), 2),
+                end_sec=round(float(seg.get("end") or 0.0), 2),
                 text=text,
             )
         )

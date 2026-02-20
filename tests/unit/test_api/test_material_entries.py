@@ -72,6 +72,7 @@ def _mock_entry(
     entry.state = state
     entry.error_message = error_message
     entry.pending_job_id = pending_job_id
+    entry.job_id = None  # Not an ORM field; prevent MagicMock auto-creation
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
     return entry

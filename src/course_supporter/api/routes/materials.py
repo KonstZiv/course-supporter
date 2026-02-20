@@ -155,17 +155,9 @@ async def create_material(
         course_id=str(course_id),
         job_id=str(job.id),
     )
-    return MaterialEntryCreateResponse(
-        id=entry.id,
-        node_id=entry.node_id,
-        source_type=entry.source_type,
-        source_url=entry.source_url,
-        filename=entry.filename,
-        order=entry.order,
-        state=entry.state,
-        job_id=job.id,
-        created_at=entry.created_at,
-    )
+    response = MaterialEntryCreateResponse.model_validate(entry)
+    response.job_id = job.id
+    return response
 
 
 @router.get("/courses/{course_id}/nodes/{node_id}/materials")
@@ -290,14 +282,6 @@ async def retry_material(
         course_id=str(course_id),
         job_id=str(job.id),
     )
-    return MaterialEntryCreateResponse(
-        id=entry.id,
-        node_id=entry.node_id,
-        source_type=entry.source_type,
-        source_url=entry.source_url,
-        filename=entry.filename,
-        order=entry.order,
-        state=entry.state,
-        job_id=job.id,
-        created_at=entry.created_at,
-    )
+    response = MaterialEntryCreateResponse.model_validate(entry)
+    response.job_id = job.id
+    return response

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import Job
+from course_supporter.storage.orm import Course, Job
 
 # Valid job status transitions
 JOB_TRANSITIONS: dict[str, set[str]] = {
@@ -125,6 +125,22 @@ class JobRepository:
         stmt = update(Job).where(Job.id == job_id).values(arq_job_id=arq_job_id)
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def get_by_id_for_tenant(
+        self, job_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Job | None:
+        """Get a job by ID, ensuring it belongs to the given tenant.
+
+        Joins through ``job.course_id → course.tenant_id`` for isolation.
+        Jobs without a ``course_id`` are not accessible via this method.
+        """
+        stmt = (
+            select(Job)
+            .join(Course, Job.course_id == Course.id)
+            .where(Job.id == job_id, Course.tenant_id == tenant_id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_active_for_course(self, course_id: uuid.UUID) -> list[Job]:
         """Get all active (queued or running) jobs for a course."""

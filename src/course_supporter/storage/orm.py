@@ -155,6 +155,72 @@ class MaterialNode(Base):
         back_populates="parent",
         cascade="all, delete-orphan",
     )
+    materials: Mapped[list["MaterialEntry"]] = relationship(
+        back_populates="node",
+        cascade="all, delete-orphan",
+    )
+
+
+class MaterialEntry(Base):
+    """A single material attached to a node in the material tree.
+
+    Separates raw (uploaded) and processed (ingested) layers with a
+    pending "receipt" that tracks whether an ingestion job is in flight.
+    State is derived, not stored — see ``MaterialState`` (S2-015).
+    """
+
+    __tablename__ = "material_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    )
+    source_type: Mapped[str] = mapped_column(
+        Enum(
+            "video",
+            "presentation",
+            "text",
+            "web",
+            name="source_type_enum",
+            create_type=False,
+        )
+    )
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Raw layer ──
+    source_url: Mapped[str] = mapped_column(String(2000))
+    filename: Mapped[str | None] = mapped_column(String(500))
+    raw_hash: Mapped[str | None] = mapped_column(String(64))
+    raw_size_bytes: Mapped[int | None] = mapped_column(Integer)
+
+    # ── Processed layer ──
+    processed_hash: Mapped[str | None] = mapped_column(String(64))
+    processed_content: Mapped[str | None] = mapped_column(Text)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # ── Pending "receipt" ──
+    pending_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
+    pending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # ── Fingerprint ──
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64))
+
+    # ── Errors ──
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    # ── Timestamps ──
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    node: Mapped["MaterialNode"] = relationship(back_populates="materials")
+    pending_job: Mapped["Job | None"] = relationship()
 
 
 class SourceMaterial(Base):

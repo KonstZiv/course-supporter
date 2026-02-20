@@ -148,6 +148,23 @@ async def health() -> JSONResponse:
         checks["s3"] = f"error: {type(e).__name__}"
         overall = "degraded"
 
+    # Redis check
+    try:
+        arq_redis = app.state.arq_redis
+        await asyncio.wait_for(
+            arq_redis.ping(),
+            timeout=HEALTH_CHECK_TIMEOUT,
+        )
+        checks["redis"] = "ok"
+    except (TimeoutError, ConnectionError, OSError) as e:
+        logger.warning("health_check_redis_error", error=type(e).__name__)
+        checks["redis"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+    except Exception as e:
+        logger.error("health_check_redis_unexpected", error=str(e), exc_info=True)
+        checks["redis"] = f"error: {type(e).__name__}"
+        overall = "degraded"
+
     status_code = 200 if overall == "ok" else 503
     return JSONResponse(
         status_code=status_code,

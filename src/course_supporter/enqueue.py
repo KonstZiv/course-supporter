@@ -6,7 +6,6 @@ import uuid
 
 import structlog
 from arq.connections import ArqRedis
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.job_priority import JobPriority
@@ -66,9 +65,7 @@ async def enqueue_ingestion(
     )
 
     if arq_job is not None:
-        stmt = update(Job).where(Job.id == job.id).values(arq_job_id=arq_job.job_id)
-        await session.execute(stmt)
-        await session.flush()
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
 
     log.info(
         "job_enqueued",

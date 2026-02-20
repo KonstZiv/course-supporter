@@ -39,6 +39,7 @@ class TestEnqueueIngestion:
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
 
             result = await enqueue_ingestion(
                 redis=redis,
@@ -65,6 +66,7 @@ class TestEnqueueIngestion:
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
 
             await enqueue_ingestion(
                 redis=redis,
@@ -93,6 +95,7 @@ class TestEnqueueIngestion:
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
 
             await enqueue_ingestion(
                 redis=redis,
@@ -103,9 +106,9 @@ class TestEnqueueIngestion:
                 source_url="https://example.com/doc",
             )
 
-        # Verify UPDATE was executed for arq_job_id
-        session.execute.assert_awaited()
-        session.flush.assert_awaited()
+        repo_cls.return_value.set_arq_job_id.assert_awaited_once_with(
+            mock_job.id, "arq:abc:456"
+        )
 
     async def test_handles_none_arq_job(self) -> None:
         """Handles case where enqueue_job returns None (duplicate)."""
@@ -116,6 +119,7 @@ class TestEnqueueIngestion:
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
 
             result = await enqueue_ingestion(
                 redis=redis,
@@ -127,8 +131,7 @@ class TestEnqueueIngestion:
             )
 
         assert result is mock_job
-        # No UPDATE executed when arq_job is None
-        session.execute.assert_not_awaited()
+        repo_cls.return_value.set_arq_job_id.assert_not_awaited()
 
     async def test_immediate_priority(self) -> None:
         """IMMEDIATE priority is passed correctly to Job and ARQ."""
@@ -138,6 +141,7 @@ class TestEnqueueIngestion:
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
 
             await enqueue_ingestion(
                 redis=redis,

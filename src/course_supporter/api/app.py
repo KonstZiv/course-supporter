@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
+from arq import create_pool
+from arq.connections import RedisSettings
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,9 +61,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.model_router = create_model_router(settings, async_session)
 
     # ARQ Redis pool for job enqueue
-    from arq import create_pool
-    from arq.connections import RedisSettings
-
     arq_redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     app.state.arq_redis = arq_redis
 

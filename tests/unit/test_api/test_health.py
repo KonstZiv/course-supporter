@@ -188,7 +188,7 @@ class TestLifespan:
             patch("course_supporter.api.app.engine") as mock_engine,
             patch("course_supporter.api.app.S3Client") as mock_s3_cls,
             patch(
-                "arq.create_pool",
+                "course_supporter.api.app.create_pool",
                 new_callable=AsyncMock,
                 return_value=mock_arq,
             ),
@@ -213,7 +213,7 @@ class TestLifespan:
             patch("course_supporter.api.app.engine") as mock_engine,
             patch("course_supporter.api.app.S3Client") as mock_s3_cls,
             patch(
-                "arq.create_pool",
+                "course_supporter.api.app.create_pool",
                 new_callable=AsyncMock,
                 return_value=mock_arq,
             ),

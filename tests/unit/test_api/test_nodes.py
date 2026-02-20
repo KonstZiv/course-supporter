@@ -44,6 +44,7 @@ def _mock_node(
     node.title = title
     node.description = description
     node.order = order
+    node.node_fingerprint = None
     node.children = children or []
     node.created_at = datetime.now(UTC)
     node.updated_at = datetime.now(UTC)

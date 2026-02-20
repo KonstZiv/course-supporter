@@ -37,6 +37,7 @@ def _make_course_mock() -> MagicMock:
     course.description = None
     course.created_at = datetime.now(UTC)
     course.updated_at = datetime.now(UTC)
+    course.course_fingerprint = None
     return course
 
 

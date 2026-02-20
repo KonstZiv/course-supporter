@@ -182,6 +182,9 @@ class MaterialEntrySummaryResponse(BaseModel):
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
     )
+    content_fingerprint: str | None = Field(
+        description="SHA-256 of processed content. ``null`` if not computed."
+    )
     created_at: datetime = Field(description="When this entry was created.")
 
 
@@ -241,6 +244,13 @@ class CourseDetailResponse(BaseModel):
     updated_at: datetime
     modules: list[ModuleResponse]
     source_materials: list[SourceMaterialResponse]
+    course_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "Merkle hash of the entire material tree. "
+            "``null`` if any node fingerprint is missing."
+        ),
+    )
     material_tree: list[NodeWithMaterialsResponse] = Field(
         default_factory=list,
         description=(
@@ -423,6 +433,9 @@ class NodeResponse(BaseModel):
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
+    node_fingerprint: str | None = Field(
+        description="Merkle hash of this node's content. ``null`` if not computed."
+    )
     created_at: datetime = Field(description="When this node was created.")
     updated_at: datetime = Field(description="When this node was last modified.")
 
@@ -460,6 +473,9 @@ class NodeTreeResponse(BaseModel):
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
+    node_fingerprint: str | None = Field(
+        description="Merkle hash of this node's content. ``null`` if not computed."
+    )
     children: list[NodeTreeResponse] = Field(
         default_factory=list,
         description="Child nodes, recursively nested. Empty list for leaf nodes.",
@@ -547,6 +563,9 @@ class MaterialEntryResponse(BaseModel):
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
+    )
+    content_fingerprint: str | None = Field(
+        description="SHA-256 of processed content. ``null`` if not computed."
     )
     pending_job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."

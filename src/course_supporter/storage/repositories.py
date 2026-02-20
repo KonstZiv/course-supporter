@@ -144,6 +144,20 @@ class CourseRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def count(self) -> int:
+        """Count courses for current tenant.
+
+        Returns:
+            Total number of courses owned by this tenant.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(Course)
+            .where(Course.tenant_id == self._tenant_id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
 
 class SlideVideoMappingRepository:
     """Repository for slide-video mapping operations."""

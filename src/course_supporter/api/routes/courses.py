@@ -136,8 +136,21 @@ async def get_course(
     tree_roots = await node_repo.get_tree(course_id, include_materials=True)
     tree = [NodeWithMaterialsResponse.model_validate(r) for r in tree_roots]
 
+    # Compute course-level fingerprint from root node fingerprints.
+    # Returns None if any root has no node_fingerprint (needs recompute).
+    course_fp: str | None = None
+    if tree_roots:
+        from course_supporter.fingerprint import FingerprintService
+
+        fp_service = FingerprintService(session)
+        try:
+            course_fp = await fp_service.ensure_course_fp(tree_roots)
+        except ValueError:
+            course_fp = None
+
     response = CourseDetailResponse.model_validate(course)
     response.material_tree = tree
+    response.course_fingerprint = course_fp
     return response
 
 

@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
+from course_supporter.fingerprint import FingerprintService
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import CourseRepository
@@ -111,6 +112,7 @@ def _make_course_mock(
     course.updated_at = datetime.now(UTC)
     course.modules = modules or []
     course.source_materials = source_materials or []
+    course.course_fingerprint = None
     return course
 
 
@@ -175,17 +177,26 @@ def _mock_entry(
     entry.order = 0
     entry.state = state
     entry.error_message = error_message
+    entry.content_fingerprint = None
     entry.created_at = datetime.now(UTC)
     return entry
 
 
 def _get_course_patches(
-    course: MagicMock, tree: list[MagicMock] | None = None
-) -> tuple[object, object]:
-    """Return context managers for patching get_with_structure and get_tree."""
+    course: MagicMock,
+    tree: list[MagicMock] | None = None,
+    course_fingerprint: str | None = None,
+) -> tuple[object, object, object]:
+    """Return context managers for patching course detail route dependencies."""
     return (
         patch.object(CourseRepository, "get_with_structure", return_value=course),
         patch.object(MaterialNodeRepository, "get_tree", return_value=tree or []),
+        patch.object(
+            FingerprintService,
+            "ensure_course_fp",
+            new_callable=AsyncMock,
+            return_value=course_fingerprint,
+        ),
     )
 
 
@@ -194,8 +205,8 @@ class TestGetCourseDetailAPI:
     async def test_get_course_returns_200(self, client: AsyncClient) -> None:
         """GET /api/v1/courses/{id} returns 200 for existing course."""
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course)
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course)
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         assert response.status_code == 200
 
@@ -210,8 +221,8 @@ class TestGetCourseDetailAPI:
     async def test_get_course_includes_basic_fields(self, client: AsyncClient) -> None:
         """Response includes id, title, description, learning_goal."""
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course)
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course)
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         data = response.json()
         assert data["id"] == str(course.id)
@@ -223,8 +234,8 @@ class TestGetCourseDetailAPI:
     async def test_get_course_empty_structure(self, client: AsyncClient) -> None:
         """Course with no modules or materials returns empty lists."""
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course)
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course)
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         data = response.json()
         assert data["modules"] == []
@@ -238,8 +249,8 @@ class TestGetCourseDetailAPI:
         """Response includes source materials."""
         sm = _make_source_material_mock()
         course = _make_course_mock(source_materials=[sm])
-        p_course, p_tree = _get_course_patches(course)
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course)
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         data = response.json()
         assert len(data["source_materials"]) == 1
@@ -256,8 +267,8 @@ class TestGetCourseDetailAPI:
         lesson = _make_lesson_mock(concepts=[concept], exercises=[exercise])
         module = _make_module_mock(lessons=[lesson])
         course = _make_course_mock(modules=[module])
-        p_course, p_tree = _get_course_patches(course)
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course)
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         data = response.json()
         assert len(data["modules"]) == 1
@@ -280,8 +291,8 @@ class TestGetCourseDetailAPI:
         child = _mock_node(title="Lesson 1.1", order=0, materials=[entry])
         root = _mock_node(title="Module 1", order=0, children=[child])
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course, tree=[root])
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course, tree=[root])
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         data = response.json()
         tree = data["material_tree"]
@@ -303,8 +314,8 @@ class TestGetCourseDetailAPI:
         entry_err = _mock_entry(state="error", error_message="Timeout")
         node = _mock_node(materials=[entry_ok, entry_err])
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course, tree=[node])
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course, tree=[node])
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         materials = response.json()["material_tree"][0]["materials"]
         assert materials[0]["state"] == "ready"
@@ -316,8 +327,8 @@ class TestGetCourseDetailAPI:
     async def test_get_course_material_tree_empty(self, client: AsyncClient) -> None:
         """Course with no tree returns empty material_tree."""
         course = _make_course_mock()
-        p_course, p_tree = _get_course_patches(course, tree=[])
-        with p_course, p_tree:
+        p_course, p_tree, p_fp = _get_course_patches(course, tree=[])
+        with p_course, p_tree, p_fp:
             response = await client.get(f"/api/v1/courses/{course.id}")
         assert response.json()["material_tree"] == []
 

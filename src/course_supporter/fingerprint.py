@@ -106,6 +106,28 @@ class FingerprintService:
         await self._session.flush()
         return digest
 
+    async def invalidate_up(self, node: MaterialNode) -> None:
+        """Clear node_fingerprint from ``node`` up to the root.
+
+        Walks the parent chain using ``parent_id``, setting
+        ``node_fingerprint = None`` on every ancestor. Issues a
+        single flush after the full walk.
+
+        Safe in async context — loads each parent via
+        ``session.get()`` instead of accessing the lazy
+        ``node.parent`` relationship.
+
+        Args:
+            node: The starting node (e.g. node whose material changed).
+        """
+        current: MaterialNode | None = node
+        while current is not None:
+            current.node_fingerprint = None
+            if current.parent_id is None:
+                break
+            current = await self._session.get(MaterialNode, current.parent_id)
+        await self._session.flush()
+
     # ── Internal compute (no flush) ──
 
     @staticmethod

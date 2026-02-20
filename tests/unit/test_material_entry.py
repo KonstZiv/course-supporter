@@ -181,6 +181,98 @@ class TestMaterialEntryRelationships:
         assert "delete-orphan" in rel.cascade
 
 
+class TestMaterialState:
+    """MaterialEntry.state derived property tests."""
+
+    def test_state_raw(self) -> None:
+        """RAW when no processed content, no pending, no error."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+        )
+        assert entry.state.value == "raw"
+
+    def test_state_pending(self) -> None:
+        """PENDING when pending_job_id is set."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            pending_job_id=_uuid7(),
+        )
+        assert entry.state.value == "pending"
+
+    def test_state_error(self) -> None:
+        """ERROR when error_message is set (highest priority)."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            error_message="LLM timeout",
+        )
+        assert entry.state.value == "error"
+
+    def test_state_error_takes_priority_over_pending(self) -> None:
+        """ERROR takes priority over PENDING."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            pending_job_id=_uuid7(),
+            error_message="failed",
+        )
+        assert entry.state.value == "error"
+
+    def test_state_ready(self) -> None:
+        """READY when processed_content set and hashes match."""
+        h = "a" * 64
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            processed_content='{"sections": []}',
+            processed_hash=h,
+            raw_hash=h,
+        )
+        assert entry.state.value == "ready"
+
+    def test_state_ready_no_raw_hash(self) -> None:
+        """READY when processed_content set and raw_hash is None (skip integrity)."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            processed_content='{"data": []}',
+            processed_hash="a" * 64,
+        )
+        assert entry.state.value == "ready"
+
+    def test_state_integrity_broken(self) -> None:
+        """INTEGRITY_BROKEN when raw_hash and processed_hash differ."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="web",
+            source_url="https://example.com",
+            processed_content='{"sections": []}',
+            processed_hash="a" * 64,
+            raw_hash="b" * 64,
+        )
+        assert entry.state.value == "integrity_broken"
+
+    def test_state_integrity_broken_after_source_update(self) -> None:
+        """INTEGRITY_BROKEN simulating source update with new raw_hash."""
+        entry = MaterialEntry(
+            node_id=_uuid7(),
+            source_type="video",
+            source_url="s3://bucket/new-video.mp4",
+            processed_content='{"transcript": "..."}',
+            processed_hash="a" * 64,
+            raw_hash="c" * 64,
+        )
+        assert entry.state.value == "integrity_broken"
+
+
 class TestMaterialEntryIndexes:
     """MaterialEntry index/constraint tests."""
 

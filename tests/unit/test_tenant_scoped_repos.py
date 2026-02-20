@@ -92,6 +92,39 @@ class TestCourseRepositoryTenantScoping:
         session.execute.assert_awaited_once()
 
 
+class TestCourseRepositoryCount:
+    """Tests for CourseRepository.count()."""
+
+    async def test_count_returns_scalar(self) -> None:
+        """count() returns integer from aggregate query."""
+        session = _mock_session()
+        tenant_id = uuid.uuid4()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 5
+        session.execute.return_value = mock_result
+
+        repo = CourseRepository(session, tenant_id)
+        result = await repo.count()
+
+        assert result == 5
+        session.execute.assert_awaited_once()
+
+    async def test_count_returns_zero_for_empty(self) -> None:
+        """count() returns 0 when tenant has no courses."""
+        session = _mock_session()
+        tenant_id = uuid.uuid4()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        session.execute.return_value = mock_result
+
+        repo = CourseRepository(session, tenant_id)
+        result = await repo.count()
+
+        assert result == 0
+
+
 class TestLLMCallRepositoryTenantScoping:
     """Tests for tenant-scoped LLMCallRepository."""
 

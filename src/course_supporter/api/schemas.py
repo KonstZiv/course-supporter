@@ -1,5 +1,7 @@
 """Request/response schemas for the API layer."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 
@@ -193,3 +195,167 @@ class JobResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     estimated_at: datetime | None
+
+
+# --- Material Tree Nodes ---
+
+
+class NodeCreateRequest(BaseModel):
+    """Request body for creating a material tree node.
+
+    Used by both root node creation (``POST /courses/{id}/nodes``)
+    and child node creation (``POST /courses/{id}/nodes/{node_id}/children``).
+
+    Example::
+
+        {
+            "title": "Module 1: Introduction",
+            "description": "Overview of core concepts"
+        }
+    """
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Node title displayed in the material tree.",
+        examples=["Module 1: Introduction"],
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=5000,
+        description="Optional detailed description of the node's purpose.",
+        examples=["Overview of the foundational concepts covered in this module."],
+    )
+
+
+class NodeUpdateRequest(BaseModel):
+    """Request body for updating a material tree node.
+
+    All fields are optional — only provided fields are updated.
+    To clear the description, send ``"description": null`` explicitly.
+
+    Example::
+
+        {"title": "Updated Title"}
+    """
+
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description="New title for the node. Omit to keep unchanged.",
+        examples=["Updated Module Title"],
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=5000,
+        description=(
+            "New description. Send ``null`` to clear, omit to keep unchanged. "
+            "Note: distinguishing 'omit' from ``null`` requires checking "
+            "``model_fields_set``."
+        ),
+    )
+
+
+class NodeMoveRequest(BaseModel):
+    """Request body for moving a node within the tree.
+
+    Move a node to a new parent (or to root by setting ``parent_id``
+    to ``null``). Cycle detection is enforced server-side.
+
+    Example::
+
+        {"parent_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
+    """
+
+    parent_id: uuid.UUID | None = Field(
+        ...,
+        description=(
+            "Target parent node ID. Set to ``null`` to move the node to the tree root."
+        ),
+    )
+
+
+class NodeReorderRequest(BaseModel):
+    """Request body for reordering a node among its siblings.
+
+    Siblings are automatically renumbered (0-based) after the operation.
+
+    Example::
+
+        {"order": 2}
+    """
+
+    order: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Desired 0-based position among siblings. "
+            "Values exceeding the maximum are clamped automatically."
+        ),
+        examples=[0, 2],
+    )
+
+
+class NodeResponse(BaseModel):
+    """Response schema for a single material tree node.
+
+    Returned by create, update, move, and reorder operations.
+    Does not include nested children — use ``NodeTreeResponse``
+    for the full tree.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
+    course_id: uuid.UUID = Field(description="Course this node belongs to.")
+    parent_id: uuid.UUID | None = Field(
+        description="Parent node ID, or ``null`` for root nodes."
+    )
+    title: str = Field(description="Node title.")
+    description: str | None = Field(description="Optional node description.")
+    order: int = Field(description="0-based position among siblings.")
+    created_at: datetime = Field(description="When this node was created.")
+    updated_at: datetime = Field(description="When this node was last modified.")
+
+
+class NodeTreeResponse(BaseModel):
+    """Recursive tree node with nested children.
+
+    Returned by ``GET /courses/{id}/nodes/tree``. Each node
+    contains its children, forming a full tree structure.
+
+    Example response::
+
+        [
+            {
+                "id": "...",
+                "title": "Module 1",
+                "children": [
+                    {
+                        "id": "...",
+                        "title": "Lesson 1.1",
+                        "children": []
+                    }
+                ]
+            }
+        ]
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
+    course_id: uuid.UUID = Field(description="Course this node belongs to.")
+    parent_id: uuid.UUID | None = Field(
+        description="Parent node ID, or ``null`` for root nodes."
+    )
+    title: str = Field(description="Node title.")
+    description: str | None = Field(description="Optional node description.")
+    order: int = Field(description="0-based position among siblings.")
+    children: list[NodeTreeResponse] = Field(
+        default_factory=list,
+        description="Child nodes, recursively nested. Empty list for leaf nodes.",
+    )
+    created_at: datetime = Field(description="When this node was created.")
+    updated_at: datetime = Field(description="When this node was last modified.")

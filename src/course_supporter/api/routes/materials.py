@@ -89,10 +89,10 @@ async def _require_node(
 
 
 async def _require_material(
-    repo: MaterialEntryRepository,
+    entry_repo: MaterialEntryRepository,
+    node_repo: MaterialNodeRepository,
     entry_id: uuid.UUID,
     course_id: uuid.UUID,
-    session: AsyncSession,
 ) -> MaterialEntry:
     """Verify the material exists and belongs to the course.
 
@@ -102,11 +102,10 @@ async def _require_material(
         HTTPException 404: If the material is not found or
             belongs to a different course.
     """
-    entry = await repo.get_by_id(entry_id)
+    entry = await entry_repo.get_by_id(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Material not found")
 
-    node_repo = MaterialNodeRepository(session)
     node = await node_repo.get_by_id(entry.node_id)
     if node is None or node.course_id != course_id:
         raise HTTPException(status_code=404, detail="Material not found")
@@ -215,8 +214,9 @@ async def get_material(
     """
     await _require_course(session, tenant.tenant_id, course_id)
 
-    repo = MaterialEntryRepository(session)
-    entry = await _require_material(repo, entry_id, course_id, session)
+    entry_repo = MaterialEntryRepository(session)
+    node_repo = MaterialNodeRepository(session)
+    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
     return MaterialEntryResponse.model_validate(entry)
 
 
@@ -235,10 +235,11 @@ async def delete_material(
     """
     await _require_course(session, tenant.tenant_id, course_id)
 
-    repo = MaterialEntryRepository(session)
-    entry = await _require_material(repo, entry_id, course_id, session)
+    entry_repo = MaterialEntryRepository(session)
+    node_repo = MaterialNodeRepository(session)
+    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
 
-    await repo.delete(entry.id)
+    await entry_repo.delete(entry.id)
     await session.commit()
 
     logger.info(
@@ -266,8 +267,9 @@ async def retry_material(
     """
     await _require_course(session, tenant.tenant_id, course_id)
 
-    repo = MaterialEntryRepository(session)
-    entry = await _require_material(repo, entry_id, course_id, session)
+    entry_repo = MaterialEntryRepository(session)
+    node_repo = MaterialNodeRepository(session)
+    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
 
     if entry.state != "error":
         raise HTTPException(

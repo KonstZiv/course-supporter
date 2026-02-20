@@ -107,7 +107,8 @@ class MaterialNodeRepository:
         roots: list[MaterialNode] = []
 
         for node in all_nodes:
-            # Clear ORM-loaded children to avoid duplicates
+            # Reset ORM relationship collection before manual assembly
+            # to prevent duplicates from lazy-loaded children.
             node.children = []
 
         for node in all_nodes:

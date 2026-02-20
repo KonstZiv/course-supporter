@@ -83,6 +83,10 @@ async def list_courses(
     Returns a paginated list of courses sorted by creation date
     (newest first). Use ``limit`` and ``offset`` to page through
     results. The ``total`` field indicates the overall count.
+
+    Args:
+        limit: Maximum number of courses per page (1-100, default 20).
+        offset: Number of courses to skip for pagination (default 0).
     """
     repo = CourseRepository(session, tenant.tenant_id)
     courses = await repo.list_all(limit=limit, offset=offset)

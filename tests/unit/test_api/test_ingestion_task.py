@@ -212,6 +212,9 @@ class TestArqIngestMaterial:
                 "course_supporter.api.tasks.SourceMaterialRepository"
             ) as mock_mat_repo_cls,
             patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(
                 "course_supporter.api.tasks.PROCESSOR_MAP",
                 {
                     SourceType.WEB: MagicMock(
@@ -232,6 +235,7 @@ class TestArqIngestMaterial:
             mock_mat_repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=MagicMock()
             )
+            mock_cb_cls.return_value.on_success = AsyncMock()
 
             await arq_ingest_material(
                 ctx, job_id, material_id, "web", "https://example.com", "immediate"
@@ -241,8 +245,8 @@ class TestArqIngestMaterial:
 
         mock_check.assert_called_once_with(JobPriority.IMMEDIATE)
 
-    async def test_success_transitions_job_and_material(self) -> None:
-        """On success: job queued→active→complete, material pending→processing→done."""
+    async def test_success_delegates_to_callback(self) -> None:
+        """On success: job activated, then callback.on_success called."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
         mid = uuid.UUID(material_id)
@@ -264,6 +268,9 @@ class TestArqIngestMaterial:
                 "course_supporter.api.tasks.SourceMaterialRepository"
             ) as mock_mat_cls,
             patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(
                 "course_supporter.api.tasks.PROCESSOR_MAP",
                 {SourceType.WEB: mock_processor},
             ),
@@ -273,36 +280,33 @@ class TestArqIngestMaterial:
             mock_mat = mock_mat_cls.return_value
             mock_mat.update_status = AsyncMock()
             mock_mat.get_by_id = AsyncMock(return_value=MagicMock())
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx, job_id, material_id, "web", "https://example.com"
             )
 
-        # Job: queued→active, then active→complete
-        job_calls = mock_job.update_status.call_args_list
-        assert len(job_calls) == 2
-        assert job_calls[0].args == (uuid.UUID(job_id), "active")
-        assert job_calls[1].args == (uuid.UUID(job_id), "complete")
-        assert job_calls[1].kwargs.get("result_material_id") == mid
+        # Job activated in main session
+        mock_job.update_status.assert_awaited_once_with(uuid.UUID(job_id), "active")
+        # Material set to processing in main session
+        mock_mat.update_status.assert_awaited_once_with(mid, "processing")
+        # Completion delegated to callback
+        mock_cb_cls.return_value.on_success.assert_awaited_once()
+        call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
+        assert call_kwargs["job_id"] == uuid.UUID(job_id)
+        assert call_kwargs["material_id"] == mid
 
-        # Material: pending→processing, then processing→done
-        mat_calls = mock_mat.update_status.call_args_list
-        assert len(mat_calls) == 2
-        assert mat_calls[0].args == (mid, "processing")
-        assert mat_calls[1].args == (mid, "done")
-
-    async def test_error_transitions_to_failed(self) -> None:
-        """On error: job→failed, material→error via two-session pattern."""
+    async def test_error_delegates_to_callback(self) -> None:
+        """On error: session rolled back, callback.on_failure called."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
         jid = uuid.UUID(job_id)
         mid = uuid.UUID(material_id)
 
-        main_session = AsyncMock()
-        main_session.add = MagicMock()
-        error_session = AsyncMock()
-        error_session.add = MagicMock()
-        factory = _make_two_session_factory(main_session, error_session)
+        session = AsyncMock()
+        session.add = MagicMock()
+        factory = _make_session_factory(session)
         ctx = _make_arq_ctx(factory=factory)
 
         mock_processor = MagicMock()
@@ -319,44 +323,31 @@ class TestArqIngestMaterial:
                 "course_supporter.api.tasks.SourceMaterialRepository"
             ) as mock_mat_cls,
             patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(
                 "course_supporter.api.tasks.PROCESSOR_MAP",
                 {SourceType.WEB: mock_processor},
             ),
         ):
-            job_repos: list[MagicMock] = []
-            mat_repos: list[MagicMock] = []
-
-            def make_job_repo(session: object) -> MagicMock:
-                repo = MagicMock()
-                repo.update_status = AsyncMock()
-                job_repos.append(repo)
-                return repo
-
-            def make_mat_repo(session: object) -> MagicMock:
-                repo = MagicMock()
-                repo.update_status = AsyncMock()
-                repo.get_by_id = AsyncMock(return_value=MagicMock())
-                mat_repos.append(repo)
-                return repo
-
-            mock_job_cls.side_effect = make_job_repo
-            mock_mat_cls.side_effect = make_mat_repo
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=MagicMock())
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx, job_id, material_id, "web", "https://example.com"
             )
 
-        # Error session repos
-        assert len(job_repos) >= 2
-        err_job = job_repos[-1]
-        err_job.update_status.assert_awaited_once()
-        assert err_job.update_status.call_args.args == (jid, "failed")
-        err_msg = err_job.update_status.call_args.kwargs.get("error_message")
-        assert "boom" in str(err_msg)
-
-        err_mat = mat_repos[-1]
-        err_mat.update_status.assert_awaited_once()
-        assert err_mat.update_status.call_args.args == (mid, "error")
+        # Main session rolled back
+        session.rollback.assert_awaited_once()
+        # Failure delegated to callback
+        mock_cb_cls.return_value.on_failure.assert_awaited_once()
+        call_kwargs = mock_cb_cls.return_value.on_failure.call_args.kwargs
+        assert call_kwargs["job_id"] == jid
+        assert call_kwargs["material_id"] == mid
+        assert "boom" in call_kwargs["error_message"]
 
     async def test_retry_on_closed_window(self) -> None:
         """NORMAL priority outside window raises arq.Retry."""

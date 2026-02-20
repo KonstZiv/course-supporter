@@ -65,4 +65,24 @@ Unit test: create entry, set/clear pending receipt, update processed layer
 
 ## Нотатки
 
-_Простір для нотаток виконавця під час роботи над задачею._
+### УВАГА: IngestionCallback міграція (з S2-009)
+
+При імплементації MaterialEntry потрібно оновити `IngestionCallback`
+(`src/course_supporter/ingestion_callback.py`), який зараз працює з `SourceMaterial`.
+
+**Що змінити:**
+1. `SourceMaterialRepository` → `MaterialEntryRepository` в on_success/on_failure
+2. Field mapping:
+   - `content_snapshot` → `processed_content`
+   - Додати: clearing `pending_job_id = NULL`, `pending_since = NULL`
+   - Додати: `processed_hash = raw_hash` (фіксація hash при обробці)
+   - Додати: `processed_at = now()`
+3. Оновити lazy import paths в callback
+
+**Тести для перевірки після міграції** (`tests/unit/test_ingestion_callback.py`):
+- `TestOnSuccess` — перевірити що нові поля MaterialEntry коректно оновлюються
+- `TestOnFailure` — перевірити що pending_job_id/pending_since очищаються і при помилці
+- Додати тести: `pending_job_id` cleared, `processed_hash` set, `processed_at` set
+- Додати тест: `on_success` з MaterialEntry в стані PENDING → READY transition
+
+Див. також docstring в `ingestion_callback.py` для повного переліку змін.

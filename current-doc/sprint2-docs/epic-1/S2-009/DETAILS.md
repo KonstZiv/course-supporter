@@ -20,52 +20,97 @@
 
 **Наступна задача:** [S2-010: Job status API endpoint](../S2-010/README.md)
 
-
-
 ---
 
 ## Детальний план реалізації
 
-1. on_ingestion_complete(material_entry_id, success, result):
-   - Оновити MaterialEntry (processed_content або error_message)
-   - Очистити pending_job_id/pending_since
-   - Інвалідувати content_fingerprint → cascade _invalidate_up
-   - Знайти SlideVideoMappings де цей матеріал є blocking factor → revalidate
-2. Інтегрувати callback в ARQ task wrapper
+### Архітектурне рішення
+
+Виділено окремий сервіс `IngestionCallback` (`src/course_supporter/ingestion_callback.py`) замість inline логіки в ARQ task. Це дозволяє:
+
+1. Тестувати callback незалежно від ingestion pipeline
+2. Інкапсулювати two-session pattern (caller не знає деталей)
+3. Мати чіткі extension points для майбутніх Epic 3 та Epic 5
+
+### Реалізація
+
+1. **`IngestionCallback` сервіс** (`ingestion_callback.py`):
+   - `on_success(job_id, material_id, content_json)`:
+     - SourceMaterial → done (з content_snapshot)
+     - Job → complete (з result_material_id)
+     - `_invalidate_fingerprints()` — no-op stub (Epic 3, S2-027)
+     - `_revalidate_blocked_mappings()` — no-op stub (Epic 5, S2-042)
+     - session.commit()
+   - `on_failure(job_id, material_id, error_message)`:
+     - Job → failed (з error_message)
+     - SourceMaterial → error (з error_message)
+     - `_revalidate_blocked_mappings()` — no-op stub
+     - session.commit()
+
+2. **Рефакторинг `arq_ingest_material`** (`api/tasks.py`):
+   - Тонкий оркестратор: check_work_window → activate job → process → delegate to callback
+   - Success path: callback.on_success() після виходу з processing session
+   - Failure path: session.rollback() → callback.on_failure() (fresh session inside callback)
+
+3. **Extension hooks** — порожні async методи з документацією:
+   - `_invalidate_fingerprints()` — план для Epic 3 (S2-027)
+   - `_revalidate_blocked_mappings()` — план для Epic 5 (S2-042)
+
+### Важливо: SourceMaterial → MaterialEntry міграція
+
+Зараз callback працює з `SourceMaterial` (Sprint 0 модель). При імплементації S2-014 (MaterialEntry ORM) потрібно:
+- Замінити `SourceMaterialRepository` → `MaterialEntryRepository`
+- Оновити field names: `content_snapshot` → `processed_content`, додати clearing `pending_job_id`/`pending_since`
+- **Перевірити всі тести** — вони прив'язані до конкретних полів
+- Див. docstring в `ingestion_callback.py` для повного списку змін
 
 ---
 
 ## Очікуваний результат
 
-Завершення ingestion каскадно оновлює entry, fingerprints і pending маппінги
+- `IngestionCallback` сервіс з on_success/on_failure і no-op hooks
+- `arq_ingest_material` рефакторено як тонкий оркестратор
+- 15 unit тестів: success path, failure path, error propagation, hooks called, integration з ARQ task
 
 ---
 
 ## Тестування
 
-### Автоматизовані тести
+### Автоматизовані тести (`tests/unit/test_ingestion_callback.py`)
 
-Integration test: ingestion complete → entry updated + fingerprints invalidated + mappings revalidated
+- **TestOnSuccess** (5 тестів): material→done, job→complete, session committed, fingerprint hook called, revalidate hook called
+- **TestOnFailure** (4 тести): job→failed, material→error, session committed, revalidate hook called
+- **TestOnSuccessErrors** (2 тести): material not found propagates, job not found propagates
+- **TestOnFailureErrors** (1 тест): job not found propagates
+- **TestHooksAreNoOp** (2 тести): stubs callable without error
+- **TestCallbackIntegrationWithArqTask** (2 тести): success delegates to callback, failure delegates to callback
 
 ### Ручний контроль (Human testing)
 
-Завантажити матеріал з маппінгом в pending_validation → дочекатись ingestion → перевірити що маппінг став validated
+Завантажити матеріал через API → дочекатись ingestion → перевірити:
+1. Job status = complete, result_material_id заповнений
+2. SourceMaterial status = done, content_snapshot заповнений
+3. При помилці: Job = failed, Material = error, error_message заповнений
 
 ---
 
 ## Checklist перед PR
 
-- [ ] Реалізація відповідає архітектурним рішенням Sprint 2 (AR-*)
-- [ ] Код проходить `make check` (ruff + mypy + pytest)
-- [ ] Unit tests написані і покривають основні сценарії
-- [ ] Edge cases покриті (error handling, boundary values)
-- [ ] Error messages зрозумілі і містять hints для користувача
+- [x] Реалізація відповідає архітектурним рішенням Sprint 2 (AR-3: callback)
+- [x] Код проходить `make check` (ruff + mypy + pytest)
+- [x] Unit tests написані і покривають основні сценарії
+- [x] Edge cases покриті (error handling, not found)
+- [x] Extension hooks документовані з планом реалізації
 - [ ] Human control points пройдені
-- [ ] Документація оновлена якщо потрібно (ERD, API docs, sprint progress)
-- [ ] Перевірено чи зміни впливають на наступні задачі — якщо так, оновити їх docs
+- [x] Вплив на наступні задачі задокументований (S2-014, S2-027, S2-042)
 
 ---
 
 ## Нотатки
 
-_Простір для нотаток виконавця під час роботи над задачею._
+### Рішення прийняті при імплементації
+
+1. **Порожні методи замість ABC/Protocol** — простіше, замінюються на місці при Epic 3/5
+2. **Callback працює з SourceMaterial** — перехід на MaterialEntry при S2-014 (документовано в коді)
+3. **Two-session pattern в callback** — on_failure відкриває нову сесію, caller відповідає тільки за rollback своєї
+4. **Legacy `ingest_material` не змінена** — deprecated, не використовує Job tracking

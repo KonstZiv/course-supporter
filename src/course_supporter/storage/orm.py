@@ -220,7 +220,7 @@ class MaterialEntry(Base):
 
     # Relationships
     node: Mapped["MaterialNode"] = relationship(back_populates="materials")
-    pending_job: Mapped["Job | None"] = relationship()
+    pending_job: Mapped["Job | None"] = relationship(back_populates="material_entries")
 
 
 class SourceMaterial(Base):
@@ -418,6 +418,9 @@ class Job(Base):
 
     # Relationships
     course: Mapped["Course | None"] = relationship()
+    material_entries: Mapped[list["MaterialEntry"]] = relationship(
+        back_populates="pending_job"
+    )
 
 
 # ──────────────────────────────────────────────

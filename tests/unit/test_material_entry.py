@@ -146,9 +146,15 @@ class TestMaterialEntryRelationships:
         assert rel.back_populates == "materials"
 
     def test_pending_job_relationship(self) -> None:
-        """pending_job relationship to Job exists."""
+        """pending_job relationship to Job with back_populates."""
         rel = MaterialEntry.__mapper__.relationships["pending_job"]
         assert rel.mapper.class_ is Job
+        assert rel.back_populates == "material_entries"
+
+    def test_job_has_material_entries_relationship(self) -> None:
+        """Job.material_entries back_populates pending_job."""
+        rel = Job.__mapper__.relationships["material_entries"]
+        assert rel.back_populates == "pending_job"
 
     def test_material_node_has_materials(self) -> None:
         """MaterialNode.materials relationship back_populates node."""

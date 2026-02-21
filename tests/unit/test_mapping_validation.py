@@ -205,6 +205,21 @@ class TestMappingValidationService:
         assert fields == {"presentation_entry_id", "video_entry_id"}
 
     @pytest.mark.asyncio
+    async def test_entry_and_timecode_errors_collected(self) -> None:
+        """Entry error + timecode error returned together in one pass."""
+        # Presentation missing + bad timecode
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(tc_start="bad", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        _idx, errors = result[0]
+        assert len(errors) == 2
+        fields = {e.field for e in errors}
+        assert fields == {"presentation_entry_id", "video_timecode_start"}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "bad_tc",
         ["abc", "1:2:3", "123:45", "1:2", ":12:34", "00:99:99", "12:60:00"],

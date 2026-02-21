@@ -100,12 +100,12 @@ class MappingValidationService:
     ) -> list[MappingValidationError]:
         """Validate a single mapping against pre-fetched entries.
 
-        Collects both entry errors (presentation + video) before returning.
-        Timecode checks run only when both entries are valid.
+        Collects all errors (entry IDs + timecode formats) in one pass.
+        Timecode ordering is checked only when both formats are valid.
         """
-        entry_errors: list[MappingValidationError] = []
+        errors: list[MappingValidationError] = []
 
-        # ── Presentation entry ──
+        # ── Entry checks ──
         pres_err = self._check_entry(
             entry_id_str=mapping.presentation_entry_id,
             node_id=node_id,
@@ -114,9 +114,8 @@ class MappingValidationService:
             entries_by_id=entries_by_id,
         )
         if pres_err is not None:
-            entry_errors.append(pres_err)
+            errors.append(pres_err)
 
-        # ── Video entry ──
         video_err = self._check_entry(
             entry_id_str=mapping.video_entry_id,
             node_id=node_id,
@@ -125,47 +124,51 @@ class MappingValidationService:
             entries_by_id=entries_by_id,
         )
         if video_err is not None:
-            entry_errors.append(video_err)
+            errors.append(video_err)
 
-        if entry_errors:
-            return entry_errors
-
-        # ── Timecode format (only when entries are valid) ──
+        # ── Timecode format ──
         tc_start = mapping.video_timecode_start
-        if not _TIMECODE_RE.match(tc_start):
-            return [
+        tc_start_valid = bool(_TIMECODE_RE.match(tc_start))
+        if not tc_start_valid:
+            errors.append(
                 MappingValidationError(
                     field="video_timecode_start",
                     message=f"Invalid timecode format '{tc_start}'",
                     hint="Use HH:MM:SS or MM:SS format (e.g., '01:23:45')",
                 )
-            ]
+            )
 
         tc_end = mapping.video_timecode_end
+        tc_end_valid = True
         if tc_end is not None:
-            if not _TIMECODE_RE.match(tc_end):
-                return [
+            tc_end_valid = bool(_TIMECODE_RE.match(tc_end))
+            if not tc_end_valid:
+                errors.append(
                     MappingValidationError(
                         field="video_timecode_end",
                         message=f"Invalid timecode format '{tc_end}'",
                         hint="Use HH:MM:SS or MM:SS format (e.g., '01:23:45')",
                     )
-                ]
+                )
 
-            # ── Timecode ordering ──
-            if _timecode_to_seconds(tc_end) < _timecode_to_seconds(tc_start):
-                return [
-                    MappingValidationError(
-                        field="video_timecode_end",
-                        message=(
-                            f"timecode_end '{tc_end}' is before "
-                            f"timecode_start '{tc_start}'"
-                        ),
-                        hint="video_timecode_end must be >= video_timecode_start",
-                    )
-                ]
+        # ── Timecode ordering (only when both formats are valid) ──
+        if (
+            tc_start_valid
+            and tc_end_valid
+            and tc_end is not None
+            and _timecode_to_seconds(tc_end) < _timecode_to_seconds(tc_start)
+        ):
+            errors.append(
+                MappingValidationError(
+                    field="video_timecode_end",
+                    message=(
+                        f"timecode_end '{tc_end}' is before timecode_start '{tc_start}'"
+                    ),
+                    hint="video_timecode_end must be >= video_timecode_start",
+                )
+            )
 
-        return []
+        return errors
 
     # ── Private helpers ──
 

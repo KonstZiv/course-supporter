@@ -108,11 +108,13 @@ class TestMappingValidationService:
     @pytest.mark.asyncio
     async def test_presentation_entry_not_found(self) -> None:
         """Missing presentation entry produces error."""
-        session = _session_with_entries({})
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({VID_ID: vid})
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
         _idx, errors = result[0]
+        assert len(errors) == 1
         assert errors[0].field == "presentation_entry_id"
         assert "not found" in errors[0].message
 
@@ -122,23 +124,29 @@ class TestMappingValidationService:
         pres = _make_entry_mock(
             entry_id=PRES_ID, node_id=OTHER_NODE_ID, source_type="presentation"
         )
-        session = _session_with_entries({PRES_ID: pres})
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0][1][0].field == "presentation_entry_id"
-        assert "belongs to node" in result[0][1][0].message
+        _idx, errors = result[0]
+        assert len(errors) == 1
+        assert errors[0].field == "presentation_entry_id"
+        assert "belongs to node" in errors[0].message
 
     @pytest.mark.asyncio
     async def test_presentation_wrong_type(self) -> None:
         """Presentation entry with wrong source_type produces error."""
         pres = _make_entry_mock(entry_id=PRES_ID, node_id=NODE_ID, source_type="video")
-        session = _session_with_entries({PRES_ID: pres})
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0][1][0].field == "presentation_entry_id"
-        assert "type 'video'" in result[0][1][0].message
+        _idx, errors = result[0]
+        assert len(errors) == 1
+        assert errors[0].field == "presentation_entry_id"
+        assert "type 'video'" in errors[0].message
 
     @pytest.mark.asyncio
     async def test_video_entry_not_found(self) -> None:
@@ -184,9 +192,22 @@ class TestMappingValidationService:
         assert "type 'text'" in result[0][1][0].message
 
     @pytest.mark.asyncio
+    async def test_both_entry_errors_collected(self) -> None:
+        """Both presentation and video errors returned in one pass."""
+        # Neither entry exists — both should fail
+        session = _session_with_entries({})
+        svc = MappingValidationService(session)
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        _idx, errors = result[0]
+        assert len(errors) == 2
+        fields = {e.field for e in errors}
+        assert fields == {"presentation_entry_id", "video_entry_id"}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "bad_tc",
-        ["abc", "1:2:3", "123:45", "1:2", ":12:34"],
+        ["abc", "1:2:3", "123:45", "1:2", ":12:34", "00:99:99", "12:60:00"],
     )
     async def test_invalid_timecode_format(self, bad_tc: str) -> None:
         """Invalid timecodes are rejected."""
@@ -241,8 +262,9 @@ class TestMappingValidationService:
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0][1][0].hint is not None
-        assert len(result[0][1][0].hint) > 0
+        for err in result[0][1]:
+            assert err.hint is not None
+            assert len(err.hint) > 0
 
     @pytest.mark.asyncio
     async def test_invalid_uuid_presentation(self) -> None:

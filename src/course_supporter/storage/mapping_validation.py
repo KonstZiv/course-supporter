@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.models.course import SlideVideoMapEntry
 from course_supporter.storage.orm import MaterialEntry
 
-_TIMECODE_RE = re.compile(r"^(\d{1,2}:)?\d{2}:\d{2}$")
+_TIMECODE_RE = re.compile(r"^([0-9]{1,2}:)?[0-5][0-9]:[0-5][0-9]$")
 
 
 @dataclass
@@ -100,8 +100,11 @@ class MappingValidationService:
     ) -> list[MappingValidationError]:
         """Validate a single mapping against pre-fetched entries.
 
-        Returns first error found (fail-fast per mapping).
+        Collects both entry errors (presentation + video) before returning.
+        Timecode checks run only when both entries are valid.
         """
+        entry_errors: list[MappingValidationError] = []
+
         # ── Presentation entry ──
         pres_err = self._check_entry(
             entry_id_str=mapping.presentation_entry_id,
@@ -111,7 +114,7 @@ class MappingValidationService:
             entries_by_id=entries_by_id,
         )
         if pres_err is not None:
-            return [pres_err]
+            entry_errors.append(pres_err)
 
         # ── Video entry ──
         video_err = self._check_entry(
@@ -122,9 +125,12 @@ class MappingValidationService:
             entries_by_id=entries_by_id,
         )
         if video_err is not None:
-            return [video_err]
+            entry_errors.append(video_err)
 
-        # ── Timecode format ──
+        if entry_errors:
+            return entry_errors
+
+        # ── Timecode format (only when entries are valid) ──
         tc_start = mapping.video_timecode_start
         if not _TIMECODE_RE.match(tc_start):
             return [

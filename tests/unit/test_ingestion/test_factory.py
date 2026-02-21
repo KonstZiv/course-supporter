@@ -73,14 +73,14 @@ class TestCreateHeavySteps:
         assert isinstance(heavy.describe_slides, functools.partial)
         assert heavy.describe_slides.func is local_describe_slides
 
-    def test_heavy_steps_is_frozen(self) -> None:
+    @pytest.mark.parametrize("field", ["transcribe", "describe_slides", "scrape_web"])
+    def test_heavy_steps_is_frozen(self, field: str) -> None:
         """HeavySteps is immutable — all fields reject assignment."""
         router = AsyncMock()
         heavy = create_heavy_steps(router=router)
 
-        for field in ("transcribe", "describe_slides", "scrape_web"):
-            with pytest.raises(AttributeError):
-                setattr(heavy, field, AsyncMock())
+        with pytest.raises(AttributeError):
+            setattr(heavy, field, AsyncMock())
 
 
 class TestCreateProcessors:

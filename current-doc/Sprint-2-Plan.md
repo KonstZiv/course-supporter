@@ -812,6 +812,19 @@ docs/
 | S2-036 | Factory for heavy steps | 2h | `create_heavy_steps(settings)` → local implementations |
 | S2-037 | Heavy steps unit tests | 3h | Mock boundary, test orchestration |
 
+### Epic 4b: S3 Download for File-Based Processors (0.5-1 день)
+
+**Ціль:** File-based processors (Text, Presentation, Video/Whisper) можуть обробляти файли, завантажені через API в S3/MinIO.
+
+**Контекст:** Виявлено при smoke-тестуванні після Epic 4. При upload файлу через API, `source_url` зберігається як S3 URL (`http://minio:9000/course-materials/...`). Processors використовують `Path(source.source_url)`, що падає з `FileNotFoundError` — S3 URL не є локальним шляхом. WebProcessor не уражений (працює з HTTP URL напряму).
+
+| # | Задача | Оцінка | Деталі |
+|---|---|---|---|
+| S2-037a | S3Client.download_file() | 2h | Додати метод завантаження об'єкта з S3 у тимчасовий файл. Повертає `Path`. Тести. |
+| S2-037b | URL resolution в tasks.py | 3h | Перед `processor.process()` — якщо `source_url` починається з S3 endpoint, завантажити у temp file, підмінити `source_url` на локальний шлях. Cleanup у `finally`. Тести. |
+
+**Залежності:** Epic 4 (processors мають DI), Epic 1 (ARQ tasks).
+
 ### Epic 5: SlideVideoMapping — Redesign (3-4 дні)
 
 **Ціль:** Explicit presentation↔video references, трирівнева валідація, deferred validation з auto-revalidation.
@@ -869,7 +882,9 @@ Epic 2 (MaterialTree + Entry) ────────────────�
                                                    │                     │
 Epic 3 (Fingerprints) ──── Epic 2 ───────────────┤                     │
                                                    ├──→ Epic 6 (Structure Gen) │
-Epic 4 (Heavy Steps) ──── Epic 1 ───────────────┤     │               │
+Epic 4 (Heavy Steps) ──── Epic 1 ───────────────┤
+                                                   │
+Epic 4b (S3 Download) ──── Epic 4 ────────────────┤     │               │
                                                    │     └──→ Epic 7 (Docs) ──┘
 Epic 5 (SlideVideoMapping) ──── Epic 1 + Epic 2 ─┘          ↑ updates docs site
 ```
@@ -879,6 +894,7 @@ Epic 5 (SlideVideoMapping) ──── Epic 1 + Epic 2 ─┘          ↑ upda
 1. **Epic 1 (Queue)** + **Epic 2 (MaterialTree)** — паралельно, розблоковують все інше
 2. **Epic 3 (Fingerprints)** — після Epic 2
 3. **Epic 4 (Heavy Steps)** — паралельно з Epic 3
+3b. **Epic 4b (S3 Download)** — одразу після Epic 4, розблоковує реальну обробку файлів
 4. **Epic 5 (SlideVideoMapping)** — після Epic 1 + Epic 2 (потребує MaterialEntry + ingestion callback)
 5. **Epic 6 (Structure Generation)** — після всіх попередніх
 6. **Epic 7 (Integration Documentation)** — публікується на docs site (Epic 0), паралельно з Epic 6

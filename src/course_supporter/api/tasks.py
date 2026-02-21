@@ -18,6 +18,7 @@ from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.storage.orm import SourceMaterial
     from course_supporter.storage.s3 import S3Client
 
 
@@ -25,31 +26,58 @@ class _HasSourceUrl(Protocol):
     source_url: str
 
 
+class _MaterialProxy:
+    """Lightweight proxy that overrides source_url without touching the ORM."""
+
+    __slots__ = ("_source_url", "_wrapped")
+
+    def __init__(self, wrapped: _HasSourceUrl, source_url: str) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_source_url", source_url)
+
+    @property
+    def source_url(self) -> str:
+        url: str = object.__getattribute__(self, "_source_url")
+        return url
+
+    def __getattr__(self, name: str) -> object:
+        result: object = getattr(object.__getattribute__(self, "_wrapped"), name)
+        return result
+
+
 @asynccontextmanager
 async def _resolve_s3_url(
-    material: _HasSourceUrl,
+    material: SourceMaterial,
     s3: S3Client | None,
-) -> AsyncIterator[None]:
-    """Download S3 object to temp file, patch material URL, restore on exit.
+) -> AsyncIterator[SourceMaterial]:
+    """Download S3 object to temp file, yield a proxy with local path.
 
-    If ``material.source_url`` is not an S3 URL (or *s3* is ``None``),
-    the context manager is a no-op.
+    The original ORM object is **never mutated**, preventing accidental
+    auto-flush of a temp path to the database.
+
+    Yields the original *material* unchanged when the URL is not an S3
+    URL, or a lightweight proxy with ``source_url`` pointing to the
+    downloaded temp file otherwise.
     """
-    original_url: str = material.source_url
-    s3_key = s3.extract_key(original_url) if s3 else None
+    s3_key = s3.extract_key(material.source_url) if s3 else None
     temp_path: Path | None = None
 
     try:
         if s3 and s3_key:
             temp_path = await s3.download_file(s3_key)
-            material.source_url = str(temp_path)
-        yield
+            proxy = _MaterialProxy(material, str(temp_path))
+            yield proxy  # type: ignore[misc]
+        else:
+            yield material
     finally:
-        material.source_url = original_url
         if temp_path is not None:
-            ap = anyio.Path(temp_path)
-            if await ap.exists():
-                await ap.unlink(missing_ok=True)
+            try:
+                ap = anyio.Path(temp_path)
+                if await ap.exists():
+                    await ap.unlink(missing_ok=True)
+            except Exception:
+                log = structlog.get_logger()
+                log.warning("s3_temp_cleanup_failed", path=str(temp_path))
 
 
 async def arq_ingest_material(
@@ -115,8 +143,8 @@ async def arq_ingest_material(
                 msg = f"SourceMaterial not found: {mid}"
                 raise ValueError(msg)
 
-            async with _resolve_s3_url(material, s3):
-                doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3) as resolved:
+                doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
 
@@ -171,8 +199,8 @@ async def ingest_material(
                 msg = f"SourceMaterial not found: {material_id}"
                 raise ValueError(msg)
 
-            async with _resolve_s3_url(material, s3):
-                doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3) as resolved:
+                doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
             await repo.update_status(material_id, "done", content_snapshot=content)

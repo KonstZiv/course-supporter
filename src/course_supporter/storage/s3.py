@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlparse
 
 import anyio
 import structlog
@@ -255,8 +256,6 @@ class S3Client:
             Object key if the URL belongs to this client's endpoint/bucket,
             ``None`` otherwise.
         """
-        from urllib.parse import urlparse
-
         parsed = urlparse(url)
         endpoint_parsed = urlparse(self._endpoint_url)
 

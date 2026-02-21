@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from typing import Annotated
 
 import structlog
@@ -27,6 +28,10 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.source import SourceType
+from course_supporter.storage.mapping_validation import (
+    MappingValidationError,
+    MappingValidationService,
+)
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import (
     CourseRepository,
@@ -48,6 +53,11 @@ def _file_extension(filename: str | None) -> str:
     if not filename or "." not in filename:
         return ""
     return "." + filename.rsplit(".", maxsplit=1)[-1].lower()
+
+
+def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
+    """Convert MappingValidationError dataclass to a JSON-safe dict."""
+    return asdict(err)
 
 
 ALLOWED_EXTENSIONS: dict[SourceType, frozenset[str]] = {
@@ -172,6 +182,19 @@ async def create_slide_mapping(
     node = await node_repo.get_by_id(node_id)
     if node is None or node.course_id != course.id:
         raise HTTPException(status_code=404, detail="Node not found")
+
+    # ── Level 1: structural validation (single query for all entries) ──
+    validator = MappingValidationService(session)
+    errors_per_mapping = await validator.validate_batch(node_id, body.mappings)
+
+    if errors_per_mapping:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {"index": idx, "errors": [_ve_to_dict(e) for e in errs]}
+                for idx, errs in errors_per_mapping
+            ],
+        )
 
     svm_repo = SlideVideoMappingRepository(session)
     records = await svm_repo.batch_create(node_id, body.mappings)

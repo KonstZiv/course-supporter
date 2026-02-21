@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import structlog
 
-from course_supporter.models.course import CourseContext, SlideVideoMapEntry
+from course_supporter.models.course import CourseContext, SlideTimecodeRef
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -28,7 +28,7 @@ class MergeStep:
 
     Responsibilities:
     1. Sort documents by source type priority (video first, web last)
-    2. Cross-reference slide<->video via SlideVideoMapEntry mappings
+    2. Cross-reference slide<->video via SlideTimecodeRef mappings
     3. Package everything into CourseContext for ArchitectAgent
 
     This is a synchronous, pure data transformation — no I/O, no LLM.
@@ -37,7 +37,7 @@ class MergeStep:
     def merge(
         self,
         documents: list[SourceDocument],
-        mappings: list[SlideVideoMapEntry] | None = None,
+        mappings: list[SlideTimecodeRef] | None = None,
     ) -> CourseContext:
         """Merge source documents and optional mappings into CourseContext.
 
@@ -81,7 +81,7 @@ class MergeStep:
     @staticmethod
     def _apply_cross_references(
         documents: list[SourceDocument],
-        mappings: list[SlideVideoMapEntry],
+        mappings: list[SlideTimecodeRef],
     ) -> list[SourceDocument]:
         """Enrich presentation slide chunks with video timecode references.
 
@@ -95,9 +95,9 @@ class MergeStep:
         Returns:
             Documents with enriched presentation chunks.
         """
-        # Build lookup: slide_number -> video_timecode
+        # Build lookup: slide_number -> video_timecode_start
         timecode_map: dict[int, str] = {
-            m.slide_number: m.video_timecode for m in mappings
+            m.slide_number: m.video_timecode_start for m in mappings
         }
 
         if not timecode_map:

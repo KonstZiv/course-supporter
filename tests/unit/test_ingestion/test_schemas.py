@@ -9,7 +9,7 @@ from course_supporter.ingestion.base import (
     SourceProcessor,
     UnsupportedFormatError,
 )
-from course_supporter.models.course import CourseContext, SlideVideoMapEntry
+from course_supporter.models.course import CourseContext, SlideTimecodeRef
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -98,14 +98,14 @@ class TestCourseContext:
     def test_course_context_with_mappings(self) -> None:
         """CourseContext with documents and slide-video mappings."""
         doc = SourceDocument(source_type=SourceType.VIDEO, source_url="file:///v.mp4")
-        mapping = SlideVideoMapEntry(slide_number=1, video_timecode="00:05:30")
+        mapping = SlideTimecodeRef(slide_number=1, video_timecode_start="00:05:30")
         ctx = CourseContext(
             documents=[doc],
             slide_video_mappings=[mapping],
         )
         assert len(ctx.documents) == 1
         assert ctx.slide_video_mappings[0].slide_number == 1
-        assert ctx.slide_video_mappings[0].video_timecode == "00:05:30"
+        assert ctx.slide_video_mappings[0].video_timecode_start == "00:05:30"
 
 
 class TestSourceProcessor:

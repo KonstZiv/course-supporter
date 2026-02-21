@@ -3,7 +3,7 @@
 import pytest
 
 from course_supporter.ingestion.merge import MergeStep
-from course_supporter.models.course import CourseContext, SlideVideoMapEntry
+from course_supporter.models.course import CourseContext, SlideTimecodeRef
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -94,14 +94,14 @@ class TestMergeStep:
         """Documents + mappings passed through to CourseContext."""
         step = MergeStep()
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
-            SlideVideoMapEntry(slide_number=2, video_timecode="00:05:30"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
+            SlideTimecodeRef(slide_number=2, video_timecode_start="00:05:30"),
         ]
 
         result = step.merge([_make_doc()], mappings=mappings)
 
         assert len(result.slide_video_mappings) == 2
-        assert result.slide_video_mappings[0].video_timecode == "00:01:00"
+        assert result.slide_video_mappings[0].video_timecode_start == "00:01:00"
 
     def test_cross_references(self) -> None:
         """Presentation SLIDE_TEXT chunks enriched with video_timecode."""
@@ -111,8 +111,8 @@ class TestMergeStep:
             chunks=[_make_slide_chunk(1), _make_slide_chunk(2)],
         )
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
-            SlideVideoMapEntry(slide_number=2, video_timecode="00:05:30"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
+            SlideTimecodeRef(slide_number=2, video_timecode_start="00:05:30"),
         ]
 
         result = step.merge([presentation], mappings=mappings)
@@ -129,7 +129,7 @@ class TestMergeStep:
             chunks=[_make_slide_chunk(1)],
         )
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
         ]
 
         result = step.merge([presentation], mappings=mappings)
@@ -152,7 +152,7 @@ class TestMergeStep:
             ],
         )
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
         ]
 
         result = step.merge([video], mappings=mappings)
@@ -167,7 +167,7 @@ class TestMergeStep:
             chunks=[_make_slide_chunk(3)],
         )
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
         ]
 
         result = step.merge([presentation], mappings=mappings)
@@ -192,7 +192,7 @@ class TestMergeStep:
             ],
         )
         mappings = [
-            SlideVideoMapEntry(slide_number=1, video_timecode="00:01:00"),
+            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
         ]
 
         result = step.merge([presentation], mappings=mappings)

@@ -167,43 +167,47 @@ class SlideVideoMappingRepository:
 
     async def batch_create(
         self,
-        course_id: uuid.UUID,
+        node_id: uuid.UUID,
         mappings: list[SlideVideoMapEntry],
     ) -> list[SlideVideoMapping]:
         """Create multiple slide-video mappings in a batch.
 
         Args:
-            course_id: FK to the parent course.
+            node_id: FK to the parent material node.
             mappings: List of SlideVideoMapEntry Pydantic models.
 
         Returns:
             List of created SlideVideoMapping ORM instances.
         """
         records = []
-        for m in mappings:
+        for idx, m in enumerate(mappings):
             record = SlideVideoMapping(
-                course_id=course_id,
+                node_id=node_id,
+                presentation_entry_id=uuid.UUID(m.presentation_entry_id),
+                video_entry_id=uuid.UUID(m.video_entry_id),
                 slide_number=m.slide_number,
-                video_timecode=m.video_timecode,
+                video_timecode_start=m.video_timecode_start,
+                video_timecode_end=m.video_timecode_end,
+                order=idx,
             )
             self._session.add(record)
             records.append(record)
         await self._session.flush()
         return records
 
-    async def get_by_course_id(self, course_id: uuid.UUID) -> list[SlideVideoMapping]:
-        """Get all slide-video mappings for a course.
+    async def get_by_node_id(self, node_id: uuid.UUID) -> list[SlideVideoMapping]:
+        """Get all slide-video mappings for a material node.
 
         Args:
-            course_id: UUID of the parent course.
+            node_id: UUID of the parent material node.
 
         Returns:
-            List of SlideVideoMapping instances ordered by slide_number.
+            List of SlideVideoMapping instances ordered by order.
         """
         stmt = (
             select(SlideVideoMapping)
-            .where(SlideVideoMapping.course_id == course_id)
-            .order_by(SlideVideoMapping.slide_number)
+            .where(SlideVideoMapping.node_id == node_id)
+            .order_by(SlideVideoMapping.order)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

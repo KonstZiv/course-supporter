@@ -75,9 +75,10 @@ class TestORMModels:
         assert fks == {"tenants.id"}
 
     def test_slide_video_mapping_fk(self) -> None:
-        """SlideVideoMapping has FK to courses."""
+        """SlideVideoMapping has FK to material_nodes and material_entries."""
         fks = {fk.target_fullname for fk in SlideVideoMapping.__table__.foreign_keys}
-        assert "courses.id" in fks
+        assert "material_nodes.id" in fks
+        assert "material_entries.id" in fks
 
     def test_ondelete_cascade_on_foreign_keys(self) -> None:
         """All FK constraints use CASCADE ondelete."""

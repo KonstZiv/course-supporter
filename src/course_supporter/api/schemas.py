@@ -63,7 +63,7 @@ class CourseListResponse(BaseModel):
 
 
 class SlideVideoMapRequest(BaseModel):
-    """Request body for POST /courses/{id}/slide-mapping."""
+    """Request body for POST /courses/{id}/nodes/{node_id}/slide-mapping."""
 
     mappings: list[SlideVideoMapEntry] = Field(..., min_length=1)
 
@@ -74,8 +74,18 @@ class SlideVideoMapItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    node_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    video_entry_id: uuid.UUID
     slide_number: int
-    video_timecode: str
+    video_timecode_start: str
+    video_timecode_end: str | None
+    order: int
+    validation_state: str
+    blocking_factors: list[dict[str, object]] | None
+    validation_errors: list[dict[str, object]] | None
+    validated_at: datetime | None
+    created_at: datetime
 
 
 class SlideVideoMapResponse(BaseModel):

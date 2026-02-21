@@ -108,9 +108,6 @@ class Course(Base):
     source_materials: Mapped[list["SourceMaterial"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
-    slide_video_mappings: Mapped[list["SlideVideoMapping"]] = relationship(
-        back_populates="course", cascade="all, delete-orphan"
-    )
     modules: Mapped[list["Module"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
@@ -157,6 +154,10 @@ class MaterialNode(Base):
         cascade="all, delete-orphan",
     )
     materials: Mapped[list["MaterialEntry"]] = relationship(
+        back_populates="node",
+        cascade="all, delete-orphan",
+    )
+    slide_video_mappings: Mapped[list["SlideVideoMapping"]] = relationship(
         back_populates="node",
         cascade="all, delete-orphan",
     )
@@ -299,21 +300,64 @@ class SourceMaterial(Base):
     course: Mapped["Course"] = relationship(back_populates="source_materials")
 
 
+class MappingValidationState(StrEnum):
+    """Validation state for slide-video mappings."""
+
+    VALIDATED = "validated"
+    PENDING_VALIDATION = "pending_validation"
+    VALIDATION_FAILED = "validation_failed"
+
+
 class SlideVideoMapping(Base):
+    """Maps a specific slide in a presentation to a timecode range in a video.
+
+    Both presentation and video are referenced by FK to MaterialEntry.
+    Validation is tracked via ``validation_state`` with optional JSONB
+    ``blocking_factors`` (deferred validation) and ``validation_errors``.
+    """
+
     __tablename__ = "slide_video_mappings"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("courses.id", ondelete="CASCADE")
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    )
+    presentation_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_entries.id", ondelete="CASCADE"), index=True
+    )
+    video_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_entries.id", ondelete="CASCADE"), index=True
     )
     slide_number: Mapped[int] = mapped_column(Integer)
-    video_timecode: Mapped[str] = mapped_column(String(20))
+    video_timecode_start: Mapped[str] = mapped_column(String(20))
+    video_timecode_end: Mapped[str | None] = mapped_column(String(20))
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Validation tracking ──
+    validation_state: Mapped[str] = mapped_column(
+        Enum(
+            "validated",
+            "pending_validation",
+            "validation_failed",
+            name="mapping_validation_state_enum",
+            create_type=False,
+        ),
+        default=MappingValidationState.PENDING_VALIDATION,
+    )
+    blocking_factors: Mapped[list[Any] | None] = mapped_column(JSONB)
+    validation_errors: Mapped[list[Any] | None] = mapped_column(JSONB)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    course: Mapped["Course"] = relationship(back_populates="slide_video_mappings")
+    node: Mapped["MaterialNode"] = relationship(back_populates="slide_video_mappings")
+    presentation_entry: Mapped["MaterialEntry"] = relationship(
+        foreign_keys=[presentation_entry_id]
+    )
+    video_entry: Mapped["MaterialEntry"] = relationship(foreign_keys=[video_entry_id])
 
 
 # ──────────────────────────────────────────────

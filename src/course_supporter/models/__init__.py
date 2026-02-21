@@ -9,6 +9,7 @@ from course_supporter.models.course import (
     ModuleDifficulty,
     ModuleOutput,
     SlideRange,
+    SlideTimecodeRef,
     SlideVideoMapEntry,
     WebReference,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "ModuleDifficulty",
     "ModuleOutput",
     "SlideRange",
+    "SlideTimecodeRef",
     "SlideVideoMapEntry",
     "SourceDocument",
     "SourceType",

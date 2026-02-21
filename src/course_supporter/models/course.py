@@ -9,14 +9,28 @@ from course_supporter.models.source import SourceDocument
 
 
 class SlideVideoMapEntry(BaseModel):
-    """Pydantic mirror of ORM SlideVideoMapping.
+    """Input schema for creating a slide-video mapping via API.
 
-    Maps slide_number to video_timecode (e.g., "01:23:45").
-    Matches ORM: String(20) for video_timecode.
+    References a specific presentation and video by MaterialEntry ID,
+    mapping a slide number to a timecode range in the video.
+    """
+
+    presentation_entry_id: str
+    video_entry_id: str
+    slide_number: int
+    video_timecode_start: str
+    video_timecode_end: str | None = None
+
+
+class SlideTimecodeRef(BaseModel):
+    """Lightweight slide-to-timecode reference for merge step.
+
+    Used internally in CourseContext to enrich presentation chunks
+    with video timecodes. Does not carry entry IDs.
     """
 
     slide_number: int
-    video_timecode: str
+    video_timecode_start: str
 
 
 class CourseContext(BaseModel):
@@ -28,7 +42,7 @@ class CourseContext(BaseModel):
     """
 
     documents: list[SourceDocument]
-    slide_video_mappings: list[SlideVideoMapEntry] = Field(default_factory=list)
+    slide_video_mappings: list[SlideTimecodeRef] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

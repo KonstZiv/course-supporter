@@ -154,21 +154,27 @@ async def get_course(
     return response
 
 
-@router.post("/courses/{course_id}/slide-mapping", status_code=201)
+@router.post("/courses/{course_id}/nodes/{node_id}/slide-mapping", status_code=201)
 async def create_slide_mapping(
     course_id: uuid.UUID,
+    node_id: uuid.UUID,
     body: SlideVideoMapRequest,
     tenant: PrepDep,
     session: SessionDep,
 ) -> SlideVideoMapResponse:
-    """Create slide-video mappings for a course."""
+    """Create slide-video mappings for a material node."""
     course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
 
+    node_repo = MaterialNodeRepository(session)
+    node = await node_repo.get_by_id(node_id)
+    if node is None or node.course_id != course.id:
+        raise HTTPException(status_code=404, detail="Node not found")
+
     svm_repo = SlideVideoMappingRepository(session)
-    records = await svm_repo.batch_create(course_id, body.mappings)
+    records = await svm_repo.batch_create(node_id, body.mappings)
     await session.commit()
     return SlideVideoMapResponse(
         created=len(records),

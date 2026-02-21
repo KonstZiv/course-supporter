@@ -79,7 +79,9 @@ class TestCreateHeavySteps:
         router = AsyncMock()
         heavy = create_heavy_steps(router=router)
 
-        with pytest.raises(AttributeError):
+        from dataclasses import FrozenInstanceError
+
+        with pytest.raises(FrozenInstanceError):
             setattr(heavy, field, AsyncMock())
 
 

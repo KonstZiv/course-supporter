@@ -182,13 +182,9 @@ async def create_slide_mapping(
     if node is None or node.course_id != course.id:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    # ── Level 1: structural validation ──
+    # ── Level 1: structural validation (single query for all entries) ──
     validator = MappingValidationService(session)
-    errors_per_mapping: list[tuple[int, list[MappingValidationError]]] = []
-    for idx, m in enumerate(body.mappings):
-        errs = await validator.validate_structural(node_id, m)
-        if errs:
-            errors_per_mapping.append((idx, errs))
+    errors_per_mapping = await validator.validate_batch(node_id, body.mappings)
 
     if errors_per_mapping:
         raise HTTPException(

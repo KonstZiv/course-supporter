@@ -103,9 +103,7 @@ class TestSlideVideoMappingAPI:
         with (
             patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
-            patch.object(
-                MappingValidationService, "validate_structural", return_value=[]
-            ),
+            patch.object(MappingValidationService, "validate_batch", return_value=[]),
             patch.object(
                 SlideVideoMappingRepository, "batch_create", return_value=records
             ),
@@ -195,9 +193,7 @@ class TestSlideVideoMappingAPI:
         with (
             patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
-            patch.object(
-                MappingValidationService, "validate_structural", return_value=[]
-            ),
+            patch.object(MappingValidationService, "validate_batch", return_value=[]),
             patch.object(
                 SlideVideoMappingRepository, "batch_create", return_value=[record]
             ),

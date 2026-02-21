@@ -64,21 +64,26 @@ def _make_mapping(
 def _session_with_entries(
     entries: dict[uuid.UUID, MagicMock],
 ) -> AsyncMock:
-    """Build an AsyncSession mock that returns entries by ID."""
+    """Build an AsyncSession mock whose execute() returns pre-set entries.
+
+    Handles both single-ID lookups and IN-clause queries by returning
+    all matching entries from the ``entries`` dict.
+    """
     session = AsyncMock()
 
     async def _execute(stmt: object) -> MagicMock:
-        # Extract the UUID from the WHERE clause bind parameters
         compiled = stmt.compile()  # type: ignore[union-attr]
         params = compiled.params
-        # The param key is auto-generated; grab first UUID value
+        matched = []
         for val in params.values():
             if isinstance(val, uuid.UUID) and val in entries:
-                result = MagicMock()
-                result.scalar_one_or_none.return_value = entries[val]
-                return result
+                matched.append(entries[val])
+            elif isinstance(val, (list, tuple, set)):
+                for item in val:
+                    if isinstance(item, uuid.UUID) and item in entries:
+                        matched.append(entries[item])
         result = MagicMock()
-        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = matched
         return result
 
     session.execute = _execute
@@ -86,7 +91,7 @@ def _session_with_entries(
 
 
 class TestMappingValidationService:
-    """Unit tests for validate_structural()."""
+    """Unit tests for validate_batch()."""
 
     @pytest.mark.asyncio
     async def test_valid_mapping_returns_no_errors(self) -> None:
@@ -97,16 +102,17 @@ class TestMappingValidationService:
         vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert errors == []
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_presentation_entry_not_found(self) -> None:
         """Missing presentation entry produces error."""
         session = _session_with_entries({})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        _idx, errors = result[0]
         assert errors[0].field == "presentation_entry_id"
         assert "not found" in errors[0].message
 
@@ -118,10 +124,10 @@ class TestMappingValidationService:
         )
         session = _session_with_entries({PRES_ID: pres})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].field == "presentation_entry_id"
-        assert "belongs to node" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].field == "presentation_entry_id"
+        assert "belongs to node" in result[0][1][0].message
 
     @pytest.mark.asyncio
     async def test_presentation_wrong_type(self) -> None:
@@ -129,10 +135,10 @@ class TestMappingValidationService:
         pres = _make_entry_mock(entry_id=PRES_ID, node_id=NODE_ID, source_type="video")
         session = _session_with_entries({PRES_ID: pres})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].field == "presentation_entry_id"
-        assert "type 'video'" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].field == "presentation_entry_id"
+        assert "type 'video'" in result[0][1][0].message
 
     @pytest.mark.asyncio
     async def test_video_entry_not_found(self) -> None:
@@ -142,10 +148,10 @@ class TestMappingValidationService:
         )
         session = _session_with_entries({PRES_ID: pres})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].field == "video_entry_id"
-        assert "not found" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_entry_id"
+        assert "not found" in result[0][1][0].message
 
     @pytest.mark.asyncio
     async def test_video_wrong_node(self) -> None:
@@ -158,10 +164,10 @@ class TestMappingValidationService:
         )
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].field == "video_entry_id"
-        assert "belongs to node" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_entry_id"
+        assert "belongs to node" in result[0][1][0].message
 
     @pytest.mark.asyncio
     async def test_video_wrong_type(self) -> None:
@@ -172,10 +178,10 @@ class TestMappingValidationService:
         vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="text")
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].field == "video_entry_id"
-        assert "type 'text'" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_entry_id"
+        assert "type 'text'" in result[0][1][0].message
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -191,10 +197,10 @@ class TestMappingValidationService:
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
         mapping = _make_mapping(tc_start=bad_tc, tc_end=None)
-        errors = await svc.validate_structural(NODE_ID, mapping)
-        assert len(errors) == 1
-        assert errors[0].field == "video_timecode_start"
-        assert "Invalid timecode format" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_timecode_start"
+        assert "Invalid timecode format" in result[0][1][0].message
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -210,8 +216,8 @@ class TestMappingValidationService:
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
         mapping = _make_mapping(tc_start=tc, tc_end=None)
-        errors = await svc.validate_structural(NODE_ID, mapping)
-        assert errors == []
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_timecode_end_before_start(self) -> None:
@@ -223,20 +229,90 @@ class TestMappingValidationService:
         session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
         svc = MappingValidationService(session)
         mapping = _make_mapping(tc_start="01:00:00", tc_end="00:30:00")
-        errors = await svc.validate_structural(NODE_ID, mapping)
-        assert len(errors) == 1
-        assert errors[0].field == "video_timecode_end"
-        assert "before" in errors[0].message
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_timecode_end"
+        assert "before" in result[0][1][0].message
 
     @pytest.mark.asyncio
     async def test_error_messages_contain_hints(self) -> None:
         """All validation errors include a hint field."""
         session = _session_with_entries({})
         svc = MappingValidationService(session)
-        errors = await svc.validate_structural(NODE_ID, _make_mapping())
-        assert len(errors) == 1
-        assert errors[0].hint is not None
-        assert len(errors[0].hint) > 0
+        result = await svc.validate_batch(NODE_ID, [_make_mapping()])
+        assert len(result) == 1
+        assert result[0][1][0].hint is not None
+        assert len(result[0][1][0].hint) > 0
+
+    @pytest.mark.asyncio
+    async def test_invalid_uuid_presentation(self) -> None:
+        """Invalid UUID for presentation_entry_id returns 422, not 500."""
+        session = _session_with_entries({})
+        svc = MappingValidationService(session)
+        mapping = SlideVideoMapEntry(
+            presentation_entry_id="not-a-uuid",
+            video_entry_id=str(VID_ID),
+            slide_number=1,
+            video_timecode_start="00:05:00",
+        )
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        assert result[0][1][0].field == "presentation_entry_id"
+        assert "Invalid UUID format" in result[0][1][0].message
+
+    @pytest.mark.asyncio
+    async def test_invalid_uuid_video(self) -> None:
+        """Invalid UUID for video_entry_id returns validation error."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        session = _session_with_entries({PRES_ID: pres})
+        svc = MappingValidationService(session)
+        mapping = SlideVideoMapEntry(
+            presentation_entry_id=str(PRES_ID),
+            video_entry_id="also-not-uuid",
+            slide_number=1,
+            video_timecode_start="00:05:00",
+        )
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        assert result[0][1][0].field == "video_entry_id"
+        assert "Invalid UUID format" in result[0][1][0].message
+
+    @pytest.mark.asyncio
+    async def test_batch_single_query(self) -> None:
+        """validate_batch() executes exactly one DB query for all mappings."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        original_execute = session.execute
+        call_count = 0
+
+        async def counting_execute(stmt: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            return await original_execute(stmt)
+
+        session.execute = counting_execute
+
+        svc = MappingValidationService(session)
+        mappings = [_make_mapping() for _ in range(5)]
+        result = await svc.validate_batch(NODE_ID, mappings)
+        assert result == []
+        assert call_count == 1, f"Expected 1 DB query, got {call_count}"
+
+    @pytest.mark.asyncio
+    async def test_batch_multiple_errors(self) -> None:
+        """validate_batch() returns errors for all failing mappings."""
+        session = _session_with_entries({})
+        svc = MappingValidationService(session)
+        mappings = [_make_mapping(), _make_mapping()]
+        result = await svc.validate_batch(NODE_ID, mappings)
+        assert len(result) == 2
+        assert result[0][0] == 0
+        assert result[1][0] == 1
 
 
 class TestRouteReturns422OnValidationError:
@@ -287,8 +363,8 @@ class TestRouteReturns422OnValidationError:
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
             patch.object(
                 MappingValidationService,
-                "validate_structural",
-                return_value=[validation_err],
+                "validate_batch",
+                return_value=[(0, [validation_err])],
             ),
         ):
             response = await client.post(

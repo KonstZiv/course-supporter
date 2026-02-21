@@ -8,22 +8,12 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.ingestion.presentation import PresentationProcessor
-from course_supporter.ingestion.text import TextProcessor
-from course_supporter.ingestion.video import VideoProcessor
-from course_supporter.ingestion.web import WebProcessor
+from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
 from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-
-PROCESSOR_MAP = {
-    SourceType.VIDEO: VideoProcessor,
-    SourceType.PRESENTATION: PresentationProcessor,
-    SourceType.TEXT: TextProcessor,
-    SourceType.WEB: WebProcessor,
-}
 
 
 async def arq_ingest_material(
@@ -65,6 +55,9 @@ async def arq_ingest_material(
     )
     log.info("ingestion_started")
 
+    heavy = create_heavy_steps(router=router)
+    processors = create_processors(heavy)
+
     async with session_factory() as session:
         job_repo = JobRepository(session)
         mat_repo = SourceMaterialRepository(session)
@@ -73,17 +66,21 @@ async def arq_ingest_material(
             await mat_repo.update_status(mid, "processing")
             await session.commit()
 
-            processor_cls = PROCESSOR_MAP.get(SourceType(source_type))
-            if processor_cls is None:
-                msg = f"No processor for source_type: {source_type}"
-                raise ValueError(msg)
+            try:
+                st = SourceType(source_type)
+                processor = processors[st]
+            except (ValueError, KeyError):
+                msg = f"Unsupported source_type: {source_type}"
+                raise ValueError(msg) from None
 
             material = await mat_repo.get_by_id(mid)
             if material is None:
                 msg = f"SourceMaterial not found: {mid}"
                 raise ValueError(msg)
 
-            processor = processor_cls()
+            # router is still passed here because GeminiVideoProcessor
+            # uses it directly in process() (not via DI heavy step).
+            # Can be removed once Gemini is extracted as a heavy step.
             doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
@@ -117,23 +114,28 @@ async def ingest_material(
     )
     log.info("ingestion_started")
 
+    heavy = create_heavy_steps(router=router)
+    processors = create_processors(heavy)
+
     async with session_factory() as session:
         repo = SourceMaterialRepository(session)
         try:
             await repo.update_status(material_id, "processing")
             await session.commit()
 
-            processor_cls = PROCESSOR_MAP.get(SourceType(source_type))
-            if processor_cls is None:
-                msg = f"No processor for source_type: {source_type}"
-                raise ValueError(msg)
+            try:
+                st = SourceType(source_type)
+                processor = processors[st]
+            except (ValueError, KeyError):
+                msg = f"Unsupported source_type: {source_type}"
+                raise ValueError(msg) from None
 
             material = await repo.get_by_id(material_id)
             if material is None:
                 msg = f"SourceMaterial not found: {material_id}"
                 raise ValueError(msg)
 
-            processor = processor_cls()
+            # router passed for GeminiVideoProcessor (see comment above)
             doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()

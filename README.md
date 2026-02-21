@@ -7,6 +7,8 @@ AI-powered system for transforming course materials into structured learning pla
 
 **[Documentation](https://kostyantynzivenko.github.io/course-supporter/)** | **[API (live)](https://api.pythoncourse.me/docs)**
 
+---
+
 ## What it does
 
 - **Ingests** video, presentations, text, and web links

@@ -215,9 +215,9 @@ class MappingValidationService:
                 field=field,
                 message=(
                     f"Entry '{entry_id}' is type '{entry.source_type}', "
-                    f"expected '{expected_type}'"
+                    f"expected '{expected_type.value}'"
                 ),
-                hint=f"Use a {expected_type} material for {field}",
+                hint=f"Use a {expected_type.value} material for {field}",
             )
 
         return None

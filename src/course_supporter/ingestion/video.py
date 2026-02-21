@@ -23,6 +23,11 @@ from course_supporter.ingestion.base import (
     SourceProcessor,
     UnsupportedFormatError,
 )
+from course_supporter.ingestion.heavy_steps import (
+    TranscribeFunc,
+    TranscribeParams,
+    TranscriptSegment,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -196,12 +201,26 @@ class WhisperVideoProcessor(SourceProcessor):
     """Process video using local FFmpeg + OpenAI Whisper.
 
     Extracts audio track via FFmpeg subprocess, then transcribes
-    using whisper library. No external API calls required.
+    using an injected ``TranscribeFunc`` (default: ``local_transcribe``).
 
     Requires:
     - FFmpeg installed on the system
     - whisper package (optional 'media' dependency group)
     """
+
+    def __init__(
+        self,
+        *,
+        transcribe_func: TranscribeFunc | None = None,
+    ) -> None:
+        self._transcribe_func = transcribe_func or self._default_transcribe_func()
+
+    @staticmethod
+    def _default_transcribe_func() -> TranscribeFunc:
+        """Lazy-import local_transcribe as the default implementation."""
+        from course_supporter.ingestion.transcribe import local_transcribe
+
+        return local_transcribe
 
     async def process(
         self,
@@ -223,11 +242,11 @@ class WhisperVideoProcessor(SourceProcessor):
         audio_path = await self._extract_audio(source.source_url)
 
         try:
-            # 2. Transcribe audio with Whisper
-            segments = await self._transcribe(audio_path)
+            # 2. Transcribe audio via injected heavy step
+            transcript = await self._transcribe_func(audio_path, TranscribeParams())
 
             # 3. Convert segments to chunks
-            chunks = self._segments_to_chunks(segments)
+            chunks = self._segments_to_chunks(transcript.segments)
 
             logger.info(
                 "whisper_video_processing_done",
@@ -365,32 +384,14 @@ class WhisperVideoProcessor(SourceProcessor):
         logger.info("ytdlp_audio_downloaded", url=url, path=output_path)
         return output_path
 
-    async def _transcribe(self, audio_path: str) -> list[dict[str, Any]]:
-        """Transcribe audio file using Whisper.
-
-        Runs Whisper in a thread pool to avoid blocking the event loop.
-
-        Args:
-            audio_path: Path to the WAV audio file.
-
-        Returns:
-            List of segment dicts with 'start', 'end', 'text' keys.
-        """
-        import whisper
-
-        loop = asyncio.get_running_loop()
-        model = await loop.run_in_executor(None, whisper.load_model, "base")
-        result = await loop.run_in_executor(None, model.transcribe, audio_path)
-        return result.get("segments", [])  # type: ignore[no-any-return]
-
     @staticmethod
     def _segments_to_chunks(
-        segments: list[dict[str, Any]],
+        segments: list[TranscriptSegment],
     ) -> list[ContentChunk]:
-        """Convert Whisper segments to ContentChunks."""
+        """Convert TranscriptSegment objects to ContentChunks."""
         chunks: list[ContentChunk] = []
         for idx, seg in enumerate(segments):
-            text = seg.get("text", "").strip()
+            text = seg.text.strip()
             if not text:
                 continue
             chunks.append(
@@ -399,8 +400,8 @@ class WhisperVideoProcessor(SourceProcessor):
                     text=text,
                     index=idx,
                     metadata={
-                        "start_sec": round(seg.get("start", 0.0), 2),
-                        "end_sec": round(seg.get("end", 0.0), 2),
+                        "start_sec": round(seg.start_sec, 2),
+                        "end_sec": round(seg.end_sec, 2),
                     },
                 )
             )
@@ -414,10 +415,17 @@ class VideoProcessor(SourceProcessor):
     falls back to WhisperVideoProcessor (local FFmpeg + Whisper).
     """
 
-    def __init__(self, *, enable_whisper: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        enable_whisper: bool = True,
+        transcribe_func: TranscribeFunc | None = None,
+    ) -> None:
         self._gemini = GeminiVideoProcessor()
         self._whisper: SourceProcessor | None = (
-            WhisperVideoProcessor() if enable_whisper else None
+            WhisperVideoProcessor(transcribe_func=transcribe_func)
+            if enable_whisper
+            else None
         )
 
     async def process(

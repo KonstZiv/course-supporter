@@ -34,6 +34,7 @@ async def startup(ctx: WorkerCtx) -> None:
     )
 
     from course_supporter.llm import create_model_router
+    from course_supporter.storage.s3 import S3Client
 
     s = get_settings()
     configure_logging(
@@ -53,9 +54,18 @@ async def startup(ctx: WorkerCtx) -> None:
     )
     model_router = create_model_router(s, session_factory)
 
+    s3 = S3Client(
+        endpoint_url=s.s3_endpoint,
+        access_key=s.s3_access_key,
+        secret_key=s.s3_secret_key.get_secret_value(),
+        bucket=s.s3_bucket,
+    )
+    await s3.open()
+
     ctx["engine"] = engine
     ctx["session_factory"] = session_factory
     ctx["model_router"] = model_router
+    ctx["s3_client"] = s3
 
     log = structlog.get_logger()
     log.info("worker_started", redis_url=s.redis_url, max_jobs=s.worker_max_jobs)
@@ -64,6 +74,10 @@ async def startup(ctx: WorkerCtx) -> None:
 async def shutdown(ctx: WorkerCtx) -> None:
     """Clean up worker resources on shutdown."""
     log = structlog.get_logger()
+
+    s3 = ctx.get("s3_client")
+    if s3 is not None:
+        await s3.close()
 
     engine = ctx.get("engine")
     if engine is not None:

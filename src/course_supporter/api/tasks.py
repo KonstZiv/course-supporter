@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
+import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -14,6 +18,66 @@ from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.storage.orm import SourceMaterial
+    from course_supporter.storage.s3 import S3Client
+
+
+class _HasSourceUrl(Protocol):
+    source_url: str
+
+
+class _MaterialProxy:
+    """Lightweight proxy that overrides source_url without touching the ORM."""
+
+    __slots__ = ("_source_url", "_wrapped")
+
+    def __init__(self, wrapped: _HasSourceUrl, source_url: str) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_source_url", source_url)
+
+    @property
+    def source_url(self) -> str:
+        url: str = object.__getattribute__(self, "_source_url")
+        return url
+
+    def __getattr__(self, name: str) -> object:
+        result: object = getattr(object.__getattribute__(self, "_wrapped"), name)
+        return result
+
+
+@asynccontextmanager
+async def _resolve_s3_url(
+    material: SourceMaterial,
+    s3: S3Client | None,
+) -> AsyncIterator[SourceMaterial]:
+    """Download S3 object to temp file, yield a proxy with local path.
+
+    The original ORM object is **never mutated**, preventing accidental
+    auto-flush of a temp path to the database.
+
+    Yields the original *material* unchanged when the URL is not an S3
+    URL, or a lightweight proxy with ``source_url`` pointing to the
+    downloaded temp file otherwise.
+    """
+    s3_key = s3.extract_key(material.source_url) if s3 else None
+    temp_path: Path | None = None
+
+    try:
+        if s3 and s3_key:
+            temp_path = await s3.download_file(s3_key)
+            proxy = _MaterialProxy(material, str(temp_path))
+            yield proxy  # type: ignore[misc]
+        else:
+            yield material
+    finally:
+        if temp_path is not None:
+            try:
+                ap = anyio.Path(temp_path)
+                if await ap.exists():
+                    await ap.unlink(missing_ok=True)
+            except Exception:
+                log = structlog.get_logger()
+                log.warning("s3_temp_cleanup_failed", path=str(temp_path))
 
 
 async def arq_ingest_material(
@@ -57,6 +121,7 @@ async def arq_ingest_material(
 
     heavy = create_heavy_steps(router=router)
     processors = create_processors(heavy)
+    s3: S3Client | None = ctx.get("s3_client")
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
@@ -78,10 +143,8 @@ async def arq_ingest_material(
                 msg = f"SourceMaterial not found: {mid}"
                 raise ValueError(msg)
 
-            # router is still passed here because GeminiVideoProcessor
-            # uses it directly in process() (not via DI heavy step).
-            # Can be removed once Gemini is extracted as a heavy step.
-            doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3) as resolved:
+                doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
 
@@ -103,6 +166,7 @@ async def ingest_material(
     source_url: str,
     session_factory: async_sessionmaker[AsyncSession],
     router: ModelRouter | None = None,
+    s3: S3Client | None = None,
 ) -> None:
     """Process a source material in the background (legacy).
 
@@ -135,8 +199,8 @@ async def ingest_material(
                 msg = f"SourceMaterial not found: {material_id}"
                 raise ValueError(msg)
 
-            # router passed for GeminiVideoProcessor (see comment above)
-            doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3) as resolved:
+                doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
             await repo.update_status(material_id, "done", content_snapshot=content)

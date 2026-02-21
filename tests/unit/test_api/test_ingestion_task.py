@@ -384,3 +384,134 @@ class TestArqIngestMaterial:
                 "https://example.com",
                 "normal",
             )
+
+    async def test_s3_url_resolved_before_processing(self) -> None:
+        """S3 URL is downloaded and material.source_url is replaced."""
+        from pathlib import Path
+
+        import anyio
+
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        factory = _make_session_factory()
+
+        mock_material = MagicMock()
+        mock_material.source_url = "http://localhost:9000/course-materials/courses/f.md"
+
+        mock_s3 = MagicMock()
+        mock_s3.extract_key = MagicMock(return_value="courses/f.md")
+        tmp = Path("/tmp/test-downloaded.md")
+        mock_s3.download_file = AsyncMock(return_value=tmp)
+
+        ctx = _make_arq_ctx(factory=factory)
+        ctx["s3_client"] = mock_s3
+
+        captured_url: str | None = None
+
+        async def capture_process(mat: object, **kw: object) -> SourceDocument:
+            nonlocal captured_url
+            captured_url = mat.source_url  # type: ignore[union-attr]
+            return SourceDocument(
+                source_type=SourceType.TEXT,
+                source_url="http://localhost:9000/course-materials/courses/f.md",
+            )
+
+        mock_proc = MagicMock()
+        mock_proc.process = capture_process
+        procs = {SourceType.TEXT: mock_proc}
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_mat_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=procs),
+            patch.object(anyio.Path, "exists", AsyncMock(return_value=False)),
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
+            mock_cb_cls.return_value.on_success = AsyncMock()
+
+            await arq_ingest_material(
+                ctx,
+                job_id,
+                material_id,
+                "text",
+                "http://localhost:9000/course-materials/courses/f.md",
+            )
+
+        mock_s3.download_file.assert_awaited_once_with("courses/f.md")
+        assert captured_url == str(tmp)
+        # ORM source_url restored after processing to prevent DB pollution
+        assert (
+            mock_material.source_url
+            == "http://localhost:9000/course-materials/courses/f.md"
+        )
+
+    async def test_temp_file_cleaned_up_on_success_and_error(self) -> None:
+        """Temp file from S3 download is unlinked in finally block."""
+        from pathlib import Path
+
+        import anyio
+
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        factory = _make_session_factory()
+
+        mock_material = MagicMock()
+        mock_material.source_url = "http://localhost:9000/course-materials/courses/f.md"
+
+        tmp = Path("/tmp/test-cleanup.md")
+        mock_s3 = MagicMock()
+        mock_s3.extract_key = MagicMock(return_value="courses/f.md")
+        mock_s3.download_file = AsyncMock(return_value=tmp)
+
+        ctx = _make_arq_ctx(factory=factory)
+        ctx["s3_client"] = mock_s3
+
+        mock_exists = AsyncMock(return_value=True)
+        mock_unlink = AsyncMock()
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_mat_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(
+                _FACTORY,
+                return_value=_failing_processors(
+                    error="boom", source_type=SourceType.TEXT
+                ),
+            ),
+            patch.object(anyio.Path, "exists", mock_exists),
+            patch.object(anyio.Path, "unlink", mock_unlink),
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.update_status = AsyncMock()
+            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
+            mock_cb_cls.return_value.on_failure = AsyncMock()
+
+            await arq_ingest_material(
+                ctx,
+                job_id,
+                material_id,
+                "text",
+                "http://localhost:9000/course-materials/courses/f.md",
+            )
+
+        mock_unlink.assert_awaited_once_with(missing_ok=True)

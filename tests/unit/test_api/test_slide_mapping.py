@@ -12,6 +12,7 @@ from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.models.course import SlideVideoMapEntry
 from course_supporter.storage.database import get_session
+from course_supporter.storage.mapping_validation import MappingValidationService
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import (
     CourseRepository,
@@ -103,6 +104,9 @@ class TestSlideVideoMappingAPI:
             patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
             patch.object(
+                MappingValidationService, "validate_structural", return_value=[]
+            ),
+            patch.object(
                 SlideVideoMappingRepository, "batch_create", return_value=records
             ),
         ):
@@ -191,6 +195,9 @@ class TestSlideVideoMappingAPI:
         with (
             patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(
+                MappingValidationService, "validate_structural", return_value=[]
+            ),
             patch.object(
                 SlideVideoMappingRepository, "batch_create", return_value=[record]
             ),

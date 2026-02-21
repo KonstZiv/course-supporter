@@ -184,6 +184,26 @@ class TestPDFProcessing:
         # Path normalizes "file:///slides.pdf" -> "file:/slides.pdf"
         assert args[0][0] == str(Path("file:///slides.pdf"))
 
+    async def test_describe_func_called_once_for_multi_page_pdf(self) -> None:
+        """describe_slides_func is called once per PDF, not once per page."""
+        mock_pages = [MagicMock() for _ in range(5)]
+        for i, page in enumerate(mock_pages):
+            page.get_text.return_value = f"Slide {i + 1}"
+
+        mock_doc = _make_fitz_doc(mock_pages)
+        mock_describe = AsyncMock(
+            return_value=[
+                SlideDescription(slide_number=i + 1, description=f"Desc {i + 1}")
+                for i in range(5)
+            ]
+        )
+
+        with patch("fitz.open", return_value=mock_doc):
+            proc = PresentationProcessor(describe_slides_func=mock_describe)
+            await proc.process(_make_source())
+
+        mock_describe.assert_awaited_once()
+
 
 class TestPPTXProcessing:
     async def test_text_extraction(self) -> None:

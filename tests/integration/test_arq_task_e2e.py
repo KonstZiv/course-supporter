@@ -17,12 +17,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.api.tasks import PROCESSOR_MAP, arq_ingest_material
+from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.models.source import SourceType
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.repositories import SourceMaterialRepository
 
 pytestmark = pytest.mark.requires_db
+
+_FACTORY = "course_supporter.api.tasks.create_processors"
+_HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 
 
 def _build_ctx(
@@ -35,20 +38,26 @@ def _build_ctx(
     }
 
 
-def _mock_processor(*, content: str = '{"sections": []}') -> MagicMock:
-    """Create a mock processor that returns a valid SourceDocument."""
+def _mock_processors(
+    *,
+    content: str = '{"sections": []}',
+) -> dict[SourceType, MagicMock]:
+    """Create a processors dict with a mock processor instance."""
     mock_doc = MagicMock()
     mock_doc.model_dump_json.return_value = content
     processor = MagicMock()
-    processor.return_value.process = AsyncMock(return_value=mock_doc)
-    return processor
+    processor.process = AsyncMock(return_value=mock_doc)
+    return {SourceType.WEB: processor}
 
 
-def _failing_processor(*, error: str = "Processing failed") -> MagicMock:
-    """Create a mock processor that raises an exception."""
+def _failing_processors(
+    *,
+    error: str = "Processing failed",
+) -> dict[SourceType, MagicMock]:
+    """Create a processors dict with a processor that raises."""
     processor = MagicMock()
-    processor.return_value.process = AsyncMock(side_effect=RuntimeError(error))
-    return processor
+    processor.process = AsyncMock(side_effect=RuntimeError(error))
+    return {SourceType.WEB: processor}
 
 
 class TestArqIngestMaterialE2E:
@@ -83,10 +92,10 @@ class TestArqIngestMaterialE2E:
             patch(
                 "course_supporter.job_priority.check_work_window",
             ),
-            patch.dict(
-                PROCESSOR_MAP,
-                {SourceType.WEB: _mock_processor(content=content)},
-                clear=True,
+            patch(_HEAVY),
+            patch(
+                _FACTORY,
+                return_value=_mock_processors(content=content),
             ),
         ):
             await arq_ingest_material(
@@ -142,10 +151,10 @@ class TestArqIngestMaterialE2E:
             patch(
                 "course_supporter.job_priority.check_work_window",
             ),
-            patch.dict(
-                PROCESSOR_MAP,
-                {SourceType.WEB: _failing_processor(error=error_msg)},
-                clear=True,
+            patch(_HEAVY),
+            patch(
+                _FACTORY,
+                return_value=_failing_processors(error=error_msg),
             ),
         ):
             await arq_ingest_material(

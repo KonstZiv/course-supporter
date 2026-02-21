@@ -8,6 +8,9 @@ import pytest
 from course_supporter.api.tasks import arq_ingest_material, ingest_material
 from course_supporter.models.source import SourceDocument, SourceType
 
+_FACTORY = "course_supporter.api.tasks.create_processors"
+_HEAVY = "course_supporter.api.tasks.create_heavy_steps"
+
 
 def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
     """Create a mock async_sessionmaker that returns an async ctx manager.
@@ -58,6 +61,33 @@ def _make_arq_ctx(
     }
 
 
+def _mock_processors(
+    doc: SourceDocument | None = None,
+    *,
+    source_type: SourceType = SourceType.WEB,
+) -> dict[SourceType, MagicMock]:
+    """Create a processors dict with a mock processor instance."""
+    if doc is None:
+        doc = SourceDocument(
+            source_type=source_type,
+            source_url="https://example.com",
+        )
+    mock_proc = MagicMock()
+    mock_proc.process = AsyncMock(return_value=doc)
+    return {source_type: mock_proc}
+
+
+def _failing_processors(
+    *,
+    error: str = "Processing failed",
+    source_type: SourceType = SourceType.WEB,
+) -> dict[SourceType, MagicMock]:
+    """Create a processors dict with a processor that raises."""
+    mock_proc = MagicMock()
+    mock_proc.process = AsyncMock(side_effect=RuntimeError(error))
+    return {source_type: mock_proc}
+
+
 class TestIngestMaterial:
     """Tests for the legacy ingest_material function."""
 
@@ -72,19 +102,14 @@ class TestIngestMaterial:
         mock_material.source_url = "https://example.com"
         mock_material.source_type = SourceType.WEB
 
-        mock_processor = MagicMock()
-        mock_processor.return_value.process = AsyncMock(return_value=doc)
-
         factory = _make_session_factory()
 
         with (
             patch(
                 "course_supporter.api.tasks.SourceMaterialRepository"
             ) as mock_repo_cls,
-            patch(
-                "course_supporter.api.tasks.PROCESSOR_MAP",
-                {SourceType.WEB: mock_processor},
-            ),
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=_mock_processors(doc)),
         ):
             mock_repo = mock_repo_cls.return_value
             mock_repo.update_status = AsyncMock()
@@ -115,20 +140,16 @@ class TestIngestMaterial:
         mock_material.source_url = "https://example.com"
         mock_material.source_type = SourceType.WEB
 
-        mock_processor = MagicMock()
-        mock_processor.return_value.process = AsyncMock(
-            side_effect=RuntimeError("Processing failed")
-        )
-
         factory = _make_two_session_factory(main_session, error_session)
 
         with (
             patch(
                 "course_supporter.api.tasks.SourceMaterialRepository"
             ) as mock_repo_cls,
+            patch(_HEAVY),
             patch(
-                "course_supporter.api.tasks.PROCESSOR_MAP",
-                {SourceType.WEB: mock_processor},
+                _FACTORY,
+                return_value=_failing_processors(error="Processing failed"),
             ),
         ):
             repo_instances: list[MagicMock] = []
@@ -167,9 +188,13 @@ class TestIngestMaterial:
 
         factory = _make_two_session_factory(main_session, error_session)
 
-        with patch(
-            "course_supporter.api.tasks.SourceMaterialRepository"
-        ) as mock_repo_cls:
+        with (
+            patch(
+                "course_supporter.api.tasks.SourceMaterialRepository"
+            ) as mock_repo_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value={}),
+        ):
             repo_instances: list[MagicMock] = []
 
             def make_repo(session: object) -> MagicMock:
@@ -214,20 +239,10 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
             ) as mock_cb_cls,
+            patch(_HEAVY),
             patch(
-                "course_supporter.api.tasks.PROCESSOR_MAP",
-                {
-                    SourceType.WEB: MagicMock(
-                        return_value=MagicMock(
-                            process=AsyncMock(
-                                return_value=SourceDocument(
-                                    source_type=SourceType.WEB,
-                                    source_url="https://example.com",
-                                )
-                            )
-                        )
-                    )
-                },
+                _FACTORY,
+                return_value=_mock_processors(),
             ),
         ):
             mock_job_repo_cls.return_value.update_status = AsyncMock()
@@ -238,7 +253,12 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
 
             await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com", "immediate"
+                ctx,
+                job_id,
+                material_id,
+                "web",
+                "https://example.com",
+                "immediate",
             )
 
         from course_supporter.job_priority import JobPriority
@@ -256,8 +276,6 @@ class TestArqIngestMaterial:
         doc = SourceDocument(
             source_type=SourceType.WEB, source_url="https://example.com"
         )
-        mock_processor = MagicMock()
-        mock_processor.return_value.process = AsyncMock(return_value=doc)
 
         with (
             patch("course_supporter.job_priority.check_work_window"),
@@ -270,10 +288,8 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
             ) as mock_cb_cls,
-            patch(
-                "course_supporter.api.tasks.PROCESSOR_MAP",
-                {SourceType.WEB: mock_processor},
-            ),
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=_mock_processors(doc)),
         ):
             mock_job = mock_job_cls.return_value
             mock_job.update_status = AsyncMock()
@@ -309,11 +325,6 @@ class TestArqIngestMaterial:
         factory = _make_session_factory(session)
         ctx = _make_arq_ctx(factory=factory)
 
-        mock_processor = MagicMock()
-        mock_processor.return_value.process = AsyncMock(
-            side_effect=RuntimeError("boom")
-        )
-
         with (
             patch("course_supporter.job_priority.check_work_window"),
             patch(
@@ -325,9 +336,10 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
             ) as mock_cb_cls,
+            patch(_HEAVY),
             patch(
-                "course_supporter.api.tasks.PROCESSOR_MAP",
-                {SourceType.WEB: mock_processor},
+                _FACTORY,
+                return_value=_failing_processors(error="boom"),
             ),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
@@ -365,5 +377,10 @@ class TestArqIngestMaterial:
             pytest.raises(Retry),
         ):
             await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com", "normal"
+                ctx,
+                job_id,
+                material_id,
+                "web",
+                "https://example.com",
+                "normal",
             )

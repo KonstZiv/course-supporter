@@ -381,7 +381,7 @@ class TestCallbackIntegrationWithArqTask:
 
     async def test_success_delegates_to_callback(self) -> None:
         """On successful processing, callback.on_success is called."""
-        from course_supporter.api.tasks import PROCESSOR_MAP, arq_ingest_material
+        from course_supporter.api.tasks import arq_ingest_material
 
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -389,7 +389,7 @@ class TestCallbackIntegrationWithArqTask:
         mock_doc.model_dump_json.return_value = '{"content": "ok"}'
 
         mock_processor = MagicMock()
-        mock_processor.return_value.process = AsyncMock(return_value=mock_doc)
+        mock_processor.process = AsyncMock(return_value=mock_doc)
 
         session = AsyncMock()
         session.commit = AsyncMock()
@@ -406,15 +406,17 @@ class TestCallbackIntegrationWithArqTask:
 
         ctx = {"session_factory": factory, "model_router": router}
 
-        # arq_ingest_material has lazy import of JobRepository from storage
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+        _factory = "course_supporter.api.tasks.create_processors"
+        _heavy = "course_supporter.api.tasks.create_heavy_steps"
 
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
-            patch.dict(PROCESSOR_MAP, {"web": mock_processor}, clear=True),
+            patch(_heavy),
+            patch(_factory, return_value={"web": mock_processor}),
         ):
             job_cls.return_value.update_status = AsyncMock()
             mat_cls.return_value.update_status = AsyncMock()
@@ -452,14 +454,17 @@ class TestCallbackIntegrationWithArqTask:
 
         ctx = {"session_factory": factory, "model_router": router}
 
-        # arq_ingest_material has lazy import of JobRepository from storage
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+        _heavy = "course_supporter.api.tasks.create_heavy_steps"
+        _factory_fn = "course_supporter.api.tasks.create_processors"
 
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
+            patch(_heavy),
+            patch(_factory_fn, return_value={"web": MagicMock()}),
         ):
             job_cls.return_value.update_status = AsyncMock()
             mat_cls.return_value.update_status = AsyncMock()

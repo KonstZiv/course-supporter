@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from typing import Annotated
 
 import structlog
@@ -56,7 +57,7 @@ def _file_extension(filename: str | None) -> str:
 
 def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
     """Convert MappingValidationError dataclass to a JSON-safe dict."""
-    return {"field": err.field, "message": err.message, "hint": err.hint}
+    return asdict(err)
 
 
 ALLOWED_EXTENSIONS: dict[SourceType, frozenset[str]] = {

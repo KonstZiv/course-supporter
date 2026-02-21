@@ -66,11 +66,12 @@ async def arq_ingest_material(
             await mat_repo.update_status(mid, "processing")
             await session.commit()
 
-            st = SourceType(source_type)
-            processor = processors.get(st)
-            if processor is None:
-                msg = f"No processor for source_type: {source_type}"
-                raise ValueError(msg)
+            try:
+                st = SourceType(source_type)
+                processor = processors[st]
+            except (ValueError, KeyError):
+                msg = f"Unsupported source_type: {source_type}"
+                raise ValueError(msg) from None
 
             material = await mat_repo.get_by_id(mid)
             if material is None:
@@ -122,11 +123,12 @@ async def ingest_material(
             await repo.update_status(material_id, "processing")
             await session.commit()
 
-            st = SourceType(source_type)
-            processor = processors.get(st)
-            if processor is None:
-                msg = f"No processor for source_type: {source_type}"
-                raise ValueError(msg)
+            try:
+                st = SourceType(source_type)
+                processor = processors[st]
+            except (ValueError, KeyError):
+                msg = f"Unsupported source_type: {source_type}"
+                raise ValueError(msg) from None
 
             material = await repo.get_by_id(material_id)
             if material is None:

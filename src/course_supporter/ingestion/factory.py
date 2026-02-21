@@ -33,11 +33,12 @@ class HeavySteps:
 
     Each field is an async callable conforming to the protocol
     defined in :mod:`course_supporter.ingestion.heavy_steps`.
-    ``describe_slides`` is None when no ModelRouter is available.
+    ``describe_slides`` is None when no ModelRouter is available;
+    PresentationProcessor handles None gracefully (text-only extraction).
     """
 
     transcribe: TranscribeFunc
-    describe_slides: DescribeSlidesFunc | None
+    describe_slides: DescribeSlidesFunc | None  # None → text-only PDF
     scrape_web: ScrapeWebFunc
 
 

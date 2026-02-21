@@ -321,6 +321,11 @@ class S3Client:
                         break
                     await fh.write(chunk)
         except Exception:
+            # Clean up only self-created temp files on download failure.
+            # Caller-provided dest is left for the caller to manage.
+            # NOTE: _resolve_s3_url handles cleanup *after* a successful
+            # download; this branch covers partial-download failures where
+            # the caller never receives the path.
             if is_temp:
                 await anyio.Path(dest).unlink(missing_ok=True)
             raise

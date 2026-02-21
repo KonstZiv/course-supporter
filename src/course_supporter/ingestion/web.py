@@ -1,4 +1,4 @@
-"""Web processor using trafilatura for content extraction."""
+"""Web processor — thin orchestrator over ScrapeWebFunc."""
 
 from __future__ import annotations
 
@@ -9,9 +9,12 @@ from urllib.parse import urlparse
 import structlog
 
 from course_supporter.ingestion.base import (
-    ProcessingError,
     SourceProcessor,
     UnsupportedFormatError,
+)
+from course_supporter.ingestion.heavy_steps import (
+    ScrapeWebFunc,
+    ScrapeWebParams,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -28,12 +31,25 @@ logger = structlog.get_logger()
 
 
 class WebProcessor(SourceProcessor):
-    """Process web pages by fetching HTML and extracting content.
+    """Process web pages by delegating to an injected scraping function.
 
-    Uses trafilatura for intelligent content extraction
-    (article text, removing boilerplate/navigation).
+    Uses ``ScrapeWebFunc`` for content extraction (default: ``local_scrape_web``).
     Raw HTML is saved as content_snapshot for re-processing.
     """
+
+    def __init__(
+        self,
+        *,
+        scrape_func: ScrapeWebFunc | None = None,
+    ) -> None:
+        self._scrape_func = scrape_func or self._default_scrape_func()
+
+    @staticmethod
+    def _default_scrape_func() -> ScrapeWebFunc:
+        """Lazy-import local_scrape_web as the default implementation."""
+        from course_supporter.ingestion.scrape_web import local_scrape_web
+
+        return local_scrape_web
 
     async def process(
         self,
@@ -52,14 +68,11 @@ class WebProcessor(SourceProcessor):
 
         logger.info("web_processing_start", url=url, domain=domain)
 
-        # 1. Fetch HTML
-        html = self._fetch_html(url)
+        # 1. Delegate to heavy step
+        scraped = await self._scrape_func(url, ScrapeWebParams())
 
-        # 2. Extract content
-        extracted = self._extract_content(html)
-
-        # 3. Split into chunks
-        chunks = self._text_to_chunks(extracted) if extracted else []
+        # 2. Split into chunks
+        chunks = self._text_to_chunks(scraped.text) if scraped.text else []
 
         fetched_at = datetime.now(UTC).isoformat()
 
@@ -77,52 +90,9 @@ class WebProcessor(SourceProcessor):
             metadata={
                 "domain": domain,
                 "fetched_at": fetched_at,
-                "content_snapshot": html,
+                "content_snapshot": scraped.raw_html,
             },
         )
-
-    @staticmethod
-    def _fetch_html(url: str) -> str:
-        """Fetch HTML from URL using trafilatura.
-
-        Args:
-            url: The URL to fetch.
-
-        Returns:
-            Raw HTML string.
-
-        Raises:
-            ProcessingError: If fetch fails (returns None).
-        """
-        import trafilatura
-
-        result = trafilatura.fetch_url(url)
-        if result is None:
-            raise ProcessingError(
-                f"Failed to fetch URL: {url}. The page may be unreachable or blocked."
-            )
-        return str(result)
-
-    @staticmethod
-    def _extract_content(html: str) -> str | None:
-        """Extract main content from HTML using trafilatura.
-
-        Args:
-            html: Raw HTML string.
-
-        Returns:
-            Extracted text content, or None if extraction fails.
-        """
-        import trafilatura
-
-        result = trafilatura.extract(
-            html,
-            include_comments=False,
-            include_tables=True,
-        )
-        if result is None:
-            return None
-        return str(result)
 
     @staticmethod
     def _text_to_chunks(text: str) -> list[ContentChunk]:

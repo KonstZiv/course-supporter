@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
 from course_supporter.ingestion.base import (
     SourceProcessor,
     UnsupportedFormatError,
+)
+from course_supporter.ingestion.heavy_steps import (
+    DescribeSlidesFunc,
+    DescribeSlidesParams,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -31,9 +35,16 @@ class PresentationProcessor(SourceProcessor):
     """Process PDF and PPTX presentations.
 
     Extracts text from each slide/page as SLIDE_TEXT chunks.
-    Optionally uses Vision LLM (via router) to describe
+    Optionally uses an injected ``DescribeSlidesFunc`` to describe
     slide images as SLIDE_DESCRIPTION chunks.
     """
+
+    def __init__(
+        self,
+        *,
+        describe_slides_func: DescribeSlidesFunc | None = None,
+    ) -> None:
+        self._describe_slides_func = describe_slides_func
 
     async def process(
         self,
@@ -63,7 +74,7 @@ class PresentationProcessor(SourceProcessor):
         )
 
         if ext == ".pdf":
-            chunks, page_count = await self._process_pdf(path, router=router)
+            chunks, page_count = await self._process_pdf(path)
         else:
             chunks, page_count = await self._process_pptx(path)
 
@@ -84,8 +95,6 @@ class PresentationProcessor(SourceProcessor):
     async def _process_pdf(
         self,
         path: Path,
-        *,
-        router: ModelRouter | None = None,
     ) -> tuple[list[ContentChunk], int]:
         """Extract text (and optionally images) from PDF pages.
 
@@ -114,23 +123,23 @@ class PresentationProcessor(SourceProcessor):
                             metadata={"slide_number": slide_number},
                         )
                     )
-
-                # Optional: Vision LLM analysis of slide image
-                if router is not None:
-                    description = await self._analyze_slide_image(
-                        page, slide_number, router=router
-                    )
-                    if description:
-                        chunks.append(
-                            ContentChunk(
-                                chunk_type=ChunkType.SLIDE_DESCRIPTION,
-                                text=description,
-                                index=slide_number,
-                                metadata={"slide_number": slide_number},
-                            )
-                        )
         finally:
             doc.close()
+
+        # Optional: vision descriptions via injected heavy step
+        if self._describe_slides_func is not None:
+            descriptions = await self._describe_slides_func(
+                str(path), DescribeSlidesParams()
+            )
+            for desc in descriptions:
+                chunks.append(
+                    ContentChunk(
+                        chunk_type=ChunkType.SLIDE_DESCRIPTION,
+                        text=desc.description,
+                        index=desc.slide_number,
+                        metadata={"slide_number": desc.slide_number},
+                    )
+                )
 
         return chunks, page_count
 
@@ -171,39 +180,3 @@ class PresentationProcessor(SourceProcessor):
                 )
 
         return chunks, len(slides)
-
-    async def _analyze_slide_image(
-        self,
-        page: Any,
-        slide_number: int,
-        *,
-        router: ModelRouter,
-    ) -> str | None:
-        """Send slide image to Vision LLM for description.
-
-        Returns description string or None if analysis fails.
-        Failures are logged but do not crash processing.
-        """
-        try:
-            pixmap = page.get_pixmap(dpi=150)
-            _image_bytes = pixmap.tobytes("png")
-
-            response = await router.complete(
-                action="presentation_analysis",
-                prompt=(
-                    f"Describe slide {slide_number}. "
-                    "Focus on diagrams, charts, and key visual elements. "
-                    "Ignore decorative elements."
-                ),
-                # TODO: attach image_bytes to the request
-                # when router supports multimodal input
-            )
-            return response.content
-
-        except Exception:
-            logger.warning(
-                "slide_vision_analysis_failed",
-                slide_number=slide_number,
-                exc_info=True,
-            )
-            return None

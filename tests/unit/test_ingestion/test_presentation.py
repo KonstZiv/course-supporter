@@ -1,10 +1,12 @@
 """Tests for PresentationProcessor."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from course_supporter.ingestion.base import UnsupportedFormatError
+from course_supporter.ingestion.heavy_steps import SlideDescription
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.models.source import ChunkType, SourceDocument, SourceType
 
@@ -49,21 +51,21 @@ class TestPDFProcessing:
         assert doc.chunks[0].text == "Slide 1 content"
 
     async def test_with_vision_analysis(self) -> None:
-        """Mock router.complete -> SLIDE_DESCRIPTION chunks."""
+        """Injected describe_slides_func -> SLIDE_DESCRIPTION chunks."""
         mock_page = MagicMock()
         mock_page.get_text.return_value = "Text"
-        mock_page.get_pixmap.return_value = MagicMock(
-            tobytes=MagicMock(return_value=b"png_data")
-        )
 
         mock_doc = _make_fitz_doc([mock_page])
 
-        router = AsyncMock()
-        router.complete.return_value = MagicMock(content="Diagram showing flow")
+        mock_describe = AsyncMock(
+            return_value=[
+                SlideDescription(slide_number=1, description="Diagram showing flow"),
+            ]
+        )
 
         with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source(), router=router)
+            proc = PresentationProcessor(describe_slides_func=mock_describe)
+            doc = await proc.process(_make_source())
 
         desc_chunks = [
             c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_DESCRIPTION
@@ -83,18 +85,31 @@ class TestPDFProcessing:
         assert doc.metadata["page_count"] == 0
 
     async def test_vision_failure_graceful(self) -> None:
-        """LLM fails -> text-only chunks (no crash)."""
+        """describe_slides_func raises -> propagates (caller handles)."""
         mock_page = MagicMock()
         mock_page.get_text.return_value = "Text content"
-        mock_page.get_pixmap.side_effect = RuntimeError("Vision failed")
 
         mock_doc = _make_fitz_doc([mock_page])
 
-        router = AsyncMock()
+        mock_describe = AsyncMock(side_effect=RuntimeError("Vision failed"))
+
+        with (
+            patch("fitz.open", return_value=mock_doc),
+            pytest.raises(RuntimeError, match="Vision failed"),
+        ):
+            proc = PresentationProcessor(describe_slides_func=mock_describe)
+            await proc.process(_make_source())
+
+    async def test_no_describe_func_text_only(self) -> None:
+        """No describe_slides_func -> text-only chunks (no crash)."""
+        mock_page = MagicMock()
+        mock_page.get_text.return_value = "Text content"
+
+        mock_doc = _make_fitz_doc([mock_page])
 
         with patch("fitz.open", return_value=mock_doc):
             proc = PresentationProcessor()
-            doc = await proc.process(_make_source(), router=router)
+            doc = await proc.process(_make_source())
 
         text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
         assert len(text_chunks) == 1
@@ -116,6 +131,23 @@ class TestPDFProcessing:
 
         assert doc.chunks == []
         assert doc.metadata["page_count"] == 1
+
+    async def test_describe_func_called_with_path_and_params(self) -> None:
+        """describe_slides_func receives str(path) and DescribeSlidesParams."""
+        mock_page = MagicMock()
+        mock_page.get_text.return_value = "Text"
+
+        mock_doc = _make_fitz_doc([mock_page])
+        mock_describe = AsyncMock(return_value=[])
+
+        with patch("fitz.open", return_value=mock_doc):
+            proc = PresentationProcessor(describe_slides_func=mock_describe)
+            await proc.process(_make_source(url="file:///slides.pdf"))
+
+        mock_describe.assert_awaited_once()
+        args = mock_describe.call_args
+        # Path normalizes "file:///slides.pdf" -> "file:/slides.pdf"
+        assert args[0][0] == str(Path("file:///slides.pdf"))
 
 
 class TestPPTXProcessing:
@@ -146,8 +178,8 @@ class TestPPTXProcessing:
         assert len(doc.chunks) == 1
         assert doc.chunks[0].chunk_type == ChunkType.SLIDE_TEXT
 
-    async def test_without_router(self) -> None:
-        """No router -> no vision analysis, only text."""
+    async def test_without_describe_func(self) -> None:
+        """No describe_slides_func -> no vision analysis, only text."""
         mock_prs = MagicMock()
         mock_prs.slides = []
 

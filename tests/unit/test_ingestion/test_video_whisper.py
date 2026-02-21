@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
+from course_supporter.ingestion.heavy_steps import Transcript, TranscriptSegment
 from course_supporter.ingestion.video import (
     VideoProcessor,
     WhisperVideoProcessor,
@@ -25,19 +26,26 @@ def _make_source(
     return source
 
 
+def _mock_transcribe_func(
+    segments: list[TranscriptSegment] | None = None,
+) -> AsyncMock:
+    """Create a mock TranscribeFunc returning Transcript."""
+    if segments is None:
+        segments = [
+            TranscriptSegment(start_sec=0.0, end_sec=10.0, text="Hello"),
+            TranscriptSegment(start_sec=10.0, end_sec=20.0, text="World"),
+        ]
+    return AsyncMock(return_value=Transcript(segments=segments))
+
+
 class TestWhisperVideoProcessor:
     async def test_success(self) -> None:
-        """Mocked Whisper transcribe -> SourceDocument with chunks."""
-        proc = WhisperVideoProcessor()
-
-        mock_segments = [
-            {"start": 0.0, "end": 10.0, "text": "Hello"},
-            {"start": 10.0, "end": 20.0, "text": "World"},
-        ]
+        """Injected transcribe_func -> SourceDocument with chunks."""
+        mock_func = _mock_transcribe_func()
+        proc = WhisperVideoProcessor(transcribe_func=mock_func)
 
         with (
             patch.object(proc, "_extract_audio", return_value="/tmp/audio.wav"),
-            patch.object(proc, "_transcribe", return_value=mock_segments),
             patch("pathlib.Path.unlink"),
         ):
             doc = await proc.process(_make_source())
@@ -49,15 +57,15 @@ class TestWhisperVideoProcessor:
 
     async def test_timecodes(self) -> None:
         """Segments carry start_sec/end_sec in metadata."""
-        proc = WhisperVideoProcessor()
+        mock_func = _mock_transcribe_func(
+            segments=[
+                TranscriptSegment(start_sec=5.5, end_sec=15.3, text="speech"),
+            ]
+        )
+        proc = WhisperVideoProcessor(transcribe_func=mock_func)
 
         with (
             patch.object(proc, "_extract_audio", return_value="/tmp/a.wav"),
-            patch.object(
-                proc,
-                "_transcribe",
-                return_value=[{"start": 5.5, "end": 15.3, "text": "speech"}],
-            ),
             patch("pathlib.Path.unlink"),
         ):
             doc = await proc.process(_make_source())
@@ -69,7 +77,7 @@ class TestWhisperVideoProcessor:
 
     async def test_no_ffmpeg(self) -> None:
         """FFmpeg not found -> ProcessingError."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch.object(
@@ -83,7 +91,7 @@ class TestWhisperVideoProcessor:
 
     async def test_ffmpeg_fails(self) -> None:
         """FFmpeg subprocess error -> ProcessingError."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch.object(
@@ -97,11 +105,11 @@ class TestWhisperVideoProcessor:
 
     async def test_empty_audio(self) -> None:
         """Empty transcription result -> empty chunks."""
-        proc = WhisperVideoProcessor()
+        mock_func = _mock_transcribe_func(segments=[])
+        proc = WhisperVideoProcessor(transcribe_func=mock_func)
 
         with (
             patch.object(proc, "_extract_audio", return_value="/tmp/a.wav"),
-            patch.object(proc, "_transcribe", return_value=[]),
             patch("pathlib.Path.unlink"),
         ):
             doc = await proc.process(_make_source())
@@ -110,20 +118,18 @@ class TestWhisperVideoProcessor:
 
     async def test_invalid_source_type(self) -> None:
         """Non-video source -> UnsupportedFormatError."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
             await proc.process(_make_source(source_type="text"))
 
     async def test_cleanup_on_error(self) -> None:
         """Temp audio file cleaned up even when transcription fails."""
-        proc = WhisperVideoProcessor()
+        mock_func = AsyncMock(side_effect=RuntimeError("Whisper crash"))
+        proc = WhisperVideoProcessor(transcribe_func=mock_func)
 
         mock_unlink = MagicMock()
         with (
             patch.object(proc, "_extract_audio", return_value="/tmp/a.wav"),
-            patch.object(
-                proc, "_transcribe", side_effect=RuntimeError("Whisper crash")
-            ),
             patch("pathlib.Path.unlink", mock_unlink),
             pytest.raises(RuntimeError, match="Whisper crash"),
         ):
@@ -131,17 +137,31 @@ class TestWhisperVideoProcessor:
 
         mock_unlink.assert_called_once()
 
+    async def test_transcribe_func_called_with_params(self) -> None:
+        """transcribe_func receives audio_path and TranscribeParams."""
+        mock_func = _mock_transcribe_func()
+        proc = WhisperVideoProcessor(transcribe_func=mock_func)
+
+        with (
+            patch.object(proc, "_extract_audio", return_value="/tmp/audio.wav"),
+            patch("pathlib.Path.unlink"),
+        ):
+            await proc.process(_make_source())
+
+        mock_func.assert_awaited_once()
+        args = mock_func.call_args
+        assert args[0][0] == "/tmp/audio.wav"
+
 
 class TestWhisperUrlDownload:
     async def test_url_triggers_download(self) -> None:
         """HTTP URL triggers yt-dlp download before FFmpeg."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch.object(
                 proc, "_download_audio", return_value="/tmp/downloaded.wav"
             ) as mock_dl,
-            patch.object(proc, "_transcribe", return_value=[]),
             patch("pathlib.Path.unlink"),
             patch(
                 "asyncio.create_subprocess_exec",
@@ -159,11 +179,10 @@ class TestWhisperUrlDownload:
 
     async def test_local_path_skips_download(self) -> None:
         """Local file path does not trigger yt-dlp download."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch.object(proc, "_download_audio") as mock_dl,
-            patch.object(proc, "_transcribe", return_value=[]),
             patch("pathlib.Path.unlink"),
             patch(
                 "asyncio.create_subprocess_exec",
@@ -179,7 +198,7 @@ class TestWhisperUrlDownload:
 
     async def test_download_ytdlp_not_found(self) -> None:
         """yt-dlp not installed -> ProcessingError."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch(
@@ -192,7 +211,7 @@ class TestWhisperUrlDownload:
 
     async def test_download_ytdlp_fails(self) -> None:
         """yt-dlp returns non-zero exit code -> ProcessingError."""
-        proc = WhisperVideoProcessor()
+        proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
 
         with (
             patch(
@@ -278,3 +297,10 @@ class TestVideoProcessorFallback:
         """enable_whisper=False leaves _whisper as None."""
         proc = VideoProcessor(enable_whisper=False)
         assert proc._whisper is None
+
+    def test_transcribe_func_passed_to_whisper(self) -> None:
+        """transcribe_func is forwarded to WhisperVideoProcessor."""
+        mock_func = AsyncMock()
+        proc = VideoProcessor(enable_whisper=True, transcribe_func=mock_func)
+        assert isinstance(proc._whisper, WhisperVideoProcessor)
+        assert proc._whisper._transcribe_func is mock_func  # type: ignore[union-attr]

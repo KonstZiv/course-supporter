@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.course import SlideVideoMapEntry
+from course_supporter.models.source import SourceType
 from course_supporter.storage.orm import MaterialEntry
 
 _TIMECODE_RE = re.compile(r"^([0-9]{1,2}:)?[0-5][0-9]:[0-5][0-9]$")
@@ -109,7 +110,7 @@ class MappingValidationService:
         pres_err = self._check_entry(
             entry_id_str=mapping.presentation_entry_id,
             node_id=node_id,
-            expected_type="presentation",
+            expected_type=SourceType.PRESENTATION,
             field="presentation_entry_id",
             entries_by_id=entries_by_id,
         )
@@ -119,7 +120,7 @@ class MappingValidationService:
         video_err = self._check_entry(
             entry_id_str=mapping.video_entry_id,
             node_id=node_id,
-            expected_type="video",
+            expected_type=SourceType.VIDEO,
             field="video_entry_id",
             entries_by_id=entries_by_id,
         )
@@ -177,7 +178,7 @@ class MappingValidationService:
         *,
         entry_id_str: str,
         node_id: uuid.UUID,
-        expected_type: str,
+        expected_type: SourceType,
         field: str,
         entries_by_id: dict[uuid.UUID, MaterialEntry],
     ) -> MappingValidationError | None:

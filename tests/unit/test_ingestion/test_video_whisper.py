@@ -304,3 +304,18 @@ class TestVideoProcessorFallback:
         proc = VideoProcessor(enable_whisper=True, transcribe_func=mock_func)
         assert isinstance(proc._whisper, WhisperVideoProcessor)
         assert proc._whisper._transcribe_func is mock_func  # type: ignore[union-attr]
+
+
+class TestWhisperVideoProcessorDefaults:
+    def test_default_transcribe_func_is_local_transcribe(self) -> None:
+        """WhisperVideoProcessor() without args uses local_transcribe."""
+        from course_supporter.ingestion.transcribe import local_transcribe
+
+        proc = WhisperVideoProcessor()
+        assert proc._transcribe_func is local_transcribe
+
+    def test_injected_func_used_instead_of_default(self) -> None:
+        """Explicit transcribe_func overrides the default."""
+        custom = AsyncMock()
+        proc = WhisperVideoProcessor(transcribe_func=custom)
+        assert proc._transcribe_func is custom

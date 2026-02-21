@@ -109,3 +109,18 @@ class TestWebProcessor:
         mock_func.assert_awaited_once()
         args = mock_func.call_args
         assert args[0][0] == "https://example.com/page"
+
+
+class TestWebProcessorDefaults:
+    def test_default_scrape_func_is_local_scrape_web(self) -> None:
+        """WebProcessor() without args uses local_scrape_web."""
+        from course_supporter.ingestion.scrape_web import local_scrape_web
+
+        proc = WebProcessor()
+        assert proc._scrape_func is local_scrape_web
+
+    def test_injected_func_used_instead_of_default(self) -> None:
+        """Explicit scrape_func overrides the default."""
+        custom = AsyncMock()
+        proc = WebProcessor(scrape_func=custom)
+        assert proc._scrape_func is custom

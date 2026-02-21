@@ -5,6 +5,8 @@ from __future__ import annotations
 import functools
 from unittest.mock import AsyncMock
 
+import pytest
+
 from course_supporter.ingestion.factory import (
     HeavySteps,
     create_heavy_steps,
@@ -72,15 +74,13 @@ class TestCreateHeavySteps:
         assert heavy.describe_slides.func is local_describe_slides
 
     def test_heavy_steps_is_frozen(self) -> None:
-        """HeavySteps is immutable."""
-        heavy = create_heavy_steps()
+        """HeavySteps is immutable — all fields reject assignment."""
+        router = AsyncMock()
+        heavy = create_heavy_steps(router=router)
 
-        try:
-            heavy.transcribe = AsyncMock()  # type: ignore[misc]
-            msg = "Expected FrozenInstanceError"
-            raise AssertionError(msg)
-        except AttributeError:
-            pass
+        for field in ("transcribe", "describe_slides", "scrape_web"):
+            with pytest.raises(AttributeError):
+                setattr(heavy, field, AsyncMock())
 
 
 class TestCreateProcessors:

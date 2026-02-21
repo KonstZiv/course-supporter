@@ -26,6 +26,7 @@ from course_supporter.ingestion.base import (
 from course_supporter.ingestion.heavy_steps import (
     TranscribeFunc,
     TranscribeParams,
+    TranscriptSegment,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -385,7 +386,7 @@ class WhisperVideoProcessor(SourceProcessor):
 
     @staticmethod
     def _segments_to_chunks(
-        segments: list[Any],
+        segments: list[TranscriptSegment],
     ) -> list[ContentChunk]:
         """Convert TranscriptSegment objects to ContentChunks."""
         chunks: list[ContentChunk] = []

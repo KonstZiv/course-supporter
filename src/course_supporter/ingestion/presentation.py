@@ -103,7 +103,8 @@ class PresentationProcessor(SourceProcessor):
         """
         import fitz
 
-        chunks: list[ContentChunk] = []
+        # Phase 1: extract text from each page
+        text_chunks: list[ContentChunk] = []
         doc = fitz.open(str(path))
 
         try:
@@ -115,7 +116,7 @@ class PresentationProcessor(SourceProcessor):
                 text = page.get_text().strip()
 
                 if text:
-                    chunks.append(
+                    text_chunks.append(
                         ContentChunk(
                             chunk_type=ChunkType.SLIDE_TEXT,
                             text=text,
@@ -126,18 +127,39 @@ class PresentationProcessor(SourceProcessor):
         finally:
             doc.close()
 
-        # Optional: vision descriptions via injected heavy step
+        # Phase 2: optional vision descriptions via injected heavy step
+        descriptions_map: dict[int, str] = {}
         if self._describe_slides_func is not None:
-            descriptions = await self._describe_slides_func(
-                str(path), DescribeSlidesParams()
-            )
-            for desc in descriptions:
+            try:
+                descriptions = await self._describe_slides_func(
+                    str(path), DescribeSlidesParams()
+                )
+                for desc in descriptions:
+                    descriptions_map[desc.slide_number] = desc.description
+            except Exception:
+                logger.warning(
+                    "slide_vision_analysis_failed",
+                    path=str(path),
+                    exc_info=True,
+                )
+
+        # Phase 3: interleave text + description per slide
+        chunks: list[ContentChunk] = []
+        for slide_number in range(1, page_count + 1):
+            # Add text chunk for this slide (if any)
+            for tc in text_chunks:
+                if tc.index == slide_number:
+                    chunks.append(tc)
+                    break
+
+            # Add description chunk for this slide (if any)
+            if slide_number in descriptions_map:
                 chunks.append(
                     ContentChunk(
                         chunk_type=ChunkType.SLIDE_DESCRIPTION,
-                        text=desc.description,
-                        index=desc.slide_number,
-                        metadata={"slide_number": desc.slide_number},
+                        text=descriptions_map[slide_number],
+                        index=slide_number,
+                        metadata={"slide_number": slide_number},
                     )
                 )
 

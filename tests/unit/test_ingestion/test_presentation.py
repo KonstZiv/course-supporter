@@ -85,7 +85,7 @@ class TestPDFProcessing:
         assert doc.metadata["page_count"] == 0
 
     async def test_vision_failure_graceful(self) -> None:
-        """describe_slides_func raises -> propagates (caller handles)."""
+        """describe_slides_func raises -> text-only chunks (no crash)."""
         mock_page = MagicMock()
         mock_page.get_text.return_value = "Text content"
 
@@ -93,12 +93,16 @@ class TestPDFProcessing:
 
         mock_describe = AsyncMock(side_effect=RuntimeError("Vision failed"))
 
-        with (
-            patch("fitz.open", return_value=mock_doc),
-            pytest.raises(RuntimeError, match="Vision failed"),
-        ):
+        with patch("fitz.open", return_value=mock_doc):
             proc = PresentationProcessor(describe_slides_func=mock_describe)
-            await proc.process(_make_source())
+            doc = await proc.process(_make_source())
+
+        text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
+        assert len(text_chunks) == 1
+        desc_chunks = [
+            c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_DESCRIPTION
+        ]
+        assert len(desc_chunks) == 0
 
     async def test_no_describe_func_text_only(self) -> None:
         """No describe_slides_func -> text-only chunks (no crash)."""
@@ -131,6 +135,37 @@ class TestPDFProcessing:
 
         assert doc.chunks == []
         assert doc.metadata["page_count"] == 1
+
+    async def test_interleaved_chunk_order(self) -> None:
+        """Chunks are interleaved: Text1, Desc1, Text2, Desc2."""
+        mock_pages = []
+        for i in range(2):
+            page = MagicMock()
+            page.get_text.return_value = f"Slide {i + 1}"
+            mock_pages.append(page)
+
+        mock_doc = _make_fitz_doc(mock_pages)
+
+        mock_describe = AsyncMock(
+            return_value=[
+                SlideDescription(slide_number=1, description="Desc 1"),
+                SlideDescription(slide_number=2, description="Desc 2"),
+            ]
+        )
+
+        with patch("fitz.open", return_value=mock_doc):
+            proc = PresentationProcessor(describe_slides_func=mock_describe)
+            doc = await proc.process(_make_source())
+
+        assert len(doc.chunks) == 4
+        assert doc.chunks[0].chunk_type == ChunkType.SLIDE_TEXT
+        assert doc.chunks[0].index == 1
+        assert doc.chunks[1].chunk_type == ChunkType.SLIDE_DESCRIPTION
+        assert doc.chunks[1].index == 1
+        assert doc.chunks[2].chunk_type == ChunkType.SLIDE_TEXT
+        assert doc.chunks[2].index == 2
+        assert doc.chunks[3].chunk_type == ChunkType.SLIDE_DESCRIPTION
+        assert doc.chunks[3].index == 2
 
     async def test_describe_func_called_with_path_and_params(self) -> None:
         """describe_slides_func receives str(path) and DescribeSlidesParams."""

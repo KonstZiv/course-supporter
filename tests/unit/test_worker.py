@@ -131,3 +131,31 @@ class TestWorkerLifecycle:
             mock_structlog.get_logger.return_value = mock_logger
             await shutdown(ctx)
             mock_logger.info.assert_called_once_with("worker_stopped")
+
+    async def test_startup_creates_s3_client(self) -> None:
+        """startup() stores an S3Client in ctx['s3_client']."""
+        ctx: dict[str, object] = {}
+        mock_s3 = MagicMock()
+        mock_s3.open = AsyncMock()
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch("course_supporter.llm.create_model_router"),
+            patch(
+                "course_supporter.storage.s3.S3Client",
+                return_value=mock_s3,
+            ),
+        ):
+            await startup(ctx)
+        assert ctx["s3_client"] is mock_s3
+        mock_s3.open.assert_awaited_once()
+
+    async def test_shutdown_closes_s3_client(self) -> None:
+        """shutdown() calls close() on s3_client."""
+        mock_s3 = MagicMock()
+        mock_s3.close = AsyncMock()
+        ctx: dict[str, object] = {"s3_client": mock_s3}
+        with patch("course_supporter.worker.structlog"):
+            await shutdown(ctx)
+        mock_s3.close.assert_awaited_once()

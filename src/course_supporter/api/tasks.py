@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
+import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -14,6 +18,38 @@ from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.storage.s3 import S3Client
+
+
+class _HasSourceUrl(Protocol):
+    source_url: str
+
+
+@asynccontextmanager
+async def _resolve_s3_url(
+    material: _HasSourceUrl,
+    s3: S3Client | None,
+) -> AsyncIterator[None]:
+    """Download S3 object to temp file, patch material URL, restore on exit.
+
+    If ``material.source_url`` is not an S3 URL (or *s3* is ``None``),
+    the context manager is a no-op.
+    """
+    original_url: str = material.source_url
+    s3_key = s3.extract_key(original_url) if s3 else None
+    temp_path: Path | None = None
+
+    try:
+        if s3 and s3_key:
+            temp_path = await s3.download_file(s3_key)
+            material.source_url = str(temp_path)
+        yield
+    finally:
+        material.source_url = original_url
+        if temp_path is not None:
+            ap = anyio.Path(temp_path)
+            if await ap.exists():
+                await ap.unlink(missing_ok=True)
 
 
 async def arq_ingest_material(
@@ -57,6 +93,7 @@ async def arq_ingest_material(
 
     heavy = create_heavy_steps(router=router)
     processors = create_processors(heavy)
+    s3: S3Client | None = ctx.get("s3_client")
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
@@ -78,10 +115,8 @@ async def arq_ingest_material(
                 msg = f"SourceMaterial not found: {mid}"
                 raise ValueError(msg)
 
-            # router is still passed here because GeminiVideoProcessor
-            # uses it directly in process() (not via DI heavy step).
-            # Can be removed once Gemini is extracted as a heavy step.
-            doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3):
+                doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
 
@@ -103,6 +138,7 @@ async def ingest_material(
     source_url: str,
     session_factory: async_sessionmaker[AsyncSession],
     router: ModelRouter | None = None,
+    s3: S3Client | None = None,
 ) -> None:
     """Process a source material in the background (legacy).
 
@@ -135,8 +171,8 @@ async def ingest_material(
                 msg = f"SourceMaterial not found: {material_id}"
                 raise ValueError(msg)
 
-            # router passed for GeminiVideoProcessor (see comment above)
-            doc = await processor.process(material, router=router)
+            async with _resolve_s3_url(material, s3):
+                doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
             await repo.update_status(material_id, "done", content_snapshot=content)

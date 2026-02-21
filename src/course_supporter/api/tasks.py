@@ -77,6 +77,9 @@ async def arq_ingest_material(
                 msg = f"SourceMaterial not found: {mid}"
                 raise ValueError(msg)
 
+            # router is still passed here because GeminiVideoProcessor
+            # uses it directly in process() (not via DI heavy step).
+            # Can be removed once Gemini is extracted as a heavy step.
             doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()
@@ -130,6 +133,7 @@ async def ingest_material(
                 msg = f"SourceMaterial not found: {material_id}"
                 raise ValueError(msg)
 
+            # router passed for GeminiVideoProcessor (see comment above)
             doc = await processor.process(material, router=router)
 
             content = doc.model_dump_json()

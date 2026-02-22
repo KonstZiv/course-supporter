@@ -1,4 +1,6 @@
-"""Tests for MappingValidationService — structural (L1), content (L2), deferred (L3)."""
+"""Tests for MappingValidationService — structural (L1), content (L2), deferred (L3),
+and auto-revalidation (S2-042).
+"""
 
 import json
 import uuid
@@ -1137,3 +1139,276 @@ class TestRouteReturns422OnValidationError:
         assert detail[0]["index"] == 0
         assert detail[0]["errors"][0]["field"] == "presentation_entry_id"
         assert detail[0]["errors"][0]["hint"] is not None
+
+
+def _make_orm_mapping(
+    *,
+    node_id: uuid.UUID = NODE_ID,
+    pres_id: uuid.UUID = PRES_ID,
+    vid_id: uuid.UUID = VID_ID,
+    slide_number: int = 1,
+    tc_start: str = "01:23:45",
+    tc_end: str | None = "01:30:00",
+    blocking_factors: list[dict[str, object]] | None = None,
+) -> MagicMock:
+    """Create a mock SlideVideoMapping ORM record."""
+    m = MagicMock()
+    m.id = uuid.uuid4()
+    m.node_id = node_id
+    m.presentation_entry_id = pres_id
+    m.video_entry_id = vid_id
+    m.slide_number = slide_number
+    m.video_timecode_start = tc_start
+    m.video_timecode_end = tc_end
+    m.blocking_factors = blocking_factors
+    m.validation_state = MappingValidationState.PENDING_VALIDATION
+    m.validation_errors = None
+    m.validated_at = None
+    return m
+
+
+class TestAutoRevalidation:
+    """Tests for revalidate_blocked() — S2-042."""
+
+    @pytest.mark.asyncio
+    async def test_revalidate_material_becomes_ready(self) -> None:
+        """Both materials READY → mapping becomes VALIDATED."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(10),
+            state=MaterialState.READY,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(5400.0),
+            state=MaterialState.READY,
+        )
+        orm_mapping = _make_orm_mapping(
+            blocking_factors=[
+                {"material_entry_id": str(VID_ID), "type": "material_not_ready"}
+            ],
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=[orm_mapping]
+            )
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(VID_ID)
+
+        assert count == 1
+        assert orm_mapping.validation_state == MappingValidationState.VALIDATED
+        assert orm_mapping.validation_errors is None
+        assert orm_mapping.blocking_factors is None
+
+    @pytest.mark.asyncio
+    async def test_revalidate_material_becomes_error(self) -> None:
+        """One material ERROR → blocker updated, PENDING_VALIDATION."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            state=MaterialState.READY,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            state=MaterialState.ERROR,
+        )
+        orm_mapping = _make_orm_mapping(
+            blocking_factors=[
+                {"material_entry_id": str(VID_ID), "type": "material_not_ready"}
+            ],
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=[orm_mapping]
+            )
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(VID_ID)
+
+        assert count == 1
+        assert orm_mapping.validation_state == MappingValidationState.PENDING_VALIDATION
+        assert orm_mapping.blocking_factors is not None
+        assert orm_mapping.blocking_factors[0]["type"] == "material_error"
+
+    @pytest.mark.asyncio
+    async def test_revalidate_one_ready_one_still_pending(self) -> None:
+        """One READY, other PENDING → PENDING_VALIDATION (one blocker removed)."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            state=MaterialState.PENDING,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(5400.0),
+            state=MaterialState.READY,
+        )
+        orm_mapping = _make_orm_mapping(
+            blocking_factors=[
+                {"material_entry_id": str(PRES_ID), "type": "material_not_ready"},
+                {"material_entry_id": str(VID_ID), "type": "material_not_ready"},
+            ],
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=[orm_mapping]
+            )
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(VID_ID)
+
+        assert count == 1
+        assert orm_mapping.validation_state == MappingValidationState.PENDING_VALIDATION
+        # Only pres blocker remains
+        assert len(orm_mapping.blocking_factors) == 1
+        assert orm_mapping.blocking_factors[0]["material_entry_id"] == str(PRES_ID)
+
+    @pytest.mark.asyncio
+    async def test_revalidate_ready_but_l2_fails(self) -> None:
+        """READY but slide out of range → VALIDATION_FAILED."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(5),
+            state=MaterialState.READY,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(5400.0),
+            state=MaterialState.READY,
+        )
+        orm_mapping = _make_orm_mapping(
+            slide_number=42,
+            blocking_factors=[
+                {"material_entry_id": str(PRES_ID), "type": "material_not_ready"}
+            ],
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=[orm_mapping]
+            )
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(PRES_ID)
+
+        assert count == 1
+        assert orm_mapping.validation_state == MappingValidationState.VALIDATION_FAILED
+        assert orm_mapping.validation_errors is not None
+        assert orm_mapping.validation_errors[0]["field"] == "slide_number"
+
+    @pytest.mark.asyncio
+    async def test_revalidate_no_pending_mappings_noop(self) -> None:
+        """No blocked mappings → count=0, no flush."""
+        session = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(return_value=[])
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(uuid.uuid4())
+
+        assert count == 0
+        session.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_revalidate_returns_count(self) -> None:
+        """Returns correct count of revalidated mappings."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            state=MaterialState.READY,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            state=MaterialState.READY,
+        )
+        mappings = [
+            _make_orm_mapping(
+                blocking_factors=[
+                    {"material_entry_id": str(PRES_ID), "type": "material_not_ready"}
+                ],
+            )
+            for _ in range(3)
+        ]
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=mappings
+            )
+            svc = MappingValidationService(session)
+            count = await svc.revalidate_blocked(PRES_ID)
+
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_revalidate_sets_validated_at(self) -> None:
+        """VALIDATED mapping gets validated_at set."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            state=MaterialState.READY,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            state=MaterialState.READY,
+        )
+        orm_mapping = _make_orm_mapping(
+            blocking_factors=[
+                {"material_entry_id": str(VID_ID), "type": "material_not_ready"}
+            ],
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        session.flush = AsyncMock()
+
+        with patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository"
+        ) as repo_cls:
+            repo_cls.return_value.find_pending_by_material = AsyncMock(
+                return_value=[orm_mapping]
+            )
+            svc = MappingValidationService(session)
+            await svc.revalidate_blocked(VID_ID)
+
+        assert orm_mapping.validation_state == MappingValidationState.VALIDATED
+        assert orm_mapping.validated_at is not None

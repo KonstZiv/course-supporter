@@ -10,6 +10,7 @@ from course_supporter.ingestion_callback import IngestionCallback
 # Top-level imports in ingestion_callback — patch on the importing module
 _MAT_REPO = "course_supporter.ingestion_callback.SourceMaterialRepository"
 _JOB_REPO = "course_supporter.ingestion_callback.JobRepository"
+_VALIDATION_SVC = "course_supporter.storage.mapping_validation.MappingValidationService"
 
 
 def _mock_session_factory() -> MagicMock:
@@ -38,6 +39,12 @@ def _make_callback(
 
 class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
 
     async def test_material_updated_to_done(self) -> None:
         """SourceMaterial status transitions to 'done' with content."""
@@ -177,6 +184,12 @@ class TestOnSuccess:
 class TestOnFailure:
     """IngestionCallback.on_failure — error path."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
+
     async def test_job_updated_to_failed(self) -> None:
         """Job status transitions to 'failed' with error message."""
         callback, _ = _make_callback()
@@ -295,6 +308,12 @@ class TestOnFailure:
 class TestOnSuccessErrors:
     """IngestionCallback.on_success — error propagation."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
+
     async def test_material_not_found_propagates(self) -> None:
         """ValueError from material repo propagates to caller."""
         callback, _ = _make_callback()
@@ -339,6 +358,12 @@ class TestOnSuccessErrors:
 class TestOnFailureErrors:
     """IngestionCallback.on_failure — error propagation."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
+
     async def test_job_not_found_propagates(self) -> None:
         """ValueError from job repo propagates to caller."""
         callback, _ = _make_callback()
@@ -369,11 +394,49 @@ class TestHooksAreNoOp:
         session = AsyncMock()
         await callback._invalidate_fingerprints(session, material_id=uuid.uuid4())
 
-    async def test_revalidate_blocked_mappings_is_noop(self) -> None:
-        """_revalidate_blocked_mappings completes without error."""
+
+class TestRevalidateBlockedMappingsCallback:
+    """_revalidate_blocked_mappings delegates to MappingValidationService."""
+
+    async def test_success_triggers_revalidation(self) -> None:
+        """on_success() calls MappingValidationService.revalidate_blocked."""
         callback, _ = _make_callback()
-        session = AsyncMock()
-        await callback._revalidate_blocked_mappings(session, material_id=uuid.uuid4())
+        mid = uuid.uuid4()
+
+        with (
+            patch(_MAT_REPO) as mat_cls,
+            patch(_JOB_REPO) as job_cls,
+            patch(_VALIDATION_SVC) as svc_cls,
+        ):
+            mat_cls.return_value.update_status = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+            svc_cls.return_value.revalidate_blocked = AsyncMock(return_value=0)
+
+            await callback.on_success(
+                job_id=uuid.uuid4(), material_id=mid, content_json="{}"
+            )
+
+        svc_cls.return_value.revalidate_blocked.assert_awaited_once_with(mid)
+
+    async def test_failure_triggers_revalidation(self) -> None:
+        """on_failure() also calls MappingValidationService.revalidate_blocked."""
+        callback, _ = _make_callback()
+        mid = uuid.uuid4()
+
+        with (
+            patch(_MAT_REPO) as mat_cls,
+            patch(_JOB_REPO) as job_cls,
+            patch(_VALIDATION_SVC) as svc_cls,
+        ):
+            mat_cls.return_value.update_status = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+            svc_cls.return_value.revalidate_blocked = AsyncMock(return_value=0)
+
+            await callback.on_failure(
+                job_id=uuid.uuid4(), material_id=mid, error_message="error"
+            )
+
+        svc_cls.return_value.revalidate_blocked.assert_awaited_once_with(mid)
 
 
 class TestCallbackIntegrationWithArqTask:

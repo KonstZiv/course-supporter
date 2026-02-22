@@ -159,20 +159,14 @@ class IngestionCallback:
         *,
         material_id: uuid.UUID,
     ) -> None:
-        """Revalidate SlideVideoMappings blocked by this material.
+        """Revalidate SlideVideoMappings blocked by this material."""
+        from course_supporter.storage.mapping_validation import (
+            MappingValidationService,
+        )
 
-        **Current state**: no-op stub.
-
-        **Epic 5 (S2-042) implementation plan**:
-        1. Query ``slide_video_mappings`` where
-           ``validation_state = 'pending_validation'`` and
-           ``blocking_factors`` contains this ``material_id``.
-        2. For each mapping:
-           a. If the material is now READY — remove the blocking factor.
-           b. If the material is ERROR — update blocking factor type
-              to ``material_error``.
-           c. If all blocking factors resolved — run full validation
-              (Level 1 + 2) and set state to ``validated`` or
-              ``validation_failed``.
-        3. Flush changes within the provided session.
-        """
+        validator = MappingValidationService(session)
+        count = await validator.revalidate_blocked(material_id)
+        if count > 0:
+            structlog.get_logger().bind(
+                material_id=str(material_id),
+            ).info("revalidated_blocked_mappings", count=count)

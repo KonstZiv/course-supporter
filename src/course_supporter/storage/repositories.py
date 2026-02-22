@@ -222,6 +222,30 @@ class SlideVideoMappingRepository:
         await self._session.flush()
         return records
 
+    async def find_pending_by_material(
+        self, material_entry_id: uuid.UUID
+    ) -> list[SlideVideoMapping]:
+        """Find pending_validation mappings blocked by a specific material.
+
+        Fetches all pending mappings, filters in Python by blocking_factors
+        content (project pattern: batch fetch + filter in memory).
+        """
+        stmt = select(SlideVideoMapping).where(
+            SlideVideoMapping.validation_state
+            == MappingValidationState.PENDING_VALIDATION,
+            SlideVideoMapping.blocking_factors.isnot(None),
+        )
+        result = await self._session.execute(stmt)
+        mid_str = str(material_entry_id)
+        return [
+            m
+            for m in result.scalars().all()
+            if any(
+                bf.get("material_entry_id") == mid_str
+                for bf in (m.blocking_factors or [])
+            )
+        ]
+
     async def get_by_node_id(self, node_id: uuid.UUID) -> list[SlideVideoMapping]:
         """Get all slide-video mappings for a material node.
 

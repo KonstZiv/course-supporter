@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -478,3 +479,71 @@ class MappingValidationService:
             )
 
         return None
+
+    # ── Auto-revalidation ──
+
+    async def revalidate_blocked(self, material_entry_id: uuid.UUID) -> int:
+        """Re-run validation on mappings blocked by a specific material.
+
+        Called from ingestion callback when a material changes state.
+        Returns number of mappings revalidated.
+        """
+        from course_supporter.storage.repositories import SlideVideoMappingRepository
+
+        repo = SlideVideoMappingRepository(self._session)
+        blocked = await repo.find_pending_by_material(material_entry_id)
+        if not blocked:
+            return 0
+
+        # Collect all entry IDs from blocked mappings
+        all_ids: set[uuid.UUID] = set()
+        for m in blocked:
+            all_ids.add(m.presentation_entry_id)
+            all_ids.add(m.video_entry_id)
+
+        # Single query to fetch all referenced entries
+        entries_by_id: dict[uuid.UUID, MaterialEntry] = {}
+        if all_ids:
+            stmt = select(MaterialEntry).where(MaterialEntry.id.in_(all_ids))
+            result = await self._session.execute(stmt)
+            for entry in result.scalars().all():
+                entries_by_id[entry.id] = entry
+
+        # Pre-parse processed_content for L2
+        parsed_docs: dict[uuid.UUID, dict[str, Any]] = {}
+        for entry_id, entry in entries_by_id.items():
+            if entry.processed_content is not None:
+                doc = _parse_processed_content(entry.processed_content)
+                if doc is not None:
+                    parsed_docs[entry_id] = doc
+
+        # Revalidate each mapping
+        for m in blocked:
+            pydantic_entry = SlideVideoMapEntry(
+                presentation_entry_id=str(m.presentation_entry_id),
+                video_entry_id=str(m.video_entry_id),
+                slide_number=m.slide_number,
+                video_timecode_start=m.video_timecode_start,
+                video_timecode_end=m.video_timecode_end,
+            )
+            errs, blockers = self._validate_single(
+                m.node_id, pydantic_entry, entries_by_id, parsed_docs
+            )
+
+            if errs:
+                m.validation_state = MappingValidationState.VALIDATION_FAILED
+            elif blockers:
+                m.validation_state = MappingValidationState.PENDING_VALIDATION
+            else:
+                m.validation_state = MappingValidationState.VALIDATED
+
+            m.validation_errors = [asdict(e) for e in errs] if errs else None
+            m.blocking_factors = [asdict(bf) for bf in blockers] if blockers else None
+            m.validated_at = (
+                datetime.now(UTC)
+                if m.validation_state == MappingValidationState.VALIDATED
+                else None
+            )
+
+        await self._session.flush()
+        return len(blocked)

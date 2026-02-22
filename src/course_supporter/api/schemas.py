@@ -8,7 +8,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from course_supporter.models.course import SlideVideoMapEntry
+from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
 
 # --- Course ---
@@ -133,12 +133,15 @@ class SlideVideoMapItemResponse(BaseModel):
         ),
     )
     video_timecode_start: str = Field(
+        pattern=TIMECODE_RE,
         description=(
             "Start timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
             "Indicates when discussion of this slide begins."
         ),
     )
     video_timecode_end: str | None = Field(
+        default=None,
+        pattern=TIMECODE_RE,
         description=(
             "End timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
             "``null`` if the slide extends to the next mapping or end of video."

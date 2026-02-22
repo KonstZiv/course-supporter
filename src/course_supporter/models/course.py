@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from course_supporter.models.source import SourceDocument
 
 # HH:MM:SS or MM:SS (e.g. "01:23:45", "5:00", "00:30")
-_TIMECODE_RE = r"^(\d{1,2}:)?[0-5]?\d:[0-5]?\d$"
+TIMECODE_RE = r"^(\d{1,2}:)?[0-5]?\d:[0-5]?\d$"
 
 
 class SlideVideoMapEntry(BaseModel):
@@ -21,8 +21,8 @@ class SlideVideoMapEntry(BaseModel):
     presentation_entry_id: str
     video_entry_id: str
     slide_number: int
-    video_timecode_start: str = Field(pattern=_TIMECODE_RE)
-    video_timecode_end: str | None = Field(default=None, pattern=_TIMECODE_RE)
+    video_timecode_start: str = Field(pattern=TIMECODE_RE)
+    video_timecode_end: str | None = Field(default=None, pattern=TIMECODE_RE)
 
 
 class SlideTimecodeRef(BaseModel):

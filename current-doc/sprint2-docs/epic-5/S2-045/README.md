@@ -22,7 +22,7 @@
 `video_timecode`) не містить інформації для визначення
 `presentation_entry_id` та `video_entry_id` (нова схема).
 
-**Детальна документація:** `current-doc/S2-045-mapping-migration.md`
+**Детальна документація:** [`migration-details.md`](migration-details.md)
 
 ## Як тестуємо
 
@@ -36,4 +36,4 @@
 - [x] Міграція існує і працює (`a8f1e2c3d4b5`)
 - [x] Відсутність production даних підтверджена
 - [x] Tests зелені (`make check`)
-- [x] Documentation checkpoint: повна документація в S2-045-mapping-migration.md
+- [x] Documentation checkpoint: повна документація в migration-details.md

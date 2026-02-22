@@ -1,5 +1,6 @@
-"""Tests for MappingValidationService — structural validation (Level 1)."""
+"""Tests for MappingValidationService — structural (L1) + content (L2)."""
 
+import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,26 +37,46 @@ def _make_entry_mock(
     entry_id: uuid.UUID,
     node_id: uuid.UUID,
     source_type: str,
+    processed_content: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialEntry."""
     entry = MagicMock()
     entry.id = entry_id
     entry.node_id = node_id
     entry.source_type = source_type
+    entry.processed_content = processed_content
     return entry
+
+
+def _pres_content(page_count: int) -> str:
+    """Build minimal presentation processed_content JSON."""
+    return json.dumps({"metadata": {"page_count": page_count, "format": "pdf"}})
+
+
+def _video_content(duration_sec: float) -> str:
+    """Build minimal video processed_content JSON with one chunk."""
+    return json.dumps(
+        {
+            "metadata": {"strategy": "whisper"},
+            "chunks": [
+                {"metadata": {"start_sec": 0.0, "end_sec": duration_sec}},
+            ],
+        }
+    )
 
 
 def _make_mapping(
     *,
     pres_id: uuid.UUID = PRES_ID,
     vid_id: uuid.UUID = VID_ID,
+    slide_number: int = 1,
     tc_start: str = "01:23:45",
     tc_end: str | None = "01:30:00",
 ) -> SlideVideoMapEntry:
     return SlideVideoMapEntry(
         presentation_entry_id=str(pres_id),
         video_entry_id=str(vid_id),
-        slide_number=1,
+        slide_number=slide_number,
         video_timecode_start=tc_start,
         video_timecode_end=tc_end,
     )
@@ -350,6 +371,274 @@ class TestMappingValidationService:
         assert len(result) == 2
         assert result[0][0] == 0
         assert result[1][0] == 1
+
+
+class TestContentValidationLevel2:
+    """Unit tests for Level 2 content validation."""
+
+    @pytest.mark.asyncio
+    async def test_slide_number_out_of_range_high(self) -> None:
+        """Slide number exceeding page_count produces error with range hint."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(30),
+        )
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=42, tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        err = result[0][1][0]
+        assert err.field == "slide_number"
+        assert "42" in err.message
+        assert "30" in err.message
+        assert "1\u201330" in err.hint  # type: ignore[operator]
+
+    @pytest.mark.asyncio
+    async def test_slide_number_zero(self) -> None:
+        """Slide number 0 is invalid (range starts at 1)."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(10),
+        )
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=0, tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        assert result[0][1][0].field == "slide_number"
+
+    @pytest.mark.asyncio
+    async def test_slide_number_boundary_first(self) -> None:
+        """Slide number 1 is valid (first slide)."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(10),
+        )
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=1, tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_slide_number_boundary_last(self) -> None:
+        """Slide number equal to page_count is valid (last slide)."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(10),
+        )
+        vid = _make_entry_mock(entry_id=VID_ID, node_id=NODE_ID, source_type="video")
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=10, tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_timecode_exceeds_video_duration(self) -> None:
+        """Timecode beyond video duration produces error with range hint."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(600.0),  # 10:00
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        # 15:00 = 900s > 600s
+        mapping = _make_mapping(tc_start="15:00", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        err = result[0][1][0]
+        assert err.field == "video_timecode_start"
+        assert "900s" in err.message
+        assert "10:00" in err.message
+        assert "10:00" in err.hint  # type: ignore[operator]
+
+    @pytest.mark.asyncio
+    async def test_timecode_end_exceeds_video_duration(self) -> None:
+        """timecode_end beyond video duration produces error."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(300.0),  # 05:00
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(tc_start="04:00", tc_end="06:00")
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        err = result[0][1][0]
+        assert err.field == "video_timecode_end"
+        assert "exceeds" in err.message
+
+    @pytest.mark.asyncio
+    async def test_timecode_at_exact_duration_is_valid(self) -> None:
+        """Timecode equal to video duration is valid (boundary)."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(5400.0),  # 1:30:00
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(tc_start="1:30:00", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_processed_content_skips_level2(self) -> None:
+        """When processed_content is None, Level 2 checks are skipped."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=None,
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=None,
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        # slide=999 would fail L2, but is skipped
+        mapping = _make_mapping(slide_number=999, tc_start="99:59:59", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_pres_ready_video_not_ready(self) -> None:
+        """L2 validates slide_number but skips timecode when video not ready."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(5),
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=None,
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=10, tc_start="99:59:59", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        # Only slide_number error, no timecode error
+        assert len(result) == 1
+        assert len(result[0][1]) == 1
+        assert result[0][1][0].field == "slide_number"
+
+    @pytest.mark.asyncio
+    async def test_video_empty_chunks_skips_timecode_check(self) -> None:
+        """Video with no chunks (no duration) skips timecode range check."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID, node_id=NODE_ID, source_type="presentation"
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=json.dumps({"metadata": {}, "chunks": []}),
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(tc_start="99:59:59", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_malformed_processed_content_skips_level2(self) -> None:
+        """Malformed JSON in processed_content gracefully skips L2."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content="not json",
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content="{broken",
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=999, tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_slide_and_timecode_errors_collected_together(self) -> None:
+        """L2 collects both slide_number and timecode errors in one pass."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(5),
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(60.0),
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=10, tc_start="05:00", tc_end=None)
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert len(result) == 1
+        errors = result[0][1]
+        assert len(errors) == 2
+        fields = {e.field for e in errors}
+        assert fields == {"slide_number", "video_timecode_start"}
+
+    @pytest.mark.asyncio
+    async def test_valid_content_no_errors(self) -> None:
+        """Fully valid mapping with content checks passes all levels."""
+        pres = _make_entry_mock(
+            entry_id=PRES_ID,
+            node_id=NODE_ID,
+            source_type="presentation",
+            processed_content=_pres_content(30),
+        )
+        vid = _make_entry_mock(
+            entry_id=VID_ID,
+            node_id=NODE_ID,
+            source_type="video",
+            processed_content=_video_content(5400.0),
+        )
+        session = _session_with_entries({PRES_ID: pres, VID_ID: vid})
+        svc = MappingValidationService(session)
+        mapping = _make_mapping(slide_number=15, tc_start="01:00:00", tc_end="01:15:00")
+        result = await svc.validate_batch(NODE_ID, [mapping])
+        assert result == []
 
 
 class TestRouteReturns422OnValidationError:

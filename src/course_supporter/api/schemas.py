@@ -127,6 +127,7 @@ class SlideVideoMapItemResponse(BaseModel):
         description="MaterialEntry ID of the video recording."
     )
     slide_number: int = Field(
+        ge=1,
         description=(
             "1-based slide number within the presentation. "
             "Valid range depends on the actual number of slides in the file."

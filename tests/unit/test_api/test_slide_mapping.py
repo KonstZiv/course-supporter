@@ -665,7 +665,7 @@ class TestSlideVideoMappingRepository:
             SlideVideoMapEntry(
                 presentation_entry_id=str(pres_id),
                 video_entry_id=str(vid_id),
-                slide_number=i,
+                slide_number=i + 1,
                 video_timecode_start=f"00:0{i}:00",
             )
             for i in range(3)

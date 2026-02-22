@@ -20,7 +20,7 @@ class SlideVideoMapEntry(BaseModel):
 
     presentation_entry_id: str
     video_entry_id: str
-    slide_number: int
+    slide_number: int = Field(ge=1)
     video_timecode_start: str = Field(pattern=TIMECODE_RE)
     video_timecode_end: str | None = Field(default=None, pattern=TIMECODE_RE)
 

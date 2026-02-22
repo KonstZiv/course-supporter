@@ -1,15 +1,20 @@
-"""Structural validation for slide-video mappings (Level 1).
+"""Structural and content validation for slide-video mappings (Levels 1-2).
 
-Validates that entry IDs exist, belong to the correct node, have the
-expected source_type, and that timecodes are well-formed before any
-ORM objects are created.
+Level 1 (structural): entry IDs exist, belong to the correct node, have the
+expected source_type, and timecodes are well-formed.
+
+Level 2 (content): slide_number within presentation page_count, timecodes
+within video duration. Requires processed_content to be available (READY
+state). Skipped silently when processed_content is absent.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +24,12 @@ from course_supporter.models.source import SourceType
 from course_supporter.storage.orm import MaterialEntry
 
 _TIMECODE_RE = re.compile(r"^([0-9]{1,2}:)?[0-5][0-9]:[0-5][0-9]$")
+
+# ── Metadata key constants ──
+_KEY_METADATA = "metadata"
+_KEY_PAGE_COUNT = "page_count"
+_KEY_CHUNKS = "chunks"
+_KEY_END_SEC = "end_sec"
 
 
 @dataclass
@@ -46,8 +57,100 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
+def _parse_processed_content(raw: str) -> dict[str, Any] | None:
+    """Parse processed_content JSON string, returning None on failure."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _extract_page_count(doc: dict[str, Any]) -> int | None:
+    """Extract page_count from SourceDocument metadata."""
+    metadata = doc.get(_KEY_METADATA)
+    if not isinstance(metadata, dict):
+        return None
+    page_count = metadata.get(_KEY_PAGE_COUNT)
+    if isinstance(page_count, int) and page_count > 0:
+        return page_count
+    return None
+
+
+def _extract_video_duration_sec(doc: dict[str, Any]) -> float | None:
+    """Extract video duration as max end_sec across all chunks.
+
+    Returns None when no chunks contain end_sec (fallback: skip check).
+    """
+    chunks = doc.get(_KEY_CHUNKS)
+    if not isinstance(chunks, list) or not chunks:
+        return None
+    max_end: float | None = None
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        meta = chunk.get(_KEY_METADATA)
+        if not isinstance(meta, dict):
+            continue
+        end_sec = meta.get(_KEY_END_SEC)
+        if isinstance(end_sec, int | float) and (max_end is None or end_sec > max_end):
+            max_end = end_sec
+    return max_end
+
+
+def _seconds_to_timecode(seconds: float) -> str:
+    """Format seconds as HH:MM:SS for display."""
+    total = int(seconds)
+    h, remainder = divmod(total, 3600)
+    m, s = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _check_slide_number(
+    slide_number: int,
+    doc: dict[str, Any],
+) -> MappingValidationError | None:
+    """Check slide_number is within presentation page_count."""
+    page_count = _extract_page_count(doc)
+    if page_count is None:
+        return None
+    if slide_number < 1 or slide_number > page_count:
+        return MappingValidationError(
+            field="slide_number",
+            message=(
+                f"Slide {slide_number} does not exist in presentation "
+                f"({page_count} slides total)"
+            ),
+            hint=f"Allowed range: 1\u2013{page_count}",
+        )
+    return None
+
+
+def _check_timecode_range(
+    timecode_sec: int,
+    timecode_str: str,
+    field: str,
+    duration: float,
+) -> MappingValidationError | None:
+    """Check timecode does not exceed video duration."""
+    if timecode_sec > duration:
+        return MappingValidationError(
+            field=field,
+            message=(
+                f"Timecode '{timecode_str}' ({timecode_sec}s) exceeds "
+                f"video duration ({_seconds_to_timecode(duration)})"
+            ),
+            hint=f"Allowed range: 00:00\u2013{_seconds_to_timecode(duration)}",
+        )
+    return None
+
+
 class MappingValidationService:
-    """Structural (Level 1) validation for slide-video mappings."""
+    """Structural (Level 1) and content (Level 2) validation for mappings."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -84,10 +187,18 @@ class MappingValidationService:
             for entry in result.scalars().all():
                 entries_by_id[entry.id] = entry
 
+        # ── Pre-parse processed_content once per entry for Level 2 ──
+        parsed_docs: dict[uuid.UUID, dict[str, Any]] = {}
+        for entry_id, entry in entries_by_id.items():
+            if entry.processed_content is not None:
+                doc = _parse_processed_content(entry.processed_content)
+                if doc is not None:
+                    parsed_docs[entry_id] = doc
+
         # ── Validate each mapping in memory ──
         errors_per_mapping: list[tuple[int, list[MappingValidationError]]] = []
         for idx, m in enumerate(mappings):
-            errs = self._validate_single(node_id, m, entries_by_id)
+            errs = self._validate_single(node_id, m, entries_by_id, parsed_docs)
             if errs:
                 errors_per_mapping.append((idx, errs))
 
@@ -98,15 +209,17 @@ class MappingValidationService:
         node_id: uuid.UUID,
         mapping: SlideVideoMapEntry,
         entries_by_id: dict[uuid.UUID, MaterialEntry],
+        parsed_docs: dict[uuid.UUID, dict[str, Any]],
     ) -> list[MappingValidationError]:
         """Validate a single mapping against pre-fetched entries.
 
-        Collects all errors (entry IDs + timecode formats) in one pass.
-        Timecode ordering is checked only when both formats are valid.
+        Runs Level 1 (structural) checks first, then Level 2 (content)
+        checks using pre-parsed processed_content from ``parsed_docs``.
+        Collects all errors in one pass.
         """
         errors: list[MappingValidationError] = []
 
-        # ── Entry checks ──
+        # ── Level 1: Entry checks ──
         pres_err = self._check_entry(
             entry_id_str=mapping.presentation_entry_id,
             node_id=node_id,
@@ -127,7 +240,7 @@ class MappingValidationService:
         if video_err is not None:
             errors.append(video_err)
 
-        # ── Timecode format ──
+        # ── Level 1: Timecode format ──
         tc_start = mapping.video_timecode_start
         tc_start_valid = bool(_TIMECODE_RE.match(tc_start))
         if not tc_start_valid:
@@ -152,7 +265,7 @@ class MappingValidationService:
                     )
                 )
 
-        # ── Timecode ordering (only when both formats are valid) ──
+        # ── Level 1: Timecode ordering (only when both formats are valid) ──
         if (
             tc_start_valid
             and tc_end_valid
@@ -168,6 +281,42 @@ class MappingValidationService:
                     hint="video_timecode_end must be >= video_timecode_start",
                 )
             )
+
+        # ── Level 2: Content validation (when entries are structurally OK) ──
+        pres_uuid = (
+            _parse_uuid(mapping.presentation_entry_id) if pres_err is None else None
+        )
+        vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
+
+        pres_doc = parsed_docs.get(pres_uuid) if pres_uuid is not None else None
+        if pres_doc is not None:
+            slide_err = _check_slide_number(mapping.slide_number, pres_doc)
+            if slide_err is not None:
+                errors.append(slide_err)
+
+        video_doc = parsed_docs.get(vid_uuid) if vid_uuid is not None else None
+        if video_doc is not None:
+            duration = _extract_video_duration_sec(video_doc)
+            if duration is not None:
+                if tc_start_valid:
+                    tc_start_err = _check_timecode_range(
+                        _timecode_to_seconds(tc_start),
+                        tc_start,
+                        "video_timecode_start",
+                        duration,
+                    )
+                    if tc_start_err is not None:
+                        errors.append(tc_start_err)
+
+                if tc_end is not None and tc_end_valid:
+                    tc_end_err = _check_timecode_range(
+                        _timecode_to_seconds(tc_end),
+                        tc_end,
+                        "video_timecode_end",
+                        duration,
+                    )
+                    if tc_end_err is not None:
+                        errors.append(tc_end_err)
 
         return errors
 

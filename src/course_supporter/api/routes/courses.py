@@ -232,8 +232,8 @@ async def create_slide_mapping(
             continue
 
         natural_key = (
-            mapping.presentation_entry_id,
-            mapping.video_entry_id,
+            str(mapping.presentation_entry_id),
+            str(mapping.video_entry_id),
             mapping.slide_number,
             mapping.video_timecode_start,
         )
@@ -267,6 +267,8 @@ async def create_slide_mapping(
         response.status_code = 422
     elif records and rejected:
         response.status_code = 207
+    else:
+        response.status_code = 201
 
     # ── Hints ──
     hints: dict[str, str] = {}

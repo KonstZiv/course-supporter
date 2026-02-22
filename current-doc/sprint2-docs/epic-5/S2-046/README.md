@@ -1,7 +1,7 @@
 # S2-046: Mapping validation unit tests
 
 **Epic:** EPIC-5 — SlideVideoMapping — Redesign
-**Оцінка:** 4h
+**Оцінка:** 4h → **Фактично:** ~1h
 
 ---
 
@@ -9,31 +9,25 @@
 
 Повне тестове покриття для валідації маппінгів
 
-## Що робимо
+## Що зроблено
 
-Tests для всіх 3 рівнів валідації, auto-revalidation, partial success
+16 нових тестів + 3 hardened assertions. Деталі: [`DETAILS.md`](DETAILS.md)
 
-## Як робимо
-
-1. Level 1: wrong type, wrong node, invalid timecode
-2. Level 2: slide range, timecode range, boundary values
-3. Level 3: pending→validated lifecycle, pending→error lifecycle
-4. Batch: partial success scenarios
-5. Auto-revalidation: ingestion triggers
-
-## Очікуваний результат
-
-Повне покриття всіх validation scenarios
+- **L1**: timecode_end validation (parametrized), both timecodes invalid, tc_end == tc_start
+- **L2**: multi-chunk video duration, page_count=0/negative, chunk without metadata,
+  metadata without page_count, non-dict JSON
+- **Revalidation**: batch mixed outcomes (VALIDATED + FAILED)
+- **Hardening**: `validated_at is None` assertions on 3 existing tests
 
 ## Як тестуємо
 
-**Автоматизовано:** pytest
+**Автоматизовано:** `test_mapping_validation.py` — 74 тести, `make check` — 975 passed
 
-**Human control:** Review — чи покриті edge cases з AR-7
+**Human control:** Review — edge cases з AR-7 покриті
 
 ## Точки контролю
 
-- [ ] Код написаний і проходить `make check`
-- [ ] Tests написані і зелені
-- [ ] Human control пройдений
-- [ ] Documentation checkpoint: чи потрібно оновити docs/ERD/наступні задачі
+- [x] Код написаний і проходить `make check`
+- [x] Tests написані і зелені (74 passed)
+- [x] Human control пройдений
+- [x] Documentation checkpoint: DETAILS.md оновлено

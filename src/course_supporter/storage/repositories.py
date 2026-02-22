@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -19,12 +20,14 @@ from course_supporter.models.course import (
     SlideVideoMapEntry,
 )
 from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
+from course_supporter.storage.mapping_validation import MappingValidationResult
 from course_supporter.storage.orm import (
     Concept,
     Course,
     Exercise,
     Lesson,
     LLMCall,
+    MappingValidationState,
     Module,
     SlideVideoMapping,
     SourceMaterial,
@@ -169,16 +172,24 @@ class SlideVideoMappingRepository:
         self,
         node_id: uuid.UUID,
         mappings: list[SlideVideoMapEntry],
+        *,
+        validation_results: list[MappingValidationResult] | None = None,
     ) -> list[SlideVideoMapping]:
         """Create multiple slide-video mappings in a batch.
 
         Args:
             node_id: FK to the parent material node.
             mappings: List of SlideVideoMapEntry Pydantic models.
+            validation_results: Optional validation outcomes to persist
+                on each record (validation_state, blocking_factors, etc.).
 
         Returns:
             List of created SlideVideoMapping ORM instances.
         """
+        results_by_idx: dict[int, MappingValidationResult] = {}
+        if validation_results is not None:
+            results_by_idx = {r.index: r for r in validation_results}
+
         records = []
         for idx, m in enumerate(mappings):
             record = SlideVideoMapping(
@@ -190,6 +201,22 @@ class SlideVideoMappingRepository:
                 video_timecode_end=m.video_timecode_end,
                 order=idx,
             )
+            vr = results_by_idx.get(idx)
+            if vr is not None:
+                record.validation_state = vr.status
+                record.blocking_factors = (
+                    [asdict(bf) for bf in vr.blocking_factors]
+                    if vr.blocking_factors
+                    else None
+                )
+                record.validation_errors = (
+                    [asdict(e) for e in vr.errors] if vr.errors else None
+                )
+                record.validated_at = (
+                    datetime.now(UTC)
+                    if vr.status == MappingValidationState.VALIDATED
+                    else None
+                )
             self._session.add(record)
             records.append(record)
         await self._session.flush()

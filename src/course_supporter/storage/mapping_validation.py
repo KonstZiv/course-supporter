@@ -187,10 +187,18 @@ class MappingValidationService:
             for entry in result.scalars().all():
                 entries_by_id[entry.id] = entry
 
+        # ── Pre-parse processed_content once per entry for Level 2 ──
+        parsed_docs: dict[uuid.UUID, dict[str, Any]] = {}
+        for entry_id, entry in entries_by_id.items():
+            if entry.processed_content is not None:
+                doc = _parse_processed_content(entry.processed_content)
+                if doc is not None:
+                    parsed_docs[entry_id] = doc
+
         # ── Validate each mapping in memory ──
         errors_per_mapping: list[tuple[int, list[MappingValidationError]]] = []
         for idx, m in enumerate(mappings):
-            errs = self._validate_single(node_id, m, entries_by_id)
+            errs = self._validate_single(node_id, m, entries_by_id, parsed_docs)
             if errs:
                 errors_per_mapping.append((idx, errs))
 
@@ -201,11 +209,12 @@ class MappingValidationService:
         node_id: uuid.UUID,
         mapping: SlideVideoMapEntry,
         entries_by_id: dict[uuid.UUID, MaterialEntry],
+        parsed_docs: dict[uuid.UUID, dict[str, Any]],
     ) -> list[MappingValidationError]:
         """Validate a single mapping against pre-fetched entries.
 
         Runs Level 1 (structural) checks first, then Level 2 (content)
-        checks when the referenced entries have processed_content.
+        checks using pre-parsed processed_content from ``parsed_docs``.
         Collects all errors in one pass.
         """
         errors: list[MappingValidationError] = []
@@ -274,48 +283,40 @@ class MappingValidationService:
             )
 
         # ── Level 2: Content validation (when entries are structurally OK) ──
-        pres_entry = (
-            entries_by_id.get(uuid.UUID(mapping.presentation_entry_id))
-            if pres_err is None
-            else None
+        pres_uuid = (
+            _parse_uuid(mapping.presentation_entry_id) if pres_err is None else None
         )
-        video_entry = (
-            entries_by_id.get(uuid.UUID(mapping.video_entry_id))
-            if video_err is None
-            else None
-        )
+        vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
 
-        if pres_entry is not None and pres_entry.processed_content is not None:
-            pres_doc = _parse_processed_content(pres_entry.processed_content)
-            if pres_doc is not None:
-                slide_err = _check_slide_number(mapping.slide_number, pres_doc)
-                if slide_err is not None:
-                    errors.append(slide_err)
+        pres_doc = parsed_docs.get(pres_uuid) if pres_uuid is not None else None
+        if pres_doc is not None:
+            slide_err = _check_slide_number(mapping.slide_number, pres_doc)
+            if slide_err is not None:
+                errors.append(slide_err)
 
-        if video_entry is not None and video_entry.processed_content is not None:
-            video_doc = _parse_processed_content(video_entry.processed_content)
-            if video_doc is not None:
-                duration = _extract_video_duration_sec(video_doc)
-                if duration is not None:
-                    if tc_start_valid:
-                        tc_start_err = _check_timecode_range(
-                            _timecode_to_seconds(tc_start),
-                            tc_start,
-                            "video_timecode_start",
-                            duration,
-                        )
-                        if tc_start_err is not None:
-                            errors.append(tc_start_err)
+        video_doc = parsed_docs.get(vid_uuid) if vid_uuid is not None else None
+        if video_doc is not None:
+            duration = _extract_video_duration_sec(video_doc)
+            if duration is not None:
+                if tc_start_valid:
+                    tc_start_err = _check_timecode_range(
+                        _timecode_to_seconds(tc_start),
+                        tc_start,
+                        "video_timecode_start",
+                        duration,
+                    )
+                    if tc_start_err is not None:
+                        errors.append(tc_start_err)
 
-                    if tc_end is not None and tc_end_valid:
-                        tc_end_err = _check_timecode_range(
-                            _timecode_to_seconds(tc_end),
-                            tc_end,
-                            "video_timecode_end",
-                            duration,
-                        )
-                        if tc_end_err is not None:
-                            errors.append(tc_end_err)
+                if tc_end is not None and tc_end_valid:
+                    tc_end_err = _check_timecode_range(
+                        _timecode_to_seconds(tc_end),
+                        tc_end,
+                        "video_timecode_end",
+                        duration,
+                    )
+                    if tc_end_err is not None:
+                        errors.append(tc_end_err)
 
         return errors
 

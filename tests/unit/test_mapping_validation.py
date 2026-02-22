@@ -62,14 +62,20 @@ def _pres_content(page_count: int) -> str:
 
 def _video_content(duration_sec: float) -> str:
     """Build minimal video processed_content JSON with one chunk."""
-    return json.dumps(
-        {
-            "metadata": {"strategy": "whisper"},
-            "chunks": [
-                {"metadata": {"start_sec": 0.0, "end_sec": duration_sec}},
-            ],
-        }
-    )
+    return _multi_chunk_video_content([duration_sec])
+
+
+def _multi_chunk_video_content(end_times: list[float]) -> str:
+    """Build video processed_content JSON with multiple chunks.
+
+    Each chunk gets sequential start/end boundaries based on *end_times*.
+    """
+    chunks = []
+    prev = 0.0
+    for end in end_times:
+        chunks.append({"metadata": {"start_sec": prev, "end_sec": end}})
+        prev = end
+    return json.dumps({"metadata": {"strategy": "whisper"}, "chunks": chunks})
 
 
 def _make_mapping(
@@ -880,16 +886,7 @@ class TestContentValidationLevel2:
     @pytest.mark.asyncio
     async def test_multi_chunk_video_uses_max_end_sec(self) -> None:
         """Duration extracted as max(end_sec) across multiple chunks."""
-        multi_chunk = json.dumps(
-            {
-                "metadata": {"strategy": "whisper"},
-                "chunks": [
-                    {"metadata": {"start_sec": 0.0, "end_sec": 120.0}},
-                    {"metadata": {"start_sec": 120.0, "end_sec": 300.0}},
-                    {"metadata": {"start_sec": 300.0, "end_sec": 600.0}},
-                ],
-            }
-        )
+        multi_chunk = _multi_chunk_video_content([120.0, 300.0, 600.0])
         pres = _make_entry_mock(
             entry_id=PRES_ID,
             node_id=NODE_ID,

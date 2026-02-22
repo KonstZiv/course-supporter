@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from course_supporter.models.course import SlideVideoMapEntry
+from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
 
 # --- Course ---
@@ -62,6 +63,43 @@ class CourseListResponse(BaseModel):
 # --- Slide-Video Mapping ---
 
 
+class ValidationState(StrEnum):
+    """Validation state for slide-video mappings (API-layer enum)."""
+
+    VALIDATED = "validated"
+    PENDING_VALIDATION = "pending_validation"
+    VALIDATION_FAILED = "validation_failed"
+
+
+class BlockingFactorResponse(BaseModel):
+    """Reason why validation was deferred for a material entry."""
+
+    type: str = Field(description="Blocking reason type, e.g. ``material_not_ready``.")
+    material_entry_id: str = Field(
+        description="UUID of the material entry that is not yet ready."
+    )
+    filename: str | None = Field(
+        description="Original filename of the blocking material, if available."
+    )
+    material_state: str = Field(
+        description="Current state of the blocking material entry."
+    )
+    message: str = Field(description="Human-readable explanation.")
+    blocked_checks: list[str] = Field(
+        description="List of validation checks that were skipped."
+    )
+
+
+class ValidationErrorResponse(BaseModel):
+    """Single validation error with optional hint for fixing it."""
+
+    field: str = Field(description="Name of the field that failed validation.")
+    message: str = Field(description="What went wrong.")
+    hint: str | None = Field(
+        default=None, description="Suggested action to fix the error."
+    )
+
+
 class SlideVideoMapRequest(BaseModel):
     """Request body for POST /courses/{id}/nodes/{node_id}/slide-mapping."""
 
@@ -69,23 +107,97 @@ class SlideVideoMapRequest(BaseModel):
 
 
 class SlideVideoMapItemResponse(BaseModel):
-    """Single slide-video mapping in response."""
+    """Single slide-video mapping.
+
+    Links a presentation slide to a video timecode range.
+    Each mapping identifies a specific slide by number within a presentation
+    and the corresponding time range in a video where that slide is discussed.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: uuid.UUID
-    node_id: uuid.UUID
-    presentation_entry_id: uuid.UUID
-    video_entry_id: uuid.UUID
-    slide_number: int
-    video_timecode_start: str
-    video_timecode_end: str | None
-    order: int
-    validation_state: str
-    blocking_factors: list[dict[str, object]] | None
-    validation_errors: list[dict[str, object]] | None
-    validated_at: datetime | None
-    created_at: datetime
+    id: uuid.UUID = Field(description="Unique mapping identifier (UUIDv7).")
+    node_id: uuid.UUID = Field(
+        description="Material tree node this mapping belongs to."
+    )
+    presentation_entry_id: uuid.UUID = Field(
+        description="MaterialEntry ID of the presentation (PDF/PPTX)."
+    )
+    video_entry_id: uuid.UUID = Field(
+        description="MaterialEntry ID of the video recording."
+    )
+    slide_number: int = Field(
+        ge=1,
+        description=(
+            "1-based slide number within the presentation. "
+            "Valid range depends on the actual number of slides in the file."
+        ),
+    )
+    video_timecode_start: str = Field(
+        pattern=TIMECODE_RE,
+        description=(
+            "Start timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
+            "Indicates when discussion of this slide begins."
+        ),
+    )
+    video_timecode_end: str | None = Field(
+        default=None,
+        pattern=TIMECODE_RE,
+        description=(
+            "End timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
+            "``null`` if the slide extends to the next mapping or end of video."
+        ),
+    )
+    order: int = Field(description="0-based position within this node's mapping list.")
+    validation_state: ValidationState = Field(
+        description="Current validation status of this mapping.",
+    )
+    blocking_factors: list[BlockingFactorResponse] | None = Field(
+        default=None,
+        description=(
+            "Present only when ``validation_state`` is ``pending_validation``."
+        ),
+    )
+    validation_errors: list[ValidationErrorResponse] | None = Field(
+        default=None,
+        description=(
+            "Present only when ``validation_state`` is ``validation_failed``."
+        ),
+    )
+    validated_at: datetime | None = Field(
+        description=(
+            "Timestamp of successful validation. "
+            "``null`` if not yet validated or validation failed."
+        ),
+    )
+    created_at: datetime = Field(description="When this mapping was created.")
+
+
+class SlideVideoMapListResponse(BaseModel):
+    """List of slide-video mappings for a material tree node.
+
+    Each mapping links a specific slide (by number) in a presentation
+    to a timecode range in a video. Returned sorted by ``order``
+    (ascending, 0-based). An empty ``items`` list (with ``total: 0``)
+    is returned when the node has no mappings — this is not an error.
+
+    .. note::
+
+        Currently returns **all** mappings for the node (no pagination).
+        ``limit`` / ``offset`` query parameters and a separate ``count``
+        query will be added when pagination is needed.
+    """
+
+    items: list[SlideVideoMapItemResponse] = Field(
+        description="Mappings ordered by ``order`` (0-based)."
+    )
+    total: int = Field(
+        description=(
+            "Total number of mappings for this node. Currently equals "
+            "``len(items)``; will reflect the full count once pagination "
+            "is introduced."
+        ),
+    )
 
 
 class RejectedMappingResponse(BaseModel):

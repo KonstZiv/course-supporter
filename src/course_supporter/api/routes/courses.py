@@ -23,6 +23,7 @@ from course_supporter.api.schemas import (
     RejectedMappingResponse,
     SkippedMappingResponse,
     SlideVideoMapItemResponse,
+    SlideVideoMapListResponse,
     SlideVideoMapRequest,
     SlideVideoMapResponse,
 )
@@ -289,6 +290,91 @@ async def create_slide_mapping(
         rejected=rejected,
         hints=hints,
     )
+
+
+@router.get("/courses/{course_id}/nodes/{node_id}/slide-mapping")
+async def list_slide_mappings(
+    course_id: uuid.UUID,
+    node_id: uuid.UUID,
+    tenant: SharedDep,
+    session: SessionDep,
+) -> SlideVideoMapListResponse:
+    """List all slide-video mappings for a material tree node.
+
+    Returns mappings sorted by ``order`` (ascending, 0-based).
+    An empty list is returned when the node has no mappings (not a 404).
+
+    **HTTP status codes:**
+
+    - ``200`` — success (may contain zero or more items).
+    - ``404`` — course or node not found.
+
+    .. note::
+
+        Currently returns all mappings without pagination.
+        ``limit`` / ``offset`` parameters will be added in a future version.
+    """
+    course_repo = CourseRepository(session, tenant.tenant_id)
+    course = await course_repo.get_by_id(course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    node_repo = MaterialNodeRepository(session)
+    node = await node_repo.get_by_id(node_id)
+    if node is None or node.course_id != course.id:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    svm_repo = SlideVideoMappingRepository(session)
+    # TODO: add limit/offset params and a separate count() query for pagination
+    mappings = await svm_repo.get_by_node_id(node_id)
+    return SlideVideoMapListResponse(
+        items=[SlideVideoMapItemResponse.model_validate(m) for m in mappings],
+        total=len(mappings),
+    )
+
+
+@router.delete("/courses/{course_id}/slide-mapping/{mapping_id}", status_code=204)
+async def delete_slide_mapping(
+    course_id: uuid.UUID,
+    mapping_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> None:
+    """Delete a single slide-video mapping.
+
+    This operation is **irreversible**. The mapping is permanently removed.
+
+    **Ownership verification:** the mapping must belong to a node
+    within the specified course. Returns 404 if the course, mapping,
+    or ownership chain is invalid.
+
+    **HTTP status codes:**
+
+    - ``204`` — mapping deleted successfully (no body).
+    - ``404`` — course not found, mapping not found, or mapping
+      belongs to a node in a different course.
+    """
+    course_repo = CourseRepository(session, tenant.tenant_id)
+    course = await course_repo.get_by_id(course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    svm_repo = SlideVideoMappingRepository(session)
+    mapping = await svm_repo.get_by_id(mapping_id)
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+
+    # Ownership: mapping → node → course
+    node_repo = MaterialNodeRepository(session)
+    node = await node_repo.get_by_id(mapping.node_id)
+    if node is None or node.course_id != course.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Mapping not found in this course",
+        )
+
+    await svm_repo.delete(mapping)
+    await session.commit()
 
 
 @router.get("/courses/{course_id}/lessons/{lesson_id}")

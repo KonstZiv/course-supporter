@@ -246,6 +246,15 @@ class SlideVideoMappingRepository:
             )
         ]
 
+    async def get_by_id(self, mapping_id: uuid.UUID) -> SlideVideoMapping | None:
+        """Get a single mapping by primary key."""
+        return await self._session.get(SlideVideoMapping, mapping_id)
+
+    async def delete(self, mapping: SlideVideoMapping) -> None:
+        """Delete a mapping object directly."""
+        await self._session.delete(mapping)
+        await self._session.flush()
+
     async def get_by_node_id(self, node_id: uuid.UUID) -> list[SlideVideoMapping]:
         """Get all slide-video mappings for a material node.
 

@@ -462,6 +462,174 @@ class TestSlideVideoMappingAPI:
         assert "presentation_entry_id" in mapping
 
 
+class TestListSlideMapping:
+    """Tests for GET /courses/{id}/nodes/{node_id}/slide-mapping."""
+
+    @pytest.mark.asyncio
+    async def test_list_returns_200_with_mappings(self, client: AsyncClient) -> None:
+        """Happy path — returns mappings list."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        mock_node = MagicMock()
+        mock_node.course_id = course_id
+        records = [
+            _make_svm_mock(slide_number=1, node_id=node_id),
+            _make_svm_mock(slide_number=2, node_id=node_id),
+        ]
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(
+                SlideVideoMappingRepository, "get_by_node_id", return_value=records
+            ),
+        ):
+            response = await client.get(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["items"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_list_returns_empty_list(self, client: AsyncClient) -> None:
+        """Node with no mappings → 200, items=[], total=0."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        mock_node = MagicMock()
+        mock_node.course_id = course_id
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(
+                SlideVideoMappingRepository, "get_by_node_id", return_value=[]
+            ),
+        ):
+            response = await client.get(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_course_not_found_returns_404(self, client: AsyncClient) -> None:
+        """GET slide-mapping returns 404 for missing course."""
+        with patch.object(CourseRepository, "get_by_id", return_value=None):
+            response = await client.get(
+                f"/api/v1/courses/{uuid.uuid4()}/nodes/{uuid.uuid4()}/slide-mapping",
+            )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Course not found"
+
+    @pytest.mark.asyncio
+    async def test_list_node_not_found_returns_404(self, client: AsyncClient) -> None:
+        """GET slide-mapping returns 404 for missing node."""
+        course_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=None),
+        ):
+            response = await client.get(
+                f"/api/v1/courses/{course_id}/nodes/{uuid.uuid4()}/slide-mapping",
+            )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Node not found"
+
+
+class TestDeleteSlideMapping:
+    """Tests for DELETE /courses/{id}/slide-mapping/{mapping_id}."""
+
+    @pytest.mark.asyncio
+    async def test_delete_returns_204(self, client: AsyncClient) -> None:
+        """Happy path — mapping deleted."""
+        course_id = uuid.uuid4()
+        mapping_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        mock_mapping = MagicMock()
+        mock_mapping.node_id = node_id
+        mock_node = MagicMock()
+        mock_node.course_id = course_id
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(
+                SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
+            ),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(SlideVideoMappingRepository, "delete", return_value=None),
+        ):
+            response = await client.delete(
+                f"/api/v1/courses/{course_id}/slide-mapping/{mapping_id}",
+            )
+        assert response.status_code == 204
+
+    @pytest.mark.asyncio
+    async def test_delete_course_not_found_returns_404(
+        self, client: AsyncClient
+    ) -> None:
+        """DELETE returns 404 for missing course."""
+        with patch.object(CourseRepository, "get_by_id", return_value=None):
+            response = await client.delete(
+                f"/api/v1/courses/{uuid.uuid4()}/slide-mapping/{uuid.uuid4()}",
+            )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Course not found"
+
+    @pytest.mark.asyncio
+    async def test_delete_mapping_not_found_returns_404(
+        self, client: AsyncClient
+    ) -> None:
+        """DELETE returns 404 for missing mapping."""
+        course_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(SlideVideoMappingRepository, "get_by_id", return_value=None),
+        ):
+            response = await client.delete(
+                f"/api/v1/courses/{course_id}/slide-mapping/{uuid.uuid4()}",
+            )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Mapping not found"
+
+    @pytest.mark.asyncio
+    async def test_delete_mapping_wrong_course_returns_404(
+        self, client: AsyncClient
+    ) -> None:
+        """DELETE returns 404 when mapping belongs to node in another course."""
+        course_id = uuid.uuid4()
+        mapping_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        mock_mapping = MagicMock()
+        mock_mapping.node_id = node_id
+        mock_node = MagicMock()
+        mock_node.course_id = uuid.uuid4()  # different course
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(
+                SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
+            ),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+        ):
+            response = await client.delete(
+                f"/api/v1/courses/{course_id}/slide-mapping/{mapping_id}",
+            )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Mapping not found in this course"
+
+
 class TestSlideVideoMappingRepository:
     @pytest.mark.asyncio
     async def test_batch_create_adds_records(self, mock_session: AsyncMock) -> None:
@@ -497,7 +665,7 @@ class TestSlideVideoMappingRepository:
             SlideVideoMapEntry(
                 presentation_entry_id=str(pres_id),
                 video_entry_id=str(vid_id),
-                slide_number=i,
+                slide_number=i + 1,
                 video_timecode_start=f"00:0{i}:00",
             )
             for i in range(3)
@@ -505,6 +673,34 @@ class TestSlideVideoMappingRepository:
         repo = SlideVideoMappingRepository(mock_session)
         records = await repo.batch_create(uuid.uuid4(), mappings)
         assert [r.order for r in records] == [0, 1, 2]
+
+    @pytest.mark.asyncio
+    async def test_get_by_id_returns_mapping(self, mock_session: AsyncMock) -> None:
+        """get_by_id() returns mapping when found."""
+        mapping_id = uuid.uuid4()
+        mock_mapping = _make_svm_mock()
+        mock_session.get.return_value = mock_mapping
+        repo = SlideVideoMappingRepository(mock_session)
+        result = await repo.get_by_id(mapping_id)
+        assert result is mock_mapping
+        mock_session.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_by_id_returns_none(self, mock_session: AsyncMock) -> None:
+        """get_by_id() returns None when not found."""
+        mock_session.get.return_value = None
+        repo = SlideVideoMappingRepository(mock_session)
+        result = await repo.get_by_id(uuid.uuid4())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_mapping(self, mock_session: AsyncMock) -> None:
+        """delete() removes mapping and flushes."""
+        mock_mapping = _make_svm_mock()
+        repo = SlideVideoMappingRepository(mock_session)
+        await repo.delete(mock_mapping)
+        mock_session.delete.assert_awaited_once_with(mock_mapping)
+        mock_session.flush.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_get_by_node_id_returns_list(self, mock_session: AsyncMock) -> None:

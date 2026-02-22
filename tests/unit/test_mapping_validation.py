@@ -80,7 +80,10 @@ def _make_mapping(
     tc_start: str = "01:23:45",
     tc_end: str | None = "01:30:00",
 ) -> SlideVideoMapEntry:
-    return SlideVideoMapEntry(
+    # Use model_construct to bypass Pydantic pattern validation
+    # so that L1 validation tests can pass intentionally invalid
+    # timecodes to the MappingValidationService.
+    return SlideVideoMapEntry.model_construct(
         presentation_entry_id=str(pres_id),
         video_entry_id=str(vid_id),
         slide_number=slide_number,

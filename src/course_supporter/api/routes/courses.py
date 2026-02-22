@@ -35,6 +35,7 @@ from course_supporter.storage.mapping_validation import (
     MappingValidationError,
     MappingValidationResult,
     MappingValidationService,
+    timecode_to_seconds,
 )
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import MappingValidationState, SlideVideoMapping
@@ -205,12 +206,12 @@ async def create_slide_mapping(
     # ── Deduplication — natural key check ──
     svm_repo = SlideVideoMappingRepository(session)
     existing = await svm_repo.get_by_node_id(node_id)
-    existing_keys: set[tuple[str, str, int, str]] = {
+    existing_keys: set[tuple[str, str, int, int]] = {
         (
             str(m.presentation_entry_id),
             str(m.video_entry_id),
             m.slide_number,
-            m.video_timecode_start,
+            timecode_to_seconds(m.video_timecode_start),
         )
         for m in existing
     }
@@ -235,7 +236,7 @@ async def create_slide_mapping(
             str(mapping.presentation_entry_id),
             str(mapping.video_entry_id),
             mapping.slide_number,
-            mapping.video_timecode_start,
+            timecode_to_seconds(mapping.video_timecode_start),
         )
         if natural_key in existing_keys:
             skipped_items.append(

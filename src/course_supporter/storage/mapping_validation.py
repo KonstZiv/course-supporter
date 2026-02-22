@@ -87,6 +87,10 @@ def _timecode_to_seconds(tc: str) -> int:
     return int(parts[0]) * 60 + int(parts[1])
 
 
+# Public alias for use in route-level dedup (natural key normalization).
+timecode_to_seconds = _timecode_to_seconds
+
+
 def _parse_uuid(value: str) -> uuid.UUID | None:
     """Parse a string as UUID, returning None on invalid format."""
     try:

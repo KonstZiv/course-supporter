@@ -344,18 +344,14 @@ class MappingValidationService:
         )
         vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
 
-        def _check_readiness(entry_uuid: uuid.UUID | None, checks: list[str]) -> bool:
-            if entry_uuid is None:
-                return False
-            entry = entries_by_id.get(entry_uuid)
-            if entry is not None and entry.state != MaterialState.READY:
-                blockers.append(self._make_blocker(entry, checks))
-                return False
-            return True
-
-        pres_ready = _check_readiness(pres_uuid, ["slide_number"])
-        vid_ready = _check_readiness(
-            vid_uuid, ["video_timecode_start", "video_timecode_end"]
+        pres_ready = self._check_readiness(
+            pres_uuid, ["slide_number"], entries_by_id, blockers
+        )
+        vid_ready = self._check_readiness(
+            vid_uuid,
+            ["video_timecode_start", "video_timecode_end"],
+            entries_by_id,
+            blockers,
         )
 
         # ── Level 2: Content validation (only for READY entries) ──
@@ -394,6 +390,25 @@ class MappingValidationService:
         return errors, blockers
 
     # ── Private helpers ──
+
+    def _check_readiness(
+        self,
+        entry_uuid: uuid.UUID | None,
+        checks: list[str],
+        entries_by_id: dict[uuid.UUID, MaterialEntry],
+        blockers: list[MappingBlockingFactor],
+    ) -> bool:
+        """Check if an entry is READY; append a blocker if not.
+
+        Returns True when the entry exists and is READY (L2 can proceed).
+        """
+        if entry_uuid is None:
+            return False
+        entry = entries_by_id.get(entry_uuid)
+        if entry is not None and entry.state != MaterialState.READY:
+            blockers.append(self._make_blocker(entry, checks))
+            return False
+        return True
 
     @staticmethod
     def _make_blocker(

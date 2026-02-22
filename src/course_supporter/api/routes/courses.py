@@ -8,7 +8,7 @@ from typing import Annotated
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
@@ -20,6 +20,8 @@ from course_supporter.api.schemas import (
     LessonDetailResponse,
     MaterialCreateResponse,
     NodeWithMaterialsResponse,
+    RejectedMappingResponse,
+    SkippedMappingResponse,
     SlideVideoMapItemResponse,
     SlideVideoMapRequest,
     SlideVideoMapResponse,
@@ -27,13 +29,15 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.models.course import SlideVideoMapEntry
 from course_supporter.models.source import SourceType
 from course_supporter.storage.mapping_validation import (
     MappingValidationError,
+    MappingValidationResult,
     MappingValidationService,
 )
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import MappingValidationState
+from course_supporter.storage.orm import MappingValidationState, SlideVideoMapping
 from course_supporter.storage.repositories import (
     CourseRepository,
     LessonRepository,
@@ -172,8 +176,18 @@ async def create_slide_mapping(
     body: SlideVideoMapRequest,
     tenant: PrepDep,
     session: SessionDep,
+    response: Response,
 ) -> SlideVideoMapResponse:
-    """Create slide-video mappings for a material node."""
+    """Create slide-video mappings for a material node.
+
+    Supports partial success: valid mappings are created even when some
+    fail validation. Duplicate mappings (same natural key) are skipped.
+
+    Returns:
+        201 — all created (or only skipped duplicates, none rejected).
+        207 — partial success (some created, some rejected).
+        422 — all failed (none created, all rejected).
+    """
     course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)
     if course is None:
@@ -188,26 +202,89 @@ async def create_slide_mapping(
     validator = MappingValidationService(session)
     results = await validator.validate_batch(node_id, body.mappings)
 
-    failed = [
-        r for r in results if r.status == MappingValidationState.VALIDATION_FAILED
-    ]
-    if failed:
-        raise HTTPException(
-            status_code=422,
-            detail=[
-                {"index": r.index, "errors": [_ve_to_dict(e) for e in r.errors]}
-                for r in failed
-            ],
-        )
-
+    # ── Deduplication — natural key check ──
     svm_repo = SlideVideoMappingRepository(session)
-    records = await svm_repo.batch_create(
-        node_id, body.mappings, validation_results=results
-    )
-    await session.commit()
+    existing = await svm_repo.get_by_node_id(node_id)
+    existing_keys: set[tuple[str, str, int, str]] = {
+        (
+            str(m.presentation_entry_id),
+            str(m.video_entry_id),
+            m.slide_number,
+            m.video_timecode_start,
+        )
+        for m in existing
+    }
+
+    # ── Classify each mapping ──
+    rejected: list[RejectedMappingResponse] = []
+    skipped_items: list[SkippedMappingResponse] = []
+    creatable_mappings: list[SlideVideoMapEntry] = []
+    creatable_results: list[MappingValidationResult] = []
+
+    for idx, (mapping, vr) in enumerate(zip(body.mappings, results, strict=True)):
+        if vr.status == MappingValidationState.VALIDATION_FAILED:
+            rejected.append(
+                RejectedMappingResponse(
+                    index=idx,
+                    errors=[_ve_to_dict(e) for e in vr.errors],
+                )
+            )
+            continue
+
+        natural_key = (
+            mapping.presentation_entry_id,
+            mapping.video_entry_id,
+            mapping.slide_number,
+            mapping.video_timecode_start,
+        )
+        if natural_key in existing_keys:
+            skipped_items.append(
+                SkippedMappingResponse(index=idx, hint="already exists")
+            )
+            continue
+
+        # Re-index validation result for the creatable list
+        creatable_results.append(
+            MappingValidationResult(
+                index=len(creatable_mappings),
+                status=vr.status,
+                errors=vr.errors,
+                blocking_factors=vr.blocking_factors,
+            )
+        )
+        creatable_mappings.append(mapping)
+
+    # ── Create + respond ──
+    records: list[SlideVideoMapping] = []
+    if creatable_mappings:
+        records = await svm_repo.batch_create(
+            node_id, creatable_mappings, validation_results=creatable_results
+        )
+        await session.commit()
+
+    # ── HTTP status code ──
+    if not records and rejected:
+        response.status_code = 422
+    elif records and rejected:
+        response.status_code = 207
+
+    # ── Hints ──
+    hints: dict[str, str] = {}
+    if rejected:
+        hints["resubmit"] = (
+            "Fix errors in rejected items and resubmit only those. "
+            "Already created mappings will be automatically skipped."
+        )
+        hints["batch_size"] = "If the batch keeps failing, try reducing batch size."
+
     return SlideVideoMapResponse(
         created=len(records),
+        skipped=len(skipped_items),
+        failed=len(rejected),
         mappings=[SlideVideoMapItemResponse.model_validate(r) for r in records],
+        skipped_items=skipped_items,
+        rejected=rejected,
+        hints=hints,
     )
 
 

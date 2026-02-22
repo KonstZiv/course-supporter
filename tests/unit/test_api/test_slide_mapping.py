@@ -12,8 +12,13 @@ from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.models.course import SlideVideoMapEntry
 from course_supporter.storage.database import get_session
-from course_supporter.storage.mapping_validation import MappingValidationService
+from course_supporter.storage.mapping_validation import (
+    MappingValidationError,
+    MappingValidationResult,
+    MappingValidationService,
+)
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
+from course_supporter.storage.orm import MappingValidationState
 from course_supporter.storage.repositories import (
     CourseRepository,
     SlideVideoMappingRepository,
@@ -74,40 +79,98 @@ async def client(mock_session: AsyncMock) -> AsyncClient:
 
 
 def _make_mapping_payload(
-    pres_id: uuid.UUID | None = None, vid_id: uuid.UUID | None = None
+    pres_id: uuid.UUID | None = None,
+    vid_id: uuid.UUID | None = None,
+    slide_number: int = 3,
+    tc_start: str = "00:05:30",
 ) -> dict[str, object]:
     """Build a single mapping payload dict."""
     return {
         "presentation_entry_id": str(pres_id or uuid.uuid4()),
         "video_entry_id": str(vid_id or uuid.uuid4()),
-        "slide_number": 3,
-        "video_timecode_start": "00:05:30",
+        "slide_number": slide_number,
+        "video_timecode_start": tc_start,
         "video_timecode_end": "00:08:15",
     }
 
 
+def _validated_result(index: int) -> MappingValidationResult:
+    """Build a VALIDATED result for a given index."""
+    return MappingValidationResult(
+        index=index,
+        status=MappingValidationState.VALIDATED,
+        errors=[],
+        blocking_factors=[],
+    )
+
+
+def _failed_result(index: int) -> MappingValidationResult:
+    """Build a VALIDATION_FAILED result for a given index."""
+    return MappingValidationResult(
+        index=index,
+        status=MappingValidationState.VALIDATION_FAILED,
+        errors=[
+            MappingValidationError(
+                field="presentation_entry_id",
+                message="Entry not found",
+                hint="Check that the entry ID is correct",
+            ),
+        ],
+        blocking_factors=[],
+    )
+
+
+def _route_patches(
+    course_id: uuid.UUID,
+    node_id: uuid.UUID,
+    validation_results: list[MappingValidationResult],
+    batch_create_records: list[MagicMock],
+    existing_mappings: list[MagicMock] | None = None,
+):
+    """Context manager with all common patches for the slide-mapping route."""
+    mock_course = MagicMock()
+    mock_course.id = course_id
+    mock_node = MagicMock()
+    mock_node.course_id = course_id
+
+    return (
+        patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+        patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+        patch.object(
+            MappingValidationService,
+            "validate_batch",
+            return_value=validation_results,
+        ),
+        patch.object(
+            SlideVideoMappingRepository,
+            "get_by_node_id",
+            return_value=existing_mappings or [],
+        ),
+        patch.object(
+            SlideVideoMappingRepository,
+            "batch_create",
+            return_value=batch_create_records,
+        ),
+    )
+
+
 class TestSlideVideoMappingAPI:
     @pytest.mark.asyncio
-    async def test_create_slide_mapping_returns_201(self, client: AsyncClient) -> None:
-        """POST /courses/{id}/nodes/{node_id}/slide-mapping returns 201."""
+    async def test_full_success_returns_201(self, client: AsyncClient) -> None:
+        """All mappings valid → 201, failed=0, skipped=0."""
         course_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        mock_node = MagicMock()
-        mock_node.course_id = course_id
         records = [
             _make_svm_mock(slide_number=1, node_id=node_id),
             _make_svm_mock(slide_number=2, node_id=node_id),
         ]
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
-            patch.object(MappingValidationService, "validate_batch", return_value=[]),
-            patch.object(
-                SlideVideoMappingRepository, "batch_create", return_value=records
-            ),
-        ):
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0), _validated_result(1)],
+            records,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
             response = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
@@ -115,7 +178,203 @@ class TestSlideVideoMappingAPI:
         assert response.status_code == 201
         data = response.json()
         assert data["created"] == 2
+        assert data["skipped"] == 0
+        assert data["failed"] == 0
         assert len(data["mappings"]) == 2
+        assert data["rejected"] == []
+        assert data["skipped_items"] == []
+        assert data["hints"] == {}
+
+    @pytest.mark.asyncio
+    async def test_partial_success_returns_207(self, client: AsyncClient) -> None:
+        """Some created, some rejected → 207."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        records = [_make_svm_mock(slide_number=1, node_id=node_id)]
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0), _failed_result(1)],
+            records,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
+            )
+        assert response.status_code == 207
+        data = response.json()
+        assert data["created"] == 1
+        assert data["failed"] == 1
+        assert len(data["rejected"]) == 1
+        assert data["rejected"][0]["index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_all_failed_returns_422(self, client: AsyncClient) -> None:
+        """All invalid → 422."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_failed_result(0), _failed_result(1)],
+            [],  # no records created
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
+            )
+        assert response.status_code == 422
+        data = response.json()
+        assert data["created"] == 0
+        assert data["failed"] == 2
+
+    @pytest.mark.asyncio
+    async def test_duplicate_skipped_returns_201(self, client: AsyncClient) -> None:
+        """Duplicate submit → skipped=N, 201."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        pres_id = uuid.uuid4()
+        vid_id = uuid.uuid4()
+        existing = _make_svm_mock(node_id=node_id, pres_id=pres_id, vid_id=vid_id)
+        existing.slide_number = 3
+        existing.video_timecode_start = "00:05:30"
+
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0)],
+            [],  # nothing created
+            existing_mappings=[existing],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={
+                    "mappings": [_make_mapping_payload(pres_id=pres_id, vid_id=vid_id)]
+                },
+            )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["created"] == 0
+        assert data["skipped"] == 1
+        assert data["failed"] == 0
+        assert data["skipped_items"][0]["hint"] == "already exists"
+
+    @pytest.mark.asyncio
+    async def test_mixed_duplicate_and_new(self, client: AsyncClient) -> None:
+        """Mix of new and duplicate → correct counts."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        pres_id = uuid.uuid4()
+        vid_id = uuid.uuid4()
+        existing = _make_svm_mock(node_id=node_id, pres_id=pres_id, vid_id=vid_id)
+        existing.slide_number = 3
+        existing.video_timecode_start = "00:05:30"
+
+        new_record = _make_svm_mock(slide_number=4, node_id=node_id)
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0), _validated_result(1)],
+            [new_record],
+            existing_mappings=[existing],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={
+                    "mappings": [
+                        _make_mapping_payload(pres_id=pres_id, vid_id=vid_id),
+                        _make_mapping_payload(slide_number=4, tc_start="00:10:00"),
+                    ]
+                },
+            )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["created"] == 1
+        assert data["skipped"] == 1
+        assert data["failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_with_skipped_and_rejected(self, client: AsyncClient) -> None:
+        """Created + skipped + rejected → 207."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        pres_id = uuid.uuid4()
+        vid_id = uuid.uuid4()
+        existing = _make_svm_mock(node_id=node_id, pres_id=pres_id, vid_id=vid_id)
+        existing.slide_number = 3
+        existing.video_timecode_start = "00:05:30"
+
+        new_record = _make_svm_mock(slide_number=4, node_id=node_id)
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0), _validated_result(1), _failed_result(2)],
+            [new_record],
+            existing_mappings=[existing],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={
+                    "mappings": [
+                        _make_mapping_payload(pres_id=pres_id, vid_id=vid_id),
+                        _make_mapping_payload(slide_number=4, tc_start="00:10:00"),
+                        _make_mapping_payload(),
+                    ]
+                },
+            )
+        assert response.status_code == 207
+        data = response.json()
+        assert data["created"] == 1
+        assert data["skipped"] == 1
+        assert data["failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_response_includes_hints_on_failure(
+        self, client: AsyncClient
+    ) -> None:
+        """Hints present when rejected > 0."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        records = [_make_svm_mock(node_id=node_id)]
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0), _failed_result(1)],
+            records,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
+            )
+        data = response.json()
+        assert "resubmit" in data["hints"]
+        assert "batch_size" in data["hints"]
+
+    @pytest.mark.asyncio
+    async def test_response_no_hints_on_full_success(self, client: AsyncClient) -> None:
+        """Hints empty when full success."""
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        records = [_make_svm_mock(node_id=node_id)]
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0)],
+            records,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={"mappings": [_make_mapping_payload()]},
+            )
+        data = response.json()
+        assert data["hints"] == {}
 
     @pytest.mark.asyncio
     async def test_create_slide_mapping_course_not_found(
@@ -184,20 +443,15 @@ class TestSlideVideoMappingAPI:
         """Response mappings include validation_state field."""
         course_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        mock_node = MagicMock()
-        mock_node.course_id = course_id
         record = _make_svm_mock(node_id=node_id)
         record.validation_state = "validated"
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
-            patch.object(MappingValidationService, "validate_batch", return_value=[]),
-            patch.object(
-                SlideVideoMappingRepository, "batch_create", return_value=[record]
-            ),
-        ):
+        patches = _route_patches(
+            course_id,
+            node_id,
+            [_validated_result(0)],
+            [record],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
             response = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload()]},
@@ -280,13 +534,9 @@ class TestMappingValidationState:
     """Tests for the MappingValidationState enum."""
 
     def test_enum_values(self) -> None:
-        from course_supporter.storage.orm import MappingValidationState
-
         assert MappingValidationState.VALIDATED == "validated"
         assert MappingValidationState.PENDING_VALIDATION == "pending_validation"
         assert MappingValidationState.VALIDATION_FAILED == "validation_failed"
 
     def test_enum_is_str(self) -> None:
-        from course_supporter.storage.orm import MappingValidationState
-
         assert isinstance(MappingValidationState.VALIDATED, str)

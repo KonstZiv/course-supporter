@@ -88,11 +88,30 @@ class SlideVideoMapItemResponse(BaseModel):
     created_at: datetime
 
 
+class RejectedMappingResponse(BaseModel):
+    """Single rejected mapping with errors and hints."""
+
+    index: int
+    errors: list[dict[str, str | None]]
+
+
+class SkippedMappingResponse(BaseModel):
+    """Duplicate mapping that was skipped."""
+
+    index: int
+    hint: str
+
+
 class SlideVideoMapResponse(BaseModel):
-    """Response for slide-video mapping creation."""
+    """Response for slide-video mapping batch creation."""
 
     created: int
+    skipped: int
+    failed: int
     mappings: list[SlideVideoMapItemResponse]
+    skipped_items: list[SkippedMappingResponse]
+    rejected: list[RejectedMappingResponse]
+    hints: dict[str, str]
 
 
 # --- Course Detail (nested) ---

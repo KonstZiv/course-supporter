@@ -1062,7 +1062,7 @@ class TestDeferredValidationLevel3:
 
 
 class TestRouteReturns422OnValidationError:
-    """Integration test: route returns 422 when structural validation fails."""
+    """Integration test: route returns 422 only when ALL mappings fail."""
 
     @pytest.fixture()
     def mock_session(self) -> AsyncMock:
@@ -1082,14 +1082,15 @@ class TestRouteReturns422OnValidationError:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_route_returns_422_on_validation_error(
-        self, client: AsyncClient
-    ) -> None:
-        """POST slide-mapping returns 422 when validation fails."""
+    async def test_route_returns_422_when_all_fail(self, client: AsyncClient) -> None:
+        """POST slide-mapping returns 422 when ALL mappings fail validation."""
         from course_supporter.storage.material_node_repository import (
             MaterialNodeRepository,
         )
-        from course_supporter.storage.repositories import CourseRepository
+        from course_supporter.storage.repositories import (
+            CourseRepository,
+            SlideVideoMappingRepository,
+        )
 
         course_id = uuid.uuid4()
         node_id = uuid.uuid4()
@@ -1118,6 +1119,11 @@ class TestRouteReturns422OnValidationError:
                 "validate_batch",
                 return_value=[failed_result],
             ),
+            patch.object(
+                SlideVideoMappingRepository,
+                "get_by_node_id",
+                return_value=[],
+            ),
         ):
             response = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
@@ -1134,11 +1140,112 @@ class TestRouteReturns422OnValidationError:
             )
 
         assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert isinstance(detail, list)
-        assert detail[0]["index"] == 0
-        assert detail[0]["errors"][0]["field"] == "presentation_entry_id"
-        assert detail[0]["errors"][0]["hint"] is not None
+        data = response.json()
+        assert data["created"] == 0
+        assert data["failed"] == 1
+        assert len(data["rejected"]) == 1
+        assert data["rejected"][0]["index"] == 0
+        assert data["rejected"][0]["errors"][0]["field"] == "presentation_entry_id"
+
+    @pytest.mark.asyncio
+    async def test_route_returns_207_on_partial_failure(
+        self, client: AsyncClient
+    ) -> None:
+        """POST slide-mapping returns 207 (not 422) when SOME mappings fail."""
+        from course_supporter.storage.material_node_repository import (
+            MaterialNodeRepository,
+        )
+        from course_supporter.storage.repositories import (
+            CourseRepository,
+            SlideVideoMappingRepository,
+        )
+
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_course = MagicMock()
+        mock_course.id = course_id
+        mock_node = MagicMock()
+        mock_node.course_id = course_id
+
+        ok_result = MappingValidationResult(
+            index=0,
+            status=MappingValidationState.VALIDATED,
+            errors=[],
+            blocking_factors=[],
+        )
+        failed_result = MappingValidationResult(
+            index=1,
+            status=MappingValidationState.VALIDATION_FAILED,
+            errors=[
+                MappingValidationError(
+                    field="presentation_entry_id",
+                    message="not found",
+                    hint="check id",
+                )
+            ],
+            blocking_factors=[],
+        )
+
+        svm_record = MagicMock()
+        svm_record.id = uuid.uuid4()
+        svm_record.node_id = node_id
+        svm_record.presentation_entry_id = uuid.uuid4()
+        svm_record.video_entry_id = uuid.uuid4()
+        svm_record.slide_number = 1
+        svm_record.video_timecode_start = "00:05:00"
+        svm_record.video_timecode_end = None
+        svm_record.order = 0
+        svm_record.validation_state = "validated"
+        svm_record.blocking_factors = None
+        svm_record.validation_errors = None
+        svm_record.validated_at = None
+        from datetime import UTC, datetime
+
+        svm_record.created_at = datetime.now(UTC)
+
+        with (
+            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(
+                MappingValidationService,
+                "validate_batch",
+                return_value=[ok_result, failed_result],
+            ),
+            patch.object(
+                SlideVideoMappingRepository,
+                "get_by_node_id",
+                return_value=[],
+            ),
+            patch.object(
+                SlideVideoMappingRepository,
+                "batch_create",
+                return_value=[svm_record],
+            ),
+        ):
+            response = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                json={
+                    "mappings": [
+                        {
+                            "presentation_entry_id": str(uuid.uuid4()),
+                            "video_entry_id": str(uuid.uuid4()),
+                            "slide_number": 1,
+                            "video_timecode_start": "00:05:00",
+                        },
+                        {
+                            "presentation_entry_id": str(uuid.uuid4()),
+                            "video_entry_id": str(uuid.uuid4()),
+                            "slide_number": 2,
+                            "video_timecode_start": "00:10:00",
+                        },
+                    ]
+                },
+            )
+
+        assert response.status_code == 207
+        data = response.json()
+        assert data["created"] == 1
+        assert data["failed"] == 1
 
 
 def _make_orm_mapping(

@@ -367,7 +367,7 @@ async def delete_slide_mapping(
             detail="Mapping not found in this course",
         )
 
-    await svm_repo.delete(mapping_id)
+    await svm_repo.delete(mapping)
     await session.commit()
 
 

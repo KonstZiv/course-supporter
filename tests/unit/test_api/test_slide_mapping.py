@@ -697,19 +697,10 @@ class TestSlideVideoMappingRepository:
     async def test_delete_removes_mapping(self, mock_session: AsyncMock) -> None:
         """delete() removes mapping and flushes."""
         mock_mapping = _make_svm_mock()
-        mock_session.get.return_value = mock_mapping
         repo = SlideVideoMappingRepository(mock_session)
-        await repo.delete(mock_mapping.id)
+        await repo.delete(mock_mapping)
         mock_session.delete.assert_awaited_once_with(mock_mapping)
         mock_session.flush.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_delete_not_found_raises(self, mock_session: AsyncMock) -> None:
-        """delete() raises ValueError when mapping not found."""
-        mock_session.get.return_value = None
-        repo = SlideVideoMappingRepository(mock_session)
-        with pytest.raises(ValueError, match="SlideVideoMapping not found"):
-            await repo.delete(uuid.uuid4())
 
     @pytest.mark.asyncio
     async def test_get_by_node_id_returns_list(self, mock_session: AsyncMock) -> None:

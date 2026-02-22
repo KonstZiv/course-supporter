@@ -250,11 +250,8 @@ class SlideVideoMappingRepository:
         """Get a single mapping by primary key."""
         return await self._session.get(SlideVideoMapping, mapping_id)
 
-    async def delete(self, mapping_id: uuid.UUID) -> None:
-        """Delete a mapping. Raises ValueError if not found."""
-        mapping = await self.get_by_id(mapping_id)
-        if mapping is None:
-            raise ValueError(f"SlideVideoMapping not found: {mapping_id}")
+    async def delete(self, mapping: SlideVideoMapping) -> None:
+        """Delete a mapping object directly."""
         await self._session.delete(mapping)
         await self._session.flush()
 

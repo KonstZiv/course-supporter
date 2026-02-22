@@ -176,12 +176,24 @@ class SlideVideoMapListResponse(BaseModel):
     to a timecode range in a video. Returned sorted by ``order``
     (ascending, 0-based). An empty ``items`` list (with ``total: 0``)
     is returned when the node has no mappings — this is not an error.
+
+    .. note::
+
+        Currently returns **all** mappings for the node (no pagination).
+        ``limit`` / ``offset`` query parameters and a separate ``count``
+        query will be added when pagination is needed.
     """
 
     items: list[SlideVideoMapItemResponse] = Field(
         description="Mappings ordered by ``order`` (0-based)."
     )
-    total: int = Field(description="Total number of mappings for this node.")
+    total: int = Field(
+        description=(
+            "Total number of mappings for this node. Currently equals "
+            "``len(items)``; will reflect the full count once pagination "
+            "is introduced."
+        ),
+    )
 
 
 class RejectedMappingResponse(BaseModel):

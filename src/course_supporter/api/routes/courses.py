@@ -308,6 +308,11 @@ async def list_slide_mappings(
 
     - ``200`` — success (may contain zero or more items).
     - ``404`` — course or node not found.
+
+    .. note::
+
+        Currently returns all mappings without pagination.
+        ``limit`` / ``offset`` parameters will be added in a future version.
     """
     course_repo = CourseRepository(session, tenant.tenant_id)
     course = await course_repo.get_by_id(course_id)
@@ -320,6 +325,7 @@ async def list_slide_mappings(
         raise HTTPException(status_code=404, detail="Node not found")
 
     svm_repo = SlideVideoMappingRepository(session)
+    # TODO: add limit/offset params and a separate count() query for pagination
     mappings = await svm_repo.get_by_node_id(node_id)
     return SlideVideoMapListResponse(
         items=[SlideVideoMapItemResponse.model_validate(m) for m in mappings],

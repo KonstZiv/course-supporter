@@ -11,11 +11,13 @@ Added two CRUD endpoints for slide-video mappings:
 
 ### Repository (`repositories.py`)
 - `SlideVideoMappingRepository.get_by_id()` — fetch single mapping by PK
-- `SlideVideoMappingRepository.delete()` — delete with ValueError on not found
+- `SlideVideoMappingRepository.delete()` — accepts ORM object directly (no redundant SELECT)
 
 ### Schema (`schemas.py`)
 - Enriched `SlideVideoMapItemResponse` with `Field(description=...)` for all fields
-- Added `SlideVideoMapListResponse` wrapper with `items` + `total`
+- `ValidationState` StrEnum for `validation_state` field (OpenAPI enum)
+- `BlockingFactorResponse` / `ValidationErrorResponse` typed models (replace `dict[str, object]`)
+- Added `SlideVideoMapListResponse` wrapper with `items` + `total` (pagination-ready)
 
 ### Routes (`routes/courses.py`)
 - `list_slide_mappings` — GET, SharedDep (read-only), returns ordered mappings
@@ -30,4 +32,4 @@ Added two CRUD endpoints for slide-video mappings:
 - **DELETE at course level** (no node_id in path) — mapping_id is globally unique
 - **Ownership verification**: mapping → node_id → node.course_id == course_id
 - **Empty list = 200** (not 404) — node with no mappings is a valid state
-- **SlideVideoMapListResponse wrapper** — enables future pagination
+- **SlideVideoMapListResponse wrapper** — enables future pagination (limit/offset + count query planned)

@@ -1,11 +1,15 @@
-"""Structural and content validation for slide-video mappings (Levels 1-2).
+"""Structural, content, and deferred validation for slide-video mappings.
 
 Level 1 (structural): entry IDs exist, belong to the correct node, have the
 expected source_type, and timecodes are well-formed.
 
 Level 2 (content): slide_number within presentation page_count, timecodes
 within video duration. Requires processed_content to be available (READY
-state). Skipped silently when processed_content is absent.
+state). Skipped when material is not READY.
+
+Level 3 (deferred): when a material is not READY (RAW/PENDING/ERROR/
+INTEGRITY_BROKEN), the mapping is accepted with ``blocking_factors``
+recorded and ``validation_state = pending_validation``.
 """
 
 from __future__ import annotations
@@ -21,7 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.course import SlideVideoMapEntry
 from course_supporter.models.source import SourceType
-from course_supporter.storage.orm import MaterialEntry
+from course_supporter.storage.orm import (
+    MappingValidationState,
+    MaterialEntry,
+    MaterialState,
+)
 
 _TIMECODE_RE = re.compile(r"^([0-9]{1,2}:)?[0-5][0-9]:[0-5][0-9]$")
 
@@ -39,6 +47,35 @@ class MappingValidationError:
     field: str
     message: str
     hint: str | None = None
+
+
+@dataclass
+class MappingBlockingFactor:
+    """Reason why Level 2 validation was deferred for a material."""
+
+    type: str  # "material_not_ready" | "material_error"
+    material_entry_id: str  # UUID as string (JSON-safe)
+    filename: str | None
+    material_state: str  # entry.state.value
+    message: str
+    blocked_checks: list[str]
+
+
+@dataclass
+class MappingValidationResult:
+    """Validation outcome for a single mapping in a batch."""
+
+    index: int
+    status: MappingValidationState
+    errors: list[MappingValidationError]
+    blocking_factors: list[MappingBlockingFactor]
+
+
+# ── Blocker type constants ──
+_BLOCKER_NOT_READY = "material_not_ready"
+_BLOCKER_ERROR = "material_error"
+
+_ERROR_STATES = frozenset({MaterialState.ERROR, MaterialState.INTEGRITY_BROKEN})
 
 
 def _timecode_to_seconds(tc: str) -> int:
@@ -159,15 +196,16 @@ class MappingValidationService:
         self,
         node_id: uuid.UUID,
         mappings: list[SlideVideoMapEntry],
-    ) -> list[tuple[int, list[MappingValidationError]]]:
+    ) -> list[MappingValidationResult]:
         """Validate all mappings with a single DB query.
 
         Collects unique entry IDs, fetches them in one SELECT ... WHERE
         id IN (...), then validates each mapping in memory.
 
         Returns:
-            List of (index, errors) tuples for mappings that failed
-            validation. Empty list means all mappings are valid.
+            A result for every mapping in the batch. Each result is
+            classified as VALIDATED, PENDING_VALIDATION (has blockers
+            but no errors), or VALIDATION_FAILED (has errors).
         """
         # ── Collect all entry IDs that parse as valid UUIDs ──
         all_ids: set[uuid.UUID] = set()
@@ -195,14 +233,28 @@ class MappingValidationService:
                 if doc is not None:
                     parsed_docs[entry_id] = doc
 
-        # ── Validate each mapping in memory ──
-        errors_per_mapping: list[tuple[int, list[MappingValidationError]]] = []
+        # ── Validate each mapping and classify ──
+        results: list[MappingValidationResult] = []
         for idx, m in enumerate(mappings):
-            errs = self._validate_single(node_id, m, entries_by_id, parsed_docs)
+            errs, blockers = self._validate_single(
+                node_id, m, entries_by_id, parsed_docs
+            )
             if errs:
-                errors_per_mapping.append((idx, errs))
+                status = MappingValidationState.VALIDATION_FAILED
+            elif blockers:
+                status = MappingValidationState.PENDING_VALIDATION
+            else:
+                status = MappingValidationState.VALIDATED
+            results.append(
+                MappingValidationResult(
+                    index=idx,
+                    status=status,
+                    errors=errs,
+                    blocking_factors=blockers,
+                )
+            )
 
-        return errors_per_mapping
+        return results
 
     def _validate_single(
         self,
@@ -210,14 +262,18 @@ class MappingValidationService:
         mapping: SlideVideoMapEntry,
         entries_by_id: dict[uuid.UUID, MaterialEntry],
         parsed_docs: dict[uuid.UUID, dict[str, Any]],
-    ) -> list[MappingValidationError]:
+    ) -> tuple[list[MappingValidationError], list[MappingBlockingFactor]]:
         """Validate a single mapping against pre-fetched entries.
 
-        Runs Level 1 (structural) checks first, then Level 2 (content)
-        checks using pre-parsed processed_content from ``parsed_docs``.
-        Collects all errors in one pass.
+        Runs Level 1 (structural) checks first. For entries that pass L1,
+        checks material state: if not READY, creates a blocking factor and
+        skips Level 2. Level 2 (content) runs only for READY entries.
+
+        Returns:
+            Tuple of (errors, blocking_factors).
         """
         errors: list[MappingValidationError] = []
+        blockers: list[MappingBlockingFactor] = []
 
         # ── Level 1: Entry checks ──
         pres_err = self._check_entry(
@@ -282,45 +338,97 @@ class MappingValidationService:
                 )
             )
 
-        # ── Level 2: Content validation (when entries are structurally OK) ──
+        # ── Level 3: Check entry state, create blockers for non-READY ──
         pres_uuid = (
             _parse_uuid(mapping.presentation_entry_id) if pres_err is None else None
         )
         vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
 
-        pres_doc = parsed_docs.get(pres_uuid) if pres_uuid is not None else None
-        if pres_doc is not None:
-            slide_err = _check_slide_number(mapping.slide_number, pres_doc)
-            if slide_err is not None:
-                errors.append(slide_err)
+        pres_ready = self._check_readiness(
+            pres_uuid, ["slide_number"], entries_by_id, blockers
+        )
+        vid_ready = self._check_readiness(
+            vid_uuid,
+            ["video_timecode_start", "video_timecode_end"],
+            entries_by_id,
+            blockers,
+        )
 
-        video_doc = parsed_docs.get(vid_uuid) if vid_uuid is not None else None
-        if video_doc is not None:
-            duration = _extract_video_duration_sec(video_doc)
-            if duration is not None:
-                if tc_start_valid:
-                    tc_start_err = _check_timecode_range(
-                        _timecode_to_seconds(tc_start),
-                        tc_start,
-                        "video_timecode_start",
-                        duration,
-                    )
-                    if tc_start_err is not None:
-                        errors.append(tc_start_err)
+        # ── Level 2: Content validation (only for READY entries) ──
+        if pres_ready and pres_uuid is not None:
+            pres_doc = parsed_docs.get(pres_uuid)
+            if pres_doc is not None:
+                slide_err = _check_slide_number(mapping.slide_number, pres_doc)
+                if slide_err is not None:
+                    errors.append(slide_err)
 
-                if tc_end is not None and tc_end_valid:
-                    tc_end_err = _check_timecode_range(
-                        _timecode_to_seconds(tc_end),
-                        tc_end,
-                        "video_timecode_end",
-                        duration,
-                    )
-                    if tc_end_err is not None:
-                        errors.append(tc_end_err)
+        if vid_ready and vid_uuid is not None:
+            video_doc = parsed_docs.get(vid_uuid)
+            if video_doc is not None:
+                duration = _extract_video_duration_sec(video_doc)
+                if duration is not None:
+                    if tc_start_valid:
+                        tc_start_err = _check_timecode_range(
+                            _timecode_to_seconds(tc_start),
+                            tc_start,
+                            "video_timecode_start",
+                            duration,
+                        )
+                        if tc_start_err is not None:
+                            errors.append(tc_start_err)
 
-        return errors
+                    if tc_end is not None and tc_end_valid:
+                        tc_end_err = _check_timecode_range(
+                            _timecode_to_seconds(tc_end),
+                            tc_end,
+                            "video_timecode_end",
+                            duration,
+                        )
+                        if tc_end_err is not None:
+                            errors.append(tc_end_err)
+
+        return errors, blockers
 
     # ── Private helpers ──
+
+    def _check_readiness(
+        self,
+        entry_uuid: uuid.UUID | None,
+        checks: list[str],
+        entries_by_id: dict[uuid.UUID, MaterialEntry],
+        blockers: list[MappingBlockingFactor],
+    ) -> bool:
+        """Check if an entry is READY; append a blocker if not.
+
+        Returns True when the entry exists and is READY (L2 can proceed).
+        """
+        if entry_uuid is None:
+            return False
+        entry = entries_by_id.get(entry_uuid)
+        if entry is not None and entry.state != MaterialState.READY:
+            blockers.append(self._make_blocker(entry, checks))
+            return False
+        return True
+
+    @staticmethod
+    def _make_blocker(
+        entry: MaterialEntry,
+        blocked_checks: list[str],
+    ) -> MappingBlockingFactor:
+        """Create a MappingBlockingFactor from a non-READY entry."""
+        state = entry.state
+        blocker_type = _BLOCKER_ERROR if state in _ERROR_STATES else _BLOCKER_NOT_READY
+        return MappingBlockingFactor(
+            type=blocker_type,
+            material_entry_id=str(entry.id),
+            filename=entry.filename,
+            material_state=state.value,
+            message=(
+                f"Material '{entry.id}' is in state '{state.value}', "
+                f"content checks deferred"
+            ),
+            blocked_checks=blocked_checks,
+        )
 
     @staticmethod
     def _check_entry(

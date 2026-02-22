@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,6 +63,43 @@ class CourseListResponse(BaseModel):
 # --- Slide-Video Mapping ---
 
 
+class ValidationState(StrEnum):
+    """Validation state for slide-video mappings (API-layer enum)."""
+
+    VALIDATED = "validated"
+    PENDING_VALIDATION = "pending_validation"
+    VALIDATION_FAILED = "validation_failed"
+
+
+class BlockingFactorResponse(BaseModel):
+    """Reason why validation was deferred for a material entry."""
+
+    type: str = Field(description="Blocking reason type, e.g. ``material_not_ready``.")
+    material_entry_id: str = Field(
+        description="UUID of the material entry that is not yet ready."
+    )
+    filename: str | None = Field(
+        description="Original filename of the blocking material, if available."
+    )
+    material_state: str = Field(
+        description="Current state of the blocking material entry."
+    )
+    message: str = Field(description="Human-readable explanation.")
+    blocked_checks: list[str] = Field(
+        description="List of validation checks that were skipped."
+    )
+
+
+class ValidationErrorResponse(BaseModel):
+    """Single validation error with optional hint for fixing it."""
+
+    field: str = Field(description="Name of the field that failed validation.")
+    message: str = Field(description="What went wrong.")
+    hint: str | None = Field(
+        default=None, description="Suggested action to fix the error."
+    )
+
+
 class SlideVideoMapRequest(BaseModel):
     """Request body for POST /courses/{id}/nodes/{node_id}/slide-mapping."""
 
@@ -107,31 +145,19 @@ class SlideVideoMapItemResponse(BaseModel):
         ),
     )
     order: int = Field(description="0-based position within this node's mapping list.")
-    validation_state: str = Field(
+    validation_state: ValidationState = Field(
+        description="Current validation status of this mapping.",
+    )
+    blocking_factors: list[BlockingFactorResponse] | None = Field(
+        default=None,
         description=(
-            "Current validation status of this mapping. Possible values:\n\n"
-            "- ``validated`` — all checks passed, mapping is ready for use.\n"
-            "- ``pending_validation`` — some content checks are deferred because "
-            "referenced materials are still being processed. The mapping was "
-            "accepted but will be automatically revalidated when materials "
-            "become ready. See ``blocking_factors`` for details.\n"
-            "- ``validation_failed`` — one or more checks failed. See "
-            "``validation_errors`` for specific issues to fix."
+            "Present only when ``validation_state`` is ``pending_validation``."
         ),
     )
-    blocking_factors: list[dict[str, object]] | None = Field(
+    validation_errors: list[ValidationErrorResponse] | None = Field(
+        default=None,
         description=(
-            "Present only when ``validation_state`` is ``pending_validation``. "
-            "Each factor describes a material entry that must finish processing "
-            "before full validation can occur. Contains ``material_entry_id`` "
-            "and ``reason`` keys."
-        ),
-    )
-    validation_errors: list[dict[str, object]] | None = Field(
-        description=(
-            "Present only when ``validation_state`` is ``validation_failed``. "
-            "Each error contains ``field``, ``message``, and optional ``hint`` "
-            "describing how to fix the issue."
+            "Present only when ``validation_state`` is ``validation_failed``."
         ),
     )
     validated_at: datetime | None = Field(

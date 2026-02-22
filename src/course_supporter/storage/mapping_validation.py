@@ -25,6 +25,12 @@ from course_supporter.storage.orm import MaterialEntry
 
 _TIMECODE_RE = re.compile(r"^([0-9]{1,2}:)?[0-5][0-9]:[0-5][0-9]$")
 
+# ── Metadata key constants ──
+_KEY_METADATA = "metadata"
+_KEY_PAGE_COUNT = "page_count"
+_KEY_CHUNKS = "chunks"
+_KEY_END_SEC = "end_sec"
+
 
 @dataclass
 class MappingValidationError:
@@ -64,10 +70,10 @@ def _parse_processed_content(raw: str) -> dict[str, Any] | None:
 
 def _extract_page_count(doc: dict[str, Any]) -> int | None:
     """Extract page_count from SourceDocument metadata."""
-    metadata = doc.get("metadata")
+    metadata = doc.get(_KEY_METADATA)
     if not isinstance(metadata, dict):
         return None
-    page_count = metadata.get("page_count")
+    page_count = metadata.get(_KEY_PAGE_COUNT)
     if isinstance(page_count, int) and page_count > 0:
         return page_count
     return None
@@ -78,17 +84,17 @@ def _extract_video_duration_sec(doc: dict[str, Any]) -> float | None:
 
     Returns None when no chunks contain end_sec (fallback: skip check).
     """
-    chunks = doc.get("chunks")
+    chunks = doc.get(_KEY_CHUNKS)
     if not isinstance(chunks, list) or not chunks:
         return None
     max_end: float | None = None
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
-        meta = chunk.get("metadata")
+        meta = chunk.get(_KEY_METADATA)
         if not isinstance(meta, dict):
             continue
-        end_sec = meta.get("end_sec")
+        end_sec = meta.get(_KEY_END_SEC)
         if isinstance(end_sec, int | float) and (max_end is None or end_sec > max_end):
             max_end = end_sec
     return max_end
@@ -106,12 +112,9 @@ def _seconds_to_timecode(seconds: float) -> str:
 
 def _check_slide_number(
     slide_number: int,
-    processed_content: str,
+    doc: dict[str, Any],
 ) -> MappingValidationError | None:
     """Check slide_number is within presentation page_count."""
-    doc = _parse_processed_content(processed_content)
-    if doc is None:
-        return None
     page_count = _extract_page_count(doc)
     if page_count is None:
         return None
@@ -131,15 +134,9 @@ def _check_timecode_range(
     timecode_sec: int,
     timecode_str: str,
     field: str,
-    processed_content: str,
+    duration: float,
 ) -> MappingValidationError | None:
     """Check timecode does not exceed video duration."""
-    doc = _parse_processed_content(processed_content)
-    if doc is None:
-        return None
-    duration = _extract_video_duration_sec(doc)
-    if duration is None:
-        return None
     if timecode_sec > duration:
         return MappingValidationError(
             field=field,
@@ -289,32 +286,36 @@ class MappingValidationService:
         )
 
         if pres_entry is not None and pres_entry.processed_content is not None:
-            slide_err = _check_slide_number(
-                mapping.slide_number, pres_entry.processed_content
-            )
-            if slide_err is not None:
-                errors.append(slide_err)
+            pres_doc = _parse_processed_content(pres_entry.processed_content)
+            if pres_doc is not None:
+                slide_err = _check_slide_number(mapping.slide_number, pres_doc)
+                if slide_err is not None:
+                    errors.append(slide_err)
 
         if video_entry is not None and video_entry.processed_content is not None:
-            if tc_start_valid:
-                tc_start_err = _check_timecode_range(
-                    _timecode_to_seconds(tc_start),
-                    tc_start,
-                    "video_timecode_start",
-                    video_entry.processed_content,
-                )
-                if tc_start_err is not None:
-                    errors.append(tc_start_err)
+            video_doc = _parse_processed_content(video_entry.processed_content)
+            if video_doc is not None:
+                duration = _extract_video_duration_sec(video_doc)
+                if duration is not None:
+                    if tc_start_valid:
+                        tc_start_err = _check_timecode_range(
+                            _timecode_to_seconds(tc_start),
+                            tc_start,
+                            "video_timecode_start",
+                            duration,
+                        )
+                        if tc_start_err is not None:
+                            errors.append(tc_start_err)
 
-            if tc_end is not None and tc_end_valid:
-                tc_end_err = _check_timecode_range(
-                    _timecode_to_seconds(tc_end),
-                    tc_end,
-                    "video_timecode_end",
-                    video_entry.processed_content,
-                )
-                if tc_end_err is not None:
-                    errors.append(tc_end_err)
+                    if tc_end is not None and tc_end_valid:
+                        tc_end_err = _check_timecode_range(
+                            _timecode_to_seconds(tc_end),
+                            tc_end,
+                            "video_timecode_end",
+                            duration,
+                        )
+                        if tc_end_err is not None:
+                            errors.append(tc_end_err)
 
         return errors
 

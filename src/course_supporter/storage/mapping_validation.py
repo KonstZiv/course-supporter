@@ -344,28 +344,19 @@ class MappingValidationService:
         )
         vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
 
-        pres_ready = False
-        if pres_uuid is not None:
-            pres_entry = entries_by_id.get(pres_uuid)
-            if pres_entry is not None and pres_entry.state != MaterialState.READY:
-                blockers.append(
-                    self._make_blocker(pres_entry, ["slide_number"]),
-                )
-            else:
-                pres_ready = True
+        def _check_readiness(entry_uuid: uuid.UUID | None, checks: list[str]) -> bool:
+            if entry_uuid is None:
+                return False
+            entry = entries_by_id.get(entry_uuid)
+            if entry is not None and entry.state != MaterialState.READY:
+                blockers.append(self._make_blocker(entry, checks))
+                return False
+            return True
 
-        vid_ready = False
-        if vid_uuid is not None:
-            vid_entry = entries_by_id.get(vid_uuid)
-            if vid_entry is not None and vid_entry.state != MaterialState.READY:
-                blockers.append(
-                    self._make_blocker(
-                        vid_entry,
-                        ["video_timecode_start", "video_timecode_end"],
-                    ),
-                )
-            else:
-                vid_ready = True
+        pres_ready = _check_readiness(pres_uuid, ["slide_number"])
+        vid_ready = _check_readiness(
+            vid_uuid, ["video_timecode_start", "video_timecode_end"]
+        )
 
         # ── Level 2: Content validation (only for READY entries) ──
         if pres_ready and pres_uuid is not None:

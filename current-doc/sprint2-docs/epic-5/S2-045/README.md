@@ -1,7 +1,7 @@
 # S2-045: SlideVideoMapping migration
 
 **Epic:** EPIC-5 — SlideVideoMapping — Redesign
-**Оцінка:** 2h
+**Оцінка:** 2h → **Фактично:** no-op (документація)
 
 ---
 
@@ -9,30 +9,31 @@
 
 Існуючі маппінги мігровані на нову структуру
 
-## Що робимо
+## Рішення: data migration не потрібна
 
-Alembic migration: старі маппінги → нова таблиця
+Продакшн VPS був задеплоєний виключно для тестування.
+На момент застосування міграції `a8f1e2c3d4b5` (S2-038)
+в старій таблиці `slide_video_mappings` не було жодних
+реальних даних. Міграція коректно використовує
+`DROP TABLE` + `CREATE TABLE`.
 
-## Як робимо
+Навіть за наявності даних, автоматична міграція була б
+неможливою — стара схема (`course_id`, `slide_number`,
+`video_timecode`) не містить інформації для визначення
+`presentation_entry_id` та `video_entry_id` (нова схема).
 
-1. Створити нову таблицю (якщо не через ALTER)
-2. Мігрувати дані: визначити presentation/video entry по context
-3. validation_state = validated для існуючих (вже працюють)
-4. Downgrade migration
-
-## Очікуваний результат
-
-Існуючі маппінги працюють в новій структурі
+**Детальна документація:** `current-doc/S2-045-mapping-migration.md`
 
 ## Як тестуємо
 
-**Автоматизовано:** Migration test: upgrade → data intact → downgrade → data intact
+**Автоматизовано:** `test_schema_sync` (integration, requires_db) —
+перевіряє що ORM metadata = DB schema після всіх міграцій.
 
-**Human control:** Перевірити на staging що існуючі маппінги мігрували правильно
+**Human control:** підтверджено відсутність production даних.
 
 ## Точки контролю
 
-- [ ] Код написаний і проходить `make check`
-- [ ] Tests написані і зелені
-- [ ] Human control пройдений
-- [ ] Documentation checkpoint: чи потрібно оновити docs/ERD/наступні задачі
+- [x] Міграція існує і працює (`a8f1e2c3d4b5`)
+- [x] Відсутність production даних підтверджена
+- [x] Tests зелені (`make check`)
+- [x] Documentation checkpoint: повна документація в S2-045-mapping-migration.md

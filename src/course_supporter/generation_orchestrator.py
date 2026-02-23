@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 from arq.connections import ArqRedis
@@ -88,7 +88,7 @@ async def trigger_generation(
     session: AsyncSession,
     course_id: uuid.UUID,
     node_id: uuid.UUID | None = None,
-    mode: str = "free",
+    mode: Literal["free", "guided"] = "free",
 ) -> GenerationPlan:
     """Orchestrate cascade generation for a course or subtree.
 

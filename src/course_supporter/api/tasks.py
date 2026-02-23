@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import anyio
 import structlog
@@ -242,7 +242,7 @@ async def arq_generate_structure(
     job_id: str,
     course_id: str,
     node_id: str | None = None,
-    mode: str = "free",
+    mode: Literal["free", "guided"] = "free",
 ) -> None:
     """ARQ task: generate course structure via ArchitectAgent.
 

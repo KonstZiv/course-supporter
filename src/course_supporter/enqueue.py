@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 import structlog
 from arq.connections import ArqRedis
@@ -82,8 +83,8 @@ async def enqueue_generation(
     session: AsyncSession,
     course_id: uuid.UUID,
     node_id: uuid.UUID | None = None,
-    mode: str = "free",
-    depends_on: list[str] | None = None,
+    mode: Literal["free", "guided"] = "free",
+    depends_on: list[str] | None = None,  # Job UUIDs as strings
 ) -> Job:
     """Create a Job record and enqueue structure generation to ARQ.
 

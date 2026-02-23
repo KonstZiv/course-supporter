@@ -1,9 +1,9 @@
-"""Tests for enqueue_ingestion helper."""
+"""Tests for enqueue_ingestion and enqueue_generation helpers."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.enqueue import enqueue_generation, enqueue_ingestion
 from course_supporter.job_priority import JobPriority
 
 
@@ -155,3 +155,88 @@ class TestEnqueueIngestion:
 
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["priority"] == "immediate"
+
+
+class TestEnqueueGeneration:
+    async def test_creates_job_with_correct_type(self) -> None:
+        """enqueue_generation creates Job with job_type='generate_structure'."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        deps = [str(uuid.uuid4()), str(uuid.uuid4())]
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            result = await enqueue_generation(
+                redis=redis,
+                session=session,
+                course_id=course_id,
+                node_id=node_id,
+                mode="guided",
+                depends_on=deps,
+            )
+
+        assert result is mock_job
+        create_kwargs = repo_cls.return_value.create.call_args.kwargs
+        assert create_kwargs["job_type"] == "generate_structure"
+        assert create_kwargs["course_id"] == course_id
+        assert create_kwargs["node_id"] == node_id
+        assert create_kwargs["depends_on"] == deps
+
+    async def test_enqueues_arq_with_correct_args(self) -> None:
+        """ARQ enqueue_job receives correct args for generation."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        course_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_generation(
+                redis=redis,
+                session=session,
+                course_id=course_id,
+                node_id=node_id,
+                mode="free",
+            )
+
+        redis.enqueue_job.assert_awaited_once_with(
+            "arq_generate_structure",
+            str(mock_job.id),
+            str(course_id),
+            str(node_id),
+            "free",
+        )
+
+    async def test_course_level_passes_none_node(self) -> None:
+        """Course-level generation passes None for node_id."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        course_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_generation(
+                redis=redis,
+                session=session,
+                course_id=course_id,
+                node_id=None,
+            )
+
+        redis.enqueue_job.assert_awaited_once_with(
+            "arq_generate_structure",
+            str(mock_job.id),
+            str(course_id),
+            None,
+            "free",
+        )

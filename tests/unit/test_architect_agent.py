@@ -7,6 +7,7 @@ import pytest
 from course_supporter.agents.architect import (
     DEFAULT_PROMPT_PATH,
     ArchitectAgent,
+    GenerationResult,
     PreparedPrompt,
 )
 from course_supporter.agents.prompt_loader import PromptData
@@ -155,18 +156,19 @@ class TestGenerate:
 
     @pytest.mark.asyncio
     async def test_returns_course_structure(self, mock_router: AsyncMock) -> None:
-        """_generate returns CourseStructure from router response."""
+        """_generate returns (CourseStructure, LLMResponse) tuple."""
         agent = ArchitectAgent(mock_router)
         prepared = PreparedPrompt(
             system_prompt="System.",
             user_prompt="User prompt.",
             prompt_version="v1",
         )
-        result = await agent._generate(prepared)
+        structure, response = await agent._generate(prepared)
 
-        assert isinstance(result, CourseStructure)
-        assert result.title == "Test Course"
-        assert len(result.modules) == 1
+        assert isinstance(structure, CourseStructure)
+        assert structure.title == "Test Course"
+        assert len(structure.modules) == 1
+        assert response.model_id == "gemini-2.5-flash"
 
     @pytest.mark.asyncio
     async def test_calls_router_with_correct_params(
@@ -251,3 +253,61 @@ class TestArchitectAgentRun:
         call_kwargs = mock_router.complete_structured.call_args.kwargs
         assert "file:///test.md" in call_kwargs["prompt"]
         assert call_kwargs["system_prompt"] == "You are a course architect."
+
+
+class TestRunWithMetadata:
+    """Tests for run_with_metadata() — returns GenerationResult."""
+
+    @pytest.mark.asyncio
+    async def test_returns_generation_result(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """run_with_metadata returns GenerationResult with all fields."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            result = await agent.run_with_metadata(sample_context)
+
+        assert isinstance(result, GenerationResult)
+        assert result.structure.title == "Test Course"
+        assert result.prompt_version == "v1"
+        assert result.response.model_id == "gemini-2.5-flash"
+        assert result.response.tokens_in == 100
+        assert result.response.tokens_out == 200
+
+    @pytest.mark.asyncio
+    async def test_metadata_includes_cost(
+        self,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """run_with_metadata propagates cost_usd from LLM response."""
+        router = AsyncMock()
+        structure = CourseStructure(
+            title="Cost Test",
+            modules=[ModuleOutput(title="M1")],
+        )
+        response = LLMResponse(
+            content="{}",
+            provider="anthropic",
+            model_id="claude-sonnet-4",
+            tokens_in=500,
+            tokens_out=1000,
+            cost_usd=0.042,
+        )
+        router.complete_structured.return_value = (structure, response)
+
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(router)
+            result = await agent.run_with_metadata(sample_context)
+
+        assert result.response.cost_usd == 0.042
+        assert result.response.provider == "anthropic"

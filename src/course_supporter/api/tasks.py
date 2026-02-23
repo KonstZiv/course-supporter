@@ -18,7 +18,9 @@ from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import SourceMaterial
+    from course_supporter.models.course import SlideTimecodeRef
+    from course_supporter.models.source import SourceDocument
+    from course_supporter.storage.orm import MaterialNode, SourceMaterial
     from course_supporter.storage.s3 import S3Client
 
 
@@ -158,6 +160,234 @@ async def arq_ingest_material(
 
     await callback.on_success(job_id=jid, material_id=mid, content_json=content)
     log.info("ingestion_done")
+
+
+def _resolve_target_nodes(
+    root_nodes: list[MaterialNode],
+    course_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+) -> tuple[MaterialNode | None, list[MaterialNode]]:
+    """Resolve target node and flatten its subtree.
+
+    Args:
+        root_nodes: Root-level nodes from get_tree().
+        course_id: Course UUID (for error messages).
+        node_id: Target node UUID, or None for whole course.
+
+    Returns:
+        Tuple of (target_node_or_None, flat_node_list).
+
+    Raises:
+        NodeNotFoundError: If node_id is given but not found.
+    """
+    from course_supporter.errors import NodeNotFoundError
+    from course_supporter.tree_utils import find_node_bfs, flatten_subtree
+
+    if node_id is not None:
+        target = find_node_bfs(root_nodes, node_id)
+        if target is None:
+            msg = f"Node {node_id} not found in course {course_id}"
+            raise NodeNotFoundError(msg)
+        return target, flatten_subtree(target)
+
+    flat: list[MaterialNode] = []
+    for rn in root_nodes:
+        flat.extend(flatten_subtree(rn))
+    return None, flat
+
+
+def _collect_ready_documents(
+    flat_nodes: list[MaterialNode],
+) -> list[SourceDocument]:
+    """Extract SourceDocuments from READY MaterialEntries.
+
+    Args:
+        flat_nodes: Flat list of nodes with materials loaded.
+
+    Returns:
+        Deserialized SourceDocument list.
+
+    Raises:
+        NoReadyMaterialsError: If no READY entries found.
+    """
+    from course_supporter.errors import NoReadyMaterialsError
+    from course_supporter.models.source import SourceDocument
+    from course_supporter.storage.orm import MaterialState
+
+    documents: list[SourceDocument] = []
+    for node in flat_nodes:
+        for entry in node.materials:
+            if entry.state == MaterialState.READY:
+                documents.append(
+                    SourceDocument.model_validate_json(
+                        entry.processed_content,  # type: ignore[arg-type]
+                    )
+                )
+
+    if not documents:
+        msg = "No READY materials found for generation"
+        raise NoReadyMaterialsError(msg)
+    return documents
+
+
+def _collect_validated_mappings(
+    flat_nodes: list[MaterialNode],
+) -> list[SlideTimecodeRef]:
+    """Extract SlideTimecodeRef from validated SlideVideoMappings.
+
+    Args:
+        flat_nodes: Flat list of nodes with slide_video_mappings loaded.
+
+    Returns:
+        List of SlideTimecodeRef (may be empty).
+    """
+    from course_supporter.models.course import SlideTimecodeRef
+    from course_supporter.storage.orm import MappingValidationState
+
+    mappings: list[SlideTimecodeRef] = []
+    for node in flat_nodes:
+        for svm in node.slide_video_mappings:
+            if svm.validation_state == MappingValidationState.VALIDATED:
+                mappings.append(
+                    SlideTimecodeRef(
+                        slide_number=svm.slide_number,
+                        video_timecode_start=svm.video_timecode_start,
+                    )
+                )
+    return mappings
+
+
+async def arq_generate_structure(
+    ctx: dict[str, Any],
+    job_id: str,
+    course_id: str,
+    node_id: str | None = None,
+    mode: str = "free",
+) -> None:
+    """ARQ task: generate course structure via ArchitectAgent.
+
+    Loads READY materials from subtree (or full tree), merges into
+    CourseContext, calls LLM, and saves snapshot. Idempotent —
+    skips LLM call if a snapshot with the same fingerprint exists.
+
+    Args:
+        ctx: ARQ worker context (session_factory, model_router).
+        job_id: Job UUID as string (ARQ JSON serialization).
+        course_id: Course UUID as string.
+        node_id: Optional target node UUID. None = whole course.
+        mode: Generation mode ('free' or 'guided').
+    """
+    from course_supporter.agents.architect import ArchitectAgent
+    from course_supporter.fingerprint import FingerprintService
+    from course_supporter.ingestion.merge import MergeStep
+    from course_supporter.storage.job_repository import JobRepository
+    from course_supporter.storage.material_node_repository import (
+        MaterialNodeRepository,
+    )
+    from course_supporter.storage.snapshot_repository import SnapshotRepository
+
+    jid = uuid.UUID(job_id)
+    cid = uuid.UUID(course_id)
+    nid = uuid.UUID(node_id) if node_id else None
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    router: ModelRouter = ctx["model_router"]
+
+    log = structlog.get_logger().bind(
+        job_id=job_id,
+        course_id=course_id,
+        node_id=node_id,
+        mode=mode,
+    )
+    log.info("generate_structure_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        try:
+            await job_repo.update_status(jid, "active")
+            await session.commit()
+
+            # Load tree → resolve target → flatten
+            node_repo = MaterialNodeRepository(session)
+            root_nodes: list[MaterialNode] = await node_repo.get_tree(
+                cid,
+                include_materials=True,
+            )
+            target, flat_nodes = _resolve_target_nodes(root_nodes, cid, nid)
+
+            # Collect data for generation
+            documents = _collect_ready_documents(flat_nodes)
+            mappings = _collect_validated_mappings(flat_nodes)
+
+            # Merge
+            context = MergeStep().merge(
+                documents,
+                mappings if mappings else None,
+            )
+
+            # Compute fingerprint
+            fp_service = FingerprintService(session)
+            if target is not None:
+                fingerprint = await fp_service.ensure_node_fp(target)
+            else:
+                fingerprint = await fp_service.ensure_course_fp(root_nodes)
+            await session.commit()
+
+            # Idempotency check
+            snap_repo = SnapshotRepository(session)
+            existing = await snap_repo.find_by_identity(
+                course_id=cid,
+                node_id=nid,
+                node_fingerprint=fingerprint,
+                mode=mode,
+            )
+            if existing is not None:
+                log.info("generate_structure_idempotent", snapshot_id=str(existing.id))
+                await job_repo.update_status(
+                    jid,
+                    "complete",
+                    result_snapshot_id=existing.id,
+                )
+                await session.commit()
+                return
+
+            # Generate via ArchitectAgent
+            agent = ArchitectAgent(router)
+            gen_result = await agent.run_with_metadata(context)
+
+            # Save snapshot
+            snapshot = await snap_repo.create(
+                course_id=cid,
+                node_id=nid,
+                node_fingerprint=fingerprint,
+                mode=mode,
+                structure=gen_result.structure.model_dump(),
+                prompt_version=gen_result.prompt_version,
+                model_id=gen_result.response.model_id,
+                tokens_in=gen_result.response.tokens_in,
+                tokens_out=gen_result.response.tokens_out,
+                cost_usd=gen_result.response.cost_usd,
+            )
+
+            # Job → complete
+            await job_repo.update_status(
+                jid,
+                "complete",
+                result_snapshot_id=snapshot.id,
+            )
+            await session.commit()
+            log.info("generate_structure_done", snapshot_id=str(snapshot.id))
+
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                await JobRepository(err_session).update_status(
+                    jid,
+                    "failed",
+                    error_message=str(exc),
+                )
+                await err_session.commit()
+            log.error("generate_structure_failed", error=str(exc))
 
 
 async def ingest_material(

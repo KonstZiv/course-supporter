@@ -102,11 +102,12 @@ class TestFormatUserPromptKwargs:
         assert "video transcript" in result
         assert "{existing_structure}" not in result
 
-    def test_missing_kwarg_raises_key_error(self) -> None:
-        """Missing kwarg raises KeyError."""
+    def test_missing_kwarg_leaves_placeholder(self) -> None:
+        """Missing kwarg leaves placeholder unreplaced."""
         template = "Structure:\n{existing_structure}\nMaterials:\n{context}"
-        with pytest.raises(KeyError):
-            format_user_prompt(template, "data")
+        result = format_user_prompt(template, "data")
+        assert "{existing_structure}" in result
+        assert "data" in result
 
 
 class TestPromptFileContent:

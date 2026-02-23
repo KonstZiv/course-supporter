@@ -46,6 +46,10 @@ def load_prompt(path: str | Path) -> PromptData:
 def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
     """Format user prompt template with context and optional extras.
 
+    Uses ``str.replace`` for each placeholder instead of ``str.format``
+    so that braces inside substituted values (e.g. JSON in *context*)
+    are never misinterpreted as format placeholders.
+
     Args:
         template: Prompt template with {context} placeholder and
             optional extra placeholders (e.g. {existing_structure}).
@@ -55,4 +59,7 @@ def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
     Returns:
         Formatted prompt string.
     """
-    return template.format(context=context, **kwargs)
+    result = template.replace("{context}", context)
+    for key, value in kwargs.items():
+        result = result.replace(f"{{{key}}}", value)
+    return result

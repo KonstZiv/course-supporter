@@ -407,7 +407,7 @@ class CourseStructureSnapshot(Base):
         ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
     )
     node_fingerprint: Mapped[str] = mapped_column(String(64))
-    mode: Mapped[str] = mapped_column(String(20))
+    mode: Mapped[GenerationMode] = mapped_column(String(20))
     structure: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
     # ── LLM metadata ──

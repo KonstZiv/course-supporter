@@ -240,29 +240,38 @@ def _collect_validated_mappings(
 def _serialize_tree_for_guided(
     flat_nodes: list[MaterialNode],
 ) -> str:
-    """Serialize node tree into a readable outline for guided-mode prompt.
+    """Serialize node tree into a nested JSON outline for guided-mode prompt.
 
-    Produces a compact JSON-like structure showing the node hierarchy
-    (titles, descriptions, order) so the LLM can preserve it.
+    Rebuilds the parent-child hierarchy using each node's ``.children``
+    relationship so the LLM can see which lessons belong to which modules.
 
     Args:
-        flat_nodes: Flat list of nodes from resolve_target_nodes.
+        flat_nodes: Flat list of nodes from resolve_target_nodes
+            (root first, children eagerly loaded).
 
     Returns:
-        JSON string representing the tree outline.
+        JSON string representing the nested tree.
     """
     import json
 
-    nodes = []
-    for node in flat_nodes:
-        nodes.append(
-            {
-                "title": node.title,
-                "description": node.description,
-                "order": node.order,
-            }
-        )
-    return json.dumps(nodes, ensure_ascii=False, indent=2)
+    def _node_to_dict(node: MaterialNode) -> dict[str, object]:
+        result: dict[str, object] = {
+            "title": node.title,
+            "description": node.description,
+            "order": node.order,
+        }
+        if node.children:
+            result["children"] = [_node_to_dict(c) for c in node.children]
+        return result
+
+    # flat_nodes[0] is the root (or roots for course-level)
+    # Rebuild from roots: nodes without parent_id among flat_nodes
+    root_ids = {n.id for n in flat_nodes}
+    roots = [
+        n for n in flat_nodes if n.parent_id is None or n.parent_id not in root_ids
+    ]
+    tree = [_node_to_dict(r) for r in roots]
+    return json.dumps(tree, ensure_ascii=False, indent=2)
 
 
 async def arq_generate_structure(

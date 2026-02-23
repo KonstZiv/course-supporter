@@ -15,6 +15,7 @@ Overlap table (from AR-6):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -110,25 +111,29 @@ def _scopes_overlap_fast(
     return target_node_id == job_node_id
 
 
+def _iter_ancestors(
+    parent_map: dict[uuid.UUID, uuid.UUID | None],
+    node_id: uuid.UUID,
+) -> Iterator[uuid.UUID]:
+    """Yield ancestor IDs from *node_id* up to root (excluding itself)."""
+    visited: set[uuid.UUID] = {node_id}
+    current_id = parent_map.get(node_id)
+    while current_id is not None:
+        if current_id in visited:
+            break  # safety: cycle in data
+        yield current_id
+        visited.add(current_id)
+        current_id = parent_map.get(current_id)
+
+
 def _ancestor_set(
     parent_map: dict[uuid.UUID, uuid.UUID | None],
     node_id: uuid.UUID | None,
 ) -> set[uuid.UUID]:
-    """Collect all ancestor IDs for *node_id* (excluding itself).
-
-    Walks parent_id chain from *node_id* up to root using in-memory map.
-    Returns empty set if *node_id* is ``None`` (course-level).
-    """
-    ancestors: set[uuid.UUID] = set()
+    """Collect all ancestor IDs for *node_id* (excluding itself)."""
     if node_id is None:
-        return ancestors
-    current_id = parent_map.get(node_id)
-    while current_id is not None:
-        if current_id in ancestors:
-            break  # safety: cycle in data
-        ancestors.add(current_id)
-        current_id = parent_map.get(current_id)
-    return ancestors
+        return set()
+    return set(_iter_ancestors(parent_map, node_id))
 
 
 def _is_ancestor(
@@ -137,26 +142,10 @@ def _is_ancestor(
     ancestor_id: uuid.UUID | None,
     node_id: uuid.UUID | None,
 ) -> bool:
-    """Check if *ancestor_id* is an ancestor of *node_id* using in-memory map.
-
-    Walks parent_id chain from *node_id* up to root. Returns ``False``
-    if either is ``None`` (course-level cases handled by fast path).
-    """
+    """Check if *ancestor_id* is an ancestor of *node_id*."""
     if ancestor_id is None or node_id is None:
         return False
-
-    current_id: uuid.UUID | None = parent_map.get(node_id)
-    visited: set[uuid.UUID] = {node_id}
-
-    while current_id is not None:
-        if current_id == ancestor_id:
-            return True
-        if current_id in visited:
-            break  # safety: cycle in data
-        visited.add(current_id)
-        current_id = parent_map.get(current_id)
-
-    return False
+    return any(uid == ancestor_id for uid in _iter_ancestors(parent_map, node_id))
 
 
 def _overlap_reason(

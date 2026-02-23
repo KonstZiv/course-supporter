@@ -54,6 +54,7 @@ async def detect_conflict(
         ``ConflictInfo`` for the first conflicting job, or ``None``.
     """
     parent_map = await _load_parent_map(session, course_id)
+    target_ancestors = _ancestor_set(parent_map, target_node_id)
 
     for job in active_jobs:
         job_node_id = job.node_id
@@ -63,7 +64,7 @@ async def detect_conflict(
                 job_node_id=job_node_id,
                 reason=_overlap_reason(target_node_id, job_node_id),
             )
-        if _is_ancestor(parent_map, ancestor_id=job_node_id, node_id=target_node_id):
+        if job_node_id in target_ancestors:
             return ConflictInfo(
                 job_id=job.id,
                 job_node_id=job_node_id,
@@ -107,6 +108,27 @@ def _scopes_overlap_fast(
     if target_node_id is None or job_node_id is None:
         return True
     return target_node_id == job_node_id
+
+
+def _ancestor_set(
+    parent_map: dict[uuid.UUID, uuid.UUID | None],
+    node_id: uuid.UUID | None,
+) -> set[uuid.UUID]:
+    """Collect all ancestor IDs for *node_id* (excluding itself).
+
+    Walks parent_id chain from *node_id* up to root using in-memory map.
+    Returns empty set if *node_id* is ``None`` (course-level).
+    """
+    ancestors: set[uuid.UUID] = set()
+    if node_id is None:
+        return ancestors
+    current_id = parent_map.get(node_id)
+    while current_id is not None:
+        if current_id in ancestors:
+            break  # safety: cycle in data
+        ancestors.add(current_id)
+        current_id = parent_map.get(current_id)
+    return ancestors
 
 
 def _is_ancestor(

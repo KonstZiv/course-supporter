@@ -23,16 +23,16 @@ def upgrade() -> None:
     # Drop old table (no data migration — old schema is incompatible)
     op.drop_table("slide_video_mappings")
 
-    # Create enum type
-    mapping_validation_state_enum = sa.Enum(
-        "validated",
-        "pending_validation",
-        "validation_failed",
-        name="mapping_validation_state_enum",
+    # Create enum type via raw SQL to avoid ORM metadata conflict
+    op.execute(
+        "DO $$ BEGIN "
+        "CREATE TYPE mapping_validation_state_enum "
+        "AS ENUM ('validated', 'pending_validation', 'validation_failed'); "
+        "EXCEPTION WHEN duplicate_object THEN NULL; "
+        "END $$"
     )
-    mapping_validation_state_enum.create(op.get_bind(), checkfirst=True)
 
-    # Create redesigned table
+    # Create redesigned table (use sa.String to avoid SQLAlchemy auto-creating enum)
     op.create_table(
         "slide_video_mappings",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("order", sa.Integer(), nullable=False, server_default="0"),
         sa.Column(
             "validation_state",
-            mapping_validation_state_enum,
+            sa.String(30),
             nullable=False,
             server_default="pending_validation",
         ),
@@ -78,6 +78,22 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id"),
+    )
+
+    # Cast column to actual enum type (drop default first, re-add after)
+    op.execute(
+        "ALTER TABLE slide_video_mappings ALTER COLUMN validation_state DROP DEFAULT"
+    )
+    op.execute(
+        "ALTER TABLE slide_video_mappings "
+        "ALTER COLUMN validation_state "
+        "TYPE mapping_validation_state_enum "
+        "USING validation_state::mapping_validation_state_enum"
+    )
+    op.execute(
+        "ALTER TABLE slide_video_mappings "
+        "ALTER COLUMN validation_state "
+        "SET DEFAULT 'pending_validation'::mapping_validation_state_enum"
     )
 
     op.create_index("ix_svm_node", "slide_video_mappings", ["node_id"])

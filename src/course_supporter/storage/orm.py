@@ -13,11 +13,13 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -112,6 +114,9 @@ class Course(Base):
         back_populates="course", cascade="all, delete-orphan"
     )
     material_nodes: Mapped[list["MaterialNode"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan"
+    )
+    snapshots: Mapped[list["CourseStructureSnapshot"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
 
@@ -358,6 +363,71 @@ class SlideVideoMapping(Base):
         foreign_keys=[presentation_entry_id]
     )
     video_entry: Mapped["MaterialEntry"] = relationship(foreign_keys=[video_entry_id])
+
+
+# ──────────────────────────────────────────────
+# Course Structure Snapshots
+# ──────────────────────────────────────────────
+
+
+NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+"""Sentinel UUID used in COALESCE expressions for nullable node_id."""
+
+
+class GenerationMode(StrEnum):
+    """Mode used for course structure generation."""
+
+    FREE = "free"
+    GUIDED = "guided"
+
+
+class CourseStructureSnapshot(Base):
+    """Immutable snapshot of a generated course structure.
+
+    Tied to a specific (course, node, fingerprint, mode) combination
+    for idempotency: re-generating with the same inputs returns the
+    existing snapshot instead of calling the LLM again.
+
+    When ``node_id`` is NULL the snapshot covers the entire course.
+    """
+
+    __tablename__ = "course_structure_snapshots"
+    __table_args__ = (
+        Index(
+            "uq_snapshots_identity",
+            "course_id",
+            text(f"COALESCE(node_id, '{NIL_UUID}'::uuid)"),
+            "node_fingerprint",
+            "mode",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    )
+    node_fingerprint: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[GenerationMode] = mapped_column(String(20))
+    structure: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    # ── LLM metadata ──
+    prompt_version: Mapped[str | None] = mapped_column(String(50))
+    model_id: Mapped[str | None] = mapped_column(String(100))
+    tokens_in: Mapped[int | None] = mapped_column(Integer)
+    tokens_out: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    course: Mapped["Course"] = relationship(back_populates="snapshots")
+    node: Mapped["MaterialNode | None"] = relationship()
 
 
 # ──────────────────────────────────────────────

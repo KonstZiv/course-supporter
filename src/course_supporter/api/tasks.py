@@ -332,8 +332,15 @@ async def arq_generate_structure(
                 return
 
             # Generate via ArchitectAgent
-            agent = ArchitectAgent(router)
-            gen_result = await agent.run_with_metadata(context)
+            from course_supporter.tree_utils import serialize_tree_for_guided
+
+            existing_structure = (
+                serialize_tree_for_guided(flat_nodes) if mode == "guided" else None
+            )
+            agent = ArchitectAgent(router, mode=mode)
+            gen_result = await agent.run_with_metadata(
+                context, existing_structure=existing_structure
+            )
 
             # Save snapshot
             snapshot = await snap_repo.create(

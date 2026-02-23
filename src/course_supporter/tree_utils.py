@@ -81,3 +81,39 @@ def resolve_target_nodes(
     for rn in root_nodes:
         flat.extend(flatten_subtree(rn))
     return None, flat
+
+
+def serialize_tree_for_guided(
+    flat_nodes: list[MaterialNode],
+) -> str:
+    """Serialize node tree into a nested JSON outline for guided-mode prompt.
+
+    Rebuilds the parent-child hierarchy using each node's ``.children``
+    relationship so the LLM can see which lessons belong to which modules.
+
+    Args:
+        flat_nodes: Flat list of nodes from resolve_target_nodes
+            (root first, children eagerly loaded).
+
+    Returns:
+        JSON string representing the nested tree.
+    """
+    import json
+
+    def _node_to_dict(node: MaterialNode) -> dict[str, object]:
+        result: dict[str, object] = {
+            "title": node.title,
+            "description": node.description,
+            "order": node.order,
+        }
+        if node.children:
+            result["children"] = [_node_to_dict(c) for c in node.children]
+        return result
+
+    # Rebuild from roots: nodes without parent_id among flat_nodes
+    root_ids = {n.id for n in flat_nodes}
+    roots = [
+        n for n in flat_nodes if n.parent_id is None or n.parent_id not in root_ids
+    ]
+    tree = [_node_to_dict(r) for r in roots]
+    return json.dumps(tree, ensure_ascii=False, indent=2)

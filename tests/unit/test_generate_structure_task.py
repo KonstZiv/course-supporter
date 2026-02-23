@@ -20,6 +20,10 @@ from course_supporter.tree_utils import find_node_bfs, flatten_subtree
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
+    title: str = "Test Node",
+    description: str | None = None,
+    order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
     mappings: list[Any] | None = None,
@@ -28,6 +32,10 @@ def _make_node(
     """Create a mock MaterialNode with required attributes."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
+    node.parent_id = parent_id
+    node.title = title
+    node.description = description
+    node.order = order
     node.children = children or []
     node.materials = materials or []
     node.slide_video_mappings = mappings or []
@@ -491,6 +499,76 @@ class TestModePassthrough:
         # create called with mode="guided"
         create_kwargs = deps.snap_repo.create.call_args.kwargs
         assert create_kwargs["mode"] == "guided"
+
+
+class TestGuidedModeAgent:
+    """Guided mode: agent gets mode='guided' + existing_structure."""
+
+    @pytest.mark.asyncio
+    async def test_guided_mode_passes_existing_structure(
+        self,
+        job_id: str,
+        course_id: str,
+    ) -> None:
+        """Guided mode passes serialized tree as existing_structure."""
+        entry = _make_entry(state="ready")
+        root = _make_node(
+            materials=[entry], title="My Module", description="About Python"
+        )
+
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, course_id, deps, mode="guided")
+
+        run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
+        assert run_kwargs["existing_structure"] is not None
+        assert "My Module" in run_kwargs["existing_structure"]
+
+    @pytest.mark.asyncio
+    async def test_guided_mode_preserves_hierarchy(
+        self,
+        job_id: str,
+        course_id: str,
+    ) -> None:
+        """Guided mode serializes nested tree with children."""
+        import json
+
+        entry = _make_entry(state="ready")
+        child = _make_node(title="Lesson 1", description="First lesson")
+        child.parent_id = uuid.uuid4()  # has parent
+        root = _make_node(
+            materials=[entry],
+            title="Module A",
+            children=[child],
+        )
+        root.parent_id = None  # root node
+
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, course_id, deps, mode="guided")
+
+        run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
+        tree = json.loads(run_kwargs["existing_structure"])
+        assert tree[0]["title"] == "Module A"
+        assert "children" in tree[0]
+        assert tree[0]["children"][0]["title"] == "Lesson 1"
+
+    @pytest.mark.asyncio
+    async def test_free_mode_no_existing_structure(
+        self,
+        job_id: str,
+        course_id: str,
+    ) -> None:
+        """Free mode passes existing_structure=None to agent."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, course_id, deps, mode="free")
+
+        run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
+        assert run_kwargs["existing_structure"] is None
 
 
 class TestNodeNotFound:

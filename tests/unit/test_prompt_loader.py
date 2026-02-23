@@ -91,6 +91,37 @@ class TestFormatUserPrompt:
         assert result == "Context: "
 
 
+class TestFormatUserPromptKwargs:
+    def test_extra_kwargs_substituted(self) -> None:
+        """Extra kwargs are substituted in the template."""
+        template = "Structure:\n{existing_structure}\nMaterials:\n{context}"
+        result = format_user_prompt(
+            template, "video transcript", existing_structure="Module 1 > Lesson 1"
+        )
+        assert "Module 1 > Lesson 1" in result
+        assert "video transcript" in result
+        assert "{existing_structure}" not in result
+
+    def test_missing_kwarg_leaves_placeholder(self) -> None:
+        """Missing kwarg leaves placeholder unreplaced."""
+        template = "Structure:\n{existing_structure}\nMaterials:\n{context}"
+        result = format_user_prompt(template, "data")
+        assert "{existing_structure}" in result
+        assert "data" in result
+
+    def test_context_containing_placeholder_not_cross_substituted(self) -> None:
+        """Context with {existing_structure} must not be replaced by kwargs."""
+        template = "Structure:\n{existing_structure}\nMaterials:\n{context}"
+        malicious_context = "json with {existing_structure} inside"
+        result = format_user_prompt(
+            template,
+            malicious_context,
+            existing_structure="Module 1",
+        )
+        assert "json with {existing_structure} inside" in result
+        assert result.startswith("Structure:\nModule 1")
+
+
 class TestPromptFileContent:
     def test_v1_prompt_loads_successfully(self) -> None:
         """The actual v1.yaml prompt file loads without errors."""
@@ -101,7 +132,7 @@ class TestPromptFileContent:
     def test_v1_prompt_has_version(self) -> None:
         """The actual v1.yaml has version field."""
         data = load_prompt("prompts/architect/v1.yaml")
-        assert data.version == "v1"
+        assert data.version == "v1_free"
 
     def test_v1_prompt_describes_learning_goals(self) -> None:
         """The actual v1.yaml system prompt mentions learning goals."""
@@ -109,3 +140,21 @@ class TestPromptFileContent:
         assert "learning_goal" in data.system_prompt
         assert "expected_knowledge" in data.system_prompt
         assert "expected_skills" in data.system_prompt
+
+    def test_v1_guided_prompt_loads(self) -> None:
+        """The actual v1_guided.yaml loads without errors."""
+        data = load_prompt("prompts/architect/v1_guided.yaml")
+        assert isinstance(data, PromptData)
+        assert data.version == "v1_guided"
+
+    def test_v1_guided_has_existing_structure_placeholder(self) -> None:
+        """The guided prompt template has {existing_structure} placeholder."""
+        data = load_prompt("prompts/architect/v1_guided.yaml")
+        assert "{existing_structure}" in data.user_prompt_template
+        assert "{context}" in data.user_prompt_template
+
+    def test_v1_guided_system_mentions_preserve(self) -> None:
+        """The guided system prompt mentions preserving existing hierarchy."""
+        data = load_prompt("prompts/architect/v1_guided.yaml")
+        assert "existing" in data.system_prompt.lower()
+        assert "preserve" in data.system_prompt.lower()

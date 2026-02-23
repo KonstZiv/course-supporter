@@ -1,4 +1,4 @@
-version: "v1"
+version: "v1_free"
 
 system_prompt: |
   You are an expert Course Architect specializing in instructional design.

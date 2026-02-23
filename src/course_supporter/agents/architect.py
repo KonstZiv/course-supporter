@@ -1,6 +1,8 @@
 """ArchitectAgent: generates course structure from materials via LLM."""
 
-from typing import NamedTuple
+from __future__ import annotations
+
+from typing import Literal, NamedTuple
 
 import structlog
 
@@ -11,7 +13,10 @@ from course_supporter.models.course import CourseContext, CourseStructure
 
 logger = structlog.get_logger()
 
-DEFAULT_PROMPT_PATH = "prompts/architect/v1.yaml"
+PROMPT_PATHS: dict[str, str] = {
+    "free": "prompts/architect/v1.yaml",
+    "guided": "prompts/architect/v1_guided.yaml",
+}
 
 
 class GenerationResult(NamedTuple):
@@ -55,7 +60,8 @@ class ArchitectAgent:
 
     Args:
         router: ModelRouter instance for LLM calls.
-        prompt_path: Path to YAML prompt template.
+        mode: Generation mode ('free' or 'guided').
+        prompt_path: Override path to YAML prompt template (ignores mode).
         strategy: Routing strategy ('default', 'quality', 'budget').
         temperature: LLM temperature (0.0 = deterministic).
         max_tokens: Maximum output tokens.
@@ -65,24 +71,32 @@ class ArchitectAgent:
         self,
         router: ModelRouter,
         *,
-        prompt_path: str = DEFAULT_PROMPT_PATH,
+        mode: Literal["free", "guided"] = "free",
+        prompt_path: str | None = None,
         strategy: str = "default",
         temperature: float = 0.0,
         max_tokens: int = 8192,
     ) -> None:
         self._router = router
-        self._prompt_path = prompt_path
+        self._mode = mode
+        self._prompt_path = prompt_path or PROMPT_PATHS[mode]
         self._strategy = strategy
         self._temperature = temperature
         self._max_tokens = max_tokens
 
-    async def run(self, context: CourseContext) -> CourseStructure:
+    async def run(
+        self,
+        context: CourseContext,
+        *,
+        existing_structure: str | None = None,
+    ) -> CourseStructure:
         """Generate course structure from materials.
 
         Orchestrates the pipeline: prepare prompts -> generate via LLM.
 
         Args:
             context: Unified course context from ingestion pipeline.
+            existing_structure: Serialized existing tree for guided mode.
 
         Returns:
             Validated CourseStructure from LLM.
@@ -91,13 +105,18 @@ class ArchitectAgent:
             AllModelsFailedError: If all models in all strategies fail.
             FileNotFoundError: If prompt file not found.
         """
-        prepared = self._prepare_prompts(context)
+        prepared = self._prepare_prompts(context, existing_structure=existing_structure)
         structure, _response = await self._generate(
             prepared, documents_count=len(context.documents)
         )
         return structure
 
-    async def run_with_metadata(self, context: CourseContext) -> GenerationResult:
+    async def run_with_metadata(
+        self,
+        context: CourseContext,
+        *,
+        existing_structure: str | None = None,
+    ) -> GenerationResult:
         """Generate course structure with full LLM metadata.
 
         Same pipeline as :meth:`run` but returns prompt version and
@@ -105,6 +124,7 @@ class ArchitectAgent:
 
         Args:
             context: Unified course context from ingestion pipeline.
+            existing_structure: Serialized existing tree for guided mode.
 
         Returns:
             GenerationResult with structure, prompt_version, and LLMResponse.
@@ -113,7 +133,7 @@ class ArchitectAgent:
             AllModelsFailedError: If all models in all strategies fail.
             FileNotFoundError: If prompt file not found.
         """
-        prepared = self._prepare_prompts(context)
+        prepared = self._prepare_prompts(context, existing_structure=existing_structure)
         structure, response = await self._generate(
             prepared, documents_count=len(context.documents)
         )
@@ -123,14 +143,21 @@ class ArchitectAgent:
             response=response,
         )
 
-    def _prepare_prompts(self, context: CourseContext) -> PreparedPrompt:
+    def _prepare_prompts(
+        self,
+        context: CourseContext,
+        *,
+        existing_structure: str | None = None,
+    ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
         Loads YAML prompt file, serializes CourseContext to JSON,
-        and injects it into the user prompt template.
+        and injects it into the user prompt template. For guided mode,
+        also injects the existing structure.
 
         Args:
             context: Course context to serialize into the prompt.
+            existing_structure: Serialized existing tree for guided mode.
 
         Returns:
             PreparedPrompt with system prompt, formatted user prompt,
@@ -141,9 +168,17 @@ class ArchitectAgent:
             ValidationError: If YAML missing required keys.
         """
         prompt_data = load_prompt(self._prompt_path)
+
+        kwargs: dict[str, str] = {}
+        if self._mode == "guided":
+            kwargs["existing_structure"] = (
+                existing_structure or "No existing structure provided."
+            )
+
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
             context.model_dump_json(),
+            **kwargs,
         )
         return PreparedPrompt(
             system_prompt=prompt_data.system_prompt,
@@ -178,6 +213,7 @@ class ArchitectAgent:
             prompt_version=prepared.prompt_version,
             documents_count=documents_count,
             context_chars=len(prepared.user_prompt),
+            mode=self._mode,
         )
 
         result, response = await self._router.complete_structured(

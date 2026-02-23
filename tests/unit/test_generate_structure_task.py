@@ -9,13 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.agents.architect import GenerationResult
-from course_supporter.api.tasks import (
-    _find_node_bfs,
-    _flatten_subtree,
-    arq_generate_structure,
-)
+from course_supporter.api.tasks import arq_generate_structure
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import CourseStructure, ModuleOutput
+from course_supporter.tree_utils import find_node_bfs, flatten_subtree
 
 # ── Helpers ──
 
@@ -94,14 +91,14 @@ def _sample_gen_result() -> GenerationResult:
     )
 
 
-# ── _flatten_subtree / _find_node_bfs ──
+# ── flatten_subtree / find_node_bfs ──
 
 
 class TestFlattenSubtree:
     def test_single_node(self) -> None:
         """Single node without children returns list of one."""
         root = _make_node()
-        assert _flatten_subtree(root) == [root]
+        assert flatten_subtree(root) == [root]
 
     def test_nested_tree(self) -> None:
         """Collects all descendants via BFS."""
@@ -110,7 +107,7 @@ class TestFlattenSubtree:
         grandchild = _make_node()
         child1.children = [grandchild]
         root = _make_node(children=[child1, child2])
-        result = _flatten_subtree(root)
+        result = flatten_subtree(root)
         assert len(result) == 4
         assert result[0] is root
         assert grandchild in result
@@ -122,12 +119,12 @@ class TestFindNodeBfs:
         target_id = uuid.uuid4()
         target = _make_node(node_id=target_id)
         root = _make_node(children=[_make_node(children=[target])])
-        assert _find_node_bfs([root], target_id) is target
+        assert find_node_bfs([root], target_id) is target
 
     def test_returns_none_for_missing(self) -> None:
         """Returns None when node not found."""
         root = _make_node()
-        assert _find_node_bfs([root], uuid.uuid4()) is None
+        assert find_node_bfs([root], uuid.uuid4()) is None
 
 
 # ── arq_generate_structure ──

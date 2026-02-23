@@ -18,6 +18,8 @@ from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.models.course import SlideTimecodeRef
+    from course_supporter.models.source import SourceDocument
     from course_supporter.storage.orm import MaterialNode, SourceMaterial
     from course_supporter.storage.s3 import S3Client
 
@@ -160,40 +162,99 @@ async def arq_ingest_material(
     log.info("ingestion_done")
 
 
-def _flatten_subtree(root: MaterialNode) -> list[MaterialNode]:
-    """BFS from root collecting all nodes (children must be populated).
+def _resolve_target_nodes(
+    root_nodes: list[MaterialNode],
+    course_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+) -> tuple[MaterialNode | None, list[MaterialNode]]:
+    """Resolve target node and flatten its subtree.
 
     Args:
-        root: Root node of the subtree with children eagerly loaded.
+        root_nodes: Root-level nodes from get_tree().
+        course_id: Course UUID (for error messages).
+        node_id: Target node UUID, or None for whole course.
 
     Returns:
-        Flat list of all nodes in the subtree, root first.
+        Tuple of (target_node_or_None, flat_node_list).
+
+    Raises:
+        NodeNotFoundError: If node_id is given but not found.
     """
-    from collections import deque
+    from course_supporter.errors import NodeNotFoundError
+    from course_supporter.tree_utils import find_node_bfs, flatten_subtree
 
-    result: list[MaterialNode] = []
-    queue: deque[MaterialNode] = deque([root])
-    while queue:
-        node = queue.popleft()
-        result.append(node)
-        queue.extend(node.children)
-    return result
+    if node_id is not None:
+        target = find_node_bfs(root_nodes, node_id)
+        if target is None:
+            msg = f"Node {node_id} not found in course {course_id}"
+            raise NodeNotFoundError(msg)
+        return target, flatten_subtree(target)
+
+    flat: list[MaterialNode] = []
+    for rn in root_nodes:
+        flat.extend(flatten_subtree(rn))
+    return None, flat
 
 
-def _find_node_bfs(
-    roots: list[MaterialNode],
-    target_id: uuid.UUID,
-) -> MaterialNode | None:
-    """BFS across roots to find node by ID."""
-    from collections import deque
+def _collect_ready_documents(
+    flat_nodes: list[MaterialNode],
+) -> list[SourceDocument]:
+    """Extract SourceDocuments from READY MaterialEntries.
 
-    queue: deque[MaterialNode] = deque(roots)
-    while queue:
-        node = queue.popleft()
-        if node.id == target_id:
-            return node
-        queue.extend(node.children)
-    return None
+    Args:
+        flat_nodes: Flat list of nodes with materials loaded.
+
+    Returns:
+        Deserialized SourceDocument list.
+
+    Raises:
+        NoReadyMaterialsError: If no READY entries found.
+    """
+    from course_supporter.errors import NoReadyMaterialsError
+    from course_supporter.models.source import SourceDocument
+    from course_supporter.storage.orm import MaterialState
+
+    documents: list[SourceDocument] = []
+    for node in flat_nodes:
+        for entry in node.materials:
+            if entry.state == MaterialState.READY:
+                documents.append(
+                    SourceDocument.model_validate_json(
+                        entry.processed_content,  # type: ignore[arg-type]
+                    )
+                )
+
+    if not documents:
+        msg = "No READY materials found for generation"
+        raise NoReadyMaterialsError(msg)
+    return documents
+
+
+def _collect_validated_mappings(
+    flat_nodes: list[MaterialNode],
+) -> list[SlideTimecodeRef]:
+    """Extract SlideTimecodeRef from validated SlideVideoMappings.
+
+    Args:
+        flat_nodes: Flat list of nodes with slide_video_mappings loaded.
+
+    Returns:
+        List of SlideTimecodeRef (may be empty).
+    """
+    from course_supporter.models.course import SlideTimecodeRef
+    from course_supporter.storage.orm import MappingValidationState
+
+    mappings: list[SlideTimecodeRef] = []
+    for node in flat_nodes:
+        for svm in node.slide_video_mappings:
+            if svm.validation_state == MappingValidationState.VALIDATED:
+                mappings.append(
+                    SlideTimecodeRef(
+                        slide_number=svm.slide_number,
+                        video_timecode_start=svm.video_timecode_start,
+                    )
+                )
+    return mappings
 
 
 async def arq_generate_structure(
@@ -219,15 +280,9 @@ async def arq_generate_structure(
     from course_supporter.agents.architect import ArchitectAgent
     from course_supporter.fingerprint import FingerprintService
     from course_supporter.ingestion.merge import MergeStep
-    from course_supporter.models.course import SlideTimecodeRef
-    from course_supporter.models.source import SourceDocument
     from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.material_node_repository import (
         MaterialNodeRepository,
-    )
-    from course_supporter.storage.orm import (
-        MappingValidationState,
-        MaterialState,
     )
     from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -252,52 +307,17 @@ async def arq_generate_structure(
             await job_repo.update_status(jid, "active")
             await session.commit()
 
-            # Load tree with materials
+            # Load tree → resolve target → flatten
             node_repo = MaterialNodeRepository(session)
             root_nodes: list[MaterialNode] = await node_repo.get_tree(
                 cid,
                 include_materials=True,
             )
+            target, flat_nodes = _resolve_target_nodes(root_nodes, cid, nid)
 
-            # Determine target nodes
-            if nid is not None:
-                target = _find_node_bfs(root_nodes, nid)
-                if target is None:
-                    msg = f"Node {nid} not found in course {cid}"
-                    raise ValueError(msg)
-                flat_nodes = _flatten_subtree(target)
-            else:
-                target = None
-                flat_nodes = []
-                for rn in root_nodes:
-                    flat_nodes.extend(_flatten_subtree(rn))
-
-            # Collect READY materials → SourceDocument
-            documents: list[SourceDocument] = []
-            for node in flat_nodes:
-                for entry in node.materials:
-                    if entry.state == MaterialState.READY:
-                        documents.append(
-                            SourceDocument.model_validate_json(
-                                entry.processed_content,  # type: ignore[arg-type]
-                            )
-                        )
-
-            if not documents:
-                msg = "No READY materials found for generation"
-                raise ValueError(msg)
-
-            # Collect validated SlideVideoMappings → SlideTimecodeRef
-            mappings: list[SlideTimecodeRef] = []
-            for node in flat_nodes:
-                for svm in node.slide_video_mappings:
-                    if svm.validation_state == MappingValidationState.VALIDATED:
-                        mappings.append(
-                            SlideTimecodeRef(
-                                slide_number=svm.slide_number,
-                                video_timecode_start=svm.video_timecode_start,
-                            )
-                        )
+            # Collect data for generation
+            documents = _collect_ready_documents(flat_nodes)
+            mappings = _collect_validated_mappings(flat_nodes)
 
             # Merge
             context = MergeStep().merge(

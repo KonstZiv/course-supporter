@@ -8,9 +8,11 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import CourseStructureSnapshot
-
-_NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+from course_supporter.storage.orm import (
+    NIL_UUID,
+    CourseStructureSnapshot,
+    GenerationMode,
+)
 
 
 class SnapshotRepository:
@@ -29,7 +31,7 @@ class SnapshotRepository:
         course_id: uuid.UUID,
         node_id: uuid.UUID | None = None,
         node_fingerprint: str,
-        mode: str,
+        mode: GenerationMode | str,
         structure: dict[str, Any],
         prompt_version: str | None = None,
         model_id: str | None = None,
@@ -64,7 +66,7 @@ class SnapshotRepository:
         course_id: uuid.UUID,
         node_id: uuid.UUID | None,
         node_fingerprint: str,
-        mode: str,
+        mode: GenerationMode | str,
     ) -> CourseStructureSnapshot | None:
         """Find snapshot by the unique identity key.
 
@@ -73,8 +75,8 @@ class SnapshotRepository:
         """
         stmt = select(CourseStructureSnapshot).where(
             CourseStructureSnapshot.course_id == course_id,
-            func.coalesce(CourseStructureSnapshot.node_id, _NIL_UUID)
-            == (node_id or _NIL_UUID),
+            func.coalesce(CourseStructureSnapshot.node_id, NIL_UUID)
+            == (node_id or NIL_UUID),
             CourseStructureSnapshot.node_fingerprint == node_fingerprint,
             CourseStructureSnapshot.mode == mode,
         )

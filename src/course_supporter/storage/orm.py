@@ -370,6 +370,10 @@ class SlideVideoMapping(Base):
 # ──────────────────────────────────────────────
 
 
+NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+"""Sentinel UUID used in COALESCE expressions for nullable node_id."""
+
+
 class GenerationMode(StrEnum):
     """Mode used for course structure generation."""
 
@@ -392,7 +396,7 @@ class CourseStructureSnapshot(Base):
         Index(
             "uq_snapshots_identity",
             "course_id",
-            text("COALESCE(node_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            text(f"COALESCE(node_id, '{NIL_UUID}'::uuid)"),
             "node_fingerprint",
             "mode",
             unique=True,

@@ -169,31 +169,11 @@ def _resolve_target_nodes(
 ) -> tuple[MaterialNode | None, list[MaterialNode]]:
     """Resolve target node and flatten its subtree.
 
-    Args:
-        root_nodes: Root-level nodes from get_tree().
-        course_id: Course UUID (for error messages).
-        node_id: Target node UUID, or None for whole course.
-
-    Returns:
-        Tuple of (target_node_or_None, flat_node_list).
-
-    Raises:
-        NodeNotFoundError: If node_id is given but not found.
+    Thin wrapper around :func:`tree_utils.resolve_target_nodes`.
     """
-    from course_supporter.errors import NodeNotFoundError
-    from course_supporter.tree_utils import find_node_bfs, flatten_subtree
+    from course_supporter.tree_utils import resolve_target_nodes
 
-    if node_id is not None:
-        target = find_node_bfs(root_nodes, node_id)
-        if target is None:
-            msg = f"Node {node_id} not found in course {course_id}"
-            raise NodeNotFoundError(msg)
-        return target, flatten_subtree(target)
-
-    flat: list[MaterialNode] = []
-    for rn in root_nodes:
-        flat.extend(flatten_subtree(rn))
-    return None, flat
+    return resolve_target_nodes(root_nodes, course_id, node_id)
 
 
 def _collect_ready_documents(

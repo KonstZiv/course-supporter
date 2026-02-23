@@ -87,7 +87,7 @@ class _Deps:
 
         # JobRepository
         self.job_repo = AsyncMock()
-        self.job_repo.get_active_for_course = AsyncMock(
+        self.job_repo.get_active_generation_jobs = AsyncMock(
             return_value=active_gen_jobs or [],
         )
 

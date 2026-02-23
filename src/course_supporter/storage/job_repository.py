@@ -152,6 +152,20 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_active_generation_jobs(self, course_id: uuid.UUID) -> list[Job]:
+        """Get active generation jobs (queued or running) for a course."""
+        stmt = (
+            select(Job)
+            .where(
+                Job.course_id == course_id,
+                Job.status.in_(["queued", "active"]),
+                Job.job_type == "generate_structure",
+            )
+            .order_by(Job.queued_at)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_active_for_node(self, node_id: uuid.UUID) -> list[Job]:
         """Get all active jobs for a specific node."""
         stmt = (

@@ -115,7 +115,6 @@ async def trigger_generation(
         GenerationConflictError: If an active generation overlaps.
         NoReadyMaterialsError: If subtree has no materials at all.
     """
-    from course_supporter.api.tasks import _resolve_target_nodes
     from course_supporter.conflict_detection import detect_conflict
     from course_supporter.enqueue import enqueue_generation, enqueue_ingestion
     from course_supporter.errors import (
@@ -128,6 +127,7 @@ async def trigger_generation(
         MaterialNodeRepository,
     )
     from course_supporter.storage.snapshot_repository import SnapshotRepository
+    from course_supporter.tree_utils import resolve_target_nodes
 
     log = structlog.get_logger().bind(
         course_id=str(course_id),
@@ -142,15 +142,11 @@ async def trigger_generation(
         course_id,
         include_materials=True,
     )
-    target, flat_nodes = _resolve_target_nodes(root_nodes, course_id, node_id)
+    target, flat_nodes = resolve_target_nodes(root_nodes, course_id, node_id)
 
     # 2. Conflict detection
     job_repo = JobRepository(session)
-    active_gen_jobs = [
-        j
-        for j in await job_repo.get_active_for_course(course_id)
-        if j.job_type == "generate_structure"
-    ]
+    active_gen_jobs = await job_repo.get_active_generation_jobs(course_id)
     conflict = await detect_conflict(
         session,
         course_id,

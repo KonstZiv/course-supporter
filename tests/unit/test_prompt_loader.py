@@ -109,6 +109,18 @@ class TestFormatUserPromptKwargs:
         assert "{existing_structure}" in result
         assert "data" in result
 
+    def test_context_containing_placeholder_not_cross_substituted(self) -> None:
+        """Context with {existing_structure} must not be replaced by kwargs."""
+        template = "Structure:\n{existing_structure}\nMaterials:\n{context}"
+        malicious_context = "json with {existing_structure} inside"
+        result = format_user_prompt(
+            template,
+            malicious_context,
+            existing_structure="Module 1",
+        )
+        assert "json with {existing_structure} inside" in result
+        assert result.startswith("Structure:\nModule 1")
+
 
 class TestPromptFileContent:
     def test_v1_prompt_loads_successfully(self) -> None:

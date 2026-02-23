@@ -66,7 +66,7 @@ system_prompt: |
   - **title**: lesson title
   - **video_start_timecode** / **video_end_timecode**: time range in source video
     (format "HH:MM:SS", null if no video)
-  - **slide_range**: {{"start": N, "end": M}} from presentation (null if no slides)
+  - **slide_range**: {"start": N, "end": M} from presentation (null if no slides)
   - **concepts**: list of concept cards
   - **exercises**: list of exercises
 

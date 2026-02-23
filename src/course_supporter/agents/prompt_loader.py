@@ -1,5 +1,6 @@
 """Prompt template loading and formatting utilities."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -43,12 +44,15 @@ def load_prompt(path: str | Path) -> PromptData:
     return PromptData.model_validate(data)
 
 
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+
+
 def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
     """Format user prompt template with context and optional extras.
 
-    Uses ``str.replace`` for each placeholder instead of ``str.format``
-    so that braces inside substituted values (e.g. JSON in *context*)
-    are never misinterpreted as format placeholders.
+    Uses a single-pass regex substitution so that values already
+    injected (e.g. *context* containing ``{existing_structure}``)
+    are never re-scanned for further placeholders.
 
     Args:
         template: Prompt template with {context} placeholder and
@@ -59,7 +63,10 @@ def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
     Returns:
         Formatted prompt string.
     """
-    result = template.replace("{context}", context)
-    for key, value in kwargs.items():
-        result = result.replace(f"{{{key}}}", value)
-    return result
+    replacements: dict[str, str] = {"context": context, **kwargs}
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return replacements.get(key, match.group(0))
+
+    return _PLACEHOLDER_RE.sub(_replace, template)

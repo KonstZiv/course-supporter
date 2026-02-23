@@ -8,7 +8,7 @@ structure generation for that scope.
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -103,9 +103,9 @@ class ReadinessService:
                 children_map[node.parent_id].append(node)
 
         subtree_ids: set[uuid.UUID] = {root_id}
-        queue = [root_id]
+        queue: deque[uuid.UUID] = deque([root_id])
         while queue:
-            current_id = queue.pop()
+            current_id = queue.popleft()
             for child in children_map.get(current_id, []):
                 if child.id not in subtree_ids:
                     subtree_ids.add(child.id)

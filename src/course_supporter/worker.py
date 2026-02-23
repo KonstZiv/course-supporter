@@ -14,7 +14,7 @@ from typing import Any, ClassVar
 import structlog
 from arq.connections import RedisSettings
 
-from course_supporter.api.tasks import arq_ingest_material
+from course_supporter.api.tasks import arq_generate_structure, arq_ingest_material
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
 
@@ -94,7 +94,7 @@ class WorkerSettings:
     redis_settings: RedisSettings = RedisSettings.from_dsn(
         _settings.redis_url,
     )
-    functions: ClassVar[list[Any]] = [arq_ingest_material]
+    functions: ClassVar[list[Any]] = [arq_ingest_material, arq_generate_structure]
     on_startup = startup
     on_shutdown = shutdown
 

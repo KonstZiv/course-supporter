@@ -6,11 +6,24 @@ import structlog
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.llm.router import ModelRouter
+from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import CourseContext, CourseStructure
 
 logger = structlog.get_logger()
 
 DEFAULT_PROMPT_PATH = "prompts/architect/v1.yaml"
+
+
+class GenerationResult(NamedTuple):
+    """Result of structure generation including LLM metadata.
+
+    Bundles the validated structure, prompt version used, and full
+    LLM response with token counts and cost for persistence.
+    """
+
+    structure: CourseStructure
+    prompt_version: str
+    response: LLMResponse
 
 
 class PreparedPrompt(NamedTuple):
@@ -79,7 +92,36 @@ class ArchitectAgent:
             FileNotFoundError: If prompt file not found.
         """
         prepared = self._prepare_prompts(context)
-        return await self._generate(prepared, documents_count=len(context.documents))
+        structure, _response = await self._generate(
+            prepared, documents_count=len(context.documents)
+        )
+        return structure
+
+    async def run_with_metadata(self, context: CourseContext) -> GenerationResult:
+        """Generate course structure with full LLM metadata.
+
+        Same pipeline as :meth:`run` but returns prompt version and
+        LLM response (model_id, tokens, cost) for persistence.
+
+        Args:
+            context: Unified course context from ingestion pipeline.
+
+        Returns:
+            GenerationResult with structure, prompt_version, and LLMResponse.
+
+        Raises:
+            AllModelsFailedError: If all models in all strategies fail.
+            FileNotFoundError: If prompt file not found.
+        """
+        prepared = self._prepare_prompts(context)
+        structure, response = await self._generate(
+            prepared, documents_count=len(context.documents)
+        )
+        return GenerationResult(
+            structure=structure,
+            prompt_version=prepared.prompt_version,
+            response=response,
+        )
 
     def _prepare_prompts(self, context: CourseContext) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
@@ -114,18 +156,18 @@ class ArchitectAgent:
         prepared: PreparedPrompt,
         *,
         documents_count: int = 0,
-    ) -> CourseStructure:
-        """Step 2: Call LLM and return validated CourseStructure.
+    ) -> tuple[CourseStructure, LLMResponse]:
+        """Step 2: Call LLM and return validated CourseStructure with response.
 
         Sends prepared prompts to ModelRouter with structured output
-        and returns the parsed Pydantic model.
+        and returns the parsed Pydantic model alongside raw LLM response.
 
         Args:
             prepared: Formatted prompts from _prepare_prompts step.
             documents_count: Number of documents for logging.
 
         Returns:
-            Validated CourseStructure from LLM.
+            Tuple of (CourseStructure, LLMResponse).
 
         Raises:
             AllModelsFailedError: If all models in all strategies fail.
@@ -158,4 +200,4 @@ class ArchitectAgent:
             cost_usd=response.cost_usd,
         )
 
-        return structure
+        return structure, response

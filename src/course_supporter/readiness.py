@@ -8,6 +8,7 @@ structure generation for that scope.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -83,7 +84,8 @@ class ReadinessService:
         """
         root = await self._session.get(MaterialNode, root_id)
         if root is None:
-            return []
+            msg = f"Node {root_id} not found"
+            raise ValueError(msg)
 
         stmt = (
             select(MaterialNode)
@@ -93,16 +95,20 @@ class ReadinessService:
         result = await self._session.execute(stmt)
         all_nodes = list(result.scalars().all())
 
-        # Build parent→children lookup and collect subtree
+        # Build parent→children index for O(N) BFS
         by_id: dict[uuid.UUID, MaterialNode] = {n.id: n for n in all_nodes}
+        children_map: defaultdict[uuid.UUID, list[MaterialNode]] = defaultdict(list)
+        for node in all_nodes:
+            if node.parent_id is not None:
+                children_map[node.parent_id].append(node)
+
         subtree_ids: set[uuid.UUID] = {root_id}
-        # BFS to find all descendants
         queue = [root_id]
         while queue:
             current_id = queue.pop()
-            for node in all_nodes:
-                if node.parent_id == current_id and node.id not in subtree_ids:
-                    subtree_ids.add(node.id)
-                    queue.append(node.id)
+            for child in children_map.get(current_id, []):
+                if child.id not in subtree_ids:
+                    subtree_ids.add(child.id)
+                    queue.append(child.id)
 
         return [by_id[nid] for nid in subtree_ids if nid in by_id]

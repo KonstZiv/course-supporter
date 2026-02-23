@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from course_supporter.readiness import ReadinessService, StaleMaterial
 from course_supporter.storage.orm import MaterialEntry, MaterialNode, MaterialState
 
@@ -257,16 +259,14 @@ class TestNonBlockingStates:
 class TestMissingNode:
     """Edge case: node not found."""
 
-    async def test_missing_node_returns_ready(self) -> None:
-        """Non-existent node returns ready=True (empty subtree)."""
+    async def test_missing_node_raises(self) -> None:
+        """Non-existent node raises ValueError."""
         session = AsyncMock()
         session.get.return_value = None
         svc = ReadinessService(session)
 
-        result = await svc.check_subtree(uuid.uuid4())
-
-        assert result.ready is True
-        assert result.stale == []
+        with pytest.raises(ValueError, match="not found"):
+            await svc.check_subtree(uuid.uuid4())
 
 
 class TestStaleMaterialDataclass:

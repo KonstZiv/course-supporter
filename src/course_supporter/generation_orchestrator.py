@@ -63,9 +63,8 @@ def _partition_entries(
     return stale, ready
 
 
-async def _collect_pending_job_ids(
+def _collect_pending_job_ids(
     stale: list[MaterialEntry],
-    session: AsyncSession,
 ) -> list[str]:
     """Collect Job UUIDs (as str) for PENDING entries.
 
@@ -74,7 +73,6 @@ async def _collect_pending_job_ids(
 
     Args:
         stale: Stale entries (may include PENDING ones).
-        session: DB session for lookups.
 
     Returns:
         List of Job UUID strings for entries with pending_job_id.
@@ -169,7 +167,7 @@ async def trigger_generation(
         depends_on_ids: list[str] = []
 
         # Collect existing pending job IDs (skip re-enqueue)
-        pending_ids = await _collect_pending_job_ids(stale, session)
+        pending_ids = _collect_pending_job_ids(stale)
         depends_on_ids.extend(pending_ids)
 
         # Enqueue ingestion for non-PENDING stale entries

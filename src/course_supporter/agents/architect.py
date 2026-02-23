@@ -170,8 +170,10 @@ class ArchitectAgent:
         prompt_data = load_prompt(self._prompt_path)
 
         kwargs: dict[str, str] = {}
-        if existing_structure is not None:
-            kwargs["existing_structure"] = existing_structure
+        if self._mode == "guided":
+            kwargs["existing_structure"] = (
+                existing_structure or "No existing structure provided."
+            )
 
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,

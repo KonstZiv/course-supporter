@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.agents.architect import (
-    DEFAULT_PROMPT_PATH,
+    PROMPT_PATHS,
     ArchitectAgent,
     GenerationResult,
     PreparedPrompt,
@@ -62,7 +62,8 @@ class TestArchitectAgentInit:
     def test_default_params(self, mock_router: AsyncMock) -> None:
         """ArchitectAgent initializes with sensible defaults."""
         agent = ArchitectAgent(mock_router)
-        assert agent._prompt_path == DEFAULT_PROMPT_PATH
+        assert agent._prompt_path == PROMPT_PATHS["free"]
+        assert agent._mode == "free"
         assert agent._strategy == "default"
         assert agent._temperature == 0.0
         assert agent._max_tokens == 8192
@@ -80,6 +81,25 @@ class TestArchitectAgentInit:
         assert agent._strategy == "quality"
         assert agent._temperature == 0.3
         assert agent._max_tokens == 4096
+
+    def test_free_mode_uses_free_prompt(self, mock_router: AsyncMock) -> None:
+        """Free mode selects v1.yaml prompt."""
+        agent = ArchitectAgent(mock_router, mode="free")
+        assert agent._prompt_path == PROMPT_PATHS["free"]
+        assert agent._mode == "free"
+
+    def test_guided_mode_uses_guided_prompt(self, mock_router: AsyncMock) -> None:
+        """Guided mode selects v1_guided.yaml prompt."""
+        agent = ArchitectAgent(mock_router, mode="guided")
+        assert agent._prompt_path == PROMPT_PATHS["guided"]
+        assert agent._mode == "guided"
+
+    def test_explicit_prompt_path_overrides_mode(self, mock_router: AsyncMock) -> None:
+        """Explicit prompt_path overrides mode-based selection."""
+        agent = ArchitectAgent(
+            mock_router, mode="guided", prompt_path="custom/override.yaml"
+        )
+        assert agent._prompt_path == "custom/override.yaml"
 
 
 class TestPreparePrompts:
@@ -149,6 +169,54 @@ class TestPreparePrompts:
             prepared = agent._prepare_prompts(sample_context)
 
         assert prepared.prompt_version == "unknown"
+
+
+class TestGuidedModePrepare:
+    """Tests for guided mode prompt preparation with existing_structure."""
+
+    def test_existing_structure_in_prompt(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+    ) -> None:
+        """_prepare_prompts injects existing_structure into guided template."""
+        guided_data = PromptData(
+            version="v1_guided",
+            system_prompt="Guided system.",
+            user_prompt_template=(
+                "Structure:\n{existing_structure}\nMaterials:\n{context}"
+            ),
+        )
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=guided_data,
+        ):
+            agent = ArchitectAgent(mock_router, mode="guided")
+            prepared = agent._prepare_prompts(
+                sample_context,
+                existing_structure='[{"title": "Module 1"}]',
+            )
+
+        assert "Module 1" in prepared.user_prompt
+        assert prepared.prompt_version == "v1_guided"
+        assert "{existing_structure}" not in prepared.user_prompt
+
+    def test_free_mode_no_existing_structure(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """Free mode does not pass existing_structure."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router, mode="free")
+            prepared = agent._prepare_prompts(sample_context)
+
+        # No KeyError — free template has no {existing_structure} placeholder
+        assert "file:///test.md" in prepared.user_prompt
 
 
 class TestGenerate:
@@ -311,3 +379,32 @@ class TestRunWithMetadata:
 
         assert result.response.cost_usd == 0.042
         assert result.response.provider == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_guided_mode_passes_existing_structure(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+    ) -> None:
+        """run_with_metadata passes existing_structure to prompt preparation."""
+        guided_data = PromptData(
+            version="v1_guided",
+            system_prompt="Guided system.",
+            user_prompt_template=(
+                "Structure:\n{existing_structure}\nMaterials:\n{context}"
+            ),
+        )
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=guided_data,
+        ):
+            agent = ArchitectAgent(mock_router, mode="guided")
+            result = await agent.run_with_metadata(
+                sample_context,
+                existing_structure='[{"title": "Existing Module"}]',
+            )
+
+        assert result.prompt_version == "v1_guided"
+        # Verify the prompt contained the existing structure
+        call_kwargs = mock_router.complete_structured.call_args.kwargs
+        assert "Existing Module" in call_kwargs["prompt"]

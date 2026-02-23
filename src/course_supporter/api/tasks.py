@@ -237,6 +237,34 @@ def _collect_validated_mappings(
     return mappings
 
 
+def _serialize_tree_for_guided(
+    flat_nodes: list[MaterialNode],
+) -> str:
+    """Serialize node tree into a readable outline for guided-mode prompt.
+
+    Produces a compact JSON-like structure showing the node hierarchy
+    (titles, descriptions, order) so the LLM can preserve it.
+
+    Args:
+        flat_nodes: Flat list of nodes from resolve_target_nodes.
+
+    Returns:
+        JSON string representing the tree outline.
+    """
+    import json
+
+    nodes = []
+    for node in flat_nodes:
+        nodes.append(
+            {
+                "title": node.title,
+                "description": node.description,
+                "order": node.order,
+            }
+        )
+    return json.dumps(nodes, ensure_ascii=False, indent=2)
+
+
 async def arq_generate_structure(
     ctx: dict[str, Any],
     job_id: str,
@@ -332,8 +360,13 @@ async def arq_generate_structure(
                 return
 
             # Generate via ArchitectAgent
-            agent = ArchitectAgent(router)
-            gen_result = await agent.run_with_metadata(context)
+            existing_structure = (
+                _serialize_tree_for_guided(flat_nodes) if mode == "guided" else None
+            )
+            agent = ArchitectAgent(router, mode=mode)
+            gen_result = await agent.run_with_metadata(
+                context, existing_structure=existing_structure
+            )
 
             # Save snapshot
             snapshot = await snap_repo.create(

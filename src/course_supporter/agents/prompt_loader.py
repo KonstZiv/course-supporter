@@ -43,14 +43,16 @@ def load_prompt(path: str | Path) -> PromptData:
     return PromptData.model_validate(data)
 
 
-def format_user_prompt(template: str, context: str) -> str:
-    """Format user prompt template with context.
+def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
+    """Format user prompt template with context and optional extras.
 
     Args:
-        template: Prompt template with {context} placeholder.
+        template: Prompt template with {context} placeholder and
+            optional extra placeholders (e.g. {existing_structure}).
         context: Serialized CourseContext to inject.
+        **kwargs: Additional template variables (e.g. existing_structure).
 
     Returns:
         Formatted prompt string.
     """
-    return template.format(context=context)
+    return template.format(context=context, **kwargs)

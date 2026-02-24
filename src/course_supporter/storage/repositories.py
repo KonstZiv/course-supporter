@@ -279,7 +279,7 @@ class SlideVideoMappingRepository:
                     ]
                 ),
             )
-            .order_by(SlideVideoMapping.node_id, SlideVideoMapping.order)
+            .order_by(SlideVideoMapping.node_id, SlideVideoMapping.slide_number)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

@@ -450,6 +450,7 @@ class TestListSnapshots:
             mock_repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_course()
             )
+            mock_snap_cls.return_value.count_for_course = AsyncMock(return_value=3)
             mock_snap_cls.return_value.list_for_course = AsyncMock(return_value=snaps)
             resp = await client.get(
                 f"/api/v1/courses/{COURSE_ID}/structure/history",
@@ -477,6 +478,7 @@ class TestListSnapshots:
             mock_repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_course()
             )
+            mock_snap_cls.return_value.count_for_course = AsyncMock(return_value=0)
             mock_snap_cls.return_value.list_for_course = AsyncMock(return_value=[])
             resp = await client.get(
                 f"/api/v1/courses/{COURSE_ID}/structure/history",
@@ -489,7 +491,7 @@ class TestListSnapshots:
 
     async def test_pagination(self, client: AsyncClient) -> None:
         """Pagination with limit and offset works."""
-        snaps = [_make_snapshot(snapshot_id=uuid.uuid4()) for _ in range(5)]
+        page = [_make_snapshot(snapshot_id=uuid.uuid4()) for _ in range(2)]
 
         with (
             patch(
@@ -502,7 +504,8 @@ class TestListSnapshots:
             mock_repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_course()
             )
-            mock_snap_cls.return_value.list_for_course = AsyncMock(return_value=snaps)
+            mock_snap_cls.return_value.count_for_course = AsyncMock(return_value=5)
+            mock_snap_cls.return_value.list_for_course = AsyncMock(return_value=page)
             resp = await client.get(
                 f"/api/v1/courses/{COURSE_ID}/structure/history",
                 params={"limit": 2, "offset": 1},

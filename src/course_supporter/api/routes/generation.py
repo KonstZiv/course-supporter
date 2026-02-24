@@ -111,13 +111,11 @@ async def generate_structure(
     if plan.is_idempotent:
         response.status_code = 200
 
-    log = structlog.get_logger().bind(
+    logger.info(
+        "generation_triggered",
         course_id=str(course_id),
         node_id=str(body.node_id),
         mode=body.mode,
-    )
-    log.info(
-        "generation_triggered",
         is_idempotent=plan.is_idempotent,
         generation_job_id=(
             str(plan.generation_job.id) if plan.generation_job else None
@@ -183,10 +181,8 @@ async def list_snapshots(
     await _require_course(session, tenant.tenant_id, course_id)
 
     repo = SnapshotRepository(session)
-    all_snapshots = await repo.list_for_course(course_id)
-
-    total = len(all_snapshots)
-    page = all_snapshots[offset : offset + limit]
+    total = await repo.count_for_course(course_id)
+    page = await repo.list_for_course(course_id, limit=limit, offset=offset)
 
     return {
         "items": [SnapshotSummaryResponse.model_validate(s) for s in page],

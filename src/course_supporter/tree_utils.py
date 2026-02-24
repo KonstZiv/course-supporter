@@ -7,6 +7,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from course_supporter.models.course import MaterialNodeSummary
     from course_supporter.storage.orm import MaterialNode
 
 
@@ -81,6 +82,55 @@ def resolve_target_nodes(
     for rn in root_nodes:
         flat.extend(flatten_subtree(rn))
     return None, flat
+
+
+def build_material_tree_summary(
+    flat_nodes: list[MaterialNode],
+) -> list[MaterialNodeSummary]:
+    """Build tree summary with material titles for LLM context.
+
+    Rebuilds the parent-child hierarchy from ``flat_nodes`` and collects
+    filenames (or source URLs) from READY materials on each node.  The
+    result is a lightweight Pydantic tree suitable for serialisation
+    inside ``CourseContext``.
+
+    Args:
+        flat_nodes: Flat list of nodes from :func:`resolve_target_nodes`
+            (root first, children eagerly loaded).
+
+    Returns:
+        List of root-level :class:`MaterialNodeSummary` nodes.
+    """
+    from course_supporter.models.course import MaterialNodeSummary
+    from course_supporter.storage.orm import MaterialState
+
+    node_ids = {n.id for n in flat_nodes}
+
+    def _material_titles(node: MaterialNode) -> list[str]:
+        titles: list[str] = []
+        for entry in node.materials:
+            if entry.state == MaterialState.READY and (
+                title := (entry.filename or entry.source_url)
+            ):
+                titles.append(title)
+        return titles
+
+    def _node_to_summary(node: MaterialNode) -> MaterialNodeSummary:
+        return MaterialNodeSummary(
+            title=node.title,
+            description=node.description,
+            order=node.order,
+            material_titles=_material_titles(node),
+            children=sorted(
+                [_node_to_summary(c) for c in node.children if c.id in node_ids],
+                key=lambda x: x.order,
+            ),
+        )
+
+    roots = [
+        n for n in flat_nodes if n.parent_id is None or n.parent_id not in node_ids
+    ]
+    return [_node_to_summary(r) for r in roots]
 
 
 def serialize_tree_for_guided(

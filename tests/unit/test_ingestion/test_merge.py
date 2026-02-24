@@ -3,7 +3,11 @@
 import pytest
 
 from course_supporter.ingestion.merge import MergeStep
-from course_supporter.models.course import CourseContext, SlideTimecodeRef
+from course_supporter.models.course import (
+    CourseContext,
+    MaterialNodeSummary,
+    SlideTimecodeRef,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -223,3 +227,43 @@ class TestMergeStep:
         result = step.merge([_make_doc()])
 
         assert result.created_at is not None
+
+    def test_no_material_tree_default(self) -> None:
+        """No material_tree -> empty list in CourseContext."""
+        step = MergeStep()
+
+        result = step.merge([_make_doc()])
+
+        assert result.material_tree == []
+
+    def test_with_material_tree(self) -> None:
+        """material_tree passed through to CourseContext."""
+        step = MergeStep()
+        tree = [
+            MaterialNodeSummary(
+                title="Module 1",
+                order=0,
+                material_titles=["lecture.pdf"],
+                children=[
+                    MaterialNodeSummary(
+                        title="Lesson 1",
+                        order=0,
+                        material_titles=["video.mp4"],
+                    ),
+                ],
+            ),
+        ]
+
+        result = step.merge([_make_doc()], material_tree=tree)
+
+        assert len(result.material_tree) == 1
+        assert result.material_tree[0].title == "Module 1"
+        assert result.material_tree[0].children[0].title == "Lesson 1"
+
+    def test_material_tree_none_becomes_empty(self) -> None:
+        """material_tree=None defaults to empty list."""
+        step = MergeStep()
+
+        result = step.merge([_make_doc()], material_tree=None)
+
+        assert result.material_tree == []

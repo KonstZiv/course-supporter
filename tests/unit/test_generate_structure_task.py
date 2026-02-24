@@ -47,6 +47,8 @@ def _make_entry(
     *,
     state: str = "ready",
     processed_content: str | None = None,
+    filename: str | None = "test.md",
+    source_url: str = "file:///test.md",
 ) -> MagicMock:
     """Create a mock MaterialEntry."""
     entry = MagicMock()
@@ -54,6 +56,8 @@ def _make_entry(
     entry.processed_content = processed_content or (
         '{"source_type": "text", "source_url": "file:///test.md"}'
     )
+    entry.filename = filename
+    entry.source_url = source_url
     return entry
 
 
@@ -194,6 +198,9 @@ class _MockDeps:
         self.merge_instance = MagicMock()
         self.merge_cls = MagicMock(return_value=self.merge_instance)
 
+        # build_material_tree_summary — returns empty list by default
+        self.tree_summary: list[Any] = []
+
         # MaterialState / MappingValidationState — used for enum comparison
         # These are imported inside the function via lazy import, so we
         # let them resolve naturally. Our mock entries use string values
@@ -257,6 +264,10 @@ async def _run_task(
         patch(
             "course_supporter.ingestion.merge.MergeStep",
             deps.merge_cls,
+        ),
+        patch(
+            "course_supporter.tree_utils.build_material_tree_summary",
+            return_value=deps.tree_summary,
         ),
     ):
         await arq_generate_structure(

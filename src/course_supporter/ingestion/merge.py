@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import structlog
 
-from course_supporter.models.course import CourseContext, SlideTimecodeRef
+from course_supporter.models.course import (
+    CourseContext,
+    MaterialNodeSummary,
+    SlideTimecodeRef,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -38,15 +42,17 @@ class MergeStep:
         self,
         documents: list[SourceDocument],
         mappings: list[SlideTimecodeRef] | None = None,
+        material_tree: list[MaterialNodeSummary] | None = None,
     ) -> CourseContext:
         """Merge source documents and optional mappings into CourseContext.
 
         Args:
             documents: List of processed SourceDocuments.
             mappings: Optional slide<->video mappings for cross-referencing.
+            material_tree: Optional tree hierarchy with material associations.
 
         Returns:
-            CourseContext with sorted documents and mappings.
+            CourseContext with sorted documents, mappings, and tree metadata.
 
         Raises:
             ValueError: If documents list is empty.
@@ -76,6 +82,7 @@ class MergeStep:
         return CourseContext(
             documents=sorted_docs,
             slide_video_mappings=resolved_mappings,
+            material_tree=material_tree or [],
         )
 
     @staticmethod

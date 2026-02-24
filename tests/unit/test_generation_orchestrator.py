@@ -15,6 +15,7 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import (
     GenerationPlan,
+    MappingWarning,
     _partition_entries,
     trigger_generation,
 )
@@ -80,6 +81,7 @@ class _Deps:
         fingerprint: str = "a" * 64,
         enqueue_ingestion_job: MagicMock | None = None,
         enqueue_generation_job: MagicMock | None = None,
+        problematic_mappings: list[Any] | None = None,
     ) -> None:
         # MaterialNodeRepository
         self.node_repo = AsyncMock()
@@ -109,6 +111,12 @@ class _Deps:
         )
         self.enqueue_generation = AsyncMock(
             return_value=enqueue_generation_job or _make_job(),
+        )
+
+        # SlideVideoMappingRepository
+        self.mapping_repo = AsyncMock()
+        self.mapping_repo.get_problematic_by_node_ids = AsyncMock(
+            return_value=problematic_mappings or [],
         )
 
 
@@ -152,6 +160,10 @@ async def _run(
         patch(
             "course_supporter.enqueue.enqueue_generation",
             deps.enqueue_generation,
+        ),
+        patch(
+            "course_supporter.storage.repositories.SlideVideoMappingRepository",
+            return_value=deps.mapping_repo,
         ),
     ):
         return await trigger_generation(
@@ -336,3 +348,99 @@ class TestNoMaterials:
 
         with pytest.raises(NoReadyMaterialsError):
             await _run(deps)
+
+
+def _make_mapping_orm(
+    *,
+    mapping_id: uuid.UUID | None = None,
+    node_id: uuid.UUID | None = None,
+    slide_number: int = 1,
+    validation_state: str = "pending_validation",
+) -> MagicMock:
+    """Create a mock SlideVideoMapping."""
+    m = MagicMock()
+    m.id = mapping_id or uuid.uuid4()
+    m.node_id = node_id or uuid.uuid4()
+    m.slide_number = slide_number
+    m.validation_state = validation_state
+    return m
+
+
+class TestMappingWarnings:
+    @pytest.mark.asyncio
+    async def test_no_problematic_mappings(self) -> None:
+        """No problematic mappings → empty warnings."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+        deps = _Deps(root_nodes=[root], problematic_mappings=[])
+
+        plan = await _run(deps)
+
+        assert plan.mapping_warnings == []
+
+    @pytest.mark.asyncio
+    async def test_pending_mapping_in_warnings(self) -> None:
+        """Pending validation mapping appears in warnings."""
+        entry = _make_entry(state="ready")
+        node_id = uuid.uuid4()
+        root = _make_node(node_id=node_id, materials=[entry])
+        pending = _make_mapping_orm(
+            node_id=node_id,
+            slide_number=3,
+            validation_state="pending_validation",
+        )
+        deps = _Deps(root_nodes=[root], problematic_mappings=[pending])
+
+        plan = await _run(deps)
+
+        assert len(plan.mapping_warnings) == 1
+        w = plan.mapping_warnings[0]
+        assert isinstance(w, MappingWarning)
+        assert w.mapping_id == pending.id
+        assert w.node_id == node_id
+        assert w.slide_number == 3
+        assert w.validation_state == "pending_validation"
+
+    @pytest.mark.asyncio
+    async def test_failed_mapping_in_warnings(self) -> None:
+        """Validation failed mapping appears in warnings."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+        failed = _make_mapping_orm(validation_state="validation_failed")
+        deps = _Deps(root_nodes=[root], problematic_mappings=[failed])
+
+        plan = await _run(deps)
+
+        assert len(plan.mapping_warnings) == 1
+        assert plan.mapping_warnings[0].validation_state == "validation_failed"
+
+    @pytest.mark.asyncio
+    async def test_warnings_present_in_idempotent_plan(self) -> None:
+        """Warnings are included even for idempotent (snapshot exists) plans."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+        snap = _make_snapshot()
+        pending = _make_mapping_orm(validation_state="pending_validation")
+        deps = _Deps(
+            root_nodes=[root],
+            find_identity=snap,
+            problematic_mappings=[pending],
+        )
+
+        plan = await _run(deps)
+
+        assert plan.is_idempotent
+        assert len(plan.mapping_warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_warnings_present_in_cascade_plan(self) -> None:
+        """Warnings are included in cascade (stale materials) plans."""
+        raw = _make_entry(state="raw")
+        root = _make_node(materials=[raw])
+        failed = _make_mapping_orm(validation_state="validation_failed")
+        deps = _Deps(root_nodes=[root], problematic_mappings=[failed])
+
+        plan = await _run(deps)
+
+        assert len(plan.ingestion_jobs) == 1
+        assert len(plan.mapping_warnings) == 1

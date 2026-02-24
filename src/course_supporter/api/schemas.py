@@ -771,6 +771,20 @@ class GenerateRequest(BaseModel):
     )
 
 
+class MappingWarningResponse(BaseModel):
+    """Warning about a slide-video mapping with problematic validation state.
+
+    Non-blocking: does not prevent generation, only informs the user.
+    """
+
+    mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
+    node_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
+    slide_number: int = Field(description="Slide number in the presentation.")
+    validation_state: str = Field(
+        description="Validation state: 'pending_validation' or 'validation_failed'.",
+    )
+
+
 class GenerationPlanResponse(BaseModel):
     """Response for POST /courses/{id}/generate.
 
@@ -794,6 +808,13 @@ class GenerationPlanResponse(BaseModel):
         description=(
             "``true`` when an identical snapshot already exists "
             "(same fingerprint and mode). No new work enqueued."
+        ),
+    )
+    mapping_warnings: list[MappingWarningResponse] = Field(
+        default_factory=list,
+        description=(
+            "Slide-video mappings with problematic "
+            "validation states in the target subtree."
         ),
     )
 

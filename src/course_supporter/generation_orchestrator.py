@@ -102,6 +102,36 @@ def _collect_pending_job_ids(
     ]
 
 
+async def _collect_mapping_warnings(
+    session: AsyncSession,
+    flat_nodes: list[MaterialNode],
+) -> list[MappingWarning]:
+    """Collect non-blocking warnings about problematic slide-video mappings.
+
+    Args:
+        session: Active DB session.
+        flat_nodes: Flat list of nodes in the target subtree.
+
+    Returns:
+        List of warnings for pending/failed validation mappings.
+    """
+    from course_supporter.storage.orm import MappingValidationState
+    from course_supporter.storage.repositories import SlideVideoMappingRepository
+
+    mapping_repo = SlideVideoMappingRepository(session)
+    node_ids = [n.id for n in flat_nodes]
+    problematic = await mapping_repo.get_problematic_by_node_ids(node_ids)
+    return [
+        MappingWarning(
+            mapping_id=m.id,
+            node_id=m.node_id,
+            slide_number=m.slide_number,
+            validation_state=MappingValidationState(m.validation_state),
+        )
+        for m in problematic
+    ]
+
+
 async def trigger_generation(
     *,
     redis: ArqRedis,
@@ -163,21 +193,7 @@ async def trigger_generation(
     target, flat_nodes = resolve_target_nodes(root_nodes, course_id, node_id)
 
     # 1b. Collect mapping warnings (non-blocking)
-    from course_supporter.storage.orm import MappingValidationState
-    from course_supporter.storage.repositories import SlideVideoMappingRepository
-
-    mapping_repo = SlideVideoMappingRepository(session)
-    node_ids = [n.id for n in flat_nodes]
-    problematic = await mapping_repo.get_problematic_by_node_ids(node_ids)
-    mapping_warnings = [
-        MappingWarning(
-            mapping_id=m.id,
-            node_id=m.node_id,
-            slide_number=m.slide_number,
-            validation_state=MappingValidationState(m.validation_state),
-        )
-        for m in problematic
-    ]
+    mapping_warnings = await _collect_mapping_warnings(session, flat_nodes)
 
     # 2. Conflict detection
     job_repo = JobRepository(session)

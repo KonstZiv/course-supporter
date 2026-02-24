@@ -19,6 +19,7 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import GenerationPlan, MappingWarning
 from course_supporter.storage.database import get_session
+from course_supporter.storage.orm import MappingValidationState
 
 STUB_TENANT = MagicMock(
     tenant_id=uuid.uuid4(),
@@ -345,7 +346,7 @@ class TestGenerateStructure:
                     mapping_id=warning_id,
                     node_id=warning_node,
                     slide_number=5,
-                    validation_state="pending_validation",
+                    validation_state=MappingValidationState.PENDING_VALIDATION,
                 ),
             ],
         )

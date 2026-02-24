@@ -19,6 +19,7 @@ from course_supporter.generation_orchestrator import (
     _partition_entries,
     trigger_generation,
 )
+from course_supporter.storage.orm import MappingValidationState
 
 # ── Helpers ──
 
@@ -399,7 +400,7 @@ class TestMappingWarnings:
         assert w.mapping_id == pending.id
         assert w.node_id == node_id
         assert w.slide_number == 3
-        assert w.validation_state == "pending_validation"
+        assert w.validation_state == MappingValidationState.PENDING_VALIDATION
 
     @pytest.mark.asyncio
     async def test_failed_mapping_in_warnings(self) -> None:
@@ -412,7 +413,8 @@ class TestMappingWarnings:
         plan = await _run(deps)
 
         assert len(plan.mapping_warnings) == 1
-        assert plan.mapping_warnings[0].validation_state == "validation_failed"
+        warning = plan.mapping_warnings[0]
+        assert warning.validation_state == MappingValidationState.VALIDATION_FAILED
 
     @pytest.mark.asyncio
     async def test_warnings_present_in_idempotent_plan(self) -> None:

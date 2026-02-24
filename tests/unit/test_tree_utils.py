@@ -409,4 +409,7 @@ class TestSerializeTreeForGuided:
         result = serialize_tree_for_guided([root, child, grandchild])
         parsed = json.loads(result)
 
-        assert parsed[0]["children"][0]["children"][0]["title"] == "Concept"
+        module = parsed[0]
+        lesson = module["children"][0]
+        concept = lesson["children"][0]
+        assert concept["title"] == "Concept"

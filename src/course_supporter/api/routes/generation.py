@@ -135,13 +135,7 @@ async def generate_structure(
         existing_snapshot_id=plan.existing_snapshot_id,
         is_idempotent=plan.is_idempotent,
         mapping_warnings=[
-            MappingWarningResponse(
-                mapping_id=w.mapping_id,
-                node_id=w.node_id,
-                slide_number=w.slide_number,
-                validation_state=w.validation_state,
-            )
-            for w in plan.mapping_warnings
+            MappingWarningResponse.model_validate(w) for w in plan.mapping_warnings
         ],
     )
 

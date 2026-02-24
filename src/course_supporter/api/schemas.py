@@ -777,6 +777,8 @@ class MappingWarningResponse(BaseModel):
     Non-blocking: does not prevent generation, only informs the user.
     """
 
+    model_config = ConfigDict(from_attributes=True)
+
     mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
     node_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
     slide_number: int = Field(description="Slide number in the presentation.")

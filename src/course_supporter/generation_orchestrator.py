@@ -17,7 +17,25 @@ from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
-    from course_supporter.storage.orm import Job, MaterialEntry, MaterialNode
+    from course_supporter.storage.orm import (
+        Job,
+        MappingValidationState,
+        MaterialEntry,
+        MaterialNode,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MappingWarning:
+    """Warning about a slide-video mapping with problematic validation state.
+
+    Non-blocking: does not prevent generation, only informs the user.
+    """
+
+    mapping_id: uuid.UUID
+    node_id: uuid.UUID
+    slide_number: int
+    validation_state: MappingValidationState
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +47,14 @@ class GenerationPlan:
         generation_job: Generation job (None if idempotent hit).
         existing_snapshot_id: Existing snapshot UUID if idempotent.
         is_idempotent: True when no new work is needed.
+        mapping_warnings: Mappings with pending/failed validation states.
     """
 
     ingestion_jobs: list[Job] = field(default_factory=list)
     generation_job: Job | None = None
     existing_snapshot_id: uuid.UUID | None = None
     is_idempotent: bool = False
+    mapping_warnings: list[MappingWarning] = field(default_factory=list)
 
 
 def _partition_entries(
@@ -79,6 +99,36 @@ def _collect_pending_job_ids(
     """
     return [
         str(entry.pending_job_id) for entry in stale if entry.pending_job_id is not None
+    ]
+
+
+async def _collect_mapping_warnings(
+    session: AsyncSession,
+    flat_nodes: list[MaterialNode],
+) -> list[MappingWarning]:
+    """Collect non-blocking warnings about problematic slide-video mappings.
+
+    Args:
+        session: Active DB session.
+        flat_nodes: Flat list of nodes in the target subtree.
+
+    Returns:
+        List of warnings for pending/failed validation mappings.
+    """
+    from course_supporter.storage.orm import MappingValidationState
+    from course_supporter.storage.repositories import SlideVideoMappingRepository
+
+    mapping_repo = SlideVideoMappingRepository(session)
+    node_ids = [n.id for n in flat_nodes]
+    problematic = await mapping_repo.get_problematic_by_node_ids(node_ids)
+    return [
+        MappingWarning(
+            mapping_id=m.id,
+            node_id=m.node_id,
+            slide_number=m.slide_number,
+            validation_state=MappingValidationState(m.validation_state),
+        )
+        for m in problematic
     ]
 
 
@@ -142,6 +192,9 @@ async def trigger_generation(
     )
     target, flat_nodes = resolve_target_nodes(root_nodes, course_id, node_id)
 
+    # 1b. Collect mapping warnings (non-blocking)
+    mapping_warnings = await _collect_mapping_warnings(session, flat_nodes)
+
     # 2. Conflict detection
     job_repo = JobRepository(session)
     active_gen_jobs = await job_repo.get_active_generation_jobs(course_id)
@@ -204,6 +257,7 @@ async def trigger_generation(
         return GenerationPlan(
             ingestion_jobs=ingestion_jobs,
             generation_job=gen_job,
+            mapping_warnings=mapping_warnings,
         )
 
     # 5. All READY → check idempotency via fingerprint
@@ -228,6 +282,7 @@ async def trigger_generation(
         return GenerationPlan(
             existing_snapshot_id=existing.id,
             is_idempotent=True,
+            mapping_warnings=mapping_warnings,
         )
 
     # 6. Enqueue generation (all READY, no existing snapshot)
@@ -242,4 +297,4 @@ async def trigger_generation(
         "trigger_generation_enqueued",
         generation_job_id=str(gen_job.id),
     )
-    return GenerationPlan(generation_job=gen_job)
+    return GenerationPlan(generation_job=gen_job, mapping_warnings=mapping_warnings)

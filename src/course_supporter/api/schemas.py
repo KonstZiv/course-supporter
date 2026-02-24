@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
-from course_supporter.storage.orm import GenerationMode
+from course_supporter.storage.orm import GenerationMode, MappingValidationState
 
 # --- Course ---
 
@@ -771,6 +771,22 @@ class GenerateRequest(BaseModel):
     )
 
 
+class MappingWarningResponse(BaseModel):
+    """Warning about a slide-video mapping with problematic validation state.
+
+    Non-blocking: does not prevent generation, only informs the user.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
+    node_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
+    slide_number: int = Field(description="Slide number in the presentation.")
+    validation_state: MappingValidationState = Field(
+        description="Validation state of the mapping.",
+    )
+
+
 class GenerationPlanResponse(BaseModel):
     """Response for POST /courses/{id}/generate.
 
@@ -794,6 +810,13 @@ class GenerationPlanResponse(BaseModel):
         description=(
             "``true`` when an identical snapshot already exists "
             "(same fingerprint and mode). No new work enqueued."
+        ),
+    )
+    mapping_warnings: list[MappingWarningResponse] = Field(
+        default_factory=list,
+        description=(
+            "Slide-video mappings with problematic "
+            "validation states in the target subtree."
         ),
     )
 

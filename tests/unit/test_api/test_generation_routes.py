@@ -17,8 +17,9 @@ from course_supporter.errors import (
     NodeNotFoundError,
     NoReadyMaterialsError,
 )
-from course_supporter.generation_orchestrator import GenerationPlan
+from course_supporter.generation_orchestrator import GenerationPlan, MappingWarning
 from course_supporter.storage.database import get_session
+from course_supporter.storage.orm import MappingValidationState
 
 STUB_TENANT = MagicMock(
     tenant_id=uuid.uuid4(),
@@ -332,6 +333,76 @@ class TestGenerateStructure:
         mock_trigger.assert_called_once()
         call_kwargs = mock_trigger.call_args.kwargs
         assert call_kwargs["mode"] == "free"
+
+    async def test_202_with_mapping_warnings(self, client: AsyncClient) -> None:
+        """Generation response includes mapping warnings."""
+        gen_job = _make_job()
+        warning_id = uuid.uuid4()
+        warning_node = uuid.uuid4()
+        plan = GenerationPlan(
+            generation_job=gen_job,
+            mapping_warnings=[
+                MappingWarning(
+                    mapping_id=warning_id,
+                    node_id=warning_node,
+                    slide_number=5,
+                    validation_state=MappingValidationState.PENDING_VALIDATION,
+                ),
+            ],
+        )
+
+        with (
+            patch(
+                "course_supporter.api.routes.generation.CourseRepository"
+            ) as mock_repo_cls,
+            patch(
+                "course_supporter.api.routes.generation.trigger_generation",
+                new_callable=AsyncMock,
+                return_value=plan,
+            ),
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_course()
+            )
+            resp = await client.post(
+                f"/api/v1/courses/{COURSE_ID}/generate",
+                json={"mode": "free"},
+            )
+
+        assert resp.status_code == 202
+        data = resp.json()
+        assert len(data["mapping_warnings"]) == 1
+        w = data["mapping_warnings"][0]
+        assert w["mapping_id"] == str(warning_id)
+        assert w["node_id"] == str(warning_node)
+        assert w["slide_number"] == 5
+        assert w["validation_state"] == "pending_validation"
+
+    async def test_202_no_warnings_empty_list(self, client: AsyncClient) -> None:
+        """No warnings → empty list in response."""
+        gen_job = _make_job()
+        plan = GenerationPlan(generation_job=gen_job)
+
+        with (
+            patch(
+                "course_supporter.api.routes.generation.CourseRepository"
+            ) as mock_repo_cls,
+            patch(
+                "course_supporter.api.routes.generation.trigger_generation",
+                new_callable=AsyncMock,
+                return_value=plan,
+            ),
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_course()
+            )
+            resp = await client.post(
+                f"/api/v1/courses/{COURSE_ID}/generate",
+                json={"mode": "free"},
+            )
+
+        assert resp.status_code == 202
+        assert resp.json()["mapping_warnings"] == []
 
 
 # ── GET /courses/{id}/structure ──

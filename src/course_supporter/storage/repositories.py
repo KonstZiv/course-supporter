@@ -255,6 +255,35 @@ class SlideVideoMappingRepository:
         await self._session.delete(mapping)
         await self._session.flush()
 
+    async def get_problematic_by_node_ids(
+        self, node_ids: list[uuid.UUID]
+    ) -> list[SlideVideoMapping]:
+        """Fetch mappings with pending_validation or validation_failed states.
+
+        Args:
+            node_ids: List of MaterialNode UUIDs to check.
+
+        Returns:
+            List of SlideVideoMapping with problematic validation states.
+        """
+        if not node_ids:
+            return []
+        stmt = (
+            select(SlideVideoMapping)
+            .where(
+                SlideVideoMapping.node_id.in_(node_ids),
+                SlideVideoMapping.validation_state.in_(
+                    [
+                        MappingValidationState.PENDING_VALIDATION,
+                        MappingValidationState.VALIDATION_FAILED,
+                    ]
+                ),
+            )
+            .order_by(SlideVideoMapping.node_id, SlideVideoMapping.slide_number)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_node_id(self, node_id: uuid.UUID) -> list[SlideVideoMapping]:
         """Get all slide-video mappings for a material node.
 

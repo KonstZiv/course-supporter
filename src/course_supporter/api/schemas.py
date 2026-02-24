@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
-from course_supporter.storage.orm import GenerationMode
+from course_supporter.storage.orm import GenerationMode, MappingValidationState
 
 # --- Course ---
 
@@ -780,8 +780,8 @@ class MappingWarningResponse(BaseModel):
     mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
     node_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
     slide_number: int = Field(description="Slide number in the presentation.")
-    validation_state: str = Field(
-        description="Validation state: 'pending_validation' or 'validation_failed'.",
+    validation_state: MappingValidationState = Field(
+        description="Validation state of the mapping.",
     )
 
 

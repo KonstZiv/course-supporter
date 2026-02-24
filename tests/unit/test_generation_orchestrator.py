@@ -16,6 +16,7 @@ from course_supporter.errors import (
 from course_supporter.generation_orchestrator import (
     GenerationPlan,
     MappingWarning,
+    _collect_pending_job_ids,
     _partition_entries,
     trigger_generation,
 )
@@ -446,3 +447,33 @@ class TestMappingWarnings:
 
         assert len(plan.ingestion_jobs) == 1
         assert len(plan.mapping_warnings) == 1
+
+
+# ── _collect_pending_job_ids ──
+
+
+class TestCollectPendingJobIds:
+    def test_mixed_entries(self) -> None:
+        """Returns only IDs from entries with pending_job_id."""
+        jid1 = uuid.uuid4()
+        jid2 = uuid.uuid4()
+        e1 = _make_entry(state="pending", pending_job_id=jid1)
+        e2 = _make_entry(state="raw")  # no pending_job_id
+        e3 = _make_entry(state="pending", pending_job_id=jid2)
+
+        result = _collect_pending_job_ids([e1, e2, e3])
+
+        assert result == [str(jid1), str(jid2)]
+
+    def test_no_pending_job_ids(self) -> None:
+        """All entries without pending_job_id returns empty list."""
+        e1 = _make_entry(state="raw")
+        e2 = _make_entry(state="error")
+
+        result = _collect_pending_job_ids([e1, e2])
+
+        assert result == []
+
+    def test_empty_input(self) -> None:
+        """Empty input returns empty list."""
+        assert _collect_pending_job_ids([]) == []

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
+from course_supporter.errors import NodeNotFoundError
 from course_supporter.models.course import MaterialNodeSummary
-from course_supporter.tree_utils import build_material_tree_summary
+from course_supporter.tree_utils import (
+    build_material_tree_summary,
+    resolve_target_nodes,
+    serialize_tree_for_guided,
+)
 
 # ── Helpers ──
 
@@ -257,3 +265,148 @@ class TestBuildMaterialTreeSummary:
         result = build_material_tree_summary([root, child_b, child_a])
 
         assert [c.title for c in result[0].children] == ["First", "Second"]
+
+
+# ── resolve_target_nodes ──
+
+
+class TestResolveTargetNodes:
+    def test_course_level_returns_all_nodes(self) -> None:
+        """node_id=None returns (None, flat list of all nodes)."""
+        child = _make_node(title="Child")
+        root = _make_node(title="Root", children=[child])
+
+        target, flat = resolve_target_nodes([root], uuid.uuid4(), None)
+
+        assert target is None
+        assert len(flat) == 2
+        assert root in flat
+        assert child in flat
+
+    def test_node_level_returns_target_and_subtree(self) -> None:
+        """node_id=existing returns (target, subtree_flat)."""
+        grandchild = _make_node(title="Grandchild")
+        child_id = uuid.uuid4()
+        child = _make_node(
+            node_id=child_id,
+            title="Child",
+            children=[grandchild],
+        )
+        root = _make_node(title="Root", children=[child])
+
+        target, flat = resolve_target_nodes([root], uuid.uuid4(), child_id)
+
+        assert target is child
+        assert len(flat) == 2
+        assert child in flat
+        assert grandchild in flat
+        assert root not in flat
+
+    def test_missing_node_raises(self) -> None:
+        """node_id not found raises NodeNotFoundError."""
+        root = _make_node(title="Root")
+
+        with pytest.raises(NodeNotFoundError):
+            resolve_target_nodes([root], uuid.uuid4(), uuid.uuid4())
+
+    def test_multiple_roots_course_level(self) -> None:
+        """Multiple roots with node_id=None flattens all."""
+        root1 = _make_node(title="Root1")
+        root2_child = _make_node(title="R2 Child")
+        root2 = _make_node(title="Root2", children=[root2_child])
+
+        _, flat = resolve_target_nodes(
+            [root1, root2],
+            uuid.uuid4(),
+            None,
+        )
+
+        assert len(flat) == 3
+
+    def test_empty_roots(self) -> None:
+        """Empty root list with node_id=None returns empty flat list."""
+        target, flat = resolve_target_nodes([], uuid.uuid4(), None)
+
+        assert target is None
+        assert flat == []
+
+
+# ── serialize_tree_for_guided ──
+
+
+class TestSerializeTreeForGuided:
+    def test_single_root_valid_json(self) -> None:
+        """Single root produces valid JSON with title, description, order."""
+        root = _make_node(title="Module 1", description="Intro", order=0)
+
+        result = serialize_tree_for_guided([root])
+        parsed = json.loads(result)
+
+        assert len(parsed) == 1
+        assert parsed[0]["title"] == "Module 1"
+        assert parsed[0]["description"] == "Intro"
+        assert parsed[0]["order"] == 0
+
+    def test_nested_tree_has_children_key(self) -> None:
+        """Nested tree includes children key with child nodes."""
+        child = _make_node(title="Lesson 1", order=0)
+        root = _make_node(title="Module 1", order=0, children=[child])
+
+        result = serialize_tree_for_guided([root, child])
+        parsed = json.loads(result)
+
+        assert "children" in parsed[0]
+        assert len(parsed[0]["children"]) == 1
+        assert parsed[0]["children"][0]["title"] == "Lesson 1"
+
+    def test_leaf_node_no_children_key(self) -> None:
+        """Leaf node (no children) omits the 'children' key."""
+        root = _make_node(title="Leaf", children=[])
+
+        result = serialize_tree_for_guided([root])
+        parsed = json.loads(result)
+
+        assert "children" not in parsed[0]
+
+    def test_multiple_roots(self) -> None:
+        """Multiple root nodes produce a JSON list."""
+        root1 = _make_node(title="Module 1", order=0)
+        root2 = _make_node(title="Module 2", order=1)
+
+        result = serialize_tree_for_guided([root1, root2])
+        parsed = json.loads(result)
+
+        assert len(parsed) == 2
+        titles = {item["title"] for item in parsed}
+        assert titles == {"Module 1", "Module 2"}
+
+    def test_deep_nesting(self) -> None:
+        """Three-level nesting serialized correctly."""
+        gc_id = uuid.uuid4()
+        c_id = uuid.uuid4()
+        r_id = uuid.uuid4()
+
+        grandchild = _make_node(
+            node_id=gc_id,
+            parent_id=c_id,
+            title="Concept",
+            order=0,
+        )
+        child = _make_node(
+            node_id=c_id,
+            parent_id=r_id,
+            title="Lesson",
+            order=0,
+            children=[grandchild],
+        )
+        root = _make_node(
+            node_id=r_id,
+            title="Module",
+            order=0,
+            children=[child],
+        )
+
+        result = serialize_tree_for_guided([root, child, grandchild])
+        parsed = json.loads(result)
+
+        assert parsed[0]["children"][0]["children"][0]["title"] == "Concept"

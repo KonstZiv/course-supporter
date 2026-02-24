@@ -349,12 +349,23 @@ class TestSerializeTreeForGuided:
 
     def test_nested_tree_has_children_key(self) -> None:
         """Nested tree includes children key with child nodes."""
-        child = _make_node(title="Lesson 1", order=0)
-        root = _make_node(title="Module 1", order=0, children=[child])
+        root_id = uuid.uuid4()
+        child = _make_node(
+            title="Lesson 1",
+            order=0,
+            parent_id=root_id,
+        )
+        root = _make_node(
+            node_id=root_id,
+            title="Module 1",
+            order=0,
+            children=[child],
+        )
 
         result = serialize_tree_for_guided([root, child])
         parsed = json.loads(result)
 
+        assert len(parsed) == 1
         assert "children" in parsed[0]
         assert len(parsed[0]["children"]) == 1
         assert parsed[0]["children"][0]["title"] == "Lesson 1"

@@ -1,5 +1,7 @@
 """Course structure schemas."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -36,6 +38,21 @@ class SlideTimecodeRef(BaseModel):
     video_timecode_start: str
 
 
+class MaterialNodeSummary(BaseModel):
+    """Node metadata with material references for LLM context.
+
+    Provides a lightweight tree representation that tells the LLM
+    which materials belong to which nodes, enabling tree-aware
+    structure generation in both free and guided modes.
+    """
+
+    title: str
+    description: str | None = None
+    order: int
+    material_titles: list[str] = Field(default_factory=list)
+    children: list[MaterialNodeSummary] = Field(default_factory=list)
+
+
 class CourseContext(BaseModel):
     """Unified context for course structuring.
 
@@ -46,6 +63,7 @@ class CourseContext(BaseModel):
 
     documents: list[SourceDocument]
     slide_video_mappings: list[SlideTimecodeRef] = Field(default_factory=list)
+    material_tree: list[MaterialNodeSummary] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

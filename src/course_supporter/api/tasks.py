@@ -299,10 +299,16 @@ async def arq_generate_structure(
             documents = _collect_ready_documents(flat_nodes)
             mappings = _collect_validated_mappings(flat_nodes)
 
+            # Build tree summary for LLM context
+            from course_supporter.tree_utils import build_material_tree_summary
+
+            tree_summary = build_material_tree_summary(flat_nodes)
+
             # Merge
             context = MergeStep().merge(
                 documents,
                 mappings if mappings else None,
+                material_tree=tree_summary,
             )
 
             # Compute fingerprint

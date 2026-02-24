@@ -236,3 +236,24 @@ class TestBuildMaterialTreeSummary:
         result = build_material_tree_summary([root])
 
         assert result[0].material_titles == []
+
+    def test_children_sorted_by_order(self) -> None:
+        """Children are sorted by order regardless of ORM loading order."""
+        root_id = uuid.uuid4()
+        child_b = _make_node(
+            node_id=uuid.uuid4(), parent_id=root_id, title="Second", order=2
+        )
+        child_a = _make_node(
+            node_id=uuid.uuid4(), parent_id=root_id, title="First", order=1
+        )
+        root = _make_node(
+            node_id=root_id,
+            title="Root",
+            order=0,
+            # ORM may return in arbitrary order
+            children=[child_b, child_a],
+        )
+
+        result = build_material_tree_summary([root, child_b, child_a])
+
+        assert [c.title for c in result[0].children] == ["First", "Second"]

@@ -121,7 +121,10 @@ def build_material_tree_summary(
             description=node.description,
             order=node.order,
             material_titles=_material_titles(node),
-            children=[_node_to_summary(c) for c in node.children if c.id in node_ids],
+            children=sorted(
+                [_node_to_summary(c) for c in node.children if c.id in node_ids],
+                key=lambda x: x.order,
+            ),
         )
 
     roots = [

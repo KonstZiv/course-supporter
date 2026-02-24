@@ -5,11 +5,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
+from course_supporter.storage.orm import GenerationMode
 
 # --- Course ---
 
@@ -741,3 +743,104 @@ class MaterialEntryCreateResponse(BaseModel):
         description="ID of the auto-enqueued ingestion job for progress tracking.",
     )
     created_at: datetime = Field(description="When this entry was created.")
+
+
+# --- Structure Generation ---
+
+
+class GenerateRequest(BaseModel):
+    """Request body for POST /courses/{id}/generate.
+
+    Triggers structure generation for the entire course (default)
+    or a specific subtree when ``node_id`` is provided.
+    """
+
+    node_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Target node UUID for subtree generation. "
+            "``null`` or omitted for course-level generation."
+        ),
+    )
+    mode: GenerationMode = Field(
+        default=GenerationMode.FREE,
+        description=(
+            "Generation mode. ``free`` generates from scratch; "
+            "``guided`` preserves existing tree structure."
+        ),
+    )
+
+
+class GenerationPlanResponse(BaseModel):
+    """Response for POST /courses/{id}/generate.
+
+    Describes the enqueued work: generation job, prerequisite
+    ingestion jobs, or an existing snapshot for idempotent requests.
+    """
+
+    generation_job: JobResponse | None = Field(
+        default=None,
+        description="The enqueued generation job. ``null`` for idempotent hits.",
+    )
+    ingestion_jobs: list[JobResponse] = Field(
+        default_factory=list,
+        description="Ingestion jobs enqueued for stale materials before generation.",
+    )
+    existing_snapshot_id: uuid.UUID | None = Field(
+        default=None,
+        description="Existing snapshot UUID when the request is idempotent.",
+    )
+    is_idempotent: bool = Field(
+        description=(
+            "``true`` when an identical snapshot already exists "
+            "(same fingerprint and mode). No new work enqueued."
+        ),
+    )
+
+
+class SnapshotSummaryResponse(BaseModel):
+    """Snapshot metadata without the full structure payload.
+
+    Used in list endpoints to keep response size small.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
+    course_id: uuid.UUID = Field(description="Course this snapshot belongs to.")
+    node_id: uuid.UUID | None = Field(
+        description="Target node UUID, or ``null`` for course-level snapshots."
+    )
+    mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
+    node_fingerprint: str = Field(
+        description="Merkle fingerprint of the target subtree at generation time."
+    )
+    prompt_version: str | None = Field(description="Prompt template version used.")
+    model_id: str | None = Field(description="LLM model identifier used.")
+    tokens_in: int | None = Field(description="Input tokens consumed.")
+    tokens_out: int | None = Field(description="Output tokens generated.")
+    cost_usd: float | None = Field(description="Estimated cost in USD.")
+    created_at: datetime = Field(description="When this snapshot was created.")
+
+
+class SnapshotDetailResponse(SnapshotSummaryResponse):
+    """Full snapshot including the generated structure.
+
+    Extends ``SnapshotSummaryResponse`` with the ``structure`` field
+    containing the complete ``CourseStructure`` as JSON.
+    """
+
+    structure: dict[str, Any] = Field(
+        description="Generated course structure (CourseStructure JSON)."
+    )
+
+
+class SnapshotListResponse(BaseModel):
+    """Paginated list of structure snapshots (metadata only)."""
+
+    items: list[SnapshotSummaryResponse] = Field(
+        description="Snapshot summaries for the current page."
+    )
+    total: int = Field(description="Total number of snapshots for this course.")
+    limit: int = Field(description="Maximum items per page (as requested).")
+    offset: int = Field(description="Number of items skipped (as requested).")

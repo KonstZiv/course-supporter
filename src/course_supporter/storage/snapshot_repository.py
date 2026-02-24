@@ -118,15 +118,38 @@ class SnapshotRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def count_for_course(self, course_id: uuid.UUID) -> int:
+        """Count snapshots for a course."""
+        stmt = (
+            select(func.count())
+            .select_from(CourseStructureSnapshot)
+            .where(CourseStructureSnapshot.course_id == course_id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
     async def list_for_course(
         self,
         course_id: uuid.UUID,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[CourseStructureSnapshot]:
-        """List all snapshots for a course, newest first."""
+        """List snapshots for a course, newest first.
+
+        Args:
+            course_id: Course UUID.
+            limit: Max rows to return (DB-level LIMIT).
+            offset: Rows to skip (DB-level OFFSET).
+        """
         stmt = (
             select(CourseStructureSnapshot)
             .where(CourseStructureSnapshot.course_id == course_id)
             .order_by(CourseStructureSnapshot.created_at.desc())
         )
+        if offset is not None:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

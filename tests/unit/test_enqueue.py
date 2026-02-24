@@ -252,6 +252,7 @@ class TestEnqueueGeneration:
         session = _mock_session()
         redis = _mock_redis(arq_job_id="arq:gen:789")
         mock_job = _mock_job()
+        course_id = uuid.uuid4()
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
@@ -260,7 +261,7 @@ class TestEnqueueGeneration:
             await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                course_id=course_id,
             )
 
         repo_cls.return_value.set_arq_job_id.assert_awaited_once_with(

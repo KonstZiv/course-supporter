@@ -17,7 +17,12 @@ from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
-    from course_supporter.storage.orm import Job, MaterialEntry, MaterialNode
+    from course_supporter.storage.orm import (
+        Job,
+        MappingValidationState,
+        MaterialEntry,
+        MaterialNode,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +35,7 @@ class MappingWarning:
     mapping_id: uuid.UUID
     node_id: uuid.UUID
     slide_number: int
-    validation_state: str
+    validation_state: MappingValidationState
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +163,7 @@ async def trigger_generation(
     target, flat_nodes = resolve_target_nodes(root_nodes, course_id, node_id)
 
     # 1b. Collect mapping warnings (non-blocking)
+    from course_supporter.storage.orm import MappingValidationState
     from course_supporter.storage.repositories import SlideVideoMappingRepository
 
     mapping_repo = SlideVideoMappingRepository(session)
@@ -168,7 +174,7 @@ async def trigger_generation(
             mapping_id=m.id,
             node_id=m.node_id,
             slide_number=m.slide_number,
-            validation_state=m.validation_state,
+            validation_state=MappingValidationState(m.validation_state),
         )
         for m in problematic
     ]

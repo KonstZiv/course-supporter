@@ -186,6 +186,9 @@ class TestEnqueueGeneration:
         assert create_kwargs["course_id"] == course_id
         assert create_kwargs["node_id"] == node_id
         assert create_kwargs["depends_on"] == deps
+        assert create_kwargs["input_params"]["course_id"] == str(course_id)
+        assert create_kwargs["input_params"]["node_id"] == str(node_id)
+        assert create_kwargs["input_params"]["mode"] == "guided"
 
     async def test_enqueues_arq_with_correct_args(self) -> None:
         """ARQ enqueue_job receives correct args for generation."""
@@ -240,3 +243,47 @@ class TestEnqueueGeneration:
             None,
             "free",
         )
+
+        create_kwargs = repo_cls.return_value.create.call_args.kwargs
+        assert create_kwargs["input_params"]["node_id"] is None
+
+    async def test_sets_arq_job_id(self) -> None:
+        """arq_job_id set on Job record after enqueue."""
+        session = _mock_session()
+        redis = _mock_redis(arq_job_id="arq:gen:789")
+        mock_job = _mock_job()
+        course_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_generation(
+                redis=redis,
+                session=session,
+                course_id=course_id,
+            )
+
+        repo_cls.return_value.set_arq_job_id.assert_awaited_once_with(
+            mock_job.id, "arq:gen:789"
+        )
+
+    async def test_handles_none_arq_job(self) -> None:
+        """When ARQ returns None (duplicate), set_arq_job_id is not called."""
+        session = _mock_session()
+        redis = AsyncMock()
+        redis.enqueue_job = AsyncMock(return_value=None)
+        mock_job = _mock_job()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            result = await enqueue_generation(
+                redis=redis,
+                session=session,
+                course_id=uuid.uuid4(),
+            )
+
+        assert result is mock_job
+        repo_cls.return_value.set_arq_job_id.assert_not_awaited()

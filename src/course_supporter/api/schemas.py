@@ -5,12 +5,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
+from course_supporter.storage.orm import GenerationMode
 
 # --- Course ---
 
@@ -761,8 +762,8 @@ class GenerateRequest(BaseModel):
             "``null`` or omitted for course-level generation."
         ),
     )
-    mode: Literal["free", "guided"] = Field(
-        default="free",
+    mode: GenerationMode = Field(
+        default=GenerationMode.FREE,
         description=(
             "Generation mode. ``free`` generates from scratch; "
             "``guided`` preserves existing tree structure."
@@ -810,7 +811,7 @@ class SnapshotSummaryResponse(BaseModel):
     node_id: uuid.UUID | None = Field(
         description="Target node UUID, or ``null`` for course-level snapshots."
     )
-    mode: str = Field(description="Generation mode: ``free`` or ``guided``.")
+    mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
     node_fingerprint: str = Field(
         description="Merkle fingerprint of the target subtree at generation time."
     )
@@ -832,3 +833,14 @@ class SnapshotDetailResponse(SnapshotSummaryResponse):
     structure: dict[str, Any] = Field(
         description="Generated course structure (CourseStructure JSON)."
     )
+
+
+class SnapshotListResponse(BaseModel):
+    """Paginated list of structure snapshots (metadata only)."""
+
+    items: list[SnapshotSummaryResponse] = Field(
+        description="Snapshot summaries for the current page."
+    )
+    total: int = Field(description="Total number of snapshots for this course.")
+    limit: int = Field(description="Maximum items per page (as requested).")
+    offset: int = Field(description="Number of items skipped (as requested).")

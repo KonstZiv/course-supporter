@@ -27,6 +27,7 @@ from course_supporter.api.schemas import (
     GenerationPlanResponse,
     JobResponse,
     SnapshotDetailResponse,
+    SnapshotListResponse,
     SnapshotSummaryResponse,
 )
 from course_supporter.auth.context import TenantContext
@@ -91,7 +92,7 @@ async def generate_structure(
             session=session,
             course_id=course_id,
             node_id=body.node_id,
-            mode=body.mode,
+            mode=body.mode.value,
         )
     except NodeNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Node not found") from exc
@@ -173,7 +174,7 @@ async def list_snapshots(
     session: SessionDep,
     limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
     offset: int = Query(default=0, ge=0, description="Items to skip."),
-) -> dict[str, object]:
+) -> SnapshotListResponse:
     """List structure snapshots for a course (metadata only).
 
     Returns all snapshots newest-first with pagination.
@@ -184,12 +185,12 @@ async def list_snapshots(
     total = await repo.count_for_course(course_id)
     page = await repo.list_for_course(course_id, limit=limit, offset=offset)
 
-    return {
-        "items": [SnapshotSummaryResponse.model_validate(s) for s in page],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    return SnapshotListResponse(
+        items=[SnapshotSummaryResponse.model_validate(s) for s in page],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/courses/{course_id}/structure/snapshots/{snapshot_id}")

@@ -104,11 +104,15 @@ def build_material_tree_summary(
     from course_supporter.models.course import MaterialNodeSummary
     from course_supporter.storage.orm import MaterialState
 
+    node_ids = {n.id for n in flat_nodes}
+
     def _material_titles(node: MaterialNode) -> list[str]:
         titles: list[str] = []
         for entry in node.materials:
-            if entry.state == MaterialState.READY:
-                titles.append(entry.filename or entry.source_url)
+            if entry.state == MaterialState.READY and (
+                title := (entry.filename or entry.source_url)
+            ):
+                titles.append(title)
         return titles
 
     def _node_to_summary(node: MaterialNode) -> MaterialNodeSummary:
@@ -117,11 +121,9 @@ def build_material_tree_summary(
             description=node.description,
             order=node.order,
             material_titles=_material_titles(node),
-            children=[_node_to_summary(c) for c in node.children],
+            children=[_node_to_summary(c) for c in node.children if c.id in node_ids],
         )
 
-    # Rebuild roots: nodes whose parent is not in the flat set
-    node_ids = {n.id for n in flat_nodes}
     roots = [
         n for n in flat_nodes if n.parent_id is None or n.parent_id not in node_ids
     ]

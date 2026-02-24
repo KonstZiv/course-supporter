@@ -198,3 +198,41 @@ class TestBuildMaterialTreeSummary:
         json_str = result[0].model_dump_json()
         assert "Module" in json_str
         assert "test.pdf" in json_str
+
+    def test_children_outside_flat_nodes_excluded(self) -> None:
+        """Children not in flat_nodes are excluded from the summary."""
+        root_id = uuid.uuid4()
+        child_in = _make_node(
+            node_id=uuid.uuid4(),
+            parent_id=root_id,
+            title="Included",
+            order=0,
+        )
+        child_out = _make_node(
+            node_id=uuid.uuid4(),
+            parent_id=root_id,
+            title="Excluded",
+            order=1,
+        )
+        root = _make_node(
+            node_id=root_id,
+            title="Root",
+            order=0,
+            children=[child_in, child_out],
+        )
+
+        # Only root and child_in are in flat_nodes
+        result = build_material_tree_summary([root, child_in])
+
+        assert len(result) == 1
+        assert len(result[0].children) == 1
+        assert result[0].children[0].title == "Included"
+
+    def test_none_filename_and_none_source_url_skipped(self) -> None:
+        """Entry with both filename=None and source_url=None is skipped."""
+        entry = _make_entry(state="ready", filename=None, source_url="")
+        root = _make_node(materials=[entry])
+
+        result = build_material_tree_summary([root])
+
+        assert result[0].material_titles == []

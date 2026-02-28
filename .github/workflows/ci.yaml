@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 # Cancel previous run when a new push arrives in the same PR.
 concurrency:
@@ -71,15 +71,10 @@ jobs:
         env:
           ENVIRONMENT: testing
 
+
   ai-review:
-    name: AI Code Review
     runs-on: ubuntu-latest
-    # Runs ONLY after all three base jobs succeed.
-    needs: [lint, typecheck, test]
-    # Only for PRs (not push to main) and not for fork PRs.
-    if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       pull-requests: write
@@ -87,4 +82,4 @@ jobs:
       - uses: KonstZiv/ai-code-reviewer@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          google_api_key: ${{ secrets.GOOGLE_API_KEY }}
+          google_api_key: ${{ secrets.AI_REVIEWER_GOOGLE_API_KEY }}

@@ -1,64 +1,82 @@
-# S2-057: Flow Guide — Деталі для виконавця
+# S2-057: Flow Guide (Layer 1) — Деталі для виконавця
 
-**Epic:** EPIC-7 — Integration Documentation
-**Оцінка:** 3h
+**Epic:** EPIC-7 — Integration Documentation + Manual QA
 
 ---
-
-## Мета
-
-Повний сценарій від створення курсу до отримання структури
 
 ## Контекст
 
-Ця задача є частиною Epic "Integration Documentation" (1-2 дні).
-Загальна ціль epic: Зовнішня команда може почати інтеграцію. Публікується на docs site (Epic 0).
+Перша задача epic. Створює концептуальний огляд системи — "карту" для нового користувача API. Не містить curl-прикладів (це Layer 2), не описує варіації параметрів (це Layer 3). Тільки "що" і "навіщо", без "як саме".
 
-## Залежності
+## Структура документа `docs/api/flow-guide.md`
 
-**Наступна задача:** [S2-058: API Reference update](../S2-058/README.md)
+### 1. What is Course Supporter?
 
+- AI-powered система для трансформації навчальних матеріалів у структурований план курсу
+- Приймає: відео, презентації, текстові документи, веб-посилання
+- Видає: структурований курс (модулі → уроки → концепти → вправи)
 
+### 2. Core Concepts
+
+- **Course** — верхній рівень, контейнер
+- **Material Tree** — ієрархія nodes для організації матеріалів (як файлова система)
+- **Material Entry** — конкретний матеріал, прикріплений до node
+- **Ingestion** — автоматична обробка матеріалу (транскрипція, OCR, scraping)
+- **Slide-Video Mapping** — опціональна прив'язка слайдів до таймкодів відео
+- **Structure Generation** — LLM-генерація структури курсу на основі оброблених матеріалів
+- **Snapshot** — збережений результат генерації (версіонування)
+- **Job** — асинхронна задача (ingestion або generation)
+
+### 3. The Main Flow
+
+Діаграма (mermaid або ASCII):
+
+```
+Create Course → Build Tree → Upload Materials → [Wait for Ingestion]
+    → [Optional: Slide-Video Mappings] → Generate Structure
+    → [Wait for Generation] → Get Result
+```
+
+Опис кожного кроку (1-2 речення):
+- Що відбувається
+- Який endpoint відповідає
+- Що повертається
+
+### 4. Supported Material Types
+
+| Type | Formats | Processing |
+|------|---------|------------|
+| video | .mp4, .webm, .mkv, .avi | Transcription (Gemini → Whisper fallback) |
+| presentation | .pdf, .pptx | Slide extraction + OCR |
+| text | .md, .docx, .html, .txt | Content extraction |
+| web | URL | Web scraping (trafilatura) |
+
+### 5. Async Operations Pattern
+
+- Upload/generate повертають `job_id`
+- Polling: `GET /api/v1/jobs/{job_id}` до `complete` або `failed`
+- Job statuses: `queued` → `active` → `complete` / `failed`
+
+### 6. Authentication
+
+- API Key в header `X-API-Key`
+- Scopes: `prep` (read+write), `check` (read-only)
+- Rate limits per scope
+- Tenant isolation — кожен бачить тільки свої дані
+
+### 7. What's Next?
+
+Посилання на Quick Start (S2-058) і Endpoint Reference (S2-059).
 
 ---
 
-## Детальний план реалізації
+## Checklist
 
-1. Описати кожен крок: create course → add nodes → upload materials → generate
-2. Curl приклади для кожного endpoint
-3. Описати polling pattern для async operations
-4. Описати error recovery scenarios
-
----
-
-## Очікуваний результат
-
-Новий розробник може пройти повний flow за 30 хвилин
-
----
-
-## Тестування
-
-### Автоматизовані тести
-
-Немає (контентна задача)
-
-### Ручний контроль (Human testing)
-
-Дати guide новій людині — чи проходить flow без питань
-
----
-
-## Checklist перед PR
-
-- [ ] Реалізація відповідає архітектурним рішенням Sprint 2 (AR-*)
-- [ ] Код проходить `make check` (ruff + mypy + pytest)
-- [ ] Unit tests написані і покривають основні сценарії
-- [ ] Edge cases покриті (error handling, boundary values)
-- [ ] Error messages зрозумілі і містять hints для користувача
-- [ ] Human control points пройдені
-- [ ] Документація оновлена якщо потрібно (ERD, API docs, sprint progress)
-- [ ] Перевірено чи зміни впливають на наступні задачі — якщо так, оновити їх docs
+- [ ] Текст написаний англійською (документація для зовнішніх користувачів)
+- [ ] Mermaid-діаграма рендериться в mkdocs
+- [ ] `mkdocs build --strict` проходить
+- [ ] Узгоджено з автором проєкту
+- [ ] Посилання на наступні документи додані
 
 ---
 

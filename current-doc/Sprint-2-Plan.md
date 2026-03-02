@@ -858,16 +858,17 @@ docs/
 | S2-055 | Mapping warnings in generation | 2h | pending_validation/validation_failed маппінги → warnings |
 | S2-056 | Structure generation tests | 4h | Pipeline mock, idempotency, conflicts, readiness, cascade |
 
-### Epic 7: Integration Documentation (1-2 дні)
+### Epic 7: Integration Documentation + Manual QA
 
-**Ціль:** Зовнішня команда може почати інтеграцію. Публікується на docs site (Epic 0).
+**Ціль:** Користувач API може самостійно пройти повний flow, використовуючи тільки документацію. Паралельно — manual QA всіх endpoints на production.
 
-| # | Задача | Оцінка | Деталі |
-|---|---|---|---|
-| S2-057 | Flow Guide | 3h | `docs/api/flow-guide.md` — повний сценарій від створення курсу до структури |
-| S2-058 | API Reference update | 2h | `docs/api/reference.md` — OpenAPI schema, приклади запитів/відповідей |
-| S2-059 | Auth & onboarding guide | 1h | `docs/api/auth.md` — ключ, scopes, rate limits |
-| S2-060 | Error handling guide | 2h | `docs/api/errors.md` — коди помилок, retry стратегії, polling patterns |
+**Підхід:** 3 шари документації (Flow Guide → Quick Start → Endpoint Reference), ітеративно з тестуванням кожного кроку на production.
+
+| # | Задача | Деталі |
+|---|---|---|
+| S2-057 | Flow Guide (Layer 1) | Високорівневий опис: навіщо інструмент, основні кроки, як пов'язані |
+| S2-058 | Quick Start (Layer 2) | Один найпростіший шлях з curl + manual QA happy path на production |
+| S2-059 | Endpoint Reference (Layer 3) | Всі 29 endpoints з варіаціями, edge cases + manual QA кожного |
 
 ---
 

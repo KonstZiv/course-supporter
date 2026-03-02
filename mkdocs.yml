@@ -6,26 +6,32 @@ repo_name: course-supporter
 
 theme:
   name: material
-  language: en
+  language: uk
   palette:
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: yellow
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: yellow
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+  font:
+    text: Inter
+    code: Roboto Mono
   features:
     - navigation.sections
     - navigation.expand
     - navigation.top
     - content.code.copy
     - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search

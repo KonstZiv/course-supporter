@@ -1,0 +1,45 @@
+/* Course Supporter — Swagger UI Brand Styles */
+
+/* Header bar */
+.swagger-ui .topbar {
+  background-color: #1A237E;
+}
+
+/* Page background */
+body {
+  background-color: #F5F7F9;
+}
+
+/* Font override */
+.swagger-ui {
+  font-family: "Inter", "Roboto", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* "Try it out" button */
+.swagger-ui .btn.try-out__btn {
+  background-color: #FFD600;
+  color: #000;
+  border-color: #FFD600;
+}
+
+.swagger-ui .btn.try-out__btn:hover {
+  background-color: #FFEA00;
+  border-color: #FFEA00;
+}
+
+/* Execute button */
+.swagger-ui .btn.execute {
+  background-color: #1A237E;
+  color: #fff;
+  border-color: #1A237E;
+}
+
+.swagger-ui .btn.execute:hover {
+  background-color: #3949AB;
+  border-color: #3949AB;
+}
+
+/* Links */
+.swagger-ui a {
+  color: #1A237E;
+}

@@ -62,9 +62,10 @@ nav:
       - Sprint 1 — Prod Deploy: sprints/sprint-1/index.md
       - Sprint 2 — Material Tree: sprints/sprint-2/index.md
   - API:
+      - "Огляд flow": api/flow-guide.md
+      - "Швидкий старт": api/quick-start.md
       - Reference: api/reference.md
-      - Flow Guide: api/flow-guide.md
-      - Auth: api/auth.md
+      - "Автентифікація": api/auth.md
   - Development:
       - Setup: development/setup.md
       - Testing: development/testing.md

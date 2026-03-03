@@ -12,7 +12,7 @@ from course_supporter.storage.orm import Course, Job
 
 # Valid job status transitions
 JOB_TRANSITIONS: dict[str, set[str]] = {
-    "queued": {"active", "cancelled"},
+    "queued": {"active", "cancelled", "failed"},
     "active": {"complete", "failed"},
     "complete": set(),
     "failed": {"queued"},  # retry

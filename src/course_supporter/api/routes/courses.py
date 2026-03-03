@@ -27,6 +27,7 @@ from course_supporter.api.schemas import (
     SlideVideoMapRequest,
     SlideVideoMapResponse,
 )
+from course_supporter.api.upload_validation import ALLOWED_EXTENSIONS, file_extension
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
@@ -53,27 +54,10 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["courses"])
 
 
-# Allowed file extensions per source_type (lowercase, with dot).
-# web does not accept file uploads at all.
-def _file_extension(filename: str | None) -> str:
-    """Extract lowercase file extension from filename."""
-    if not filename or "." not in filename:
-        return ""
-    return "." + filename.rsplit(".", maxsplit=1)[-1].lower()
-
-
 def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
     """Convert MappingValidationError dataclass to a JSON-safe dict."""
     return asdict(err)
 
-
-ALLOWED_EXTENSIONS: dict[SourceType, frozenset[str]] = {
-    SourceType.VIDEO: frozenset({".mp4", ".webm", ".mkv", ".avi"}),
-    SourceType.PRESENTATION: frozenset({".pdf", ".pptx"}),
-    SourceType.TEXT: frozenset(
-        {".md", ".markdown", ".docx", ".html", ".htm", ".txt"},
-    ),
-}
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
@@ -448,7 +432,7 @@ async def create_material(
                 " provide source_url instead.",
             )
         allowed = ALLOWED_EXTENSIONS.get(source_type, frozenset())
-        ext = _file_extension(file.filename)
+        ext = file_extension(file.filename)
         if ext not in allowed:
             raise HTTPException(
                 status_code=422,

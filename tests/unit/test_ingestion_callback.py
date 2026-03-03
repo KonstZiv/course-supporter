@@ -439,8 +439,136 @@ class TestRevalidateBlockedMappingsCallback:
         svc_cls.return_value.revalidate_blocked.assert_awaited_once_with(mid)
 
 
+class TestOnSuccessNewModel:
+    """IngestionCallback.on_success with is_new_model=True."""
+
+    _ENTRY_REPO = (
+        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
+
+    async def test_entry_repo_complete_processing_called(self) -> None:
+        """MaterialEntryRepository.complete_processing called with hash."""
+        callback, _ = _make_callback()
+        jid = uuid.uuid4()
+        mid = uuid.uuid4()
+        content = '{"key": "value"}'
+
+        with (
+            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_JOB_REPO) as job_cls,
+        ):
+            entry_cls.return_value.complete_processing = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+
+            await callback.on_success(
+                job_id=jid,
+                material_id=mid,
+                content_json=content,
+                is_new_model=True,
+            )
+
+        entry_cls.return_value.complete_processing.assert_awaited_once()
+        call_kwargs = entry_cls.return_value.complete_processing.call_args
+        assert call_kwargs.args[0] == mid
+        assert call_kwargs.kwargs["processed_content"] == content
+        assert len(call_kwargs.kwargs["processed_hash"]) == 64  # SHA-256 hex
+
+    async def test_legacy_repo_not_called_for_new_model(self) -> None:
+        """SourceMaterialRepository not used when is_new_model=True."""
+        callback, _ = _make_callback()
+
+        with (
+            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_MAT_REPO) as mat_cls,
+            patch(_JOB_REPO) as job_cls,
+        ):
+            entry_cls.return_value.complete_processing = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+            mat_cls.return_value.update_status = AsyncMock()
+
+            await callback.on_success(
+                job_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                content_json="{}",
+                is_new_model=True,
+            )
+
+        mat_cls.return_value.update_status.assert_not_awaited()
+
+
+class TestOnFailureNewModel:
+    """IngestionCallback.on_failure with is_new_model=True."""
+
+    _ENTRY_REPO = (
+        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _mock_revalidation(self) -> None:  # type: ignore[misc]
+        with patch(_VALIDATION_SVC) as svc:
+            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
+            yield
+
+    async def test_entry_repo_fail_processing_called(self) -> None:
+        """MaterialEntryRepository.fail_processing called with error."""
+        callback, _ = _make_callback()
+        jid = uuid.uuid4()
+        mid = uuid.uuid4()
+        error = "Processing failed"
+
+        with (
+            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_JOB_REPO) as job_cls,
+        ):
+            entry_cls.return_value.fail_processing = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+
+            await callback.on_failure(
+                job_id=jid,
+                material_id=mid,
+                error_message=error,
+                is_new_model=True,
+            )
+
+        entry_cls.return_value.fail_processing.assert_awaited_once_with(
+            mid, error_message=error
+        )
+
+    async def test_legacy_repo_not_called_for_new_model_failure(self) -> None:
+        """SourceMaterialRepository not used on failure when is_new_model=True."""
+        callback, _ = _make_callback()
+
+        with (
+            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_MAT_REPO) as mat_cls,
+            patch(_JOB_REPO) as job_cls,
+        ):
+            entry_cls.return_value.fail_processing = AsyncMock()
+            job_cls.return_value.update_status = AsyncMock()
+            mat_cls.return_value.update_status = AsyncMock()
+
+            await callback.on_failure(
+                job_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                error_message="error",
+                is_new_model=True,
+            )
+
+        mat_cls.return_value.update_status.assert_not_awaited()
+
+
 class TestCallbackIntegrationWithArqTask:
     """Verify arq_ingest_material delegates to IngestionCallback."""
+
+    _ENTRY_REPO = (
+        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+    )
 
     async def test_success_delegates_to_callback(self) -> None:
         """On successful processing, callback.on_success is called."""
@@ -478,10 +606,12 @@ class TestCallbackIntegrationWithArqTask:
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
+            patch(self._ENTRY_REPO) as entry_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
         ):
             job_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mat_cls.return_value.update_status = AsyncMock()
             mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
             cb_cls.return_value.on_success = AsyncMock()
@@ -526,10 +656,12 @@ class TestCallbackIntegrationWithArqTask:
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
+            patch(self._ENTRY_REPO) as entry_cls,
             patch(_heavy),
             patch(_factory_fn, return_value={"web": MagicMock()}),
         ):
             job_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mat_cls.return_value.update_status = AsyncMock()
             mat_cls.return_value.get_by_id = AsyncMock(return_value=None)
             cb_cls.return_value.on_success = AsyncMock()

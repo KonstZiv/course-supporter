@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_arq_redis, get_current_tenant
+from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
@@ -99,6 +100,15 @@ def mock_arq() -> MagicMock:
 
 
 @pytest.fixture()
+def mock_s3() -> AsyncMock:
+    s3 = AsyncMock()
+    s3.upload_smart = AsyncMock(
+        return_value=("http://localhost:9000/course-materials/key/file.pdf", 1024)
+    )
+    return s3
+
+
+@pytest.fixture()
 def course_id() -> uuid.UUID:
     return uuid.uuid4()
 
@@ -109,10 +119,13 @@ def node_id() -> uuid.UUID:
 
 
 @pytest.fixture()
-async def client(mock_session: AsyncMock, mock_arq: MagicMock) -> AsyncClient:
+async def client(
+    mock_session: AsyncMock, mock_arq: MagicMock, mock_s3: AsyncMock
+) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     app.dependency_overrides[get_arq_redis] = lambda: mock_arq
+    app.dependency_overrides[get_s3_client] = lambda: mock_s3
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -124,10 +137,10 @@ async def client(mock_session: AsyncMock, mock_arq: MagicMock) -> AsyncClient:
 class TestCreateMaterial:
     """POST /api/v1/courses/{id}/nodes/{nid}/materials"""
 
-    async def test_returns_201(
+    async def test_returns_201_with_url(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
     ) -> None:
-        """Successful material creation returns 201 with job_id."""
+        """Successful material creation with URL returns 201 with job_id."""
         entry = _mock_entry(node_id=node_id)
         job = _mock_job()
         with (
@@ -144,7 +157,7 @@ class TestCreateMaterial:
         ):
             resp = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
+                data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
                 },
@@ -155,18 +168,102 @@ class TestCreateMaterial:
         assert data["job_id"] == str(job.id)
         assert data["source_type"] == "text"
 
+    async def test_returns_201_with_file_upload(
+        self,
+        client: AsyncClient,
+        course_id: uuid.UUID,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """Successful file upload returns 201."""
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="presentation",
+            source_url="http://localhost:9000/course-materials/key/file.pdf",
+            filename="slides.pdf",
+        )
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
+            ),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id, course_id=course_id),
+            ),
+            patch.object(MaterialEntryRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "slides.pdf",
+                        io.BytesIO(b"PDF content"),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+        mock_s3.upload_smart.assert_awaited_once()
+
     async def test_invalid_source_type_returns_422(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
     ) -> None:
-        """Invalid source_type is rejected by Pydantic validation."""
+        """Invalid source_type is rejected by validation."""
         resp = await client.post(
             f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-            json={
+            data={
                 "source_type": "invalid",
                 "source_url": "https://example.com/doc.md",
             },
         )
         assert resp.status_code == 422
+
+    async def test_no_url_no_file_returns_422(
+        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    ) -> None:
+        """Neither URL nor file provided returns 422."""
+        resp = await client.post(
+            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            data={"source_type": "text"},
+        )
+        assert resp.status_code == 422
+        assert "Either source_url or file" in resp.json()["detail"]
+
+    async def test_web_rejects_file_upload(
+        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    ) -> None:
+        """source_type 'web' does not accept file uploads."""
+        resp = await client.post(
+            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            data={"source_type": "web"},
+            files={
+                "file": ("page.html", io.BytesIO(b"<html>"), "text/html"),
+            },
+        )
+        assert resp.status_code == 422
+        assert "does not accept file uploads" in resp.json()["detail"]
+
+    async def test_invalid_extension_returns_422(
+        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    ) -> None:
+        """File with wrong extension for source_type returns 422."""
+        resp = await client.post(
+            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            data={"source_type": "video"},
+            files={
+                "file": (
+                    "slides.pdf",
+                    io.BytesIO(b"PDF content"),
+                    "application/pdf",
+                ),
+            },
+        )
+        assert resp.status_code == 422
+        assert "'.pdf' is not allowed" in resp.json()["detail"]
 
     async def test_course_not_found_returns_404(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
@@ -175,7 +272,7 @@ class TestCreateMaterial:
         with patch.object(CourseRepository, "get_by_id", return_value=None):
             resp = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
+                data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
                 },
@@ -195,7 +292,7 @@ class TestCreateMaterial:
         ):
             resp = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
+                data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
                 },
@@ -220,17 +317,17 @@ class TestCreateMaterial:
         ):
             resp = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
+                data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
                 },
             )
         assert resp.status_code == 404
 
-    async def test_with_filename(
+    async def test_with_filename_override(
         self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
     ) -> None:
-        """Creation with filename includes it in response."""
+        """Creation with filename override includes it in response."""
         entry = _mock_entry(node_id=node_id, filename="notes.md")
         job = _mock_job()
         with (
@@ -247,7 +344,7 @@ class TestCreateMaterial:
         ):
             resp = await client.post(
                 f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                json={
+                data={
                     "source_type": "text",
                     "source_url": "https://example.com/notes.md",
                     "filename": "notes.md",

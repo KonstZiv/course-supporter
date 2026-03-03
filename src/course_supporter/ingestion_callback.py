@@ -21,6 +21,7 @@ internally for failure paths.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import TYPE_CHECKING
 
@@ -50,35 +51,50 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         content_json: str,
+        is_new_model: bool = False,
     ) -> None:
         """Handle successful ingestion completion.
 
-        1. SourceMaterial → done (with content_snapshot).
-        2. Job → complete (with result_material_id).
-        3. Invalidate fingerprints (no-op until Epic 3).
-        4. Revalidate blocked mappings (no-op until Epic 5).
+        When ``is_new_model`` is True, uses ``MaterialEntryRepository``
+        (``complete_processing``). Otherwise falls back to legacy
+        ``SourceMaterialRepository`` (``update_status → done``).
 
         Args:
             job_id: The Job tracking this ingestion.
-            material_id: The SourceMaterial that was processed.
+            material_id: The material that was processed.
             content_json: Serialized SourceDocument JSON.
+            is_new_model: True when the material is a MaterialEntry.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
         )
 
         async with self._session_factory() as session:
-            mat_repo = SourceMaterialRepository(session)
             job_repo = JobRepository(session)
 
-            await mat_repo.update_status(
-                material_id, "done", content_snapshot=content_json
-            )
+            if is_new_model:
+                from course_supporter.storage.material_entry_repository import (
+                    MaterialEntryRepository,
+                )
+
+                entry_repo = MaterialEntryRepository(session)
+                processed_hash = hashlib.sha256(content_json.encode()).hexdigest()
+                await entry_repo.complete_processing(
+                    material_id,
+                    processed_content=content_json,
+                    processed_hash=processed_hash,
+                )
+            else:
+                mat_repo = SourceMaterialRepository(session)
+                await mat_repo.update_status(
+                    material_id, "done", content_snapshot=content_json
+                )
+
             await job_repo.update_status(
                 job_id, "complete", result_material_id=material_id
             )
 
-            # Extension points for future epics
+            # Extension points
             await self._invalidate_fingerprints(session, material_id=material_id)
             await self._revalidate_blocked_mappings(session, material_id=material_id)
 
@@ -92,20 +108,22 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         error_message: str,
+        is_new_model: bool = False,
     ) -> None:
         """Handle failed ingestion.
 
         Opens a fresh session (the caller's session is expected to have
         been rolled back already) to persist error state.
 
-        1. SourceMaterial → error (with error_message).
-        2. Job → failed (with error_message).
-        3. Revalidate blocked mappings to update blocking_factors (no-op until Epic 5).
+        When ``is_new_model`` is True, uses ``MaterialEntryRepository``
+        (``fail_processing``). Otherwise falls back to legacy
+        ``SourceMaterialRepository`` (``update_status → error``).
 
         Args:
             job_id: The Job tracking this ingestion.
-            material_id: The SourceMaterial that failed.
+            material_id: The material that failed.
             error_message: Human-readable error description.
+            is_new_model: True when the material is a MaterialEntry.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
@@ -113,12 +131,23 @@ class IngestionCallback:
 
         async with self._session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = SourceMaterialRepository(session)
 
             await job_repo.update_status(job_id, "failed", error_message=error_message)
-            await mat_repo.update_status(
-                material_id, "error", error_message=error_message
-            )
+
+            if is_new_model:
+                from course_supporter.storage.material_entry_repository import (
+                    MaterialEntryRepository,
+                )
+
+                entry_repo = MaterialEntryRepository(session)
+                await entry_repo.fail_processing(
+                    material_id, error_message=error_message
+                )
+            else:
+                mat_repo = SourceMaterialRepository(session)
+                await mat_repo.update_status(
+                    material_id, "error", error_message=error_message
+                )
 
             # Extension point: update blocking_factors on mappings
             # that reference this material (Epic 5, S2-042).

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.models.course import SlideTimecodeRef
     from course_supporter.models.source import SourceDocument
-    from course_supporter.storage.orm import MaterialNode, SourceMaterial
+    from course_supporter.storage.orm import MaterialNode
     from course_supporter.storage.s3 import S3Client
 
 
@@ -49,9 +49,9 @@ class _MaterialProxy:
 
 @asynccontextmanager
 async def _resolve_s3_url(
-    material: SourceMaterial,
+    material: _HasSourceUrl,
     s3: S3Client | None,
-) -> AsyncIterator[SourceMaterial]:
+) -> AsyncIterator[Any]:  # Any: processor.process() expects SourceMaterial
     """Download S3 object to temp file, yield a proxy with local path.
 
     The original ORM object is **never mutated**, preventing accidental
@@ -68,7 +68,7 @@ async def _resolve_s3_url(
         if s3 and s3_key:
             temp_path = await s3.download_file(s3_key)
             proxy = _MaterialProxy(material, str(temp_path))
-            yield proxy  # type: ignore[misc]
+            yield proxy
         else:
             yield material
     finally:
@@ -107,6 +107,9 @@ async def arq_ingest_material(
     from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
     from course_supporter.storage.job_repository import JobRepository
+    from course_supporter.storage.material_entry_repository import (
+        MaterialEntryRepository,
+    )
 
     check_work_window(JobPriority(priority))
 
@@ -127,10 +130,20 @@ async def arq_ingest_material(
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
+        entry_repo = MaterialEntryRepository(session)
         mat_repo = SourceMaterialRepository(session)
+
+        # Detect model: try MaterialEntry first, fallback to SourceMaterial
+        entry = await entry_repo.get_by_id(mid)
+        is_new_model = entry is not None
+
         try:
             await job_repo.update_status(jid, "active")
-            await mat_repo.update_status(mid, "processing")
+
+            if is_new_model:
+                await entry_repo.set_pending(mid, jid)
+            else:
+                await mat_repo.update_status(mid, "processing")
             await session.commit()
 
             try:
@@ -140,10 +153,15 @@ async def arq_ingest_material(
                 msg = f"Unsupported source_type: {source_type}"
                 raise ValueError(msg) from None
 
-            material = await mat_repo.get_by_id(mid)
-            if material is None:
-                msg = f"SourceMaterial not found: {mid}"
-                raise ValueError(msg)
+            material: _HasSourceUrl
+            if is_new_model:
+                material = entry  # type: ignore[assignment]
+            else:
+                old_mat = await mat_repo.get_by_id(mid)
+                if old_mat is None:
+                    msg = f"SourceMaterial not found: {mid}"
+                    raise ValueError(msg)
+                material = old_mat
 
             async with _resolve_s3_url(material, s3) as resolved:
                 doc = await processor.process(resolved, router=router)
@@ -153,12 +171,20 @@ async def arq_ingest_material(
         except Exception as exc:
             await session.rollback()
             await callback.on_failure(
-                job_id=jid, material_id=mid, error_message=str(exc)
+                job_id=jid,
+                material_id=mid,
+                error_message=str(exc),
+                is_new_model=is_new_model,
             )
             log.error("ingestion_failed", error=str(exc))
             return
 
-    await callback.on_success(job_id=jid, material_id=mid, content_json=content)
+    await callback.on_success(
+        job_id=jid,
+        material_id=mid,
+        content_json=content,
+        is_new_model=is_new_model,
+    )
     log.info("ingestion_done")
 
 

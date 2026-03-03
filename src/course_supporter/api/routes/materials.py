@@ -24,7 +24,7 @@ from typing import Annotated
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
@@ -130,7 +130,7 @@ async def create_material(
     ] = None,
     file: Annotated[
         UploadFile | None,
-        Form(
+        File(
             description=(
                 "File upload (multipart). Accepted formats: "
                 "presentation (pdf, pptx), text (md, txt, docx, html), "

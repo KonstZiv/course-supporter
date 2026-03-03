@@ -354,6 +354,25 @@ class TestCreateMaterial:
         assert resp.json()["filename"] == "notes.md"
 
 
+class TestCreateMaterialOpenAPISpec:
+    """Regression: ensure create_material endpoint accepts multipart/form-data."""
+
+    async def test_openapi_content_type_is_multipart(self, client: AsyncClient) -> None:
+        """File upload endpoint must declare multipart/form-data content type.
+
+        Regression test for Form() vs File() annotation bug: using Form()
+        for UploadFile causes FastAPI to generate x-www-form-urlencoded
+        instead of multipart/form-data, breaking real file uploads.
+        """
+        resp = await client.get("/openapi.json")
+        schema = resp.json()
+        path = "/api/v1/courses/{course_id}/nodes/{node_id}/materials"
+        content_types = list(
+            schema["paths"][path]["post"]["requestBody"]["content"].keys()
+        )
+        assert "multipart/form-data" in content_types
+
+
 class TestListMaterials:
     """GET /api/v1/courses/{id}/nodes/{nid}/materials"""
 

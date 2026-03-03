@@ -51,7 +51,7 @@ class _MaterialProxy:
 async def _resolve_s3_url(
     material: _HasSourceUrl,
     s3: S3Client | None,
-) -> AsyncIterator[Any]:
+) -> AsyncIterator[Any]:  # Any: processor.process() expects SourceMaterial
     """Download S3 object to temp file, yield a proxy with local path.
 
     The original ORM object is **never mutated**, preventing accidental

@@ -21,6 +21,7 @@ internally for failure paths.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import TYPE_CHECKING
 
@@ -64,8 +65,6 @@ class IngestionCallback:
             content_json: Serialized SourceDocument JSON.
             is_new_model: True when the material is a MaterialEntry.
         """
-        import hashlib
-
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
         )

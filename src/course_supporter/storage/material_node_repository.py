@@ -8,6 +8,7 @@ from enum import Enum, auto
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.storage.orm import MaterialNode
 
@@ -124,9 +125,14 @@ class MaterialNodeRepository:
         roots: list[MaterialNode] = []
 
         for node in all_nodes:
-            # Reset ORM relationship collection before manual assembly
-            # to prevent duplicates from lazy-loaded children.
-            node.children = []
+            # Use set_committed_value to bypass ORM backref synchronization.
+            # Direct assignment (node.children = []) triggers lazy-load of
+            # existing children for backref sync, which fails in async context
+            # with MissingGreenlet.
+            if hasattr(node, "_sa_instance_state"):
+                set_committed_value(node, "children", [])
+            else:
+                node.children = []
 
         for node in all_nodes:
             if node.parent_id is None:

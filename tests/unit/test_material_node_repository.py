@@ -303,6 +303,61 @@ class TestGetTreeDeepNesting:
         assert gggc.children == []
 
 
+class TestGetTreeSetCommittedValue:
+    """get_tree uses set_committed_value to avoid async lazy-load."""
+
+    async def test_uses_set_committed_value_for_orm_objects(self) -> None:
+        """get_tree uses set_committed_value for real ORM instances.
+
+        Direct assignment (node.children = []) triggers ORM backref
+        synchronization which lazy-loads existing children. In async
+        context this raises MissingGreenlet (BUG-001).
+        """
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="Root", order=0)
+        # Simulate real ORM object by adding _sa_instance_state
+        root._sa_instance_state = MagicMock()
+        child = _mock_node(course_id=cid, parent_id=root.id, title="Child", order=0)
+        child._sa_instance_state = MagicMock()
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root, child]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        with patch(
+            "course_supporter.storage.material_node_repository.set_committed_value"
+        ) as mock_scv:
+            await repo.get_tree(cid)
+
+        # set_committed_value called for each node (root + child)
+        assert mock_scv.call_count == 2
+        for call in mock_scv.call_args_list:
+            assert call[0][1] == "children"
+            assert call[0][2] == []
+
+    async def test_falls_back_to_direct_assignment_for_mocks(self) -> None:
+        """get_tree uses direct assignment for non-ORM objects (tests)."""
+        cid = uuid.uuid4()
+        root = _mock_node(course_id=cid, title="Root", order=0)
+        child = _mock_node(course_id=cid, parent_id=root.id, title="Child", order=0)
+
+        session = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = [root, child]
+        session.execute.return_value = exec_result
+
+        repo = MaterialNodeRepository(session)
+        roots = await repo.get_tree(cid)
+
+        # Tree assembled correctly via direct assignment fallback
+        assert len(roots) == 1
+        assert roots[0] is root
+        assert len(root.children) == 1
+        assert root.children[0] is child
+
+
 class TestGetTreeOrphanNodes:
     """get_tree with orphan nodes (parent not in loaded set)."""
 

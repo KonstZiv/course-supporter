@@ -31,7 +31,7 @@ class TestOnSuccessDB:
         Pre-conditions: Job=active, Material=processing.
         After on_success:
           - Material.status == 'done', content_snapshot set
-          - Job.status == 'complete', result_material_id == material_id
+          - Job.status == 'complete'
         """
         jid = committed_job_and_material["job_id"]
         mid = committed_job_and_material["material_id"]
@@ -51,31 +51,10 @@ class TestOnSuccessDB:
         assert job is not None
         assert job.status == "complete"
         assert job.completed_at is not None
-        assert job.result_material_id == mid
-
         assert material is not None
         assert material.status == "done"
         assert material.content_snapshot == content
         assert material.processed_at is not None
-
-    async def test_success_result_material_id_correct(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        committed_job_and_material: dict[str, Any],
-    ) -> None:
-        """Job.result_material_id is the exact UUID of the material."""
-        jid = committed_job_and_material["job_id"]
-        mid = committed_job_and_material["material_id"]
-
-        callback = IngestionCallback(session_factory)
-        await callback.on_success(job_id=jid, material_id=mid, content_json="{}")
-
-        async with session_factory() as session:
-            job_repo = JobRepository(session)
-            job = await job_repo.get_by_id(jid)
-
-        assert job is not None
-        assert job.result_material_id == mid
 
 
 class TestOnFailureDB:

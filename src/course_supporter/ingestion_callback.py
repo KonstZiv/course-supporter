@@ -90,9 +90,7 @@ class IngestionCallback:
                     material_id, "done", content_snapshot=content_json
                 )
 
-            await job_repo.update_status(
-                job_id, "complete", result_material_id=material_id
-            )
+            await job_repo.update_status(job_id, "complete")
 
             # Extension points
             await self._invalidate_fingerprints(session, material_id=material_id)

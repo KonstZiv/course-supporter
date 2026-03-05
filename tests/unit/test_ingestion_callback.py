@@ -68,7 +68,7 @@ class TestOnSuccess:
         )
 
     async def test_job_updated_to_complete(self) -> None:
-        """Job status transitions to 'complete' with result_material_id."""
+        """Job status transitions to 'complete'."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -83,9 +83,7 @@ class TestOnSuccess:
 
             await callback.on_success(job_id=jid, material_id=mid, content_json="{}")
 
-        job_repo.update_status.assert_awaited_once_with(
-            jid, "complete", result_material_id=mid
-        )
+        job_repo.update_status.assert_awaited_once_with(jid, "complete")
 
     async def test_session_committed(self) -> None:
         """Session is committed after all updates."""

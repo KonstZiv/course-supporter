@@ -308,7 +308,6 @@ class TestHappyPathNodeLevel:
         deps.job_repo.update_status.assert_any_call(
             uuid.UUID(job_id),
             "complete",
-            result_snapshot_id=snap.id,
         )
 
 
@@ -356,7 +355,6 @@ class TestIdempotency:
         deps.job_repo.update_status.assert_any_call(
             uuid.UUID(job_id),
             "complete",
-            result_snapshot_id=existing.id,
         )
 
 

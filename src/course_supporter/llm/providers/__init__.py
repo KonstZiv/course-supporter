@@ -1,6 +1,6 @@
 """LLM provider implementations.
 
-PROVIDER_REGISTRY maps provider names (used in models.yaml)
+PROVIDER_REGISTRY maps provider names (used in external_services.yaml)
 to their implementation classes. To add a new provider:
 
 1. Create a new module in this package (e.g., mistral.py)

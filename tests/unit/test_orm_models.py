@@ -5,8 +5,8 @@ from course_supporter.storage.orm import (
     Concept,
     Course,
     Exercise,
+    ExternalServiceCall,
     Lesson,
-    LLMCall,
     Module,
     SlideVideoMapping,
     SourceMaterial,
@@ -27,7 +27,7 @@ class TestORMModels:
             "lessons",
             "concepts",
             "exercises",
-            "llm_calls",
+            "external_service_calls",
             "jobs",
         }
         assert expected.issubset(table_names)
@@ -69,10 +69,11 @@ class TestORMModels:
         columns = {c.name for c in Concept.__table__.columns}
         assert "embedding" in columns
 
-    def test_llm_call_linked_to_tenant(self) -> None:
-        """LLMCall has FK to tenants for billing."""
-        fks = {fk.target_fullname for fk in LLMCall.__table__.foreign_keys}
-        assert fks == {"tenants.id"}
+    def test_external_service_call_fks(self) -> None:
+        """ExternalServiceCall has FK to tenants and jobs."""
+        fks = {fk.target_fullname for fk in ExternalServiceCall.__table__.foreign_keys}
+        assert "tenants.id" in fks
+        assert "jobs.id" in fks
 
     def test_slide_video_mapping_fk(self) -> None:
         """SlideVideoMapping has FK to material_nodes and material_entries."""

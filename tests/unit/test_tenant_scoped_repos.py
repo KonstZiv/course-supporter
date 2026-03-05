@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from course_supporter.storage.orm import Course
-from course_supporter.storage.repositories import CourseRepository, LLMCallRepository
+from course_supporter.storage.repositories import (
+    CourseRepository,
+    ExternalServiceCallRepository,
+)
 
 
 def _make_course(
@@ -125,8 +128,8 @@ class TestCourseRepositoryCount:
         assert result == 0
 
 
-class TestLLMCallRepositoryTenantScoping:
-    """Tests for tenant-scoped LLMCallRepository."""
+class TestExternalServiceCallRepositoryTenantScoping:
+    """Tests for tenant-scoped ExternalServiceCallRepository."""
 
     async def test_llm_call_repo_scoped(self) -> None:
         """get_summary() filters by tenant_id when provided."""
@@ -145,7 +148,7 @@ class TestLLMCallRepositoryTenantScoping:
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session, tenant_id)
+        repo = ExternalServiceCallRepository(session, tenant_id)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 3
@@ -167,7 +170,7 @@ class TestLLMCallRepositoryTenantScoping:
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 10

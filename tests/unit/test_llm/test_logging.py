@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from course_supporter.llm.logging import create_log_callback
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.setup import create_model_router
-from course_supporter.storage.orm import LLMCall
+from course_supporter.storage.orm import ExternalServiceCall
 
 # -- helpers ----------------------------------------------------------------
 
@@ -67,12 +67,12 @@ class TestLogCallback:
         await callback(resp, True, None)
 
         session.add.assert_called_once()
-        record: LLMCall = session.add.call_args[0][0]
-        assert isinstance(record, LLMCall)
+        record: ExternalServiceCall = session.add.call_args[0][0]
+        assert isinstance(record, ExternalServiceCall)
         assert record.provider == "gemini"
         assert record.model_id == "gemini-2.5-flash"
-        assert record.tokens_in == 100
-        assert record.tokens_out == 50
+        assert record.unit_in == 100
+        assert record.unit_out == 50
         assert record.latency_ms == 200
         assert record.cost_usd == pytest.approx(0.001)
         assert record.success is True
@@ -86,7 +86,7 @@ class TestLogCallback:
         resp = _response()
         await callback(resp, False, "API rate limit exceeded")
 
-        record: LLMCall = session.add.call_args[0][0]
+        record: ExternalServiceCall = session.add.call_args[0][0]
         assert record.success is False
         assert record.error_message == "API rate limit exceeded"
 
@@ -97,7 +97,7 @@ class TestLogCallback:
         resp = _response(action="video_analysis", strategy="quality->default")
         await callback(resp, True, None)
 
-        record: LLMCall = session.add.call_args[0][0]
+        record: ExternalServiceCall = session.add.call_args[0][0]
         assert record.action == "video_analysis"
         assert record.strategy == "quality->default"
 
@@ -119,9 +119,9 @@ class TestLogCallback:
         resp = _response(tokens_in=None, tokens_out=None, cost_usd=None)
         await callback(resp, True, None)
 
-        record: LLMCall = session.add.call_args[0][0]
-        assert record.tokens_in is None
-        assert record.tokens_out is None
+        record: ExternalServiceCall = session.add.call_args[0][0]
+        assert record.unit_in is None
+        assert record.unit_out is None
         assert record.cost_usd is None
 
 
@@ -140,11 +140,11 @@ class TestCreateModelRouter:
         mock_providers.return_value = {}
 
         settings = MagicMock()
-        settings.model_registry_path = "config/models.yaml"
+        settings.external_services_path = "config/external_services.yaml"
 
         router = create_model_router(settings)
 
-        mock_load.assert_called_once_with(settings.model_registry_path)
+        mock_load.assert_called_once_with(settings.external_services_path)
         mock_providers.assert_called_once_with(settings)
         assert router._log_callback is None
 
@@ -159,7 +159,7 @@ class TestCreateModelRouter:
         mock_providers.return_value = {}
 
         settings = MagicMock()
-        settings.model_registry_path = "config/models.yaml"
+        settings.external_services_path = "config/external_services.yaml"
         session_factory = AsyncMock()
 
         router = create_model_router(settings, session_factory)

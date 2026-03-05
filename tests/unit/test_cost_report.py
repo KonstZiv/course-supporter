@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
-from course_supporter.storage.repositories import LLMCallRepository
+from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -40,8 +40,8 @@ def _empty_summary_row() -> MagicMock:
         successful_calls=0,
         failed_calls=0,
         total_cost_usd=0.0,
-        total_tokens_in=0,
-        total_tokens_out=0,
+        total_units_in=0,
+        total_units_out=0,
         avg_latency_ms=0.0,
     )
 
@@ -52,8 +52,8 @@ def _filled_summary_row() -> MagicMock:
         successful_calls=4,
         failed_calls=1,
         total_cost_usd=0.0123,
-        total_tokens_in=5000,
-        total_tokens_out=2000,
+        total_units_in=5000,
+        total_units_out=2000,
         avg_latency_ms=450.5,
     )
 
@@ -62,8 +62,8 @@ def _grouped_rows(groups: list[dict[str, Any]]) -> list[MagicMock]:
     return [_mock_row(**g) for g in groups]
 
 
-class TestLLMCallRepositorySummary:
-    """Tests for LLMCallRepository.get_summary."""
+class TestExternalServiceCallRepositorySummary:
+    """Tests for ExternalServiceCallRepository.get_summary."""
 
     async def test_get_summary_empty_table(self) -> None:
         """Empty table returns zeroes."""
@@ -72,12 +72,12 @@ class TestLLMCallRepositorySummary:
         mock_result.one.return_value = _empty_summary_row()
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 0
         assert summary.total_cost_usd == 0.0
-        assert summary.total_tokens_in == 0
+        assert summary.total_units_in == 0
         assert summary.avg_latency_ms == 0.0
 
     async def test_get_summary_with_data(self) -> None:
@@ -87,19 +87,19 @@ class TestLLMCallRepositorySummary:
         mock_result.one.return_value = _filled_summary_row()
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 5
         assert summary.successful_calls == 4
         assert summary.failed_calls == 1
         assert summary.total_cost_usd == pytest.approx(0.0123)
-        assert summary.total_tokens_in == 5000
-        assert summary.total_tokens_out == 2000
+        assert summary.total_units_in == 5000
+        assert summary.total_units_out == 2000
         assert summary.avg_latency_ms == pytest.approx(450.5)
 
 
-class TestLLMCallRepositoryGrouped:
+class TestExternalServiceCallRepositoryGrouped:
     """Tests for grouped cost queries."""
 
     async def test_get_by_action_groups(self) -> None:
@@ -112,23 +112,23 @@ class TestLLMCallRepositoryGrouped:
                     "group": "architect",
                     "calls": 3,
                     "cost_usd": 0.01,
-                    "tokens_in": 3000,
-                    "tokens_out": 1500,
+                    "units_in": 3000,
+                    "units_out": 1500,
                     "avg_latency_ms": 400.0,
                 },
                 {
                     "group": "summarize",
                     "calls": 2,
                     "cost_usd": 0.005,
-                    "tokens_in": 2000,
-                    "tokens_out": 500,
+                    "units_in": 2000,
+                    "units_out": 500,
                     "avg_latency_ms": 300.0,
                 },
             ]
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_action()
 
         assert len(groups) == 2
@@ -146,15 +146,15 @@ class TestLLMCallRepositoryGrouped:
                     "group": "gemini",
                     "calls": 4,
                     "cost_usd": 0.008,
-                    "tokens_in": 4000,
-                    "tokens_out": 1800,
+                    "units_in": 4000,
+                    "units_out": 1800,
                     "avg_latency_ms": 350.0,
                 },
             ]
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_provider()
 
         assert len(groups) == 1
@@ -171,15 +171,15 @@ class TestLLMCallRepositoryGrouped:
                     "group": "gemini-2.0-flash",
                     "calls": 3,
                     "cost_usd": 0.006,
-                    "tokens_in": 3000,
-                    "tokens_out": 1500,
+                    "units_in": 3000,
+                    "units_out": 1500,
                     "avg_latency_ms": 400.0,
                 },
             ]
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_model()
 
         assert len(groups) == 1
@@ -198,8 +198,8 @@ class TestCostReportAPI:
                 successful_calls=2,
                 failed_calls=0,
                 total_cost_usd=0.005,
-                total_tokens_in=1000,
-                total_tokens_out=500,
+                total_units_in=1000,
+                total_units_out=500,
                 avg_latency_ms=200.0,
             ),
             by_action=[
@@ -207,8 +207,8 @@ class TestCostReportAPI:
                     group="architect",
                     calls=2,
                     cost_usd=0.005,
-                    tokens_in=1000,
-                    tokens_out=500,
+                    units_in=1000,
+                    units_out=500,
                     avg_latency_ms=200.0,
                 ),
             ],
@@ -233,7 +233,7 @@ class TestCostReportAPI:
                     mock_session_ctx,
                 ),
                 patch(
-                    "course_supporter.api.routes.reports.LLMCallRepository",
+                    "course_supporter.api.routes.reports.ExternalServiceCallRepository",
                 ) as mock_repo_cls,
             ):
                 repo_instance = AsyncMock()
@@ -269,7 +269,7 @@ class TestCostReportAPI:
                     mock_session_ctx,
                 ),
                 patch(
-                    "course_supporter.api.routes.reports.LLMCallRepository",
+                    "course_supporter.api.routes.reports.ExternalServiceCallRepository",
                 ) as mock_repo_cls,
             ):
                 repo_instance = AsyncMock()
@@ -304,8 +304,8 @@ class TestCostReportCLI:
                 successful_calls=3,
                 failed_calls=0,
                 total_cost_usd=0.0075,
-                total_tokens_in=3000,
-                total_tokens_out=1500,
+                total_units_in=3000,
+                total_units_out=1500,
                 avg_latency_ms=300.0,
             ),
             by_action=[
@@ -313,8 +313,8 @@ class TestCostReportCLI:
                     group="architect",
                     calls=3,
                     cost_usd=0.0075,
-                    tokens_in=3000,
-                    tokens_out=1500,
+                    units_in=3000,
+                    units_out=1500,
                     avg_latency_ms=300.0,
                 ),
             ],
@@ -337,8 +337,8 @@ class TestCostReportCLI:
                 successful_calls=1,
                 failed_calls=0,
                 total_cost_usd=0.001,
-                total_tokens_in=100,
-                total_tokens_out=50,
+                total_units_in=100,
+                total_units_out=50,
                 avg_latency_ms=100.0,
             ),
             by_action=[],

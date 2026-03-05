@@ -13,7 +13,7 @@ import json
 
 from course_supporter.models.reports import CostReport
 from course_supporter.storage.database import async_session
-from course_supporter.storage.repositories import LLMCallRepository
+from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,7 +31,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def fetch_report() -> CostReport:
     """Fetch cost report from database."""
     async with async_session() as session:
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         return await repo.get_full_report()
 
 
@@ -45,8 +45,8 @@ def print_table(report: CostReport) -> str:
     lines.append(f"  Successful:       {s.successful_calls}")
     lines.append(f"  Failed:           {s.failed_calls}")
     lines.append(f"  Total cost (USD): ${s.total_cost_usd:.4f}")
-    lines.append(f"  Tokens in:        {s.total_tokens_in}")
-    lines.append(f"  Tokens out:       {s.total_tokens_out}")
+    lines.append(f"  Units in:         {s.total_units_in}")
+    lines.append(f"  Units out:        {s.total_units_out}")
     lines.append(f"  Avg latency (ms): {s.avg_latency_ms:.1f}")
     lines.append("")
 
@@ -62,15 +62,15 @@ def print_table(report: CostReport) -> str:
         else:
             header = (
                 f"{indent}{'Group':<30} {'Calls':>6} {'Cost':>10} "
-                f"{'Tokens In':>10} {'Tokens Out':>11} {'Avg ms':>8}"
+                f"{'Units In':>10} {'Units Out':>11} {'Avg ms':>8}"
             )
             lines.append(header)
             lines.append(indent + "-" * (len(header) - len(indent)))
             for g in groups:
                 lines.append(
                     f"{indent}{g.group:<30} {g.calls:>6} "
-                    f"${g.cost_usd:>9.4f} {g.tokens_in:>10} "
-                    f"{g.tokens_out:>11} {g.avg_latency_ms:>8.1f}"
+                    f"${g.cost_usd:>9.4f} {g.units_in:>10} "
+                    f"{g.units_out:>11} {g.avg_latency_ms:>8.1f}"
                 )
         lines.append("")
 

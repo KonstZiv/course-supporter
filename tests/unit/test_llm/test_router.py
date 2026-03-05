@@ -28,34 +28,44 @@ def _registry(
     strategies: dict[str, list[str]] | None = None,
 ) -> ModelRegistryConfig:
     """Create a minimal registry with two models and one action."""
+    chain = strategies or {
+        "default": ["model-a", "model-b"],
+        "quality": ["model-b", "model-a"],
+        "budget": ["model-a"],
+    }
     return ModelRegistryConfig.model_validate(
         {
-            "models": {
-                "model-a": {
-                    "provider": "p_a",
-                    "capabilities": ["structured_output"],
-                    "max_context": 100000,
-                    "cost_per_1k": {"input": 0.001, "output": 0.002},
+            "providers": {
+                "p_a": {
+                    "type": "llm",
+                    "models": [
+                        {
+                            "id": "model-a",
+                            "capabilities": ["structured_output"],
+                            "max_context": 100000,
+                            "cost_per_1k_in": 0.001,
+                            "cost_per_1k_out": 0.002,
+                        },
+                    ],
                 },
-                "model-b": {
-                    "provider": "p_b",
-                    "capabilities": ["structured_output"],
-                    "max_context": 100000,
-                    "cost_per_1k": {"input": 0.0001, "output": 0.0002},
+                "p_b": {
+                    "type": "llm",
+                    "models": [
+                        {
+                            "id": "model-b",
+                            "capabilities": ["structured_output"],
+                            "max_context": 100000,
+                            "cost_per_1k_in": 0.0001,
+                            "cost_per_1k_out": 0.0002,
+                        },
+                    ],
                 },
             },
             "actions": {
                 "act": {
-                    "description": "Test action",
+                    "strategy": "default",
                     "requires": ["structured_output"],
-                },
-            },
-            "routing": {
-                "act": strategies
-                or {
-                    "default": ["model-a", "model-b"],
-                    "quality": ["model-b", "model-a"],
-                    "budget": ["model-a"],
+                    "chain": chain,
                 },
             },
         }

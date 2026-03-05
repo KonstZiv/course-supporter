@@ -173,8 +173,7 @@ class IngestionCallback:
 
         **Epic 3 (S2-027) implementation plan**:
         1. Load the MaterialEntry (or its parent MaterialNode).
-        2. Set ``content_fingerprint = NULL`` on the entry.
-        3. Walk up the tree via ``parent_id``, setting
+        2. Walk up the tree via ``parent_id``, setting
            ``node_fingerprint = NULL`` on each ancestor node.
         4. Set course-level fingerprint to NULL.
 

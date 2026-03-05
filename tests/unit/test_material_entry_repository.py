@@ -55,7 +55,6 @@ def _mock_entry(
     entry.pending_job_id = pending_job_id
     entry.pending_since = pending_since
     entry.error_message = error_message
-    entry.content_fingerprint = None
     return entry
 
 

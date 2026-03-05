@@ -228,9 +228,6 @@ class MaterialEntry(Base):
     )
     pending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    # ── Fingerprint ──
-    content_fingerprint: Mapped[str | None] = mapped_column(String(64))
-
     # ── Errors ──
     error_message: Mapped[str | None] = mapped_column(Text)
 

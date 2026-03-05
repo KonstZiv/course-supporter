@@ -15,13 +15,15 @@ from course_supporter.storage.orm import MaterialEntry, MaterialNode
 def _make_entry(
     *,
     processed_content: str | None = None,
-    content_fingerprint: str | None = None,
+    processed_hash: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialEntry with the specified fields."""
     entry = MagicMock(spec=MaterialEntry)
     entry.id = uuid.uuid4()
     entry.processed_content = processed_content
-    entry.content_fingerprint = content_fingerprint
+    if processed_hash is None and processed_content is not None:
+        processed_hash = hashlib.sha256(processed_content.encode()).hexdigest()
+    entry.processed_hash = processed_hash
     return entry
 
 
@@ -41,8 +43,8 @@ def _make_node(
 
 
 class TestEnsureMaterialFp:
-    async def test_computes_sha256_of_processed_content(self) -> None:
-        """Fingerprint is sha256 hex digest of processed_content bytes."""
+    async def test_returns_processed_hash(self) -> None:
+        """ensure_material_fp returns the entry's processed_hash."""
         content = "Hello, this is processed content."
         entry = _make_entry(processed_content=content)
         session = AsyncMock()
@@ -52,52 +54,15 @@ class TestEnsureMaterialFp:
 
         expected = hashlib.sha256(content.encode()).hexdigest()
         assert result == expected
-        assert entry.content_fingerprint == expected
-        session.flush.assert_awaited_once()
+        assert result == entry.processed_hash
 
-    async def test_cache_hit_returns_existing(self) -> None:
-        """If content_fingerprint is already set, return it without flush."""
-        cached = "a" * 64
-        entry = _make_entry(
-            processed_content="some content",
-            content_fingerprint=cached,
-        )
-        session = AsyncMock()
-
-        svc = FingerprintService(session)
-        result = await svc.ensure_material_fp(entry)
-
-        assert result == cached
-        session.flush.assert_not_awaited()
-
-    async def test_invalidation_then_recalculate(self) -> None:
-        """After clearing fingerprint (None), next call recomputes."""
-        content = "original content"
-        fp = hashlib.sha256(content.encode()).hexdigest()
-        entry = _make_entry(processed_content=content, content_fingerprint=fp)
+    async def test_raises_when_no_processed_hash(self) -> None:
+        """ValueError if processed_hash is None."""
+        entry = _make_entry()
         session = AsyncMock()
         svc = FingerprintService(session)
 
-        # Cache hit — no flush
-        result1 = await svc.ensure_material_fp(entry)
-        assert result1 == fp
-        session.flush.assert_not_awaited()
-
-        # Invalidate
-        entry.content_fingerprint = None
-
-        # Recalculate
-        result2 = await svc.ensure_material_fp(entry)
-        assert result2 == fp
-        session.flush.assert_awaited_once()
-
-    async def test_raises_when_no_processed_content(self) -> None:
-        """ValueError if processed_content is None."""
-        entry = _make_entry(processed_content=None)
-        session = AsyncMock()
-        svc = FingerprintService(session)
-
-        with pytest.raises(ValueError, match="no processed_content"):
+        with pytest.raises(ValueError, match="no processed_hash"):
             await svc.ensure_material_fp(entry)
 
     async def test_deterministic_same_content_same_hash(self) -> None:
@@ -140,52 +105,52 @@ class TestEnsureMaterialFp:
 
 
 class TestRepositoryInvalidation:
-    """Verify that repository methods clear content_fingerprint."""
+    """Verify that repository methods invalidate node fingerprint chain."""
 
-    async def test_complete_processing_clears_fingerprint(self) -> None:
-        """complete_processing sets content_fingerprint to None."""
+    async def test_complete_processing_invalidates_node_chain(self) -> None:
+        """complete_processing triggers node chain invalidation."""
         from course_supporter.storage.material_entry_repository import (
             MaterialEntryRepository,
         )
 
         entry = MagicMock(spec=MaterialEntry)
-        entry.content_fingerprint = "old_fp"
 
         session = AsyncMock()
         repo = MaterialEntryRepository(session)
+        invalidate_mock = AsyncMock()
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
-            mp.setattr(repo, "_invalidate_node_chain", AsyncMock())
+            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
             await repo.complete_processing(
                 entry.id,
                 processed_content="new content",
                 processed_hash="abc123",
             )
 
-        assert entry.content_fingerprint is None
+        invalidate_mock.assert_awaited_once_with(entry.node_id)
 
-    async def test_update_source_clears_fingerprint(self) -> None:
-        """update_source sets content_fingerprint to None."""
+    async def test_update_source_invalidates_node_chain(self) -> None:
+        """update_source triggers node chain invalidation."""
         from course_supporter.storage.material_entry_repository import (
             MaterialEntryRepository,
         )
 
         entry = MagicMock(spec=MaterialEntry)
-        entry.content_fingerprint = "old_fp"
 
         session = AsyncMock()
         repo = MaterialEntryRepository(session)
+        invalidate_mock = AsyncMock()
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
-            mp.setattr(repo, "_invalidate_node_chain", AsyncMock())
+            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
             await repo.update_source(
                 entry.id,
                 source_url="https://new-url.com",
             )
 
-        assert entry.content_fingerprint is None
+        invalidate_mock.assert_awaited_once_with(entry.node_id)
 
 
 class TestEnsureNodeFp:
@@ -923,13 +888,10 @@ class TestLazyCalculation:
         expected = hashlib.sha256("\n".join(parts).encode()).hexdigest()
         assert result == expected
 
-    async def test_cached_material_not_recomputed(self) -> None:
-        """Material with existing content_fingerprint uses cached value."""
+    async def test_cached_material_uses_processed_hash(self) -> None:
+        """Material fingerprint comes from processed_hash directly."""
         cached_fp = "e" * 64
-        mat = _make_entry(
-            processed_content="should not be hashed",
-            content_fingerprint=cached_fp,
-        )
+        mat = _make_entry(processed_hash=cached_fp)
         node = _make_node(materials=[mat])
         session = AsyncMock()
         svc = FingerprintService(session)

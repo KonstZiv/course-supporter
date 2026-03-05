@@ -28,11 +28,7 @@ class FingerprintService:
     # ── Public API ──
 
     async def ensure_material_fp(self, entry: MaterialEntry) -> str:
-        """Lazily compute and cache content_fingerprint.
-
-        Returns the existing fingerprint if already set (no flush).
-        Otherwise computes ``sha256(processed_content)`` in UTF-8,
-        stores it on the entry, flushes, and returns the hex digest.
+        """Return the material fingerprint (``processed_hash``).
 
         Args:
             entry: A loaded MaterialEntry ORM instance.
@@ -41,14 +37,10 @@ class FingerprintService:
             64-char lowercase hex SHA-256 digest.
 
         Raises:
-            ValueError: If ``processed_content`` is None (entry not
+            ValueError: If ``processed_hash`` is None (entry not
                 yet processed).
         """
-        if entry.content_fingerprint is not None:
-            return entry.content_fingerprint
-        fp = self._compute_material_fp(entry)
-        await self._session.flush()
-        return fp
+        return self._compute_material_fp(entry)
 
     async def ensure_node_fp(self, node: MaterialNode) -> str:
         """Lazily compute and cache Merkle fingerprint for a node.
@@ -132,27 +124,19 @@ class FingerprintService:
 
     @staticmethod
     def _compute_material_fp(entry: MaterialEntry) -> str:
-        """Compute content_fingerprint without flushing.
-
-        Returns cached value if already set. Otherwise computes
-        sha256(processed_content) and stores it on the entry.
+        """Return ``processed_hash`` as the material fingerprint.
 
         Raises:
-            ValueError: If ``processed_content`` is None.
+            ValueError: If ``processed_hash`` is None (not yet processed).
         """
-        if entry.content_fingerprint is not None:
-            return entry.content_fingerprint
+        if entry.processed_hash is not None:
+            return entry.processed_hash
 
-        if entry.processed_content is None:
-            msg = (
-                f"Cannot compute fingerprint: MaterialEntry {entry.id} "
-                f"has no processed_content"
-            )
-            raise ValueError(msg)
-
-        fp = hashlib.sha256(entry.processed_content.encode()).hexdigest()
-        entry.content_fingerprint = fp
-        return fp
+        msg = (
+            f"Cannot compute fingerprint: MaterialEntry {entry.id} "
+            f"has no processed_hash"
+        )
+        raise ValueError(msg)
 
     def _compute_node_fp(self, node: MaterialNode) -> str:
         """Compute Merkle fingerprint for a node without flushing.
@@ -166,7 +150,7 @@ class FingerprintService:
 
         # Material fingerprints (skip unprocessed)
         for mat in node.materials:
-            if mat.processed_content is not None:
+            if mat.processed_hash is not None:
                 fp = self._compute_material_fp(mat)
                 parts.append(f"m:{fp}")
 

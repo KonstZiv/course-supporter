@@ -325,9 +325,6 @@ class MaterialEntrySummaryResponse(BaseModel):
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
     )
-    content_fingerprint: str | None = Field(
-        description="SHA-256 of processed content. ``null`` if not computed."
-    )
     created_at: datetime = Field(description="When this entry was created.")
 
 
@@ -706,9 +703,6 @@ class MaterialEntryResponse(BaseModel):
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
-    )
-    content_fingerprint: str | None = Field(
-        description="SHA-256 of processed content. ``null`` if not computed."
     )
     pending_job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."

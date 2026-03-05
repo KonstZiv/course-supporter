@@ -177,7 +177,6 @@ def _mock_entry(
     entry.order = 0
     entry.state = state
     entry.error_message = error_message
-    entry.content_fingerprint = None
     entry.created_at = datetime.now(UTC)
     return entry
 

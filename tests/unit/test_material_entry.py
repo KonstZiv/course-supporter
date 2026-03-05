@@ -31,7 +31,6 @@ class TestMaterialEntryModel:
         assert entry.processed_at is None
         assert entry.pending_job_id is None
         assert entry.pending_since is None
-        assert entry.content_fingerprint is None
         assert entry.error_message is None
 
     def test_create_with_raw_layer(self) -> None:
@@ -90,9 +89,9 @@ class TestMaterialEntryModel:
         assert col.type.length == 500  # type: ignore[union-attr]
 
     def test_hash_fields_max_length(self) -> None:
-        """Hash fields (raw, processed, fingerprint) are 64 chars (SHA-256)."""
+        """Hash fields (raw, processed) are 64 chars (SHA-256)."""
         table = MaterialEntry.__table__
-        for col_name in ("raw_hash", "processed_hash", "content_fingerprint"):
+        for col_name in ("raw_hash", "processed_hash"):
             col = table.c[col_name]
             assert col.type.length == 64, f"{col_name} should be 64 chars"  # type: ignore[union-attr]
 

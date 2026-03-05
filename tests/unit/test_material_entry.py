@@ -16,7 +16,7 @@ class TestMaterialEntryModel:
     def test_create_minimal(self) -> None:
         """Minimal MaterialEntry with required fields only."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com/article",
         )
@@ -29,14 +29,14 @@ class TestMaterialEntryModel:
         assert entry.processed_hash is None
         assert entry.processed_content is None
         assert entry.processed_at is None
-        assert entry.pending_job_id is None
+        assert entry.job_id is None
         assert entry.pending_since is None
         assert entry.error_message is None
 
     def test_create_with_raw_layer(self) -> None:
         """MaterialEntry with raw layer populated (file upload)."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="video",
             source_url="s3://bucket/video.mp4",
             filename="lecture-1.mp4",
@@ -51,7 +51,7 @@ class TestMaterialEntryModel:
     def test_create_with_processed_layer(self) -> None:
         """MaterialEntry with processed layer populated."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="text",
             source_url="s3://bucket/notes.md",
             processed_hash="b" * 64,
@@ -65,13 +65,13 @@ class TestMaterialEntryModel:
         """Pending receipt tracks in-flight job."""
         job_id = _uuid7()
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="presentation",
             source_url="s3://bucket/slides.pdf",
-            pending_job_id=job_id,
+            job_id=job_id,
         )
 
-        assert entry.pending_job_id == job_id
+        assert entry.job_id == job_id
 
     def test_order_default(self) -> None:
         """Order column defaults to 0."""
@@ -100,7 +100,7 @@ class TestMaterialEntryModel:
         node_id = _uuid7()
         entry = MaterialEntry(
             id=_uuid7(),
-            node_id=node_id,
+            materialnode_id=node_id,
             source_type="web",
             source_url="https://example.com",
         )
@@ -120,33 +120,33 @@ class TestMaterialEntryForeignKeys:
 
     def test_node_id_fk(self) -> None:
         """node_id FK points to material_nodes.id."""
-        col = MaterialEntry.__table__.c.node_id
+        col = MaterialEntry.__table__.c.materialnode_id
         fks = list(col.foreign_keys)
         assert len(fks) == 1
         assert fks[0].target_fullname == "material_nodes.id"
 
     def test_node_id_cascade_delete(self) -> None:
         """node_id FK uses CASCADE ondelete."""
-        col = MaterialEntry.__table__.c.node_id
+        col = MaterialEntry.__table__.c.materialnode_id
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
-    def test_pending_job_id_fk(self) -> None:
-        """pending_job_id FK points to jobs.id."""
-        col = MaterialEntry.__table__.c.pending_job_id
+    def test_job_id_fk(self) -> None:
+        """job_id FK points to jobs.id."""
+        col = MaterialEntry.__table__.c.job_id
         fks = list(col.foreign_keys)
         assert len(fks) == 1
         assert fks[0].target_fullname == "jobs.id"
 
-    def test_pending_job_id_set_null(self) -> None:
-        """pending_job_id FK uses SET NULL ondelete."""
-        col = MaterialEntry.__table__.c.pending_job_id
+    def test_job_id_set_null(self) -> None:
+        """job_id FK uses SET NULL ondelete."""
+        col = MaterialEntry.__table__.c.job_id
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "SET NULL"
 
-    def test_pending_job_id_nullable(self) -> None:
-        """pending_job_id is nullable."""
-        col = MaterialEntry.__table__.c.pending_job_id
+    def test_job_id_nullable(self) -> None:
+        """job_id is nullable."""
+        col = MaterialEntry.__table__.c.job_id
         assert col.nullable is True
 
 
@@ -186,26 +186,26 @@ class TestMaterialState:
     def test_state_raw(self) -> None:
         """RAW when no processed content, no pending, no error."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
         )
         assert entry.state.value == "raw"
 
     def test_state_pending(self) -> None:
-        """PENDING when pending_job_id is set."""
+        """PENDING when job_id is set."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
-            pending_job_id=_uuid7(),
+            job_id=_uuid7(),
         )
         assert entry.state.value == "pending"
 
     def test_state_error(self) -> None:
         """ERROR when error_message is set (highest priority)."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
             error_message="LLM timeout",
@@ -215,10 +215,10 @@ class TestMaterialState:
     def test_state_error_takes_priority_over_pending(self) -> None:
         """ERROR takes priority over PENDING."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
-            pending_job_id=_uuid7(),
+            job_id=_uuid7(),
             error_message="failed",
         )
         assert entry.state.value == "error"
@@ -227,7 +227,7 @@ class TestMaterialState:
         """READY when processed_content set and hashes match."""
         h = "a" * 64
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
             processed_content='{"sections": []}',
@@ -239,7 +239,7 @@ class TestMaterialState:
     def test_state_ready_no_raw_hash(self) -> None:
         """READY when processed_content set and raw_hash is None (skip integrity)."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
             processed_content='{"data": []}',
@@ -250,7 +250,7 @@ class TestMaterialState:
     def test_state_integrity_broken(self) -> None:
         """INTEGRITY_BROKEN when raw_hash and processed_hash differ."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://example.com",
             processed_content='{"sections": []}',
@@ -262,7 +262,7 @@ class TestMaterialState:
     def test_state_integrity_broken_after_source_update(self) -> None:
         """INTEGRITY_BROKEN simulating source update with new raw_hash."""
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="video",
             source_url="s3://bucket/new-video.mp4",
             processed_content='{"transcript": "..."}',
@@ -277,10 +277,10 @@ class TestMaterialEntryIndexes:
 
     def test_node_id_indexed(self) -> None:
         """node_id column is indexed."""
-        col = MaterialEntry.__table__.c.node_id
+        col = MaterialEntry.__table__.c.materialnode_id
         assert col.index is True
 
-    def test_pending_job_id_indexed(self) -> None:
-        """pending_job_id column is indexed."""
-        col = MaterialEntry.__table__.c.pending_job_id
+    def test_job_id_indexed(self) -> None:
+        """job_id column is indexed."""
+        col = MaterialEntry.__table__.c.job_id
         assert col.index is True

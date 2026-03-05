@@ -84,7 +84,7 @@ class FingerprintService:
 
         Args:
             root_nodes: Root-level MaterialNode instances
-                (``parent_id is None``) with eagerly loaded subtrees.
+                (``parent_materialnode_id is None``) with eagerly loaded subtrees.
 
         Returns:
             64-char lowercase hex SHA-256 digest.
@@ -101,7 +101,7 @@ class FingerprintService:
     async def invalidate_up(self, node: MaterialNode) -> None:
         """Clear node_fingerprint from ``node`` up to the root.
 
-        Walks the parent chain using ``parent_id``, setting
+        Walks the parent chain using ``parent_materialnode_id``, setting
         ``node_fingerprint = None`` on every ancestor. Issues a
         single flush after the full walk.
 
@@ -115,9 +115,11 @@ class FingerprintService:
         current: MaterialNode | None = node
         while current is not None:
             current.node_fingerprint = None
-            if current.parent_id is None:
+            if current.parent_materialnode_id is None:
                 break
-            current = await self._session.get(MaterialNode, current.parent_id)
+            current = await self._session.get(
+                MaterialNode, current.parent_materialnode_id
+            )
         await self._session.flush()
 
     # ── Internal compute (no flush) ──

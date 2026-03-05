@@ -76,7 +76,7 @@ class ReadinessService:
         base = select(MaterialNode.id).where(MaterialNode.id == root_id)
         cte = base.cte(name="subtree", recursive=True)
         recursive = select(MaterialNode.id).join(
-            cte, MaterialNode.parent_id == cte.c.id
+            cte, MaterialNode.parent_materialnode_id == cte.c.id
         )
         cte = cte.union_all(recursive)
 

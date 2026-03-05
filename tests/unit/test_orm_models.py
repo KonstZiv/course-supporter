@@ -33,7 +33,7 @@ class TestORMModels:
         assert "id" in columns
         assert "tenant_id" in columns
         assert "title" in columns
-        assert "parent_id" in columns
+        assert "parent_materialnode_id" in columns
         assert "created_at" in columns
         assert "updated_at" in columns
 
@@ -56,12 +56,12 @@ class TestORMModels:
 
     def test_ondelete_cascade_on_primary_foreign_keys(self) -> None:
         """Primary FK constraints use CASCADE ondelete."""
-        # Check key ownership FKs (not nullable SET NULL FKs like pending_job_id)
+        # Check key ownership FKs (not nullable SET NULL FKs like job_id)
         cascade_fks = [
-            (MaterialEntry, "node_id"),
-            (MaterialNode, "parent_id"),
+            (MaterialEntry, "materialnode_id"),
+            (MaterialNode, "parent_materialnode_id"),
             (MaterialNode, "tenant_id"),
-            (SlideVideoMapping, "node_id"),
+            (SlideVideoMapping, "materialnode_id"),
         ]
         for model, col_name in cascade_fks:
             col = model.__table__.c[col_name]

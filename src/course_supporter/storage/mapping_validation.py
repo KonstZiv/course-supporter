@@ -215,10 +215,10 @@ class MappingValidationService:
         # ── Collect all entry IDs that parse as valid UUIDs ──
         all_ids: set[uuid.UUID] = set()
         for m in mappings:
-            pres_id = _parse_uuid(m.presentation_entry_id)
+            pres_id = _parse_uuid(m.presentation_materialentry_id)
             if pres_id is not None:
                 all_ids.add(pres_id)
-            vid_id = _parse_uuid(m.video_entry_id)
+            vid_id = _parse_uuid(m.video_materialentry_id)
             if vid_id is not None:
                 all_ids.add(vid_id)
 
@@ -282,20 +282,20 @@ class MappingValidationService:
 
         # ── Level 1: Entry checks ──
         pres_err = self._check_entry(
-            entry_id_str=mapping.presentation_entry_id,
+            entry_id_str=mapping.presentation_materialentry_id,
             node_id=node_id,
             expected_type=SourceType.PRESENTATION,
-            field="presentation_entry_id",
+            field="presentation_materialentry_id",
             entries_by_id=entries_by_id,
         )
         if pres_err is not None:
             errors.append(pres_err)
 
         video_err = self._check_entry(
-            entry_id_str=mapping.video_entry_id,
+            entry_id_str=mapping.video_materialentry_id,
             node_id=node_id,
             expected_type=SourceType.VIDEO,
-            field="video_entry_id",
+            field="video_materialentry_id",
             entries_by_id=entries_by_id,
         )
         if video_err is not None:
@@ -345,9 +345,13 @@ class MappingValidationService:
 
         # ── Level 3: Check entry state, create blockers for non-READY ──
         pres_uuid = (
-            _parse_uuid(mapping.presentation_entry_id) if pres_err is None else None
+            _parse_uuid(mapping.presentation_materialentry_id)
+            if pres_err is None
+            else None
         )
-        vid_uuid = _parse_uuid(mapping.video_entry_id) if video_err is None else None
+        vid_uuid = (
+            _parse_uuid(mapping.video_materialentry_id) if video_err is None else None
+        )
 
         pres_ready = self._check_readiness(
             pres_uuid, ["slide_number"], entries_by_id, blockers
@@ -462,12 +466,12 @@ class MappingValidationService:
                 hint="Check that the entry ID is correct",
             )
 
-        if entry.node_id != node_id:
+        if entry.materialnode_id != node_id:
             return MappingValidationError(
                 field=field,
                 message=(
                     f"Entry '{entry_id}' belongs to node "
-                    f"'{entry.node_id}', not '{node_id}'"
+                    f"'{entry.materialnode_id}', not '{node_id}'"
                 ),
                 hint="Both entries must belong to the target node",
             )
@@ -502,8 +506,8 @@ class MappingValidationService:
         # Collect all entry IDs from blocked mappings
         all_ids: set[uuid.UUID] = set()
         for m in blocked:
-            all_ids.add(m.presentation_entry_id)
-            all_ids.add(m.video_entry_id)
+            all_ids.add(m.presentation_materialentry_id)
+            all_ids.add(m.video_materialentry_id)
 
         # Single query to fetch all referenced entries
         entries_by_id: dict[uuid.UUID, MaterialEntry] = {}
@@ -524,14 +528,14 @@ class MappingValidationService:
         # Revalidate each mapping
         for m in blocked:
             pydantic_entry = SlideVideoMapEntry(
-                presentation_entry_id=str(m.presentation_entry_id),
-                video_entry_id=str(m.video_entry_id),
+                presentation_materialentry_id=str(m.presentation_materialentry_id),
+                video_materialentry_id=str(m.video_materialentry_id),
                 slide_number=m.slide_number,
                 video_timecode_start=m.video_timecode_start,
                 video_timecode_end=m.video_timecode_end,
             )
             errs, blockers = self._validate_single(
-                m.node_id, pydantic_entry, entries_by_id, parsed_docs
+                m.materialnode_id, pydantic_entry, entries_by_id, parsed_docs
             )
 
             if errs:

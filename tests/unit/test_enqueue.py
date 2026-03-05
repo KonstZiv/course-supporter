@@ -57,7 +57,7 @@ class TestEnqueueIngestion:
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["job_type"] == "ingest"
         assert create_kwargs["tenant_id"] == tenant_id
-        assert create_kwargs["node_id"] == node_id
+        assert create_kwargs["materialnode_id"] == node_id
         assert create_kwargs["priority"] == "normal"
 
     async def test_enqueues_with_correct_args(self) -> None:
@@ -193,7 +193,7 @@ class TestEnqueueGeneration:
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["job_type"] == "generate_structure"
         assert create_kwargs["tenant_id"] == tenant_id
-        assert create_kwargs["node_id"] == target_node_id
+        assert create_kwargs["materialnode_id"] == target_node_id
         assert create_kwargs["depends_on"] == deps
         assert create_kwargs["input_params"]["root_node_id"] == str(root_node_id)
         assert create_kwargs["input_params"]["target_node_id"] == str(target_node_id)
@@ -257,7 +257,7 @@ class TestEnqueueGeneration:
 
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         # effective_node_id falls back to root_node_id when target is None
-        assert create_kwargs["node_id"] == root_node_id
+        assert create_kwargs["materialnode_id"] == root_node_id
         assert create_kwargs["input_params"]["target_node_id"] is None
 
     async def test_sets_arq_job_id(self) -> None:

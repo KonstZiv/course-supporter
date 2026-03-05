@@ -36,7 +36,7 @@ class SnapshotRepository:
     ) -> StructureSnapshot:
         """Create a new snapshot record."""
         snapshot = StructureSnapshot(
-            node_id=node_id,
+            materialnode_id=node_id,
             node_fingerprint=node_fingerprint,
             mode=mode,
             structure=structure,
@@ -68,7 +68,7 @@ class SnapshotRepository:
         The identity is (node_id, node_fingerprint, mode).
         """
         stmt = select(StructureSnapshot).where(
-            StructureSnapshot.node_id == node_id,
+            StructureSnapshot.materialnode_id == node_id,
             StructureSnapshot.node_fingerprint == node_fingerprint,
             StructureSnapshot.mode == mode,
         )
@@ -83,7 +83,7 @@ class SnapshotRepository:
         stmt = (
             select(StructureSnapshot)
             .options(joinedload(StructureSnapshot.service_call))
-            .where(StructureSnapshot.node_id == node_id)
+            .where(StructureSnapshot.materialnode_id == node_id)
             .order_by(StructureSnapshot.created_at.desc())
             .limit(1)
         )
@@ -95,7 +95,7 @@ class SnapshotRepository:
         stmt = (
             select(func.count())
             .select_from(StructureSnapshot)
-            .where(StructureSnapshot.node_id == node_id)
+            .where(StructureSnapshot.materialnode_id == node_id)
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()
@@ -111,7 +111,7 @@ class SnapshotRepository:
         stmt = (
             select(StructureSnapshot)
             .options(joinedload(StructureSnapshot.service_call))
-            .where(StructureSnapshot.node_id == node_id)
+            .where(StructureSnapshot.materialnode_id == node_id)
             .order_by(StructureSnapshot.created_at.desc())
         )
         if offset is not None:

@@ -47,7 +47,7 @@ async def detect_conflict(
 
     Args:
         session: DB session for loading tree nodes.
-        root_node_id: Root of the material tree (parent_id IS NULL).
+        root_node_id: Root of the material tree (parent_materialnode_id IS NULL).
         target_node_id: Target node (None = whole tree from root).
         active_jobs: Active generation jobs for the same tree.
 
@@ -58,7 +58,7 @@ async def detect_conflict(
     target_ancestors = _ancestor_set(parent_map, target_node_id)
 
     for job in active_jobs:
-        job_node_id = job.node_id
+        job_node_id = job.materialnode_id
         if _scopes_overlap_fast(target_node_id, job_node_id):
             return ConflictInfo(
                 job_id=job.id,
@@ -86,18 +86,20 @@ async def _load_parent_map(
 ) -> dict[uuid.UUID, uuid.UUID | None]:
     """Load all nodes under root_node_id via recursive CTE.
 
-    Returns {node_id: parent_id} map.
+    Returns {node_id: parent_materialnode_id} map.
     """
     base = select(MaterialNode.id).where(MaterialNode.id == root_node_id)
     cte = base.cte(name="subtree", recursive=True)
-    recursive = select(MaterialNode.id).join(cte, MaterialNode.parent_id == cte.c.id)
+    recursive = select(MaterialNode.id).join(
+        cte, MaterialNode.parent_materialnode_id == cte.c.id
+    )
     cte = cte.union_all(recursive)
 
-    stmt = select(MaterialNode.id, MaterialNode.parent_id).where(
+    stmt = select(MaterialNode.id, MaterialNode.parent_materialnode_id).where(
         MaterialNode.id.in_(select(cte.c.id)),
     )
     result = await session.execute(stmt)
-    return {row.id: row.parent_id for row in result.all()}
+    return {row.id: row.parent_materialnode_id for row in result.all()}
 
 
 def _scopes_overlap_fast(

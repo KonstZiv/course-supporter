@@ -70,13 +70,13 @@ class SlideVideoMapItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique mapping identifier (UUIDv7).")
-    node_id: uuid.UUID = Field(
+    materialnode_id: uuid.UUID = Field(
         description="Material tree node this mapping belongs to."
     )
-    presentation_entry_id: uuid.UUID = Field(
+    presentation_materialentry_id: uuid.UUID = Field(
         description="MaterialEntry ID of the presentation (PDF/PPTX)."
     )
-    video_entry_id: uuid.UUID = Field(
+    video_materialentry_id: uuid.UUID = Field(
         description="MaterialEntry ID of the video recording."
     )
     slide_number: int = Field(
@@ -225,15 +225,15 @@ class NodeUpdateRequest(BaseModel):
 class NodeMoveRequest(BaseModel):
     """Request body for moving a node within the tree.
 
-    Move a node to a new parent (or to root by setting ``parent_id``
+    Move a node to a new parent (or to root by setting ``parent_materialnode_id``
     to ``null``). Cycle detection is enforced server-side.
 
     Example::
 
-        {"parent_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
+        {"parent_materialnode_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
     """
 
-    parent_id: uuid.UUID | None = Field(
+    parent_materialnode_id: uuid.UUID | None = Field(
         ...,
         description=(
             "Target parent node ID. Set to ``null`` to move the node to the tree root."
@@ -274,7 +274,7 @@ class NodeResponse(BaseModel):
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
-    parent_id: uuid.UUID | None = Field(
+    parent_materialnode_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
     title: str = Field(description="Node title.")
@@ -307,7 +307,7 @@ class NodeTreeResponse(BaseModel):
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
-    parent_id: uuid.UUID | None = Field(
+    parent_materialnode_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
     title: str = Field(description="Node title.")
@@ -336,7 +336,7 @@ class NodeTreeResponse(BaseModel):
 class NodeListResponse(BaseModel):
     """Paginated list of root nodes (courses).
 
-    Root nodes (parent_id IS NULL) serve as top-level entities.
+    Root nodes (parent_materialnode_id IS NULL) serve as top-level entities.
     """
 
     items: list[NodeResponse] = Field(description="Root nodes for the current page.")
@@ -352,7 +352,7 @@ class MaterialEntrySummaryResponse(BaseModel):
     """Compact material entry within the tree detail.
 
     A lighter version of ``MaterialEntryResponse`` omitting
-    ``pending_job_id`` and ``updated_at`` to keep the tree
+    ``job_id`` and ``updated_at`` to keep the tree
     payload concise. Includes the derived ``state`` field.
     """
 
@@ -445,7 +445,9 @@ class MaterialEntryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    node_id: uuid.UUID = Field(description="Parent node this material belongs to.")
+    materialnode_id: uuid.UUID = Field(
+        description="Parent node this material belongs to."
+    )
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
     )
@@ -461,7 +463,7 @@ class MaterialEntryResponse(BaseModel):
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
     )
-    pending_job_id: uuid.UUID | None = Field(
+    job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."
     )
     created_at: datetime = Field(description="When this entry was created.")
@@ -478,7 +480,9 @@ class MaterialEntryCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    node_id: uuid.UUID = Field(description="Parent node this material belongs to.")
+    materialnode_id: uuid.UUID = Field(
+        description="Parent node this material belongs to."
+    )
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
     )
@@ -512,7 +516,7 @@ class JobResponse(BaseModel):
     priority: str
     status: str
     tenant_id: uuid.UUID | None
-    node_id: uuid.UUID | None
+    materialnode_id: uuid.UUID | None
     arq_job_id: str | None
     error_message: str | None
     queued_at: datetime
@@ -545,7 +549,7 @@ class MappingWarningResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
-    node_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
+    materialnode_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
     slide_number: int = Field(description="Slide number in the presentation.")
     validation_state: MappingValidationState = Field(
         description="Validation state of the mapping.",
@@ -602,7 +606,7 @@ class SnapshotSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
-    node_id: uuid.UUID = Field(description="Target node for this snapshot.")
+    materialnode_id: uuid.UUID = Field(description="Target node for this snapshot.")
     mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
     node_fingerprint: str = Field(
         description="Merkle fingerprint of the target subtree at generation time."

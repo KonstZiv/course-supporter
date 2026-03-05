@@ -1,7 +1,7 @@
 """Material tree node management API endpoints.
 
 Provides CRUD operations for the hierarchical material tree.
-Root nodes (parent_id IS NULL) serve as top-level entities (courses).
+Root nodes (parent_materialnode_id IS NULL) serve as top-level entities (courses).
 Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
@@ -190,7 +190,7 @@ async def create_child_node(
 
     node = await repo.create(
         tenant_id=tenant.tenant_id,
-        parent_id=node_id,
+        parent_materialnode_id=node_id,
         title=body.title,
         description=body.description,
     )
@@ -199,7 +199,7 @@ async def create_child_node(
     logger.info(
         "child_node_created",
         node_id=str(node.id),
-        parent_id=str(node_id),
+        parent_materialnode_id=str(node_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -299,18 +299,20 @@ async def move_node(
 ) -> NodeResponse:
     """Move a node to a new parent (or to root).
 
-    Cycle detection is enforced. Set ``parent_id`` to ``null``
+    Cycle detection is enforced. Set ``parent_materialnode_id`` to ``null``
     to make the node a root. Returns 422 if the move would create a cycle.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
     repo = MaterialNodeRepository(session)
 
     # Validate target parent belongs to the same tenant
-    if body.parent_id is not None:
-        await _require_node_for_tenant(session, tenant.tenant_id, body.parent_id)
+    if body.parent_materialnode_id is not None:
+        await _require_node_for_tenant(
+            session, tenant.tenant_id, body.parent_materialnode_id
+        )
 
     try:
-        node = await repo.move(node_id, body.parent_id)
+        node = await repo.move(node_id, body.parent_materialnode_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -319,7 +321,7 @@ async def move_node(
     logger.info(
         "node_moved",
         node_id=str(node_id),
-        new_parent_id=str(body.parent_id),
+        new_parent_materialnode_id=str(body.parent_materialnode_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -406,8 +408,8 @@ async def create_slide_mapping(
     existing = await svm_repo.get_by_node_id(node_id)
     existing_keys: set[tuple[str, str, int, int]] = {
         (
-            str(m.presentation_entry_id),
-            str(m.video_entry_id),
+            str(m.presentation_materialentry_id),
+            str(m.video_materialentry_id),
             m.slide_number,
             timecode_to_seconds(m.video_timecode_start),
         )
@@ -431,8 +433,8 @@ async def create_slide_mapping(
             continue
 
         natural_key = (
-            str(mapping.presentation_entry_id),
-            str(mapping.video_entry_id),
+            str(mapping.presentation_materialentry_id),
+            str(mapping.video_materialentry_id),
             mapping.slide_number,
             timecode_to_seconds(mapping.video_timecode_start),
         )
@@ -527,7 +529,7 @@ async def delete_slide_mapping(
 
     # Ownership: mapping → node → tenant
     node_repo = MaterialNodeRepository(session)
-    node = await node_repo.get_by_id(mapping.node_id)
+    node = await node_repo.get_by_id(mapping.materialnode_id)
     if node is None or node.tenant_id != tenant.tenant_id:
         raise HTTPException(
             status_code=404,

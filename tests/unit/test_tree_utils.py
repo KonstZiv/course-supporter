@@ -23,7 +23,7 @@ from course_supporter.tree_utils import (
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
     title: str = "Node",
     description: str | None = None,
     order: int = 0,
@@ -33,7 +33,7 @@ def _make_node(
     """Create a mock MaterialNode."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_id = parent_id
+    node.parent_materialnode_id = parent_materialnode_id
     node.title = title
     node.description = description
     node.order = order
@@ -114,7 +114,7 @@ class TestBuildMaterialTreeSummary:
 
         child = _make_node(
             node_id=child_id,
-            parent_id=root_id,
+            parent_materialnode_id=root_id,
             title="Lesson 1",
             order=1,
             materials=[_make_entry(filename="video.mp4")],
@@ -164,13 +164,13 @@ class TestBuildMaterialTreeSummary:
 
         grandchild = _make_node(
             node_id=grandchild_id,
-            parent_id=child_id,
+            parent_materialnode_id=child_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=child_id,
-            parent_id=root_id,
+            parent_materialnode_id=root_id,
             title="Lesson",
             order=0,
             children=[grandchild],
@@ -212,13 +212,13 @@ class TestBuildMaterialTreeSummary:
         root_id = uuid.uuid4()
         child_in = _make_node(
             node_id=uuid.uuid4(),
-            parent_id=root_id,
+            parent_materialnode_id=root_id,
             title="Included",
             order=0,
         )
         child_out = _make_node(
             node_id=uuid.uuid4(),
-            parent_id=root_id,
+            parent_materialnode_id=root_id,
             title="Excluded",
             order=1,
         )
@@ -249,10 +249,13 @@ class TestBuildMaterialTreeSummary:
         """Children are sorted by order regardless of ORM loading order."""
         root_id = uuid.uuid4()
         child_b = _make_node(
-            node_id=uuid.uuid4(), parent_id=root_id, title="Second", order=2
+            node_id=uuid.uuid4(),
+            parent_materialnode_id=root_id,
+            title="Second",
+            order=2,
         )
         child_a = _make_node(
-            node_id=uuid.uuid4(), parent_id=root_id, title="First", order=1
+            node_id=uuid.uuid4(), parent_materialnode_id=root_id, title="First", order=1
         )
         root = _make_node(
             node_id=root_id,
@@ -352,7 +355,7 @@ class TestSerializeTreeForGuided:
         child = _make_node(
             title="Lesson 1",
             order=0,
-            parent_id=root_id,
+            parent_materialnode_id=root_id,
         )
         root = _make_node(
             node_id=root_id,
@@ -398,13 +401,13 @@ class TestSerializeTreeForGuided:
 
         grandchild = _make_node(
             node_id=gc_id,
-            parent_id=c_id,
+            parent_materialnode_id=c_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=c_id,
-            parent_id=r_id,
+            parent_materialnode_id=r_id,
             title="Lesson",
             order=0,
             children=[grandchild],

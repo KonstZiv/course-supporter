@@ -86,9 +86,9 @@ async def _find_root_id(
                 status_code=500,
                 detail="Data inconsistency: parent node not found during root lookup",
             )
-        if node.parent_id is None:
+        if node.parent_materialnode_id is None:
             return node.id
-        current_id = node.parent_id
+        current_id = node.parent_materialnode_id
 
 
 @router.post("/nodes/{node_id}/generate", status_code=202)
@@ -270,7 +270,7 @@ async def get_snapshot(
     repo = SnapshotRepository(session)
     snapshot = await repo.get_by_id(snapshot_id)
 
-    if snapshot is None or snapshot.node_id != node_id:
+    if snapshot is None or snapshot.materialnode_id != node_id:
         raise HTTPException(
             status_code=404,
             detail="Snapshot not found.",

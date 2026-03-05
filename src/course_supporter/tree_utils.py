@@ -126,7 +126,9 @@ def build_material_tree_summary(
         )
 
     roots = [
-        n for n in flat_nodes if n.parent_id is None or n.parent_id not in node_ids
+        n
+        for n in flat_nodes
+        if n.parent_materialnode_id is None or n.parent_materialnode_id not in node_ids
     ]
     return [_node_to_summary(r) for r in roots]
 
@@ -158,10 +160,12 @@ def serialize_tree_for_guided(
             result["children"] = [_node_to_dict(c) for c in node.children]
         return result
 
-    # Rebuild from roots: nodes without parent_id among flat_nodes
+    # Rebuild from roots: nodes without parent_materialnode_id among flat_nodes
     root_ids = {n.id for n in flat_nodes}
     roots = [
-        n for n in flat_nodes if n.parent_id is None or n.parent_id not in root_ids
+        n
+        for n in flat_nodes
+        if n.parent_materialnode_id is None or n.parent_materialnode_id not in root_ids
     ]
     tree = [_node_to_dict(r) for r in roots]
     return json.dumps(tree, ensure_ascii=False, indent=2)

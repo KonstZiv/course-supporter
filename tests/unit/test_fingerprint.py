@@ -128,7 +128,7 @@ class TestRepositoryInvalidation:
                 processed_hash="abc123",
             )
 
-        invalidate_mock.assert_awaited_once_with(entry.node_id)
+        invalidate_mock.assert_awaited_once_with(entry.materialnode_id)
 
     async def test_update_source_invalidates_node_chain(self) -> None:
         """update_source triggers node chain invalidation."""
@@ -150,7 +150,7 @@ class TestRepositoryInvalidation:
                 source_url="https://new-url.com",
             )
 
-        invalidate_mock.assert_awaited_once_with(entry.node_id)
+        invalidate_mock.assert_awaited_once_with(entry.materialnode_id)
 
 
 class TestEnsureNodeFp:
@@ -400,9 +400,9 @@ class TestInvalidateUp:
         mid = _make_node(node_fingerprint="mid_fp")
         root = _make_node(node_fingerprint="root_fp")
 
-        leaf.parent_id = mid.id
-        mid.parent_id = root.id
-        root.parent_id = None
+        leaf.parent_materialnode_id = mid.id
+        mid.parent_materialnode_id = root.id
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -419,7 +419,7 @@ class TestInvalidateUp:
     async def test_root_node_only(self) -> None:
         """Root node (no parent) gets invalidated, no further walk."""
         root = _make_node(node_fingerprint="root_fp")
-        root.parent_id = None
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         svc = FingerprintService(session)
@@ -434,9 +434,9 @@ class TestInvalidateUp:
         sibling = _make_node(node_fingerprint="sibling_fp")
         parent = _make_node(node_fingerprint="parent_fp")
 
-        leaf.parent_id = parent.id
-        sibling.parent_id = parent.id
-        parent.parent_id = None
+        leaf.parent_materialnode_id = parent.id
+        sibling.parent_materialnode_id = parent.id
+        parent.parent_materialnode_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -456,9 +456,9 @@ class TestInvalidateUp:
         mid = _make_node(node_fingerprint="fp")
         root = _make_node(node_fingerprint="fp")
 
-        leaf.parent_id = mid.id
-        mid.parent_id = root.id
-        root.parent_id = None
+        leaf.parent_materialnode_id = mid.id
+        mid.parent_materialnode_id = root.id
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -476,9 +476,9 @@ class TestInvalidateUp:
         mid = _make_node(node_fingerprint=None)  # already invalidated
         root = _make_node(node_fingerprint="root_fp")
 
-        leaf.parent_id = mid.id
-        mid.parent_id = root.id
-        root.parent_id = None
+        leaf.parent_materialnode_id = mid.id
+        mid.parent_materialnode_id = root.id
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -522,7 +522,7 @@ class TestRepositoryCascadeInvalidation:
         )
 
         entry = MagicMock(spec=MaterialEntry)
-        entry.node_id = uuid.uuid4()
+        entry.materialnode_id = uuid.uuid4()
 
         session = AsyncMock()
         repo = MaterialEntryRepository(session)
@@ -535,7 +535,7 @@ class TestRepositoryCascadeInvalidation:
                 entry.id, processed_content="done", processed_hash="abc"
             )
 
-        mock_inv.assert_awaited_once_with(entry.node_id)
+        mock_inv.assert_awaited_once_with(entry.materialnode_id)
 
     async def test_entry_update_source_invalidates_node(self) -> None:
         """MaterialEntryRepository.update_source triggers cascade."""
@@ -544,7 +544,7 @@ class TestRepositoryCascadeInvalidation:
         )
 
         entry = MagicMock(spec=MaterialEntry)
-        entry.node_id = uuid.uuid4()
+        entry.materialnode_id = uuid.uuid4()
 
         session = AsyncMock()
         repo = MaterialEntryRepository(session)
@@ -555,7 +555,7 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.update_source(entry.id, source_url="https://new.com")
 
-        mock_inv.assert_awaited_once_with(entry.node_id)
+        mock_inv.assert_awaited_once_with(entry.materialnode_id)
 
     async def test_entry_delete_invalidates_node(self) -> None:
         """MaterialEntryRepository.delete triggers cascade."""
@@ -564,7 +564,7 @@ class TestRepositoryCascadeInvalidation:
         )
 
         entry = MagicMock(spec=MaterialEntry)
-        entry.node_id = uuid.uuid4()
+        entry.materialnode_id = uuid.uuid4()
 
         session = AsyncMock()
         repo = MaterialEntryRepository(session)
@@ -575,7 +575,7 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.delete(entry.id)
 
-        mock_inv.assert_awaited_once_with(entry.node_id)
+        mock_inv.assert_awaited_once_with(entry.materialnode_id)
 
     async def test_node_move_invalidates_old_and_new_parent(self) -> None:
         """MaterialNodeRepository.move invalidates both parent chains."""
@@ -583,11 +583,11 @@ class TestRepositoryCascadeInvalidation:
             MaterialNodeRepository,
         )
 
-        old_parent_id = uuid.uuid4()
-        new_parent_id = uuid.uuid4()
+        old_parent_materialnode_id = uuid.uuid4()
+        new_parent_materialnode_id = uuid.uuid4()
         node = MagicMock(spec=MaterialNode)
         node.id = uuid.uuid4()
-        node.parent_id = old_parent_id
+        node.parent_materialnode_id = old_parent_materialnode_id
         node.course_id = uuid.uuid4()
 
         session = AsyncMock()
@@ -599,11 +599,11 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_next_sibling_order", AsyncMock(return_value=0))
             mock_inv = AsyncMock()
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
-            await repo.move(node.id, new_parent_id)
+            await repo.move(node.id, new_parent_materialnode_id)
 
         assert mock_inv.await_count == 2
-        mock_inv.assert_any_await(old_parent_id)
-        mock_inv.assert_any_await(new_parent_id)
+        mock_inv.assert_any_await(old_parent_materialnode_id)
+        mock_inv.assert_any_await(new_parent_materialnode_id)
 
     async def test_node_delete_invalidates_parent(self) -> None:
         """MaterialNodeRepository.delete invalidates parent chain."""
@@ -611,10 +611,10 @@ class TestRepositoryCascadeInvalidation:
             MaterialNodeRepository,
         )
 
-        parent_id = uuid.uuid4()
+        parent_materialnode_id = uuid.uuid4()
         node = MagicMock(spec=MaterialNode)
         node.id = uuid.uuid4()
-        node.parent_id = parent_id
+        node.parent_materialnode_id = parent_materialnode_id
 
         session = AsyncMock()
         repo = MaterialNodeRepository(session)
@@ -625,17 +625,17 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.delete(node.id)
 
-        mock_inv.assert_awaited_once_with(parent_id)
+        mock_inv.assert_awaited_once_with(parent_materialnode_id)
 
     async def test_node_delete_root_skips_invalidation(self) -> None:
-        """Deleting a root node (parent_id=None) skips invalidation."""
+        """Deleting a root node (parent_materialnode_id=None) skips invalidation."""
         from course_supporter.storage.material_node_repository import (
             MaterialNodeRepository,
         )
 
         node = MagicMock(spec=MaterialNode)
         node.id = uuid.uuid4()
-        node.parent_id = None
+        node.parent_materialnode_id = None
 
         session = AsyncMock()
         repo = MaterialNodeRepository(session)
@@ -787,11 +787,11 @@ class TestBranchIndependence:
         branch_b = _make_node(children=[leaf_b], node_fingerprint="branch_b_fp")
         root = _make_node(children=[branch_a, branch_b], node_fingerprint="root_fp")
 
-        leaf_a.parent_id = branch_a.id
-        branch_a.parent_id = root.id
-        leaf_b.parent_id = branch_b.id
-        branch_b.parent_id = root.id
-        root.parent_id = None
+        leaf_a.parent_materialnode_id = branch_a.id
+        branch_a.parent_materialnode_id = root.id
+        leaf_b.parent_materialnode_id = branch_b.id
+        branch_b.parent_materialnode_id = root.id
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(

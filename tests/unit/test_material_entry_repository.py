@@ -35,14 +35,14 @@ def _mock_entry(
     processed_content: str | None = None,
     processed_hash: str | None = None,
     processed_at: datetime | None = None,
-    pending_job_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
     pending_since: datetime | None = None,
     error_message: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialEntry."""
     entry = MagicMock(spec=MaterialEntry)
     entry.id = entry_id or uuid.uuid4()
-    entry.node_id = node_id or uuid.uuid4()
+    entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
     entry.source_url = source_url
     entry.filename = filename
@@ -52,7 +52,7 @@ def _mock_entry(
     entry.processed_content = processed_content
     entry.processed_hash = processed_hash
     entry.processed_at = processed_at
-    entry.pending_job_id = pending_job_id
+    entry.job_id = job_id
     entry.pending_since = pending_since
     entry.error_message = error_message
     return entry
@@ -80,7 +80,7 @@ class TestCreate:
         session.flush.assert_awaited()
         added = session.add.call_args[0][0]
         assert isinstance(added, MaterialEntry)
-        assert added.node_id == node_id
+        assert added.materialnode_id == node_id
         assert added.source_type == "web"
         assert added.source_url == "https://example.com/article"
         assert added.filename is None
@@ -189,7 +189,7 @@ class TestSetPending:
     """MaterialEntryRepository.set_pending tests."""
 
     async def test_sets_pending_fields(self) -> None:
-        """Sets pending_job_id, pending_since, clears error_message."""
+        """Sets job_id, pending_since, clears error_message."""
         entry = _mock_entry(error_message="old error")
         session = AsyncMock()
         session.get.return_value = entry
@@ -199,7 +199,7 @@ class TestSetPending:
         now = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
         result = await repo.set_pending(entry.id, job_id, now=now)
 
-        assert result.pending_job_id == job_id
+        assert result.job_id == job_id
         assert result.pending_since == now
         assert result.error_message is None
         session.flush.assert_awaited()
@@ -234,7 +234,7 @@ class TestCompleteProcessing:
         """Sets processed fields and clears pending receipt."""
         job_id = uuid.uuid4()
         entry = _mock_entry(
-            pending_job_id=job_id,
+            job_id=job_id,
             pending_since=datetime(2026, 1, 1, tzinfo=UTC),
             error_message="old",
         )
@@ -253,7 +253,7 @@ class TestCompleteProcessing:
         assert result.processed_content == '{"sections": []}'
         assert result.processed_hash == "a" * 64
         assert result.processed_at == now
-        assert result.pending_job_id is None
+        assert result.job_id is None
         assert result.pending_since is None
         assert result.error_message is None
         session.flush.assert_awaited()
@@ -278,7 +278,7 @@ class TestFailProcessing:
     async def test_fails_with_error(self) -> None:
         """Sets error_message and clears pending receipt."""
         entry = _mock_entry(
-            pending_job_id=uuid.uuid4(),
+            job_id=uuid.uuid4(),
             pending_since=datetime(2026, 1, 1, tzinfo=UTC),
         )
         session = AsyncMock()
@@ -291,7 +291,7 @@ class TestFailProcessing:
         )
 
         assert result.error_message == "LLM timeout"
-        assert result.pending_job_id is None
+        assert result.job_id is None
         assert result.pending_since is None
         session.flush.assert_awaited()
 
@@ -434,7 +434,7 @@ class TestLifecycle:
 
         node_id = _uuid7()
         entry = MaterialEntry(
-            node_id=node_id,
+            materialnode_id=node_id,
             source_type="web",
             source_url="https://example.com",
         )
@@ -442,7 +442,7 @@ class TestLifecycle:
 
         # Simulate set_pending
         job_id = _uuid7()
-        entry.pending_job_id = job_id
+        entry.job_id = job_id
         entry.pending_since = datetime.now(UTC)
         entry.error_message = None
         assert entry.state.value == "pending"
@@ -451,7 +451,7 @@ class TestLifecycle:
         entry.processed_content = '{"sections": []}'
         entry.processed_hash = "a" * 64
         entry.processed_at = datetime.now(UTC)
-        entry.pending_job_id = None
+        entry.job_id = None
         entry.pending_since = None
         assert entry.state.value == "ready"
 
@@ -460,19 +460,19 @@ class TestLifecycle:
         from course_supporter.storage.orm import _uuid7
 
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="text",
             source_url="s3://bucket/notes.md",
         )
         assert entry.state.value == "raw"
 
         # Simulate set_pending
-        entry.pending_job_id = _uuid7()
+        entry.job_id = _uuid7()
         entry.pending_since = datetime.now(UTC)
         assert entry.state.value == "pending"
 
         # Simulate fail_processing
-        entry.pending_job_id = None
+        entry.job_id = None
         entry.pending_since = None
         entry.error_message = "LLM timeout"
         assert entry.state.value == "error"
@@ -482,7 +482,7 @@ class TestLifecycle:
         from course_supporter.storage.orm import _uuid7
 
         entry = MaterialEntry(
-            node_id=_uuid7(),
+            materialnode_id=_uuid7(),
             source_type="web",
             source_url="https://old.com",
             raw_hash="a" * 64,

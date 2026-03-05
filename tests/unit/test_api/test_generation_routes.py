@@ -58,7 +58,7 @@ def _make_job(
     job.priority = "normal"
     job.status = status
     job.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    job.node_id = node_id or NODE_ID
+    job.materialnode_id = node_id or NODE_ID
     job.arq_job_id = f"arq:{job.id}"
     job.error_message = None
     job.queued_at = NOW
@@ -76,7 +76,7 @@ def _make_snapshot(
 ) -> MagicMock:
     snap = MagicMock()
     snap.id = snapshot_id or SNAPSHOT_ID
-    snap.node_id = node_id or NODE_ID
+    snap.materialnode_id = node_id or NODE_ID
     snap.mode = "free"
     snap.node_fingerprint = "a" * 64
     snap.externalservicecall_id = uuid.uuid4()
@@ -98,26 +98,26 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or NODE_ID
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_id = parent_id
+    node.parent_materialnode_id = parent_materialnode_id
     return node
 
 
 def _mock_structure_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
     node_type: str = StructureNodeType.MODULE,
     order: int = 0,
     title: str = "Node",
 ) -> MagicMock:
     sn = MagicMock()
     sn.id = node_id or uuid.uuid4()
-    sn.parent_structurenode_id = parent_id
+    sn.parent_structurenode_id = parent_materialnode_id
     sn.node_type = node_type
     sn.order = order
     sn.title = title
@@ -156,12 +156,12 @@ def _mock_structure_tree() -> list[MagicMock]:
         ),
         _mock_structure_node(
             node_id=les_id,
-            parent_id=mod_id,
+            parent_materialnode_id=mod_id,
             title="Lesson 1",
             node_type=StructureNodeType.LESSON,
         ),
         _mock_structure_node(
-            parent_id=les_id,
+            parent_materialnode_id=les_id,
             title="Concept 1",
             node_type=StructureNodeType.CONCEPT,
         ),
@@ -386,7 +386,7 @@ class TestGenerateStructure:
             mapping_warnings=[
                 MappingWarning(
                     mapping_id=warning_id,
-                    node_id=warning_node,
+                    materialnode_id=warning_node,
                     slide_number=5,
                     validation_state=MappingValidationState.PENDING_VALIDATION,
                 ),
@@ -409,7 +409,7 @@ class TestGenerateStructure:
         assert len(data["mapping_warnings"]) == 1
         w = data["mapping_warnings"][0]
         assert w["mapping_id"] == str(warning_id)
-        assert w["node_id"] == str(warning_node)
+        assert w["materialnode_id"] == str(warning_node)
         assert w["slide_number"] == 5
         assert w["validation_state"] == "pending_validation"
 

@@ -43,7 +43,7 @@ class MaterialEntryRepository:
         """
         next_order = await self._next_sibling_order(node_id)
         entry = MaterialEntry(
-            node_id=node_id,
+            materialnode_id=node_id,
             source_type=source_type,
             source_url=source_url,
             filename=filename,
@@ -69,7 +69,7 @@ class MaterialEntryRepository:
         """
         stmt = (
             select(MaterialEntry)
-            .where(MaterialEntry.node_id == node_id)
+            .where(MaterialEntry.materialnode_id == node_id)
             .order_by(MaterialEntry.order)
         )
         if source_type is not None:
@@ -86,7 +86,7 @@ class MaterialEntryRepository:
     ) -> MaterialEntry:
         """Mark entry as pending ingestion.
 
-        Sets pending_job_id and pending_since, clears error_message.
+        Sets job_id and pending_since, clears error_message.
 
         Args:
             entry_id: Entry to mark.
@@ -98,7 +98,7 @@ class MaterialEntryRepository:
         """
         entry = await self._require(entry_id)
         now = now or datetime.now(UTC)
-        entry.pending_job_id = job_id
+        entry.job_id = job_id
         entry.pending_since = now
         entry.error_message = None
         await self._session.flush()
@@ -130,11 +130,11 @@ class MaterialEntryRepository:
         entry.processed_content = processed_content
         entry.processed_hash = processed_hash
         entry.processed_at = now
-        entry.pending_job_id = None
+        entry.job_id = None
         entry.pending_since = None
         entry.error_message = None
         await self._session.flush()
-        await self._invalidate_node_chain(entry.node_id)
+        await self._invalidate_node_chain(entry.materialnode_id)
         return entry
 
     async def fail_processing(
@@ -155,7 +155,7 @@ class MaterialEntryRepository:
             ValueError: If entry not found.
         """
         entry = await self._require(entry_id)
-        entry.pending_job_id = None
+        entry.job_id = None
         entry.pending_since = None
         entry.error_message = error_message
         await self._session.flush()
@@ -188,7 +188,7 @@ class MaterialEntryRepository:
         entry.raw_hash = None
         entry.raw_size_bytes = None
         await self._session.flush()
-        await self._invalidate_node_chain(entry.node_id)
+        await self._invalidate_node_chain(entry.materialnode_id)
         return entry
 
     async def ensure_raw_hash(
@@ -222,7 +222,7 @@ class MaterialEntryRepository:
             ValueError: If entry not found.
         """
         entry = await self._require(entry_id)
-        node_id = entry.node_id
+        node_id = entry.materialnode_id
         await self._session.delete(entry)
         await self._session.flush()
         await self._invalidate_node_chain(node_id)
@@ -248,7 +248,7 @@ class MaterialEntryRepository:
     async def _next_sibling_order(self, node_id: uuid.UUID) -> int:
         """Get next order value for entries under the given node."""
         stmt = select(func.coalesce(func.max(MaterialEntry.order) + 1, 0)).where(
-            MaterialEntry.node_id == node_id,
+            MaterialEntry.materialnode_id == node_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()

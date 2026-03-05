@@ -47,7 +47,7 @@ def _make_entry_mock(
     """Create a mock MaterialEntry."""
     entry = MagicMock()
     entry.id = entry_id
-    entry.node_id = node_id
+    entry.materialnode_id = node_id
     entry.source_type = source_type
     entry.processed_content = processed_content
     entry.state = state
@@ -90,8 +90,8 @@ def _make_mapping(
     # so that L1 validation tests can pass intentionally invalid
     # timecodes to the MappingValidationService.
     return SlideVideoMapEntry.model_construct(
-        presentation_entry_id=str(pres_id),
-        video_entry_id=str(vid_id),
+        presentation_materialentry_id=str(pres_id),
+        video_materialentry_id=str(vid_id),
         slide_number=slide_number,
         video_timecode_start=tc_start,
         video_timecode_end=tc_end,
@@ -190,7 +190,7 @@ class TestMappingValidationService:
         assert len(result) == 1
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) == 1
-        assert result[0].errors[0].field == "presentation_entry_id"
+        assert result[0].errors[0].field == "presentation_materialentry_id"
         assert "not found" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -211,7 +211,7 @@ class TestMappingValidationService:
         assert len(result) == 1
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) == 1
-        assert result[0].errors[0].field == "presentation_entry_id"
+        assert result[0].errors[0].field == "presentation_materialentry_id"
         assert "belongs to node" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -230,7 +230,7 @@ class TestMappingValidationService:
         assert len(result) == 1
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) == 1
-        assert result[0].errors[0].field == "presentation_entry_id"
+        assert result[0].errors[0].field == "presentation_materialentry_id"
         assert "type 'video'" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -246,7 +246,7 @@ class TestMappingValidationService:
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0].errors[0].field == "video_entry_id"
+        assert result[0].errors[0].field == "video_materialentry_id"
         assert "not found" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -265,7 +265,7 @@ class TestMappingValidationService:
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0].errors[0].field == "video_entry_id"
+        assert result[0].errors[0].field == "video_materialentry_id"
         assert "belongs to node" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -282,7 +282,7 @@ class TestMappingValidationService:
         svc = MappingValidationService(session)
         result = await svc.validate_batch(NODE_ID, [_make_mapping()])
         assert len(result) == 1
-        assert result[0].errors[0].field == "video_entry_id"
+        assert result[0].errors[0].field == "video_materialentry_id"
         assert "type 'text'" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -295,7 +295,7 @@ class TestMappingValidationService:
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) == 2
         fields = {e.field for e in result[0].errors}
-        assert fields == {"presentation_entry_id", "video_entry_id"}
+        assert fields == {"presentation_materialentry_id", "video_materialentry_id"}
 
     @pytest.mark.asyncio
     async def test_entry_and_timecode_errors_collected(self) -> None:
@@ -314,7 +314,7 @@ class TestMappingValidationService:
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) == 2
         fields = {e.field for e in result[0].errors}
-        assert fields == {"presentation_entry_id", "video_timecode_start"}
+        assert fields == {"presentation_materialentry_id", "video_timecode_start"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -403,24 +403,24 @@ class TestMappingValidationService:
 
     @pytest.mark.asyncio
     async def test_invalid_uuid_presentation(self) -> None:
-        """Invalid UUID for presentation_entry_id returns validation error."""
+        """Invalid UUID for presentation_materialentry_id returns validation error."""
         session = _session_with_entries({})
         svc = MappingValidationService(session)
         mapping = SlideVideoMapEntry(
-            presentation_entry_id="not-a-uuid",
-            video_entry_id=str(VID_ID),
+            presentation_materialentry_id="not-a-uuid",
+            video_materialentry_id=str(VID_ID),
             slide_number=1,
             video_timecode_start="00:05:00",
         )
         result = await svc.validate_batch(NODE_ID, [mapping])
         assert len(result) == 1
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
-        assert result[0].errors[0].field == "presentation_entry_id"
+        assert result[0].errors[0].field == "presentation_materialentry_id"
         assert "Invalid UUID format" in result[0].errors[0].message
 
     @pytest.mark.asyncio
     async def test_invalid_uuid_video(self) -> None:
-        """Invalid UUID for video_entry_id returns validation error."""
+        """Invalid UUID for video_materialentry_id returns validation error."""
         pres = _make_entry_mock(
             entry_id=PRES_ID,
             node_id=NODE_ID,
@@ -430,15 +430,15 @@ class TestMappingValidationService:
         session = _session_with_entries({PRES_ID: pres})
         svc = MappingValidationService(session)
         mapping = SlideVideoMapEntry(
-            presentation_entry_id=str(PRES_ID),
-            video_entry_id="also-not-uuid",
+            presentation_materialentry_id=str(PRES_ID),
+            video_materialentry_id="also-not-uuid",
             slide_number=1,
             video_timecode_start="00:05:00",
         )
         result = await svc.validate_batch(NODE_ID, [mapping])
         assert len(result) == 1
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
-        assert result[0].errors[0].field == "video_entry_id"
+        assert result[0].errors[0].field == "video_materialentry_id"
         assert "Invalid UUID format" in result[0].errors[0].message
 
     @pytest.mark.asyncio
@@ -993,7 +993,7 @@ class TestDeferredValidationLevel3:
         # L1 error → VALIDATION_FAILED despite video having a blocker
         assert result[0].status == MappingValidationState.VALIDATION_FAILED
         assert len(result[0].errors) >= 1
-        assert result[0].errors[0].field == "presentation_entry_id"
+        assert result[0].errors[0].field == "presentation_materialentry_id"
 
 
 class TestRouteReturns422OnValidationError:
@@ -1032,7 +1032,7 @@ class TestRouteReturns422OnValidationError:
         mock_node.tenant_id = STUB_TENANT.tenant_id
 
         validation_err = MappingValidationError(
-            field="presentation_entry_id",
+            field="presentation_materialentry_id",
             message=f"Entry '{uuid.uuid4()}' not found",
             hint="Check that the entry ID is correct",
         )
@@ -1061,8 +1061,8 @@ class TestRouteReturns422OnValidationError:
                 json={
                     "mappings": [
                         {
-                            "presentation_entry_id": str(uuid.uuid4()),
-                            "video_entry_id": str(uuid.uuid4()),
+                            "presentation_materialentry_id": str(uuid.uuid4()),
+                            "video_materialentry_id": str(uuid.uuid4()),
                             "slide_number": 1,
                             "video_timecode_start": "00:05:00",
                         }
@@ -1076,7 +1076,9 @@ class TestRouteReturns422OnValidationError:
         assert data["failed"] == 1
         assert len(data["rejected"]) == 1
         assert data["rejected"][0]["index"] == 0
-        assert data["rejected"][0]["errors"][0]["field"] == "presentation_entry_id"
+        assert (
+            data["rejected"][0]["errors"][0]["field"] == "presentation_materialentry_id"
+        )
 
     @pytest.mark.asyncio
     async def test_route_returns_207_on_partial_failure(
@@ -1106,7 +1108,7 @@ class TestRouteReturns422OnValidationError:
             status=MappingValidationState.VALIDATION_FAILED,
             errors=[
                 MappingValidationError(
-                    field="presentation_entry_id",
+                    field="presentation_materialentry_id",
                     message="not found",
                     hint="check id",
                 )
@@ -1116,9 +1118,9 @@ class TestRouteReturns422OnValidationError:
 
         svm_record = MagicMock()
         svm_record.id = uuid.uuid4()
-        svm_record.node_id = node_id
-        svm_record.presentation_entry_id = uuid.uuid4()
-        svm_record.video_entry_id = uuid.uuid4()
+        svm_record.materialnode_id = node_id
+        svm_record.presentation_materialentry_id = uuid.uuid4()
+        svm_record.video_materialentry_id = uuid.uuid4()
         svm_record.slide_number = 1
         svm_record.video_timecode_start = "00:05:00"
         svm_record.video_timecode_end = None
@@ -1154,14 +1156,14 @@ class TestRouteReturns422OnValidationError:
                 json={
                     "mappings": [
                         {
-                            "presentation_entry_id": str(uuid.uuid4()),
-                            "video_entry_id": str(uuid.uuid4()),
+                            "presentation_materialentry_id": str(uuid.uuid4()),
+                            "video_materialentry_id": str(uuid.uuid4()),
                             "slide_number": 1,
                             "video_timecode_start": "00:05:00",
                         },
                         {
-                            "presentation_entry_id": str(uuid.uuid4()),
-                            "video_entry_id": str(uuid.uuid4()),
+                            "presentation_materialentry_id": str(uuid.uuid4()),
+                            "video_materialentry_id": str(uuid.uuid4()),
                             "slide_number": 2,
                             "video_timecode_start": "00:10:00",
                         },
@@ -1188,9 +1190,9 @@ def _make_orm_mapping(
     """Create a mock SlideVideoMapping ORM record."""
     m = MagicMock()
     m.id = uuid.uuid4()
-    m.node_id = node_id
-    m.presentation_entry_id = pres_id
-    m.video_entry_id = vid_id
+    m.materialnode_id = node_id
+    m.presentation_materialentry_id = pres_id
+    m.video_materialentry_id = vid_id
     m.slide_number = slide_number
     m.video_timecode_start = tc_start
     m.video_timecode_end = tc_end

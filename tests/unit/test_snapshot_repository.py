@@ -21,7 +21,7 @@ def _mock_snapshot(
     """Create a mock StructureSnapshot."""
     snap = MagicMock(spec=StructureSnapshot)
     snap.id = snapshot_id or uuid.uuid4()
-    snap.node_id = node_id or uuid.uuid4()
+    snap.materialnode_id = node_id or uuid.uuid4()
     snap.node_fingerprint = node_fingerprint
     snap.mode = mode
     snap.structure = structure or {"title": "Test"}
@@ -112,7 +112,7 @@ class TestCreate:
             structure={"title": "Test"},
         )
 
-        assert result.node_id == node_id
+        assert result.materialnode_id == node_id
 
 
 class TestGetById:
@@ -157,7 +157,7 @@ class TestFindByIdentity:
         repo = SnapshotRepository(session)
 
         result = await repo.find_by_identity(
-            node_id=snap.node_id,
+            node_id=snap.materialnode_id,
             node_fingerprint=snap.node_fingerprint,
             mode=snap.mode,
         )
@@ -193,7 +193,7 @@ class TestGetLatest:
         session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
-        result = await repo.get_latest_for_node(snap.node_id)
+        result = await repo.get_latest_for_node(snap.materialnode_id)
 
         assert result is snap
 

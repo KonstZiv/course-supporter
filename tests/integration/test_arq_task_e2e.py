@@ -77,7 +77,7 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["node_id"]
+        nid = committed_seeds["materialnode_id"]
 
         # Create job in DB
         async with session_factory() as session:
@@ -136,7 +136,7 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["node_id"]
+        nid = committed_seeds["materialnode_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
@@ -194,7 +194,7 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["node_id"]
+        nid = committed_seeds["materialnode_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)

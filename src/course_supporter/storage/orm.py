@@ -38,6 +38,7 @@ class Base(DeclarativeBase):
 
 class Tenant(Base):
     __tablename__ = "tenants"
+    __table_args__ = {"comment": "Multi-tenant organizations"}
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     name: Mapped[str] = mapped_column(String(200), unique=True)
@@ -57,15 +58,30 @@ class Tenant(Base):
 
 class APIKey(Base):
     __tablename__ = "api_keys"
+    __table_args__ = {
+        "comment": "Authentication keys with scope-based access control",
+    }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE")
     )
-    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    key_prefix: Mapped[str] = mapped_column(String(16))
+    key_hash: Mapped[str] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+        comment="SHA-256 hash of the API key. Raw key is never stored",
+    )
+    key_prefix: Mapped[str] = mapped_column(
+        String(16),
+        comment="First 8 chars of the key for identification in logs",
+    )
     label: Mapped[str] = mapped_column(String(100), default="default")
-    scopes: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    scopes: Mapped[list[Any]] = mapped_column(
+        JSONB,
+        default=list,
+        comment="JSON array of granted scopes (prep, check)",
+    )
     rate_limit_prep: Mapped[int] = mapped_column(Integer, default=60)
     rate_limit_check: Mapped[int] = mapped_column(Integer, default=300)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -86,27 +102,39 @@ class APIKey(Base):
 class MaterialNode(Base):
     """Node in the material tree (recursive adjacency list).
 
-    Root nodes (parent_id IS NULL) serve as "courses" — top-level
+    Root nodes (parent_materialnode_id IS NULL) serve as "courses" — top-level
     entities owned by a tenant. Child nodes form an arbitrary-depth
     hierarchy for organising materials.
     """
 
     __tablename__ = "material_nodes"
+    __table_args__ = {
+        "comment": (
+            "Hierarchical tree of course materials. Root node (parent IS NULL) = course"
+        ),
+    }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    parent_materialnode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Self-referential FK. NULL = root node (course level)",
     )
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
-    learning_goal: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(
+        Text, comment="Pedagogical goal text for guided generation mode"
+    )
     expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
     expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
     order: Mapped[int] = mapped_column(Integer, default=0)
-    node_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    node_fingerprint: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Merkle hash of content subtree. NULL = stale",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -157,17 +185,22 @@ class MaterialEntry(Base):
     """
 
     __tablename__ = "material_entries"
+    __table_args__ = {
+        "comment": "Individual learning materials (video, presentation, text, web)",
+    }
 
     def __repr__(self) -> str:
         return (
             f"<MaterialEntry(id={self.id}, "
             f"source_type='{self.source_type}', "
-            f"node_id={self.node_id})>"
+            f"materialnode_id={self.materialnode_id})>"
         )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    node_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    materialnode_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to parent MaterialNode in the tree",
     )
     source_type: Mapped[str] = mapped_column(
         Enum(
@@ -184,17 +217,25 @@ class MaterialEntry(Base):
     # ── Raw layer ──
     source_url: Mapped[str] = mapped_column(String(2000))
     filename: Mapped[str | None] = mapped_column(String(500))
-    raw_hash: Mapped[str | None] = mapped_column(String(64))
+    raw_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="SHA-256 of uploaded raw file for integrity detection",
+    )
     raw_size_bytes: Mapped[int | None] = mapped_column(Integer)
 
     # ── Processed layer ──
-    processed_hash: Mapped[str | None] = mapped_column(String(64))
+    processed_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="SHA-256 of processed_content for Merkle tree",
+    )
     processed_content: Mapped[str | None] = mapped_column(Text)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # ── Pending "receipt" ──
-    pending_job_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        index=True,
+        comment="FK to in-flight ingestion Job. NULL when idle",
     )
     pending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -211,7 +252,7 @@ class MaterialEntry(Base):
         """
         if self.error_message:
             return MaterialState.ERROR
-        if self.pending_job_id is not None:
+        if self.job_id is not None:
             return MaterialState.PENDING
         if self.processed_content is None:
             return MaterialState.RAW
@@ -249,15 +290,20 @@ class SlideVideoMapping(Base):
     """
 
     __tablename__ = "slide_video_mappings"
+    __table_args__ = {
+        "comment": "Presentation slide to video timecode mappings",
+    }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    node_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    materialnode_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to owning MaterialNode",
     )
-    presentation_entry_id: Mapped[uuid.UUID] = mapped_column(
+    presentation_materialentry_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("material_entries.id", ondelete="CASCADE"), index=True
     )
-    video_entry_id: Mapped[uuid.UUID] = mapped_column(
+    video_materialentry_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("material_entries.id", ondelete="CASCADE"), index=True
     )
     slide_number: Mapped[int] = mapped_column(Integer)
@@ -276,7 +322,9 @@ class SlideVideoMapping(Base):
         ),
         default=MappingValidationState.PENDING_VALIDATION,
     )
-    blocking_factors: Mapped[list[Any] | None] = mapped_column(JSONB)
+    blocking_factors: Mapped[list[Any] | None] = mapped_column(
+        JSONB, comment="JSONB array of reasons preventing validation"
+    )
     validation_errors: Mapped[list[Any] | None] = mapped_column(JSONB)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -287,9 +335,11 @@ class SlideVideoMapping(Base):
     # Relationships
     node: Mapped["MaterialNode"] = relationship(back_populates="slide_video_mappings")
     presentation_entry: Mapped["MaterialEntry"] = relationship(
-        foreign_keys=[presentation_entry_id]
+        foreign_keys=[presentation_materialentry_id]
     )
-    video_entry: Mapped["MaterialEntry"] = relationship(foreign_keys=[video_entry_id])
+    video_entry: Mapped["MaterialEntry"] = relationship(
+        foreign_keys=[video_materialentry_id]
+    )
 
 
 # ──────────────────────────────────────────────
@@ -321,23 +371,32 @@ class StructureNode(Base):
     """Recursive node in a generated course structure.
 
     Each node belongs to a ``StructureSnapshot`` and forms an
-    arbitrary-depth tree via ``parent_id`` self-reference.
-    Root nodes (parent_id IS NULL) are top-level modules.
+    arbitrary-depth tree via ``parent_structurenode_id`` self-reference.
+    Root nodes (parent_structurenode_id IS NULL) are top-level modules.
 
     Fields are organised into six sections corresponding to
     different agent / pipeline stages that populate them.
     """
 
     __tablename__ = "structure_nodes"
+    __table_args__ = {
+        "comment": "Recursive tree of generated course structure elements",
+    }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     structuresnapshot_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("structure_snapshots.id", ondelete="CASCADE"), index=True
     )
     parent_structurenode_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("structure_nodes.id", ondelete="CASCADE"), index=True
+        ForeignKey("structure_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Self-referential FK. NULL = top-level module",
     )
-    node_type: Mapped[str] = mapped_column(String(30), index=True)
+    node_type: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        comment="Enum: module, lesson, concept, exercise",
+    )
     order: Mapped[int] = mapped_column(Integer, default=0)
 
     # ── Section 1: Formal & organisational (Methodologist agent) ──
@@ -356,7 +415,9 @@ class StructureNode(Base):
     competencies: Mapped[list[str] | None] = mapped_column(JSONB)
 
     # ── Section 3: Methodological accents ──
-    key_concepts: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    key_concepts: Mapped[list[dict[str, str]] | None] = mapped_column(
+        JSONB, comment="JSONB array of concept strings"
+    )
     common_mistakes: Mapped[list[str] | None] = mapped_column(JSONB)
     teaching_strategy: Mapped[str | None] = mapped_column(String(50))
     activities: Mapped[list[str] | None] = mapped_column(JSONB)
@@ -367,7 +428,9 @@ class StructureNode(Base):
     content_version: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # ── Section 5: Material references (Indexer agent) ──
-    timecodes: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    timecodes: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, comment="JSONB of video timecode references"
+    )
     slide_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     web_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
@@ -406,7 +469,7 @@ class StructureSnapshot(Base):
     LLM metadata (model_id, tokens, cost) is stored in the linked
     ExternalServiceCall record — no duplication in the snapshot.
 
-    ``node_id`` references the root MaterialNode (= course) for
+    ``materialnode_id`` references the root MaterialNode (= course) for
     course-level snapshots, or a child node for subtree snapshots.
     """
 
@@ -414,23 +477,31 @@ class StructureSnapshot(Base):
     __table_args__ = (
         Index(
             "uq_snapshots_identity",
-            "node_id",
+            "materialnode_id",
             "node_fingerprint",
             "mode",
             unique=True,
         ),
+        {"comment": "LLM-generated course structure versions"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    node_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
+    materialnode_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to target MaterialNode (root = whole course)",
     )
     externalservicecall_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"), index=True
     )
-    node_fingerprint: Mapped[str] = mapped_column(String(64))
+    node_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        comment="Merkle hash at generation time for idempotency",
+    )
     mode: Mapped[GenerationMode] = mapped_column(String(20))
-    structure: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    structure: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, comment="JSONB of generated course structure"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -451,19 +522,29 @@ class StructureSnapshot(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = {
+        "comment": "Background task queue entries (ingestion, generation)",
+    }
+
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="SET NULL"), index=True
+    materialnode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="SET NULL"),
+        index=True,
+        comment="FK to target MaterialNode. NULL for orphaned jobs",
     )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     arq_job_id: Mapped[str | None] = mapped_column(String(100))
-    input_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    depends_on: Mapped[list[str] | None] = mapped_column(JSONB)
+    input_params: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="JSONB of task-specific parameters"
+    )
+    depends_on: Mapped[list[str] | None] = mapped_column(
+        JSONB, comment="JSONB array of Job UUIDs that must complete first"
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -486,6 +567,9 @@ class Job(Base):
 
 class ExternalServiceCall(Base):
     __tablename__ = "external_service_calls"
+    __table_args__ = {
+        "comment": ("Audit log of all external API calls (LLM, transcription, etc.)"),
+    }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(

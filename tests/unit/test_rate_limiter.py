@@ -133,7 +133,7 @@ class TestRateLimitAPI:
                 node = MagicMock()
                 node.id = uuid.uuid4()
                 node.tenant_id = tenant.tenant_id
-                node.parent_id = None
+                node.parent_materialnode_id = None
                 node.title = "Test"
                 node.description = None
                 node.learning_goal = None

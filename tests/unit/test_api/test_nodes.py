@@ -29,7 +29,7 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
@@ -39,7 +39,7 @@ def _mock_node(
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_id = parent_id
+    node.parent_materialnode_id = parent_materialnode_id
     node.title = title
     node.description = description
     node.order = order
@@ -90,7 +90,7 @@ class TestCreateRootNode:
         data = resp.json()
         assert data["id"] == str(node.id)
         assert data["title"] == "Module 1"
-        assert data["parent_id"] is None
+        assert data["parent_materialnode_id"] is None
         assert data["tenant_id"] == str(STUB_TENANT.tenant_id)
         assert "created_at" in data
         assert "updated_at" in data
@@ -122,7 +122,7 @@ class TestCreateChildNode:
     async def test_returns_201(self, client: AsyncClient) -> None:
         """Successful child creation returns 201."""
         parent = _mock_node(title="Parent")
-        child = _mock_node(parent_id=parent.id, title="Child")
+        child = _mock_node(parent_materialnode_id=parent.id, title="Child")
         with (
             patch.object(MaterialNodeRepository, "get_by_id", return_value=parent),
             patch.object(MaterialNodeRepository, "create", return_value=child),
@@ -131,7 +131,7 @@ class TestCreateChildNode:
                 f"/api/v1/nodes/{parent.id}/children", json={"title": "Child"}
             )
         assert resp.status_code == 201
-        assert resp.json()["parent_id"] == str(parent.id)
+        assert resp.json()["parent_materialnode_id"] == str(parent.id)
 
     async def test_parent_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent parent returns 404."""
@@ -267,7 +267,7 @@ class TestMoveNode:
         """Node moved to a new parent."""
         node = _mock_node(title="Movable")
         target = _mock_node(title="Target")
-        moved = _mock_node(parent_id=target.id)
+        moved = _mock_node(parent_materialnode_id=target.id)
 
         def fake_get(nid: uuid.UUID) -> MagicMock | None:
             lookup = {node.id: node, target.id: target}
@@ -279,24 +279,24 @@ class TestMoveNode:
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_id": str(target.id)},
+                json={"parent_materialnode_id": str(target.id)},
             )
         assert resp.status_code == 200
-        assert resp.json()["parent_id"] == str(target.id)
+        assert resp.json()["parent_materialnode_id"] == str(target.id)
 
     async def test_move_to_root(self, client: AsyncClient) -> None:
-        """Node moved to root (parent_id=null)."""
-        node = _mock_node(parent_id=uuid.uuid4())
-        moved = _mock_node(parent_id=None)
+        """Node moved to root (parent_materialnode_id=null)."""
+        node = _mock_node(parent_materialnode_id=uuid.uuid4())
+        moved = _mock_node(parent_materialnode_id=None)
         with (
             patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
             patch.object(MaterialNodeRepository, "move", return_value=moved),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node.id}/move", json={"parent_id": None}
+                f"/api/v1/nodes/{node.id}/move", json={"parent_materialnode_id": None}
             )
         assert resp.status_code == 200
-        assert resp.json()["parent_id"] is None
+        assert resp.json()["parent_materialnode_id"] is None
 
     async def test_cycle_returns_422(self, client: AsyncClient) -> None:
         """Cycle detection error returns 422."""
@@ -317,7 +317,7 @@ class TestMoveNode:
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_id": str(target.id)},
+                json={"parent_materialnode_id": str(target.id)},
             )
         assert resp.status_code == 422
         assert "cycle" in resp.json()["detail"]
@@ -334,7 +334,7 @@ class TestMoveNode:
         with patch.object(MaterialNodeRepository, "get_by_id", side_effect=fake_get):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_id": str(target.id)},
+                json={"parent_materialnode_id": str(target.id)},
             )
         assert resp.status_code == 404
 

@@ -158,15 +158,17 @@ async def committed_seeds(
     # Cleanup: delete in reverse FK order
     async with session_factory() as session:
         await session.execute(
-            Job.__table__.delete().where(Job.node_id == ids["node_id"])
+            Job.__table__.delete().where(Job.node_id == ids["materialnode_id"])
         )
         await session.execute(
             MaterialEntry.__table__.delete().where(
-                MaterialEntry.node_id == ids["node_id"]
+                MaterialEntry.node_id == ids["materialnode_id"]
             )
         )
         await session.execute(
-            MaterialNode.__table__.delete().where(MaterialNode.id == ids["node_id"])
+            MaterialNode.__table__.delete().where(
+                MaterialNode.id == ids["materialnode_id"]
+            )
         )
         await session.execute(
             Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
@@ -197,7 +199,7 @@ async def committed_job_and_material(
 
         job = await job_repo.create(
             tenant_id=committed_seeds["tenant_id"],
-            node_id=committed_seeds["node_id"],
+            node_id=committed_seeds["materialnode_id"],
             job_type="ingest",
         )
         await job_repo.update_status(job.id, "active")
@@ -207,7 +209,7 @@ async def committed_job_and_material(
     yield {
         "job_id": job.id,
         "material_id": committed_seeds["material_id"],
-        "node_id": committed_seeds["node_id"],
+        "node_id": committed_seeds["materialnode_id"],
         "tenant_id": committed_seeds["tenant_id"],
     }
 

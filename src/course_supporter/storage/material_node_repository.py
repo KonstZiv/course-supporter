@@ -26,7 +26,7 @@ class _Unset(Enum):
 class MaterialNodeRepository:
     """Repository for material tree node operations.
 
-    Root nodes (parent_id IS NULL) represent "courses" — top-level
+    Root nodes (parent_materialnode_id IS NULL) represent "courses" — top-level
     entities owned by a tenant. Tenant isolation is enforced at the
     API layer via ``node.tenant_id``.
     """
@@ -48,7 +48,7 @@ class MaterialNodeRepository:
             select(MaterialNode)
             .where(
                 MaterialNode.tenant_id == tenant_id,
-                MaterialNode.parent_id.is_(None),
+                MaterialNode.parent_materialnode_id.is_(None),
             )
             .order_by(MaterialNode.created_at.desc())
             .limit(limit)
@@ -64,7 +64,7 @@ class MaterialNodeRepository:
             .select_from(MaterialNode)
             .where(
                 MaterialNode.tenant_id == tenant_id,
-                MaterialNode.parent_id.is_(None),
+                MaterialNode.parent_materialnode_id.is_(None),
             )
         )
         result = await self._session.execute(stmt)
@@ -77,7 +77,7 @@ class MaterialNodeRepository:
         *,
         tenant_id: uuid.UUID,
         title: str,
-        parent_id: uuid.UUID | None = None,
+        parent_materialnode_id: uuid.UUID | None = None,
         description: str | None = None,
     ) -> MaterialNode:
         """Create a new node with auto-incremented order among siblings.
@@ -85,16 +85,16 @@ class MaterialNodeRepository:
         Args:
             tenant_id: FK to the owning tenant.
             title: Node title.
-            parent_id: FK to parent node (None for root).
+            parent_materialnode_id: FK to parent node (None for root).
             description: Optional node description.
 
         Returns:
             The newly created MaterialNode.
         """
-        next_order = await self._next_sibling_order(parent_id)
+        next_order = await self._next_sibling_order(parent_materialnode_id)
         node = MaterialNode(
             tenant_id=tenant_id,
-            parent_id=parent_id,
+            parent_materialnode_id=parent_materialnode_id,
             title=title,
             description=description,
             order=next_order,
@@ -108,12 +108,12 @@ class MaterialNodeRepository:
         return await self._session.get(MaterialNode, node_id)
 
     async def get_roots(self, tenant_id: uuid.UUID) -> list[MaterialNode]:
-        """Get root nodes (parent_id=None) for a tenant, ordered."""
+        """Get root nodes (parent_materialnode_id=None) for a tenant, ordered."""
         stmt = (
             select(MaterialNode)
             .where(
                 MaterialNode.tenant_id == tenant_id,
-                MaterialNode.parent_id.is_(None),
+                MaterialNode.parent_materialnode_id.is_(None),
             )
             .order_by(MaterialNode.order)
         )
@@ -124,7 +124,7 @@ class MaterialNodeRepository:
         """Get direct children of a node, ordered."""
         stmt = (
             select(MaterialNode)
-            .where(MaterialNode.parent_id == node_id)
+            .where(MaterialNode.parent_materialnode_id == node_id)
             .order_by(MaterialNode.order)
         )
         result = await self._session.execute(stmt)
@@ -152,11 +152,11 @@ class MaterialNodeRepository:
             List containing the root node with ``children`` populated
             recursively. Returns empty list if root_id not found.
         """
-        # Recursive CTE: start from root_id, walk down via parent_id
+        # Recursive CTE: start from root_id, walk down via parent_materialnode_id
         base = select(MaterialNode.id).where(MaterialNode.id == root_id)
         cte = base.cte(name="subtree", recursive=True)
         recursive = select(MaterialNode.id).join(
-            cte, MaterialNode.parent_id == cte.c.id
+            cte, MaterialNode.parent_materialnode_id == cte.c.id
         )
         cte = cte.union_all(recursive)
 
@@ -182,10 +182,13 @@ class MaterialNodeRepository:
                 node.children = []
 
         for node in all_nodes:
-            if node.parent_id is None or node.parent_id not in by_id:
+            if (
+                node.parent_materialnode_id is None
+                or node.parent_materialnode_id not in by_id
+            ):
                 roots.append(node)
             else:
-                parent = by_id.get(node.parent_id)
+                parent = by_id.get(node.parent_materialnode_id)
                 if parent is not None:
                     parent.children.append(node)
 
@@ -194,13 +197,13 @@ class MaterialNodeRepository:
     async def move(
         self,
         node_id: uuid.UUID,
-        new_parent_id: uuid.UUID | None,
+        new_parent_materialnode_id: uuid.UUID | None,
     ) -> MaterialNode:
         """Move a node to a new parent with cycle detection.
 
         Args:
             node_id: UUID of the node to move.
-            new_parent_id: New parent (None to make root).
+            new_parent_materialnode_id: New parent (None to make root).
 
         Returns:
             Updated MaterialNode.
@@ -213,26 +216,28 @@ class MaterialNodeRepository:
             msg = f"MaterialNode not found: {node_id}"
             raise ValueError(msg)
 
-        if new_parent_id is not None:
-            if new_parent_id == node_id:
+        if new_parent_materialnode_id is not None:
+            if new_parent_materialnode_id == node_id:
                 msg = "Cannot move node to be its own parent"
                 raise ValueError(msg)
 
             # Walk up from new_parent to root checking for cycle
-            if await self._is_descendant(ancestor_id=node_id, node_id=new_parent_id):
+            if await self._is_descendant(
+                ancestor_id=node_id, node_id=new_parent_materialnode_id
+            ):
                 msg = (
-                    f"Cannot move node {node_id} under {new_parent_id}: "
+                    f"Cannot move node {node_id} under {new_parent_materialnode_id}: "
                     f"would create a cycle"
                 )
                 raise ValueError(msg)
 
-        old_parent_id = node.parent_id
-        node.parent_id = new_parent_id
-        node.order = await self._next_sibling_order(new_parent_id)
+        old_parent_materialnode_id = node.parent_materialnode_id
+        node.parent_materialnode_id = new_parent_materialnode_id
+        node.order = await self._next_sibling_order(new_parent_materialnode_id)
         await self._session.flush()
         # Invalidate both old and new parent chains
-        await self._invalidate_node_chain(old_parent_id)
-        await self._invalidate_node_chain(new_parent_id)
+        await self._invalidate_node_chain(old_parent_materialnode_id)
+        await self._invalidate_node_chain(new_parent_materialnode_id)
         return node
 
     async def reorder(self, node_id: uuid.UUID, new_order: int) -> MaterialNode:
@@ -265,7 +270,7 @@ class MaterialNodeRepository:
         stmt = (
             select(MaterialNode)
             .where(
-                MaterialNode.parent_id == node.parent_id,
+                MaterialNode.parent_materialnode_id == node.parent_materialnode_id,
                 MaterialNode.tenant_id == node.tenant_id,
             )
             .order_by(MaterialNode.order)
@@ -333,10 +338,10 @@ class MaterialNodeRepository:
         if node is None:
             msg = f"MaterialNode not found: {node_id}"
             raise ValueError(msg)
-        parent_id = node.parent_id
+        parent_materialnode_id = node.parent_materialnode_id
         await self._session.delete(node)
         await self._session.flush()
-        await self._invalidate_node_chain(parent_id)
+        await self._invalidate_node_chain(parent_materialnode_id)
 
     # ── Private helpers ──
 
@@ -352,12 +357,12 @@ class MaterialNodeRepository:
 
     async def _next_sibling_order(
         self,
-        parent_id: uuid.UUID | None,
+        parent_materialnode_id: uuid.UUID | None,
     ) -> int:
         """Get next order value for siblings under the given parent."""
         # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = select(func.coalesce(func.max(MaterialNode.order) + 1, 0)).where(
-            MaterialNode.parent_id == parent_id,
+            MaterialNode.parent_materialnode_id == parent_materialnode_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()
@@ -385,8 +390,8 @@ class MaterialNodeRepository:
             if current is None:
                 break
 
-            if current.parent_id == ancestor_id:
+            if current.parent_materialnode_id == ancestor_id:
                 return True
-            current_id = current.parent_id
+            current_id = current.parent_materialnode_id
 
         return False

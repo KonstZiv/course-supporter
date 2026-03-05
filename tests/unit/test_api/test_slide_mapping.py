@@ -41,9 +41,9 @@ def _make_svm_mock(
     """Create a mock SlideVideoMapping ORM object."""
     svm = MagicMock()
     svm.id = uuid.uuid4()
-    svm.node_id = node_id or uuid.uuid4()
-    svm.presentation_entry_id = pres_id or uuid.uuid4()
-    svm.video_entry_id = vid_id or uuid.uuid4()
+    svm.materialnode_id = node_id or uuid.uuid4()
+    svm.presentation_materialentry_id = pres_id or uuid.uuid4()
+    svm.video_materialentry_id = vid_id or uuid.uuid4()
     svm.slide_number = slide_number
     svm.video_timecode_start = "00:05:00"
     svm.video_timecode_end = "00:08:00"
@@ -94,8 +94,8 @@ def _make_mapping_payload(
 ) -> dict[str, object]:
     """Build a single mapping payload dict."""
     return {
-        "presentation_entry_id": str(pres_id or uuid.uuid4()),
-        "video_entry_id": str(vid_id or uuid.uuid4()),
+        "presentation_materialentry_id": str(pres_id or uuid.uuid4()),
+        "video_materialentry_id": str(vid_id or uuid.uuid4()),
         "slide_number": slide_number,
         "video_timecode_start": tc_start,
         "video_timecode_end": "00:08:15",
@@ -119,7 +119,7 @@ def _failed_result(index: int) -> MappingValidationResult:
         status=MappingValidationState.VALIDATION_FAILED,
         errors=[
             MappingValidationError(
-                field="presentation_entry_id",
+                field="presentation_materialentry_id",
                 message="Entry not found",
                 hint="Check that the entry ID is correct",
             ),
@@ -423,7 +423,7 @@ class TestSlideVideoMappingAPI:
         mapping = response.json()["mappings"][0]
         assert mapping["validation_state"] == "validated"
         assert "video_timecode_start" in mapping
-        assert "presentation_entry_id" in mapping
+        assert "presentation_materialentry_id" in mapping
 
 
 class TestListSlideMapping:
@@ -499,7 +499,7 @@ class TestDeleteSlideMapping:
         mapping_id = uuid.uuid4()
         node_id = uuid.uuid4()
         mock_mapping = MagicMock()
-        mock_mapping.node_id = node_id
+        mock_mapping.materialnode_id = node_id
         node = _mock_node(node_id)
         with (
             patch.object(
@@ -529,7 +529,7 @@ class TestDeleteSlideMapping:
         mapping_id = uuid.uuid4()
         node_id = uuid.uuid4()
         mock_mapping = MagicMock()
-        mock_mapping.node_id = node_id
+        mock_mapping.materialnode_id = node_id
         wrong_tenant_node = _mock_node(node_id, tenant_id=uuid.uuid4())
         with (
             patch.object(
@@ -550,7 +550,7 @@ class TestDeleteSlideMapping:
         """DELETE returns 404 when mapping's node does not exist."""
         mapping_id = uuid.uuid4()
         mock_mapping = MagicMock()
-        mock_mapping.node_id = uuid.uuid4()
+        mock_mapping.materialnode_id = uuid.uuid4()
         with (
             patch.object(
                 SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
@@ -570,14 +570,14 @@ class TestSlideVideoMappingRepository:
         vid_id = uuid.uuid4()
         mappings = [
             SlideVideoMapEntry(
-                presentation_entry_id=str(pres_id),
-                video_entry_id=str(vid_id),
+                presentation_materialentry_id=str(pres_id),
+                video_materialentry_id=str(vid_id),
                 slide_number=1,
                 video_timecode_start="00:05:00",
             ),
             SlideVideoMapEntry(
-                presentation_entry_id=str(pres_id),
-                video_entry_id=str(vid_id),
+                presentation_materialentry_id=str(pres_id),
+                video_materialentry_id=str(vid_id),
                 slide_number=2,
                 video_timecode_start="00:15:00",
             ),
@@ -595,8 +595,8 @@ class TestSlideVideoMappingRepository:
         vid_id = uuid.uuid4()
         mappings = [
             SlideVideoMapEntry(
-                presentation_entry_id=str(pres_id),
-                video_entry_id=str(vid_id),
+                presentation_materialentry_id=str(pres_id),
+                video_materialentry_id=str(vid_id),
                 slide_number=i + 1,
                 video_timecode_start=f"00:0{i}:00",
             )

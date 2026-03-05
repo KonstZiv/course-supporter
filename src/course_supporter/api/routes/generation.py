@@ -43,7 +43,7 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import trigger_generation
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import StructureNode
+from course_supporter.storage.orm import StructureNode, StructureSnapshot
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 from course_supporter.storage.structure_node_repository import StructureNodeRepository
 
@@ -169,7 +169,7 @@ async def generate_structure(
 
 async def _build_snapshot_detail(
     session: AsyncSession,
-    snapshot: object,
+    snapshot: StructureSnapshot,
 ) -> SnapshotDetailResponse:
     """Build SnapshotDetailResponse with structure_tree from DB."""
     resp = SnapshotDetailResponse.model_validate(snapshot)

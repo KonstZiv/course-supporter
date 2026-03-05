@@ -819,10 +819,25 @@ class GenerationPlanResponse(BaseModel):
     )
 
 
+class ServiceCallSummary(BaseModel):
+    """LLM metadata from the linked ExternalServiceCall."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="ExternalServiceCall UUID.")
+    provider: str = Field(description="LLM provider name.")
+    model_id: str = Field(description="LLM model identifier used.")
+    prompt_ref: str | None = Field(description="Prompt template reference.")
+    unit_in: int | None = Field(description="Input units (tokens) consumed.")
+    unit_out: int | None = Field(description="Output units (tokens) generated.")
+    cost_usd: float | None = Field(description="Estimated cost in USD.")
+
+
 class SnapshotSummaryResponse(BaseModel):
     """Snapshot metadata without the full structure payload.
 
     Used in list endpoints to keep response size small.
+    LLM metadata is available via the nested ``service_call`` field.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -836,11 +851,13 @@ class SnapshotSummaryResponse(BaseModel):
     node_fingerprint: str = Field(
         description="Merkle fingerprint of the target subtree at generation time."
     )
-    prompt_version: str | None = Field(description="Prompt template version used.")
-    model_id: str | None = Field(description="LLM model identifier used.")
-    tokens_in: int | None = Field(description="Input tokens consumed.")
-    tokens_out: int | None = Field(description="Output tokens generated.")
-    cost_usd: float | None = Field(description="Estimated cost in USD.")
+    externalservicecall_id: uuid.UUID | None = Field(
+        description="Linked ExternalServiceCall UUID."
+    )
+    service_call: ServiceCallSummary | None = Field(
+        default=None,
+        description="LLM call metadata (joined from ExternalServiceCall).",
+    )
     created_at: datetime = Field(description="When this snapshot was created.")
 
 

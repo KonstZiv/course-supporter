@@ -76,7 +76,7 @@ def _make_mapping(
 
 
 def _make_snapshot(snapshot_id: uuid.UUID | None = None) -> MagicMock:
-    """Create a mock CourseStructureSnapshot."""
+    """Create a mock StructureSnapshot."""
     snap = MagicMock()
     snap.id = snapshot_id or uuid.uuid4()
     return snap
@@ -459,15 +459,15 @@ class TestMappingsFiltering:
 
 
 class TestLLMMetadata:
-    """LLM metadata passed to snapshot create."""
+    """LLM metadata stored in ExternalServiceCall, linked to snapshot."""
 
     @pytest.mark.asyncio
-    async def test_metadata_in_snapshot(
+    async def test_esc_created_and_linked(
         self,
         job_id: str,
         course_id: str,
     ) -> None:
-        """Snapshot receives model_id, tokens, cost from GenerationResult."""
+        """Snapshot receives externalservicecall_id from created ESC."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
 
@@ -477,11 +477,11 @@ class TestLLMMetadata:
         await _run_task(job_id, course_id, deps)
 
         create_kwargs = deps.snap_repo.create.call_args.kwargs
-        assert create_kwargs["model_id"] == "gemini-2.5-flash"
-        assert create_kwargs["tokens_in"] == 100
-        assert create_kwargs["tokens_out"] == 200
-        assert create_kwargs["cost_usd"] == 0.005
-        assert create_kwargs["prompt_version"] == "v1"
+        assert "externalservicecall_id" in create_kwargs
+        # LLM metadata fields should NOT be in snapshot create
+        assert "model_id" not in create_kwargs
+        assert "tokens_in" not in create_kwargs
+        assert "cost_usd" not in create_kwargs
 
 
 class TestModePassthrough:

@@ -299,14 +299,34 @@ class TestDownloadFile:
 class TestS3Config:
     """Tests for S3Client configuration."""
 
-    def test_open_uses_s3v4_signature(self) -> None:
-        """S3Client uses SigV4 and path-style addressing."""
+    @pytest.mark.asyncio
+    async def test_open_uses_s3v4_signature(self) -> None:
+        """S3Client.open() passes SigV4 and path-style config to aiobotocore."""
         client = S3Client(
             endpoint_url="https://s3.us-west-004.backblazeb2.com",
             access_key="key",
             secret_key="secret",
             bucket="my-bucket",
         )
-        # Verify config is set up during init (tested via open())
-        assert client._endpoint_url == "https://s3.us-west-004.backblazeb2.com"
-        assert client._bucket == "my-bucket"
+
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        client._session.create_client = MagicMock(return_value=mock_ctx)
+
+        await client.open()
+
+        client._session.create_client.assert_called_once()
+        call_kwargs = client._session.create_client.call_args
+        assert call_kwargs[0] == ("s3",)
+        assert (
+            call_kwargs[1]["endpoint_url"] == "https://s3.us-west-004.backblazeb2.com"
+        )
+        assert call_kwargs[1]["aws_access_key_id"] == "key"
+        assert call_kwargs[1]["aws_secret_access_key"] == "secret"
+
+        from botocore.config import Config as BotoConfig
+
+        config: BotoConfig = call_kwargs[1]["config"]
+        assert config.signature_version == "s3v4"
+        assert config.s3["addressing_style"] == "path"

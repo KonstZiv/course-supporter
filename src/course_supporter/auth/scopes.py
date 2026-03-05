@@ -49,7 +49,8 @@ def require_scope(
         elif matched_scope == AuthScope.CHECK:
             limit = tenant.rate_limit_check
         else:
-            limit = tenant.rate_limit_check
+            msg = f"No rate limit configured for scope: {matched_scope}"
+            raise ValueError(msg)
         key = f"{tenant.tenant_id}:{matched_scope}"
         allowed, retry_after = rate_limiter.check(key, limit)
 

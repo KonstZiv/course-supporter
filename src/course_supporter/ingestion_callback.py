@@ -173,7 +173,7 @@ class IngestionCallback:
         1. Load the MaterialEntry (or its parent MaterialNode).
         2. Walk up the tree via ``parent_id``, setting
            ``node_fingerprint = NULL`` on each ancestor node.
-        4. Set course-level fingerprint to NULL.
+        3. Set course-level fingerprint to NULL.
 
         All changes are flushed within the provided session
         (caller commits).

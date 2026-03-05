@@ -34,7 +34,8 @@ class TestEnqueueIngestion:
         session = _mock_session()
         redis = _mock_redis()
         mock_job = _mock_job()
-        course_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        node_id = uuid.uuid4()
         material_id = uuid.uuid4()
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
@@ -44,7 +45,8 @@ class TestEnqueueIngestion:
             result = await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=course_id,
+                tenant_id=tenant_id,
+                node_id=node_id,
                 material_id=material_id,
                 source_type="web",
                 source_url="https://example.com",
@@ -54,7 +56,8 @@ class TestEnqueueIngestion:
         repo_cls.return_value.create.assert_awaited_once()
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["job_type"] == "ingest"
-        assert create_kwargs["course_id"] == course_id
+        assert create_kwargs["tenant_id"] == tenant_id
+        assert create_kwargs["node_id"] == node_id
         assert create_kwargs["priority"] == "normal"
 
     async def test_enqueues_with_correct_args(self) -> None:
@@ -71,7 +74,8 @@ class TestEnqueueIngestion:
             await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
                 material_id=material_id,
                 source_type="video",
                 source_url="s3://bucket/key",
@@ -100,7 +104,8 @@ class TestEnqueueIngestion:
             await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
                 material_id=uuid.uuid4(),
                 source_type="text",
                 source_url="https://example.com/doc",
@@ -124,7 +129,8 @@ class TestEnqueueIngestion:
             result = await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
                 material_id=uuid.uuid4(),
                 source_type="web",
                 source_url="https://example.com",
@@ -146,7 +152,8 @@ class TestEnqueueIngestion:
             await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
                 material_id=uuid.uuid4(),
                 source_type="web",
                 source_url="https://example.com",
@@ -163,8 +170,9 @@ class TestEnqueueGeneration:
         session = _mock_session()
         redis = _mock_redis()
         mock_job = _mock_job()
-        course_id = uuid.uuid4()
-        node_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        root_node_id = uuid.uuid4()
+        target_node_id = uuid.uuid4()
         deps = [str(uuid.uuid4()), str(uuid.uuid4())]
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
@@ -174,8 +182,9 @@ class TestEnqueueGeneration:
             result = await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=course_id,
-                node_id=node_id,
+                tenant_id=tenant_id,
+                root_node_id=root_node_id,
+                target_node_id=target_node_id,
                 mode="guided",
                 depends_on=deps,
             )
@@ -183,11 +192,11 @@ class TestEnqueueGeneration:
         assert result is mock_job
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["job_type"] == "generate_structure"
-        assert create_kwargs["course_id"] == course_id
-        assert create_kwargs["node_id"] == node_id
+        assert create_kwargs["tenant_id"] == tenant_id
+        assert create_kwargs["node_id"] == target_node_id
         assert create_kwargs["depends_on"] == deps
-        assert create_kwargs["input_params"]["course_id"] == str(course_id)
-        assert create_kwargs["input_params"]["node_id"] == str(node_id)
+        assert create_kwargs["input_params"]["root_node_id"] == str(root_node_id)
+        assert create_kwargs["input_params"]["target_node_id"] == str(target_node_id)
         assert create_kwargs["input_params"]["mode"] == "guided"
 
     async def test_enqueues_arq_with_correct_args(self) -> None:
@@ -195,8 +204,8 @@ class TestEnqueueGeneration:
         session = _mock_session()
         redis = _mock_redis()
         mock_job = _mock_job()
-        course_id = uuid.uuid4()
-        node_id = uuid.uuid4()
+        root_node_id = uuid.uuid4()
+        target_node_id = uuid.uuid4()
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
@@ -205,25 +214,27 @@ class TestEnqueueGeneration:
             await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=course_id,
-                node_id=node_id,
+                tenant_id=uuid.uuid4(),
+                root_node_id=root_node_id,
+                target_node_id=target_node_id,
                 mode="free",
             )
 
         redis.enqueue_job.assert_awaited_once_with(
             "arq_generate_structure",
             str(mock_job.id),
-            str(course_id),
-            str(node_id),
+            str(root_node_id),
+            str(target_node_id),
             "free",
         )
 
-    async def test_course_level_passes_none_node(self) -> None:
-        """Course-level generation passes None for node_id."""
+    async def test_whole_tree_passes_none_target(self) -> None:
+        """Whole-tree generation passes None for target_node_id."""
         session = _mock_session()
         redis = _mock_redis()
         mock_job = _mock_job()
-        course_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        root_node_id = uuid.uuid4()
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
@@ -232,27 +243,28 @@ class TestEnqueueGeneration:
             await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=course_id,
-                node_id=None,
+                tenant_id=tenant_id,
+                root_node_id=root_node_id,
             )
 
         redis.enqueue_job.assert_awaited_once_with(
             "arq_generate_structure",
             str(mock_job.id),
-            str(course_id),
+            str(root_node_id),
             None,
             "free",
         )
 
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
-        assert create_kwargs["input_params"]["node_id"] is None
+        # effective_node_id falls back to root_node_id when target is None
+        assert create_kwargs["node_id"] == root_node_id
+        assert create_kwargs["input_params"]["target_node_id"] is None
 
     async def test_sets_arq_job_id(self) -> None:
         """arq_job_id set on Job record after enqueue."""
         session = _mock_session()
         redis = _mock_redis(arq_job_id="arq:gen:789")
         mock_job = _mock_job()
-        course_id = uuid.uuid4()
 
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
@@ -261,7 +273,8 @@ class TestEnqueueGeneration:
             await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=course_id,
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
             )
 
         repo_cls.return_value.set_arq_job_id.assert_awaited_once_with(
@@ -282,7 +295,8 @@ class TestEnqueueGeneration:
             result = await enqueue_generation(
                 redis=redis,
                 session=session,
-                course_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
             )
 
         assert result is mock_job

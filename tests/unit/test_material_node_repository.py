@@ -24,7 +24,7 @@ def _no_cascade_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
 def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
-    course_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
     title: str = "Test Node",
     order: int = 0,
@@ -32,7 +32,7 @@ def _mock_node(
     """Create a mock MaterialNode."""
     node = MagicMock(spec=MaterialNode)
     node.id = node_id or uuid.uuid4()
-    node.course_id = course_id or uuid.uuid4()
+    node.tenant_id = tenant_id or uuid.uuid4()
     node.parent_id = parent_id
     node.title = title
     node.description = None
@@ -52,12 +52,10 @@ class TestCreate:
         repo = MaterialNodeRepository(session)
 
         tenant_id = uuid.uuid4()
-        course_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=0):
             result = await repo.create(
                 tenant_id=tenant_id,
-                course_id=course_id,
                 title="Module 1",
             )
 
@@ -78,13 +76,11 @@ class TestCreate:
         repo = MaterialNodeRepository(session)
 
         tenant_id = uuid.uuid4()
-        course_id = uuid.uuid4()
         parent_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=3):
             result = await repo.create(
                 tenant_id=tenant_id,
-                course_id=course_id,
                 parent_id=parent_id,
                 title="Subtopic",
                 description="Details",
@@ -106,7 +102,6 @@ class TestCreate:
         with patch.object(repo, "_next_sibling_order", return_value=0):
             result = await repo.create(
                 tenant_id=uuid.uuid4(),
-                course_id=uuid.uuid4(),
                 title="Node",
             )
 
@@ -140,7 +135,7 @@ class TestGetById:
 
 
 class TestGetTree:
-    """MaterialNodeRepository.get_tree tests."""
+    """MaterialNodeRepository.get_subtree tests."""
 
     async def test_empty_course(self) -> None:
         """No nodes returns empty list."""
@@ -150,14 +145,14 @@ class TestGetTree:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(uuid.uuid4())
+        roots = await repo.get_subtree(uuid.uuid4())
         assert roots == []
 
     async def test_flat_roots(self) -> None:
         """Multiple root nodes returned in order."""
         cid = uuid.uuid4()
-        r1 = _mock_node(course_id=cid, title="Root 1", order=0)
-        r2 = _mock_node(course_id=cid, title="Root 2", order=1)
+        r1 = _mock_node(tenant_id=cid, title="Root 1", order=0)
+        r2 = _mock_node(tenant_id=cid, title="Root 2", order=1)
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -165,7 +160,7 @@ class TestGetTree:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         assert len(roots) == 2
         assert roots[0] is r1
@@ -174,10 +169,10 @@ class TestGetTree:
     async def test_nested_tree(self) -> None:
         """Three-level tree assembled correctly."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
-        child = _mock_node(course_id=cid, parent_id=root.id, title="Child", order=0)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
+        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
         grandchild = _mock_node(
-            course_id=cid, parent_id=child.id, title="Grandchild", order=0
+            tenant_id=cid, parent_id=child.id, title="Grandchild", order=0
         )
 
         session = AsyncMock()
@@ -190,7 +185,7 @@ class TestGetTree:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         assert len(roots) == 1
         assert roots[0] is root
@@ -202,9 +197,9 @@ class TestGetTree:
     async def test_multiple_children(self) -> None:
         """Node with multiple children ordered."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
-        c1 = _mock_node(course_id=cid, parent_id=root.id, title="C1", order=0)
-        c2 = _mock_node(course_id=cid, parent_id=root.id, title="C2", order=1)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
+        c1 = _mock_node(tenant_id=cid, parent_id=root.id, title="C1", order=0)
+        c2 = _mock_node(tenant_id=cid, parent_id=root.id, title="C2", order=1)
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -212,7 +207,7 @@ class TestGetTree:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         assert len(roots) == 1
         assert len(root.children) == 2
@@ -221,12 +216,12 @@ class TestGetTree:
 
 
 class TestGetTreeIncludeMaterials:
-    """MaterialNodeRepository.get_tree with include_materials=True."""
+    """MaterialNodeRepository.get_subtree with include_materials=True."""
 
     async def test_include_materials_adds_selectinload(self) -> None:
         """When include_materials=True, materials are loaded for each node."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root")
+        root = _mock_node(tenant_id=cid, title="Root")
         # Simulate materials list on the node (as selectinload would populate)
         mat1 = MagicMock()
         root.materials = [mat1]
@@ -237,7 +232,7 @@ class TestGetTreeIncludeMaterials:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid, include_materials=True)
+        roots = await repo.get_subtree(cid, include_materials=True)
 
         assert len(roots) == 1
         assert roots[0].materials == [mat1]
@@ -253,22 +248,22 @@ class TestGetTreeIncludeMaterials:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        await repo.get_tree(cid)
+        await repo.get_subtree(cid)
 
         # The call should succeed without loading materials
         session.execute.assert_awaited_once()
 
 
 class TestGetTreeDeepNesting:
-    """get_tree with 4+ level deep nesting."""
+    """get_subtree with 4+ level deep nesting."""
 
     async def test_four_level_tree(self) -> None:
         """Four-level deep tree assembled correctly."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="L1", order=0)
-        l2 = _mock_node(course_id=cid, parent_id=root.id, title="L2", order=0)
-        l3 = _mock_node(course_id=cid, parent_id=l2.id, title="L3", order=0)
-        l4 = _mock_node(course_id=cid, parent_id=l3.id, title="L4", order=0)
+        root = _mock_node(tenant_id=cid, title="L1", order=0)
+        l2 = _mock_node(tenant_id=cid, parent_id=root.id, title="L2", order=0)
+        l3 = _mock_node(tenant_id=cid, parent_id=l2.id, title="L3", order=0)
+        l4 = _mock_node(tenant_id=cid, parent_id=l3.id, title="L4", order=0)
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -276,7 +271,7 @@ class TestGetTreeDeepNesting:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         assert len(roots) == 1
         assert roots[0] is root
@@ -291,13 +286,13 @@ class TestGetTreeDeepNesting:
     async def test_five_level_tree_with_siblings(self) -> None:
         """Five-level deep tree with siblings at each level."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
-        c1 = _mock_node(course_id=cid, parent_id=root.id, title="C1", order=0)
-        c2 = _mock_node(course_id=cid, parent_id=root.id, title="C2", order=1)
-        gc1 = _mock_node(course_id=cid, parent_id=c1.id, title="GC1", order=0)
-        gc2 = _mock_node(course_id=cid, parent_id=c1.id, title="GC2", order=1)
-        ggc = _mock_node(course_id=cid, parent_id=gc1.id, title="GGC", order=0)
-        gggc = _mock_node(course_id=cid, parent_id=ggc.id, title="GGGC", order=0)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
+        c1 = _mock_node(tenant_id=cid, parent_id=root.id, title="C1", order=0)
+        c2 = _mock_node(tenant_id=cid, parent_id=root.id, title="C2", order=1)
+        gc1 = _mock_node(tenant_id=cid, parent_id=c1.id, title="GC1", order=0)
+        gc2 = _mock_node(tenant_id=cid, parent_id=c1.id, title="GC2", order=1)
+        ggc = _mock_node(tenant_id=cid, parent_id=gc1.id, title="GGC", order=0)
+        gggc = _mock_node(tenant_id=cid, parent_id=ggc.id, title="GGGC", order=0)
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -313,7 +308,7 @@ class TestGetTreeDeepNesting:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         assert len(roots) == 1
         assert len(root.children) == 2
@@ -327,20 +322,20 @@ class TestGetTreeDeepNesting:
 
 
 class TestGetTreeSetCommittedValue:
-    """get_tree uses set_committed_value to avoid async lazy-load."""
+    """get_subtree uses set_committed_value to avoid async lazy-load."""
 
     async def test_uses_set_committed_value_for_orm_objects(self) -> None:
-        """get_tree uses set_committed_value for real ORM instances.
+        """get_subtree uses set_committed_value for real ORM instances.
 
         Direct assignment (node.children = []) triggers ORM backref
         synchronization which lazy-loads existing children. In async
         context this raises MissingGreenlet (BUG-001).
         """
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
         # Simulate real ORM object by adding _sa_instance_state
         root._sa_instance_state = MagicMock()
-        child = _mock_node(course_id=cid, parent_id=root.id, title="Child", order=0)
+        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
         child._sa_instance_state = MagicMock()
 
         session = AsyncMock()
@@ -352,7 +347,7 @@ class TestGetTreeSetCommittedValue:
         with patch(
             "course_supporter.storage.material_node_repository.set_committed_value"
         ) as mock_scv:
-            await repo.get_tree(cid)
+            await repo.get_subtree(cid)
 
         # set_committed_value called for each node (root + child)
         assert mock_scv.call_count == 2
@@ -361,10 +356,10 @@ class TestGetTreeSetCommittedValue:
             assert call[0][2] == []
 
     async def test_falls_back_to_direct_assignment_for_mocks(self) -> None:
-        """get_tree uses direct assignment for non-ORM objects (tests)."""
+        """get_subtree uses direct assignment for non-ORM objects (tests)."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
-        child = _mock_node(course_id=cid, parent_id=root.id, title="Child", order=0)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
+        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -372,7 +367,7 @@ class TestGetTreeSetCommittedValue:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
         # Tree assembled correctly via direct assignment fallback
         assert len(roots) == 1
@@ -382,14 +377,18 @@ class TestGetTreeSetCommittedValue:
 
 
 class TestGetTreeOrphanNodes:
-    """get_tree with orphan nodes (parent not in loaded set)."""
+    """get_subtree with orphan nodes (parent not in loaded set)."""
 
-    async def test_orphan_node_excluded_from_roots(self) -> None:
-        """Node whose parent_id is set but parent not loaded is excluded."""
+    async def test_orphan_node_treated_as_root(self) -> None:
+        """Node whose parent_id is set but parent not loaded becomes a root.
+
+        In get_subtree, if a node's parent is not in the loaded set,
+        it is treated as a root (included in the result).
+        """
         cid = uuid.uuid4()
         missing_parent_id = uuid.uuid4()
         orphan = _mock_node(
-            course_id=cid,
+            tenant_id=cid,
             parent_id=missing_parent_id,
             title="Orphan",
             order=0,
@@ -401,17 +400,18 @@ class TestGetTreeOrphanNodes:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
-        # Orphan is not a root (parent_id != None), and parent not found
-        assert roots == []
+        # Orphan is treated as root when parent not in loaded set
+        assert len(roots) == 1
+        assert roots[0] is orphan
 
     async def test_mixed_valid_and_orphan(self) -> None:
-        """Valid root returned, orphan excluded."""
+        """Valid root and orphan both returned as roots."""
         cid = uuid.uuid4()
-        root = _mock_node(course_id=cid, title="Root", order=0)
+        root = _mock_node(tenant_id=cid, title="Root", order=0)
         orphan = _mock_node(
-            course_id=cid,
+            tenant_id=cid,
             parent_id=uuid.uuid4(),
             title="Orphan",
             order=0,
@@ -423,11 +423,11 @@ class TestGetTreeOrphanNodes:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        roots = await repo.get_tree(cid)
+        roots = await repo.get_subtree(cid)
 
-        assert len(roots) == 1
-        assert roots[0] is root
-        assert root.children == []
+        assert len(roots) == 2
+        assert root in roots
+        assert orphan in roots
 
 
 class TestMove:
@@ -492,8 +492,8 @@ class TestMove:
     async def test_move_to_sibling(self) -> None:
         """Move node under a valid non-ancestor parent."""
         cid = uuid.uuid4()
-        node_a = _mock_node(course_id=cid, title="A")
-        node_b = _mock_node(course_id=cid, title="B")
+        node_a = _mock_node(tenant_id=cid, title="A")
+        node_b = _mock_node(tenant_id=cid, title="B")
 
         session = AsyncMock()
 
@@ -537,9 +537,9 @@ class TestReorder:
     async def test_reorder_moves_to_position(self) -> None:
         """Node moved to desired position, siblings renumbered."""
         cid = uuid.uuid4()
-        n0 = _mock_node(course_id=cid, title="N0", order=0)
-        n1 = _mock_node(course_id=cid, title="N1", order=1)
-        n2 = _mock_node(course_id=cid, title="N2", order=2)
+        n0 = _mock_node(tenant_id=cid, title="N0", order=0)
+        n1 = _mock_node(tenant_id=cid, title="N1", order=1)
+        n2 = _mock_node(tenant_id=cid, title="N2", order=2)
 
         session = AsyncMock()
         session.get.return_value = n0
@@ -559,8 +559,8 @@ class TestReorder:
     async def test_reorder_clamps_to_max(self) -> None:
         """Order clamped to max valid position."""
         cid = uuid.uuid4()
-        n0 = _mock_node(course_id=cid, title="N0", order=0)
-        n1 = _mock_node(course_id=cid, title="N1", order=1)
+        n0 = _mock_node(tenant_id=cid, title="N0", order=0)
+        n1 = _mock_node(tenant_id=cid, title="N1", order=1)
 
         session = AsyncMock()
         session.get.return_value = n0
@@ -663,7 +663,7 @@ class TestNextSiblingOrder:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        result = await repo._next_sibling_order(uuid.uuid4(), None)
+        result = await repo._next_sibling_order(None)
         assert result == 0
 
     async def test_existing_siblings_returns_max_plus_one(self) -> None:
@@ -674,7 +674,7 @@ class TestNextSiblingOrder:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        result = await repo._next_sibling_order(uuid.uuid4(), uuid.uuid4())
+        result = await repo._next_sibling_order(uuid.uuid4())
         assert result == 3
 
     async def test_calls_execute_with_correct_args(self) -> None:
@@ -685,6 +685,6 @@ class TestNextSiblingOrder:
         session.execute.return_value = exec_result
 
         repo = MaterialNodeRepository(session)
-        await repo._next_sibling_order(uuid.uuid4(), None)
+        await repo._next_sibling_order(None)
 
         session.execute.assert_awaited_once()

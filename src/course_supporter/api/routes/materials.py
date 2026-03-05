@@ -5,16 +5,15 @@ Each material goes through a lifecycle (RAW → PENDING → READY/ERROR)
 tracked via the derived ``state`` property. Ingestion is auto-enqueued
 on creation and can be retried on failure.
 
-Tenant isolation is enforced by verifying course ownership
-before accessing any node or material.
+Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
 ------
-- ``POST   /courses/{id}/nodes/{nid}/materials``       — Add material to node
-- ``GET    /courses/{id}/nodes/{nid}/materials``        — List materials for node
-- ``GET    /courses/{id}/materials/{mid}``              — Get single material
-- ``DELETE /courses/{id}/materials/{mid}``              — Delete material
-- ``POST   /courses/{id}/materials/{mid}/retry``        — Retry failed ingestion
+- ``POST   /nodes/{nid}/materials``       — Add material to node
+- ``GET    /nodes/{nid}/materials``        — List materials for node
+- ``GET    /materials/{mid}``              — Get single material
+- ``DELETE /materials/{mid}``              — Delete material
+- ``POST   /materials/{mid}/retry``        — Retry failed ingestion
 """
 
 from __future__ import annotations
@@ -45,7 +44,6 @@ from course_supporter.models.source import SourceType
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import MaterialEntry
-from course_supporter.storage.repositories import CourseRepository
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 
 logger = structlog.get_logger()
@@ -61,67 +59,41 @@ SharedDep = Annotated[
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 
-async def _require_course(
+async def _require_node_for_tenant(
     session: AsyncSession,
     tenant_id: uuid.UUID,
-    course_id: uuid.UUID,
-) -> None:
-    """Verify the course exists and belongs to the tenant.
-
-    Raises:
-        HTTPException 404: If the course is not found or
-            does not belong to the authenticated tenant.
-    """
-    repo = CourseRepository(session, tenant_id)
-    course = await repo.get_by_id(course_id)
-    if course is None:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-
-async def _require_node(
-    session: AsyncSession,
     node_id: uuid.UUID,
-    course_id: uuid.UUID,
-) -> None:
-    """Verify the node exists and belongs to the course.
-
-    Raises:
-        HTTPException 404: If the node is not found or
-            belongs to a different course.
-    """
+) -> object:
+    """Verify the node exists and belongs to the tenant."""
     repo = MaterialNodeRepository(session)
     node = await repo.get_by_id(node_id)
-    if node is None or node.course_id != course_id:
+    if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
+    return node
 
 
-async def _require_material(
+async def _require_material_for_tenant(
     entry_repo: MaterialEntryRepository,
     node_repo: MaterialNodeRepository,
     entry_id: uuid.UUID,
-    course_id: uuid.UUID,
+    tenant_id: uuid.UUID,
 ) -> MaterialEntry:
-    """Verify the material exists and belongs to the course.
+    """Verify the material exists and belongs to the tenant.
 
-    Checks MaterialEntry → MaterialNode → Course chain.
-
-    Raises:
-        HTTPException 404: If the material is not found or
-            belongs to a different course.
+    Checks MaterialEntry → MaterialNode → tenant_id chain.
     """
     entry = await entry_repo.get_by_id(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Material not found")
 
     node = await node_repo.get_by_id(entry.node_id)
-    if node is None or node.course_id != course_id:
+    if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Material not found")
     return entry
 
 
-@router.post("/courses/{course_id}/nodes/{node_id}/materials", status_code=201)
+@router.post("/nodes/{node_id}/materials", status_code=201)
 async def create_material(
-    course_id: uuid.UUID,
     node_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
@@ -159,13 +131,6 @@ async def create_material(
     Creates a ``MaterialEntry`` and auto-enqueues an ingestion job
     via ARQ. The ``job_id`` in the response can be used to track
     processing status via ``GET /api/v1/jobs/{job_id}``.
-
-    File type validation per source_type:
-
-    - **video**: .mp4, .webm, .mkv, .avi
-    - **presentation**: .pdf, .pptx
-    - **text**: .md, .markdown, .docx, .html, .htm, .txt
-    - **web**: URL only, file upload not allowed
     """
     if source_url is None and file is None:
         raise HTTPException(
@@ -192,8 +157,7 @@ async def create_material(
                 ),
             )
 
-    await _require_course(session, tenant.tenant_id, course_id)
-    await _require_node(session, node_id, course_id)
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
     actual_filename: str | None = filename
     actual_url: str
@@ -201,7 +165,7 @@ async def create_material(
     if file is not None:
         if actual_filename is None:
             actual_filename = file.filename
-        key = f"{course_id}/{node_id}/{uuid.uuid4()}/{actual_filename or 'upload'}"
+        key = f"{node_id}/{uuid.uuid4()}/{actual_filename or 'upload'}"
         content_type = file.content_type or "application/octet-stream"
         actual_url, uploaded_bytes = await s3.upload_smart(
             stream=upload_file_chunks(file),
@@ -224,7 +188,8 @@ async def create_material(
     job = await enqueue_ingestion(
         redis=arq,
         session=session,
-        course_id=course_id,
+        tenant_id=tenant.tenant_id,
+        node_id=node_id,
         material_id=entry.id,
         source_type=source_type,
         source_url=actual_url,
@@ -235,7 +200,6 @@ async def create_material(
         "material_entry_created",
         entry_id=str(entry.id),
         node_id=str(node_id),
-        course_id=str(course_id),
         job_id=str(job.id),
     )
     response = MaterialEntryCreateResponse.model_validate(entry)
@@ -248,9 +212,8 @@ async def create_material(
     return response
 
 
-@router.get("/courses/{course_id}/nodes/{node_id}/materials")
+@router.get("/nodes/{node_id}/materials")
 async def list_materials(
-    course_id: uuid.UUID,
     node_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
@@ -258,42 +221,34 @@ async def list_materials(
     """List all materials attached to a tree node.
 
     Returns materials ordered by their position (``order`` field).
-    Each material includes the derived ``state`` indicating its
-    lifecycle stage.
-
-    Returns an empty list if the node has no materials.
     """
-    await _require_course(session, tenant.tenant_id, course_id)
-    await _require_node(session, node_id, course_id)
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
     repo = MaterialEntryRepository(session)
     entries = await repo.get_for_node(node_id)
     return [MaterialEntryResponse.model_validate(e) for e in entries]
 
 
-@router.get("/courses/{course_id}/materials/{entry_id}")
+@router.get("/materials/{entry_id}")
 async def get_material(
-    course_id: uuid.UUID,
     entry_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
 ) -> MaterialEntryResponse:
     """Get a single material entry by ID.
 
-    The material must belong to the specified course
-    (verified through the node → course chain).
+    Verified through the node → tenant chain.
     """
-    await _require_course(session, tenant.tenant_id, course_id)
-
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
-    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
+    entry = await _require_material_for_tenant(
+        entry_repo, node_repo, entry_id, tenant.tenant_id
+    )
     return MaterialEntryResponse.model_validate(entry)
 
 
-@router.delete("/courses/{course_id}/materials/{entry_id}", status_code=204)
+@router.delete("/materials/{entry_id}", status_code=204)
 async def delete_material(
-    course_id: uuid.UUID,
     entry_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
@@ -301,28 +256,21 @@ async def delete_material(
     """Delete a material entry.
 
     Removes the material and its processed content permanently.
-    If an ingestion job is in progress, it will fail gracefully
-    when it tries to write back results.
     """
-    await _require_course(session, tenant.tenant_id, course_id)
-
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
-    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
+    entry = await _require_material_for_tenant(
+        entry_repo, node_repo, entry_id, tenant.tenant_id
+    )
 
     await entry_repo.delete(entry.id)
     await session.commit()
 
-    logger.info(
-        "material_entry_deleted",
-        entry_id=str(entry_id),
-        course_id=str(course_id),
-    )
+    logger.info("material_entry_deleted", entry_id=str(entry_id))
 
 
-@router.post("/courses/{course_id}/materials/{entry_id}/retry")
+@router.post("/materials/{entry_id}/retry")
 async def retry_material(
-    course_id: uuid.UUID,
     entry_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
@@ -330,17 +278,14 @@ async def retry_material(
 ) -> MaterialEntryCreateResponse:
     """Retry ingestion for a failed material.
 
-    Only materials in ``error`` state can be retried. This clears
-    the error, creates a new ingestion job, and returns the updated
-    material with the new ``job_id``.
-
+    Only materials in ``error`` state can be retried.
     Returns 409 if the material is not in ``error`` state.
     """
-    await _require_course(session, tenant.tenant_id, course_id)
-
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
-    entry = await _require_material(entry_repo, node_repo, entry_id, course_id)
+    entry = await _require_material_for_tenant(
+        entry_repo, node_repo, entry_id, tenant.tenant_id
+    )
 
     if entry.state != "error":
         raise HTTPException(
@@ -357,7 +302,8 @@ async def retry_material(
     job = await enqueue_ingestion(
         redis=arq,
         session=session,
-        course_id=course_id,
+        tenant_id=tenant.tenant_id,
+        node_id=entry.node_id,
         material_id=entry.id,
         source_type=entry.source_type,
         source_url=entry.source_url,
@@ -367,7 +313,6 @@ async def retry_material(
     logger.info(
         "material_entry_retry",
         entry_id=str(entry_id),
-        course_id=str(course_id),
         job_id=str(job.id),
     )
     response = MaterialEntryCreateResponse.model_validate(entry)

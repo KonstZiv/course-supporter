@@ -2,14 +2,10 @@
 
 from course_supporter.storage.orm import (
     Base,
-    Concept,
-    Course,
-    Exercise,
     ExternalServiceCall,
-    Lesson,
-    Module,
+    MaterialEntry,
+    MaterialNode,
     SlideVideoMapping,
-    SourceMaterial,
 )
 
 
@@ -20,54 +16,31 @@ class TestORMModels:
         """All expected tables are in Base metadata."""
         table_names = set(Base.metadata.tables.keys())
         expected = {
-            "courses",
-            "source_materials",
+            "tenants",
+            "api_keys",
+            "material_nodes",
+            "material_entries",
             "slide_video_mappings",
-            "modules",
-            "lessons",
-            "concepts",
-            "exercises",
-            "external_service_calls",
+            "structure_snapshots",
             "jobs",
+            "external_service_calls",
         }
         assert expected.issubset(table_names)
 
-    def test_course_table_columns(self) -> None:
-        """Course table has expected columns."""
-        columns = {c.name for c in Course.__table__.columns}
+    def test_material_node_table_columns(self) -> None:
+        """MaterialNode table has expected columns."""
+        columns = {c.name for c in MaterialNode.__table__.columns}
         assert "id" in columns
+        assert "tenant_id" in columns
         assert "title" in columns
+        assert "parent_id" in columns
         assert "created_at" in columns
         assert "updated_at" in columns
 
-    def test_source_material_fk(self) -> None:
-        """SourceMaterial has FK to courses."""
-        fks = {fk.target_fullname for fk in SourceMaterial.__table__.foreign_keys}
-        assert "courses.id" in fks
-
-    def test_cascade_chain(self) -> None:
-        """Verify cascade chain: Course -> Module -> Lesson -> Concept/Exercise."""
-        # Module -> Course
-        assert any(
-            fk.target_fullname == "courses.id" for fk in Module.__table__.foreign_keys
-        )
-        # Lesson -> Module
-        assert any(
-            fk.target_fullname == "modules.id" for fk in Lesson.__table__.foreign_keys
-        )
-        # Concept -> Lesson
-        assert any(
-            fk.target_fullname == "lessons.id" for fk in Concept.__table__.foreign_keys
-        )
-        # Exercise -> Lesson
-        assert any(
-            fk.target_fullname == "lessons.id" for fk in Exercise.__table__.foreign_keys
-        )
-
-    def test_concept_has_vector_column(self) -> None:
-        """Concept has embedding column for future RAG."""
-        columns = {c.name for c in Concept.__table__.columns}
-        assert "embedding" in columns
+    def test_material_entry_fk(self) -> None:
+        """MaterialEntry has FK to material_nodes."""
+        fks = {fk.target_fullname for fk in MaterialEntry.__table__.foreign_keys}
+        assert "material_nodes.id" in fks
 
     def test_external_service_call_fks(self) -> None:
         """ExternalServiceCall has FK to tenants and jobs."""
@@ -81,18 +54,18 @@ class TestORMModels:
         assert "material_nodes.id" in fks
         assert "material_entries.id" in fks
 
-    def test_ondelete_cascade_on_foreign_keys(self) -> None:
-        """All FK constraints use CASCADE ondelete."""
-        models_with_fks = [
-            SourceMaterial,
-            SlideVideoMapping,
-            Module,
-            Lesson,
-            Concept,
-            Exercise,
+    def test_ondelete_cascade_on_primary_foreign_keys(self) -> None:
+        """Primary FK constraints use CASCADE ondelete."""
+        # Check key ownership FKs (not nullable SET NULL FKs like pending_job_id)
+        cascade_fks = [
+            (MaterialEntry, "node_id"),
+            (MaterialNode, "parent_id"),
+            (MaterialNode, "tenant_id"),
+            (SlideVideoMapping, "node_id"),
         ]
-        for model in models_with_fks:
-            for fk in model.__table__.foreign_keys:
-                assert fk.ondelete == "CASCADE", (
-                    f"{model.__tablename__}.{fk.parent.name} missing CASCADE ondelete"
-                )
+        for model, col_name in cascade_fks:
+            col = model.__table__.c[col_name]
+            fk = next(iter(col.foreign_keys))
+            assert fk.ondelete == "CASCADE", (
+                f"{model.__tablename__}.{col_name} missing CASCADE ondelete"
+            )

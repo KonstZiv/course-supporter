@@ -8,7 +8,6 @@ structure generation for that scope.
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -50,13 +49,8 @@ class ReadinessService:
         """Check readiness of a subtree rooted at *node_id*.
 
         Loads all descendant nodes (including the root) with their
-        materials in a single query, then filters stale entries
+        materials via recursive CTE, then filters stale entries
         in Python.
-
-        Returns:
-            ReadinessResult with ``ready=True`` when every material
-            in the subtree is READY (or PENDING/ERROR — those are
-            not blocking, just not stale).
         """
         nodes = await self._load_subtree(node_id)
         stale: list[StaleMaterial] = []
@@ -77,38 +71,19 @@ class ReadinessService:
     async def _load_subtree(self, root_id: uuid.UUID) -> list[MaterialNode]:
         """Load root node and all descendants with materials eager-loaded.
 
-        Uses the recursive adjacency list: first fetches the root,
-        then fetches all nodes sharing the same ``course_id`` and
-        filters to descendants in Python (same approach as
-        ``MaterialNodeRepository.get_tree``).
+        Uses a recursive CTE to find all descendant node IDs.
         """
-        root = await self._session.get(MaterialNode, root_id)
-        if root is None:
-            msg = f"Node {root_id} not found"
-            raise ValueError(msg)
+        base = select(MaterialNode.id).where(MaterialNode.id == root_id)
+        cte = base.cte(name="subtree", recursive=True)
+        recursive = select(MaterialNode.id).join(
+            cte, MaterialNode.parent_id == cte.c.id
+        )
+        cte = cte.union_all(recursive)
 
         stmt = (
             select(MaterialNode)
-            .where(MaterialNode.course_id == root.course_id)
+            .where(MaterialNode.id.in_(select(cte.c.id)))
             .options(selectinload(MaterialNode.materials))
         )
         result = await self._session.execute(stmt)
-        all_nodes = list(result.scalars().all())
-
-        # Build parent→children index for O(N) BFS
-        by_id: dict[uuid.UUID, MaterialNode] = {n.id: n for n in all_nodes}
-        children_map: defaultdict[uuid.UUID, list[MaterialNode]] = defaultdict(list)
-        for node in all_nodes:
-            if node.parent_id is not None:
-                children_map[node.parent_id].append(node)
-
-        subtree_ids: set[uuid.UUID] = {root_id}
-        queue: deque[uuid.UUID] = deque([root_id])
-        while queue:
-            current_id = queue.popleft()
-            for child in children_map.get(current_id, []):
-                if child.id not in subtree_ids:
-                    subtree_ids.add(child.id)
-                    queue.append(child.id)
-
-        return [by_id[nid] for nid in subtree_ids if nid in by_id]
+        return list(result.scalars().all())

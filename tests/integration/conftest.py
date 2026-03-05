@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from course_supporter.config import get_settings
-from course_supporter.storage.orm import Course, Job, SourceMaterial, Tenant
+from course_supporter.storage.orm import Job, MaterialEntry, MaterialNode, Tenant
 
 # ── Engine (module-scoped, shared across test module) ──────────────
 
@@ -86,31 +86,31 @@ async def seed_tenant(db_session: AsyncSession) -> Tenant:
 
 
 @pytest.fixture()
-async def seed_course(db_session: AsyncSession, seed_tenant: Tenant) -> Course:
-    """Create a Course row linked to seed_tenant."""
-    course = Course(
+async def seed_root_node(db_session: AsyncSession, seed_tenant: Tenant) -> MaterialNode:
+    """Create a root MaterialNode linked to seed_tenant."""
+    node = MaterialNode(
         tenant_id=seed_tenant.id,
         title="Integration Test Course",
+        order=0,
     )
-    db_session.add(course)
+    db_session.add(node)
     await db_session.flush()
-    return course
+    return node
 
 
 @pytest.fixture()
-async def seed_material(
-    db_session: AsyncSession, seed_course: Course
-) -> SourceMaterial:
-    """Create a SourceMaterial in 'pending' status."""
-    material = SourceMaterial(
-        course_id=seed_course.id,
+async def seed_material_entry(
+    db_session: AsyncSession, seed_root_node: MaterialNode
+) -> MaterialEntry:
+    """Create a MaterialEntry in RAW state."""
+    entry = MaterialEntry(
+        node_id=seed_root_node.id,
         source_type="web",
         source_url="https://example.com/test",
-        status="pending",
     )
-    db_session.add(material)
+    db_session.add(entry)
     await db_session.flush()
-    return material
+    return entry
 
 
 # ── Committed seeds (real commit + DELETE cleanup) ─────────────────
@@ -120,9 +120,9 @@ async def seed_material(
 async def committed_seeds(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[dict[str, uuid.UUID]]:
-    """Create Tenant + Course + SourceMaterial with real commits.
+    """Create Tenant + root MaterialNode + MaterialEntry with real commits.
 
-    Returns dict with ``tenant_id``, ``course_id``, ``material_id``.
+    Returns dict with ``tenant_id``, ``node_id``, ``material_id``.
     Cleans up after the test via DELETE in reverse FK order.
     """
     async with session_factory() as session:
@@ -130,24 +130,27 @@ async def committed_seeds(
         session.add(tenant)
         await session.flush()
 
-        course = Course(tenant_id=tenant.id, title="E2E Test Course")
-        session.add(course)
+        node = MaterialNode(
+            tenant_id=tenant.id,
+            title="E2E Test Course",
+            order=0,
+        )
+        session.add(node)
         await session.flush()
 
-        material = SourceMaterial(
-            course_id=course.id,
+        entry = MaterialEntry(
+            node_id=node.id,
             source_type="web",
             source_url="https://example.com/e2e",
-            status="pending",
         )
-        session.add(material)
+        session.add(entry)
         await session.flush()
         await session.commit()
 
         ids: dict[str, uuid.UUID] = {
             "tenant_id": tenant.id,
-            "course_id": course.id,
-            "material_id": material.id,
+            "node_id": node.id,
+            "material_id": entry.id,
         }
 
     yield ids
@@ -155,15 +158,15 @@ async def committed_seeds(
     # Cleanup: delete in reverse FK order
     async with session_factory() as session:
         await session.execute(
-            Job.__table__.delete().where(Job.course_id == ids["course_id"])
+            Job.__table__.delete().where(Job.node_id == ids["node_id"])
         )
         await session.execute(
-            SourceMaterial.__table__.delete().where(
-                SourceMaterial.course_id == ids["course_id"]
+            MaterialEntry.__table__.delete().where(
+                MaterialEntry.node_id == ids["node_id"]
             )
         )
         await session.execute(
-            Course.__table__.delete().where(Course.id == ids["course_id"])
+            MaterialNode.__table__.delete().where(MaterialNode.id == ids["node_id"])
         )
         await session.execute(
             Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
@@ -176,32 +179,35 @@ async def committed_job_and_material(
     session_factory: async_sessionmaker[AsyncSession],
     committed_seeds: dict[str, uuid.UUID],
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Create a Job (active) + Material (processing) for callback tests.
+    """Create a Job (active) + MaterialEntry for callback tests.
 
     Pre-transitions the records to the state expected before
     ``IngestionCallback.on_success`` / ``on_failure``.
 
-    Returns dict with ``job_id``, ``material_id``, ``course_id``, ``tenant_id``.
+    Returns dict with ``job_id``, ``material_id``, ``node_id``, ``tenant_id``.
     """
     from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.repositories import SourceMaterialRepository
+    from course_supporter.storage.material_entry_repository import (
+        MaterialEntryRepository,
+    )
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
-        mat_repo = SourceMaterialRepository(session)
+        entry_repo = MaterialEntryRepository(session)
 
         job = await job_repo.create(
-            course_id=committed_seeds["course_id"],
+            tenant_id=committed_seeds["tenant_id"],
+            node_id=committed_seeds["node_id"],
             job_type="ingest",
         )
         await job_repo.update_status(job.id, "active")
-        await mat_repo.update_status(committed_seeds["material_id"], "processing")
+        await entry_repo.set_pending(committed_seeds["material_id"], job.id)
         await session.commit()
 
     yield {
         "job_id": job.id,
         "material_id": committed_seeds["material_id"],
-        "course_id": committed_seeds["course_id"],
+        "node_id": committed_seeds["node_id"],
         "tenant_id": committed_seeds["tenant_id"],
     }
 

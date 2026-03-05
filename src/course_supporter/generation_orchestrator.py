@@ -136,11 +136,12 @@ async def trigger_generation(
     *,
     redis: ArqRedis,
     session: AsyncSession,
-    course_id: uuid.UUID,
-    node_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    target_node_id: uuid.UUID | None = None,
     mode: Literal["free", "guided"] = "free",
 ) -> GenerationPlan:
-    """Orchestrate cascade generation for a course or subtree.
+    """Orchestrate cascade generation for a tree or subtree.
 
     Detects stale materials, enqueues ingestion for non-PENDING ones,
     then enqueues structure generation with ``depends_on``. If all
@@ -151,15 +152,16 @@ async def trigger_generation(
     Args:
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
-        course_id: Course UUID.
-        node_id: Target node UUID (None = whole course).
+        tenant_id: Owning tenant UUID.
+        root_node_id: Root MaterialNode UUID of the tree.
+        target_node_id: Specific subtree node UUID (None = whole tree).
         mode: Generation mode ('free' or 'guided').
 
     Returns:
         GenerationPlan describing the enqueued work.
 
     Raises:
-        NodeNotFoundError: If node_id is given but not found.
+        NodeNotFoundError: If target_node_id is given but not found.
         GenerationConflictError: If an active generation overlaps.
         NoReadyMaterialsError: If subtree has no materials at all.
     """
@@ -178,30 +180,42 @@ async def trigger_generation(
     from course_supporter.tree_utils import resolve_target_nodes
 
     log = structlog.get_logger().bind(
-        course_id=str(course_id),
-        node_id=str(node_id),
+        root_node_id=str(root_node_id),
+        target_node_id=str(target_node_id),
         mode=mode,
     )
     log.info("trigger_generation_started")
 
     # 1. Load tree and resolve target
     node_repo = MaterialNodeRepository(session)
-    root_nodes: list[MaterialNode] = await node_repo.get_tree(
-        course_id,
+    root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+        root_node_id,
         include_materials=True,
     )
-    target, flat_nodes = resolve_target_nodes(root_nodes, course_id, node_id)
+    target, flat_nodes = resolve_target_nodes(root_nodes, target_node_id)
 
     # 1b. Collect mapping warnings (non-blocking)
     mapping_warnings = await _collect_mapping_warnings(session, flat_nodes)
 
-    # 2. Conflict detection
+    # 2. Conflict detection — get active gen jobs for any node in the tree
     job_repo = JobRepository(session)
-    active_gen_jobs = await job_repo.get_active_generation_jobs(course_id)
+    all_tree_node_ids = [n.id for n in flat_nodes]
+    # Also include nodes outside target subtree for full-tree conflict check
+    from course_supporter.tree_utils import flatten_subtree
+
+    if target_node_id is not None and root_nodes:
+        all_tree_flat: list[MaterialNode] = []
+        for rn in root_nodes:
+            all_tree_flat.extend(flatten_subtree(rn))
+        all_tree_node_ids = [n.id for n in all_tree_flat]
+
+    active_gen_jobs = await job_repo.get_active_generation_jobs_in_tree(
+        all_tree_node_ids
+    )
     conflict = await detect_conflict(
         session,
-        course_id,
-        node_id,
+        root_node_id,
+        target_node_id,
         active_gen_jobs,
     )
     if conflict is not None:
@@ -230,7 +244,8 @@ async def trigger_generation(
             job = await enqueue_ingestion(
                 redis=redis,
                 session=session,
-                course_id=course_id,
+                tenant_id=tenant_id,
+                node_id=entry.node_id,
                 material_id=entry.id,
                 source_type=entry.source_type,
                 source_url=entry.source_url,
@@ -242,8 +257,9 @@ async def trigger_generation(
         gen_job = await enqueue_generation(
             redis=redis,
             session=session,
-            course_id=course_id,
-            node_id=node_id,
+            tenant_id=tenant_id,
+            root_node_id=root_node_id,
+            target_node_id=target_node_id,
             mode=mode,
             depends_on=depends_on_ids if depends_on_ids else None,
         )
@@ -262,6 +278,8 @@ async def trigger_generation(
 
     # 5. All READY → check idempotency via fingerprint
     fp_service = FingerprintService(session)
+    # Effective node for fingerprint: target node or root node
+    effective_node_id = target_node_id or root_node_id
     if target is not None:
         fingerprint = await fp_service.ensure_node_fp(target)
     else:
@@ -269,8 +287,7 @@ async def trigger_generation(
 
     snap_repo = SnapshotRepository(session)
     existing = await snap_repo.find_by_identity(
-        course_id=course_id,
-        node_id=node_id,
+        node_id=effective_node_id,
         node_fingerprint=fingerprint,
         mode=mode,
     )
@@ -289,8 +306,9 @@ async def trigger_generation(
     gen_job = await enqueue_generation(
         redis=redis,
         session=session,
-        course_id=course_id,
-        node_id=node_id,
+        tenant_id=tenant_id,
+        root_node_id=root_node_id,
+        target_node_id=target_node_id,
         mode=mode,
     )
     log.info(

@@ -16,7 +16,6 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.repositories import CourseRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -30,23 +29,15 @@ STUB_TENANT = TenantContext(
 ENQUEUE_FUNC = "course_supporter.api.routes.materials.enqueue_ingestion"
 
 
-def _mock_course(course_id: uuid.UUID) -> MagicMock:
-    """Create a mock Course that passes tenant isolation."""
-    course = MagicMock()
-    course.id = course_id
-    course.tenant_id = STUB_TENANT.tenant_id
-    return course
-
-
 def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
-    course_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
+    """Create a mock MaterialNode with tenant_id."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.course_id = course_id or uuid.uuid4()
+    node.tenant_id = tenant_id or STUB_TENANT.tenant_id
     return node
 
 
@@ -73,7 +64,7 @@ def _mock_entry(
     entry.state = state
     entry.error_message = error_message
     entry.pending_job_id = pending_job_id
-    entry.job_id = None  # Not an ORM field; prevent MagicMock auto-creation
+    entry.job_id = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
     return entry
@@ -108,11 +99,6 @@ def mock_s3() -> AsyncMock:
 
 
 @pytest.fixture()
-def course_id() -> uuid.UUID:
-    return uuid.uuid4()
-
-
-@pytest.fixture()
 def node_id() -> uuid.UUID:
     return uuid.uuid4()
 
@@ -134,28 +120,25 @@ async def client(
 
 
 class TestCreateMaterial:
-    """POST /api/v1/courses/{id}/nodes/{nid}/materials"""
+    """POST /api/v1/nodes/{nid}/materials"""
 
     async def test_returns_201_with_url(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Successful material creation with URL returns 201 with job_id."""
         entry = _mock_entry(node_id=node_id)
         job = _mock_job()
         with (
             patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
@@ -170,7 +153,6 @@ class TestCreateMaterial:
     async def test_returns_201_with_file_upload(
         self,
         client: AsyncClient,
-        course_id: uuid.UUID,
         node_id: uuid.UUID,
         mock_s3: AsyncMock,
     ) -> None:
@@ -184,18 +166,15 @@ class TestCreateMaterial:
         job = _mock_job()
         with (
             patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={"source_type": "presentation"},
                 files={
                     "file": (
@@ -209,11 +188,11 @@ class TestCreateMaterial:
         mock_s3.upload_smart.assert_awaited_once()
 
     async def test_invalid_source_type_returns_422(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Invalid source_type is rejected by validation."""
         resp = await client.post(
-            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={
                 "source_type": "invalid",
                 "source_url": "https://example.com/doc.md",
@@ -222,22 +201,22 @@ class TestCreateMaterial:
         assert resp.status_code == 422
 
     async def test_no_url_no_file_returns_422(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Neither URL nor file provided returns 422."""
         resp = await client.post(
-            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "text"},
         )
         assert resp.status_code == 422
         assert "Either source_url or file" in resp.json()["detail"]
 
     async def test_web_rejects_file_upload(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """source_type 'web' does not accept file uploads."""
         resp = await client.post(
-            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "web"},
             files={
                 "file": ("page.html", io.BytesIO(b"<html>"), "text/html"),
@@ -247,11 +226,11 @@ class TestCreateMaterial:
         assert "does not accept file uploads" in resp.json()["detail"]
 
     async def test_invalid_extension_returns_422(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """File with wrong extension for source_type returns 422."""
         resp = await client.post(
-            f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "video"},
             files={
                 "file": (
@@ -264,33 +243,13 @@ class TestCreateMaterial:
         assert resp.status_code == 422
         assert "'.pdf' is not allowed" in resp.json()["detail"]
 
-    async def test_course_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
-    ) -> None:
-        """Non-existent course returns 404."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-                data={
-                    "source_type": "text",
-                    "source_url": "https://example.com/doc.md",
-                },
-            )
-        assert resp.status_code == 404
-        assert resp.json()["detail"] == "Course not found"
-
     async def test_node_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Non-existent node returns 404."""
-        with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=None),
-        ):
+        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
             resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
@@ -299,23 +258,18 @@ class TestCreateMaterial:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Node not found"
 
-    async def test_node_wrong_course_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    async def test_node_wrong_tenant_returns_404(
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """Node belonging to another course returns 404."""
-        other_course = uuid.uuid4()
-        with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
-                MaterialNodeRepository,
-                "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=other_course),
-            ),
+        """Node belonging to another tenant returns 404."""
+        other_tenant = uuid.uuid4()
+        with patch.object(
+            MaterialNodeRepository,
+            "get_by_id",
+            return_value=_mock_node(node_id=node_id, tenant_id=other_tenant),
         ):
             resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={
                     "source_type": "text",
                     "source_url": "https://example.com/doc.md",
@@ -324,25 +278,22 @@ class TestCreateMaterial:
         assert resp.status_code == 404
 
     async def test_with_filename_override(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Creation with filename override includes it in response."""
         entry = _mock_entry(node_id=node_id, filename="notes.md")
         job = _mock_job()
         with (
             patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             resp = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={
                     "source_type": "text",
                     "source_url": "https://example.com/notes.md",
@@ -357,15 +308,10 @@ class TestCreateMaterialOpenAPISpec:
     """Regression: ensure create_material endpoint accepts multipart/form-data."""
 
     async def test_openapi_content_type_is_multipart(self, client: AsyncClient) -> None:
-        """File upload endpoint must declare multipart/form-data content type.
-
-        Regression test for Form() vs File() annotation bug: using Form()
-        for UploadFile causes FastAPI to generate x-www-form-urlencoded
-        instead of multipart/form-data, breaking real file uploads.
-        """
+        """File upload endpoint must declare multipart/form-data content type."""
         resp = await client.get("/openapi.json")
         schema = resp.json()
-        path = "/api/v1/courses/{course_id}/nodes/{node_id}/materials"
+        path = "/api/v1/nodes/{node_id}/materials"
         content_types = list(
             schema["paths"][path]["post"]["requestBody"]["content"].keys()
         )
@@ -373,11 +319,9 @@ class TestCreateMaterialOpenAPISpec:
 
 
 class TestListMaterials:
-    """GET /api/v1/courses/{id}/nodes/{nid}/materials"""
+    """GET /api/v1/nodes/{nid}/materials"""
 
-    async def test_returns_list(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
-    ) -> None:
+    async def test_returns_list(self, client: AsyncClient, node_id: uuid.UUID) -> None:
         """Returns list of materials for the node."""
         entries = [
             _mock_entry(node_id=node_id, order=0),
@@ -385,177 +329,133 @@ class TestListMaterials:
         ]
         with (
             patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "get_for_node", return_value=entries),
         ):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-            )
+            resp = await client.get(f"/api/v1/nodes/{node_id}/materials")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
         assert data[0]["order"] == 0
         assert data[1]["source_type"] == "video"
 
-    async def test_empty_list(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
-    ) -> None:
+    async def test_empty_list(self, client: AsyncClient, node_id: uuid.UUID) -> None:
         """Returns empty list when node has no materials."""
         with (
             patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "get_for_node", return_value=[]),
         ):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-            )
+            resp = await client.get(f"/api/v1/nodes/{node_id}/materials")
         assert resp.status_code == 200
         assert resp.json() == []
 
-    async def test_course_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    async def test_node_not_found_returns_404(
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """Non-existent course returns 404."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/materials",
-            )
+        """Non-existent node returns 404."""
+        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+            resp = await client.get(f"/api/v1/nodes/{node_id}/materials")
         assert resp.status_code == 404
 
 
 class TestGetMaterial:
-    """GET /api/v1/courses/{id}/materials/{mid}"""
+    """GET /api/v1/materials/{mid}"""
 
-    async def test_returns_entry(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
-    ) -> None:
+    async def test_returns_entry(self, client: AsyncClient, node_id: uuid.UUID) -> None:
         """Returns single material entry."""
         entry = _mock_entry(node_id=node_id, state="ready")
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
         ):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}",
-            )
+            resp = await client.get(f"/api/v1/materials/{entry.id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["id"] == str(entry.id)
         assert data["state"] == "ready"
 
-    async def test_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID
-    ) -> None:
+    async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent material returns 404."""
-        with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(MaterialEntryRepository, "get_by_id", return_value=None),
-        ):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/materials/{uuid.uuid4()}",
-            )
+        with patch.object(MaterialEntryRepository, "get_by_id", return_value=None):
+            resp = await client.get(f"/api/v1/materials/{uuid.uuid4()}")
         assert resp.status_code == 404
 
-    async def test_wrong_course_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+    async def test_wrong_tenant_returns_404(
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """Material belonging to another course returns 404."""
+        """Material belonging to another tenant returns 404."""
         entry = _mock_entry(node_id=node_id)
-        other_course = uuid.uuid4()
+        other_tenant = uuid.uuid4()
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=other_course),
+                return_value=_mock_node(node_id=node_id, tenant_id=other_tenant),
             ),
         ):
-            resp = await client.get(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}",
-            )
+            resp = await client.get(f"/api/v1/materials/{entry.id}")
         assert resp.status_code == 404
 
 
 class TestDeleteMaterial:
-    """DELETE /api/v1/courses/{id}/materials/{mid}"""
+    """DELETE /api/v1/materials/{mid}"""
 
-    async def test_returns_204(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
-    ) -> None:
+    async def test_returns_204(self, client: AsyncClient, node_id: uuid.UUID) -> None:
         """Successful deletion returns 204."""
         entry = _mock_entry(node_id=node_id)
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch.object(MaterialEntryRepository, "delete", return_value=None),
         ):
-            resp = await client.delete(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}",
-            )
+            resp = await client.delete(f"/api/v1/materials/{entry.id}")
         assert resp.status_code == 204
 
-    async def test_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID
-    ) -> None:
+    async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent material returns 404."""
-        with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(MaterialEntryRepository, "get_by_id", return_value=None),
-        ):
-            resp = await client.delete(
-                f"/api/v1/courses/{course_id}/materials/{uuid.uuid4()}",
-            )
+        with patch.object(MaterialEntryRepository, "get_by_id", return_value=None):
+            resp = await client.delete(f"/api/v1/materials/{uuid.uuid4()}")
         assert resp.status_code == 404
 
-    async def test_course_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID
+    async def test_wrong_tenant_returns_404(
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """Non-existent course returns 404."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            resp = await client.delete(
-                f"/api/v1/courses/{course_id}/materials/{uuid.uuid4()}",
-            )
+        """Material belonging to another tenant returns 404."""
+        entry = _mock_entry(node_id=node_id)
+        other_tenant = uuid.uuid4()
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id, tenant_id=other_tenant),
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/materials/{entry.id}")
         assert resp.status_code == 404
 
 
 class TestRetryMaterial:
-    """POST /api/v1/courses/{id}/materials/{mid}/retry"""
+    """POST /api/v1/materials/{mid}/retry"""
 
     async def test_returns_200_with_new_job(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Successful retry returns 200 with new job_id."""
         entry = _mock_entry(
@@ -565,78 +465,54 @@ class TestRetryMaterial:
         )
         job = _mock_job()
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}/retry",
-            )
+            resp = await client.post(f"/api/v1/materials/{entry.id}/retry")
         assert resp.status_code == 200
         data = resp.json()
         assert data["job_id"] == str(job.id)
 
     async def test_non_error_state_returns_409(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Retry on non-error material returns 409."""
         entry = _mock_entry(node_id=node_id, state="ready")
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
         ):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}/retry",
-            )
+            resp = await client.post(f"/api/v1/materials/{entry.id}/retry")
         assert resp.status_code == 409
         assert "ready" in resp.json()["detail"]
 
     async def test_pending_state_returns_409(
-        self, client: AsyncClient, course_id: uuid.UUID, node_id: uuid.UUID
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """Retry on pending material returns 409."""
         entry = _mock_entry(node_id=node_id, state="pending")
         with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
             patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                return_value=_mock_node(node_id=node_id, course_id=course_id),
+                return_value=_mock_node(node_id=node_id),
             ),
         ):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/materials/{entry.id}/retry",
-            )
+            resp = await client.post(f"/api/v1/materials/{entry.id}/retry")
         assert resp.status_code == 409
 
-    async def test_not_found_returns_404(
-        self, client: AsyncClient, course_id: uuid.UUID
-    ) -> None:
+    async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent material returns 404."""
-        with (
-            patch.object(
-                CourseRepository, "get_by_id", return_value=_mock_course(course_id)
-            ),
-            patch.object(MaterialEntryRepository, "get_by_id", return_value=None),
-        ):
-            resp = await client.post(
-                f"/api/v1/courses/{course_id}/materials/{uuid.uuid4()}/retry",
-            )
+        with patch.object(MaterialEntryRepository, "get_by_id", return_value=None):
+            resp = await client.post(f"/api/v1/materials/{uuid.uuid4()}/retry")
         assert resp.status_code == 404

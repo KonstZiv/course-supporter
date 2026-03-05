@@ -14,7 +14,6 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.repositories import CourseRepository
 
 
 def _make_tenant(scopes: list[str]) -> TenantContext:
@@ -29,16 +28,22 @@ def _make_tenant(scopes: list[str]) -> TenantContext:
     )
 
 
-def _make_course_mock() -> MagicMock:
-    """Create a mock Course ORM object."""
-    course = MagicMock()
-    course.id = uuid.uuid4()
-    course.title = "Test"
-    course.description = None
-    course.created_at = datetime.now(UTC)
-    course.updated_at = datetime.now(UTC)
-    course.course_fingerprint = None
-    return course
+def _make_node_mock(tenant_id: uuid.UUID | None = None) -> MagicMock:
+    """Create a mock MaterialNode ORM object."""
+    node = MagicMock()
+    node.id = uuid.uuid4()
+    node.tenant_id = tenant_id or uuid.uuid4()
+    node.parent_id = None
+    node.title = "Test"
+    node.description = None
+    node.learning_goal = None
+    node.expected_knowledge = None
+    node.expected_skills = None
+    node.order = 0
+    node.node_fingerprint = None
+    node.created_at = datetime.now(UTC)
+    node.updated_at = datetime.now(UTC)
+    return node
 
 
 @pytest.fixture()
@@ -53,7 +58,7 @@ class TestScopeEnforcement:
     async def test_prep_scope_allows_prep_endpoint(
         self, mock_session: AsyncMock
     ) -> None:
-        """Tenant with 'prep' scope can access POST /courses."""
+        """Tenant with 'prep' scope can access POST /nodes."""
         tenant = _make_tenant(scopes=["prep"])
         app.dependency_overrides[get_session] = lambda: mock_session
         app.dependency_overrides[get_current_tenant] = lambda: tenant
@@ -63,11 +68,13 @@ class TestScopeEnforcement:
                 base_url="http://test",
             ) as client:
                 with patch.object(
-                    CourseRepository, "create", return_value=_make_course_mock()
+                    MaterialNodeRepository,
+                    "create",
+                    return_value=_make_node_mock(tenant.tenant_id),
                 ):
                     response = await client.post(
-                        "/api/v1/courses",
-                        json={"title": "Test Course"},
+                        "/api/v1/nodes",
+                        json={"title": "Test Node"},
                     )
             assert response.status_code == 201
         finally:
@@ -77,7 +84,7 @@ class TestScopeEnforcement:
     async def test_check_scope_denied_prep_endpoint(
         self, mock_session: AsyncMock
     ) -> None:
-        """Tenant with only 'check' scope is denied POST /courses."""
+        """Tenant with only 'check' scope is denied POST /nodes."""
         tenant = _make_tenant(scopes=["check"])
         app.dependency_overrides[get_session] = lambda: mock_session
         app.dependency_overrides[get_current_tenant] = lambda: tenant
@@ -87,8 +94,8 @@ class TestScopeEnforcement:
                 base_url="http://test",
             ) as client:
                 response = await client.post(
-                    "/api/v1/courses",
-                    json={"title": "Test Course"},
+                    "/api/v1/nodes",
+                    json={"title": "Test Node"},
                 )
             assert response.status_code == 403
             assert "Requires scope: prep" in response.json()["detail"]
@@ -126,12 +133,9 @@ class TestScopeEnforcement:
 
     @pytest.mark.asyncio
     async def test_shared_endpoint_allows_prep(self, mock_session: AsyncMock) -> None:
-        """Tenant with 'prep' scope can access shared GET /courses/{id}."""
+        """Tenant with 'prep' scope can access shared GET /nodes/{id}."""
         tenant = _make_tenant(scopes=["prep"])
-        course = _make_course_mock()
-        course.modules = []
-        course.source_materials = []
-        course.learning_goal = None
+        node = _make_node_mock(tenant.tenant_id)
         app.dependency_overrides[get_session] = lambda: mock_session
         app.dependency_overrides[get_current_tenant] = lambda: tenant
         try:
@@ -139,25 +143,19 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with (
-                    patch.object(
-                        CourseRepository, "get_with_structure", return_value=course
-                    ),
-                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
+                with patch.object(
+                    MaterialNodeRepository, "get_by_id", return_value=node
                 ):
-                    response = await client.get(f"/api/v1/courses/{course.id}")
+                    response = await client.get(f"/api/v1/nodes/{node.id}")
             assert response.status_code == 200
         finally:
             app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
     async def test_shared_endpoint_allows_check(self, mock_session: AsyncMock) -> None:
-        """Tenant with 'check' scope can access shared GET /courses/{id}."""
+        """Tenant with 'check' scope can access shared GET /nodes/{id}."""
         tenant = _make_tenant(scopes=["check"])
-        course = _make_course_mock()
-        course.modules = []
-        course.source_materials = []
-        course.learning_goal = None
+        node = _make_node_mock(tenant.tenant_id)
         app.dependency_overrides[get_session] = lambda: mock_session
         app.dependency_overrides[get_current_tenant] = lambda: tenant
         try:
@@ -165,13 +163,10 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with (
-                    patch.object(
-                        CourseRepository, "get_with_structure", return_value=course
-                    ),
-                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
+                with patch.object(
+                    MaterialNodeRepository, "get_by_id", return_value=node
                 ):
-                    response = await client.get(f"/api/v1/courses/{course.id}")
+                    response = await client.get(f"/api/v1/nodes/{node.id}")
             assert response.status_code == 200
         finally:
             app.dependency_overrides.clear()
@@ -187,28 +182,24 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                # prep endpoint
+                # prep endpoint (POST /nodes)
                 with patch.object(
-                    CourseRepository, "create", return_value=_make_course_mock()
+                    MaterialNodeRepository,
+                    "create",
+                    return_value=_make_node_mock(tenant.tenant_id),
                 ):
                     resp_prep = await client.post(
-                        "/api/v1/courses",
+                        "/api/v1/nodes",
                         json={"title": "Test"},
                     )
                 assert resp_prep.status_code == 201
 
-                # shared endpoint
-                course = _make_course_mock()
-                course.modules = []
-                course.source_materials = []
-                course.learning_goal = None
-                with (
-                    patch.object(
-                        CourseRepository, "get_with_structure", return_value=course
-                    ),
-                    patch.object(MaterialNodeRepository, "get_tree", return_value=[]),
+                # shared endpoint (GET /nodes/{id})
+                node = _make_node_mock(tenant.tenant_id)
+                with patch.object(
+                    MaterialNodeRepository, "get_by_id", return_value=node
                 ):
-                    resp_shared = await client.get(f"/api/v1/courses/{course.id}")
+                    resp_shared = await client.get(f"/api/v1/nodes/{node.id}")
                 assert resp_shared.status_code == 200
         finally:
             app.dependency_overrides.clear()

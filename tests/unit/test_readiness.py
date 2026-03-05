@@ -5,8 +5,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from course_supporter.readiness import ReadinessService, StaleMaterial
 from course_supporter.storage.orm import MaterialEntry, MaterialNode, MaterialState
 
@@ -27,7 +25,7 @@ def _mock_entry(
 def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
-    course_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
     title: str = "Node",
     materials: list[MagicMock] | None = None,
@@ -35,7 +33,7 @@ def _mock_node(
     """Create a mock MaterialNode."""
     node = MagicMock(spec=MaterialNode)
     node.id = node_id or uuid.uuid4()
-    node.course_id = course_id or uuid.uuid4()
+    node.tenant_id = tenant_id or uuid.uuid4()
     node.parent_id = parent_id
     node.title = title
     node.materials = materials or []
@@ -46,9 +44,8 @@ def _make_session(
     root: MagicMock,
     all_nodes: list[MagicMock],
 ) -> AsyncMock:
-    """Create an AsyncSession that returns root on get() and all_nodes on execute()."""
+    """Create an AsyncSession that returns all_nodes on execute()."""
     session = AsyncMock()
-    session.get.return_value = root
 
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = all_nodes
@@ -64,9 +61,9 @@ class TestAllReady:
 
     async def test_single_node_all_ready(self) -> None:
         """Single node with all READY materials returns ready=True."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[_mock_entry(), _mock_entry()],
         )
@@ -80,14 +77,14 @@ class TestAllReady:
 
     async def test_nested_all_ready(self) -> None:
         """Nested tree with all READY materials returns ready=True."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[_mock_entry()],
         )
         child = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             parent_id=root.id,
             title="Child",
             materials=[_mock_entry()],
@@ -101,8 +98,8 @@ class TestAllReady:
 
     async def test_empty_tree_is_ready(self) -> None:
         """Node with no materials is considered ready."""
-        course_id = uuid.uuid4()
-        root = _mock_node(course_id=course_id, title="Empty", materials=[])
+        tid = uuid.uuid4()
+        root = _mock_node(tenant_id=tid, title="Empty", materials=[])
         session = _make_session(root, [root])
         svc = ReadinessService(session)
 
@@ -117,10 +114,10 @@ class TestStaleMaterials:
 
     async def test_raw_material_blocks(self) -> None:
         """RAW material makes subtree not ready."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="raw.mp4")
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[raw_entry],
         )
@@ -136,10 +133,10 @@ class TestStaleMaterials:
 
     async def test_integrity_broken_blocks(self) -> None:
         """INTEGRITY_BROKEN material makes subtree not ready."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         broken = _mock_entry(state=MaterialState.INTEGRITY_BROKEN, filename="old.pdf")
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[broken],
         )
@@ -153,15 +150,15 @@ class TestStaleMaterials:
 
     async def test_nested_stale_in_child(self) -> None:
         """Stale material in child node is detected."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[_mock_entry()],
         )
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="child.mp4")
         child = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             parent_id=root.id,
             title="Child",
             materials=[raw_entry],
@@ -177,17 +174,17 @@ class TestStaleMaterials:
 
     async def test_stale_in_grandchild(self) -> None:
         """Stale material in grandchild is detected via BFS."""
-        course_id = uuid.uuid4()
-        root = _mock_node(course_id=course_id, title="Root", materials=[])
+        tid = uuid.uuid4()
+        root = _mock_node(tenant_id=tid, title="Root", materials=[])
         child = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             parent_id=root.id,
             title="Child",
             materials=[],
         )
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="deep.pdf")
         grandchild = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             parent_id=child.id,
             title="Grandchild",
             materials=[raw_entry],
@@ -203,12 +200,12 @@ class TestStaleMaterials:
 
     async def test_multiple_stale_across_nodes(self) -> None:
         """Multiple stale materials across different nodes are all returned."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         raw1 = _mock_entry(state=MaterialState.RAW, filename="a.mp4")
         raw2 = _mock_entry(state=MaterialState.INTEGRITY_BROKEN, filename="b.pdf")
-        root = _mock_node(course_id=course_id, title="Root", materials=[raw1])
+        root = _mock_node(tenant_id=tid, title="Root", materials=[raw1])
         child = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             parent_id=root.id,
             title="Child",
             materials=[_mock_entry(), raw2],
@@ -227,9 +224,9 @@ class TestNonBlockingStates:
 
     async def test_pending_does_not_block(self) -> None:
         """PENDING material is not considered stale."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[_mock_entry(state=MaterialState.PENDING)],
         )
@@ -242,9 +239,9 @@ class TestNonBlockingStates:
 
     async def test_error_does_not_block(self) -> None:
         """ERROR material is not considered stale."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="Root",
             materials=[_mock_entry(state=MaterialState.ERROR)],
         )
@@ -259,14 +256,20 @@ class TestNonBlockingStates:
 class TestMissingNode:
     """Edge case: node not found."""
 
-    async def test_missing_node_raises(self) -> None:
-        """Non-existent node raises ValueError."""
+    async def test_missing_node_returns_ready(self) -> None:
+        """Non-existent node returns ready=True (empty subtree, no stale)."""
         session = AsyncMock()
-        session.get.return_value = None
-        svc = ReadinessService(session)
+        scalars_mock = MagicMock()
+        scalars_mock.all.return_value = []
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = scalars_mock
+        session.execute.return_value = exec_result
 
-        with pytest.raises(ValueError, match="not found"):
-            await svc.check_subtree(uuid.uuid4())
+        svc = ReadinessService(session)
+        result = await svc.check_subtree(uuid.uuid4())
+
+        assert result.ready is True
+        assert result.stale == []
 
 
 class TestStaleMaterialDataclass:
@@ -274,10 +277,10 @@ class TestStaleMaterialDataclass:
 
     async def test_stale_material_fields(self) -> None:
         """StaleMaterial captures entry_id, filename, state, node context."""
-        course_id = uuid.uuid4()
+        tid = uuid.uuid4()
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="test.mp4")
         root = _mock_node(
-            course_id=course_id,
+            tenant_id=tid,
             title="My Node",
             materials=[raw_entry],
         )
@@ -299,23 +302,20 @@ class TestSubtreeIsolation:
     """Only nodes in the subtree are checked, not siblings."""
 
     async def test_sibling_stale_not_included(self) -> None:
-        """Stale material in a sibling node is not reported."""
-        course_id = uuid.uuid4()
-        root = _mock_node(course_id=course_id, title="Root", materials=[])
+        """Stale material in a sibling node is not reported.
+
+        The recursive CTE would only load descendants of the target node,
+        so the sibling is excluded. In mocks, we simulate this by only
+        returning the target subtree from execute().
+        """
+        tid = uuid.uuid4()
         target = _mock_node(
-            course_id=course_id,
-            parent_id=root.id,
+            tenant_id=tid,
             title="Target",
             materials=[_mock_entry()],
         )
-        sibling = _mock_node(
-            course_id=course_id,
-            parent_id=root.id,
-            title="Sibling",
-            materials=[_mock_entry(state=MaterialState.RAW)],
-        )
-        # Check subtree of target only — sibling should be excluded
-        session = _make_session(target, [root, target, sibling])
+        # Mock returns only target (CTE only walks down from target)
+        session = _make_session(target, [target])
         svc = ReadinessService(session)
 
         result = await svc.check_subtree(target.id)

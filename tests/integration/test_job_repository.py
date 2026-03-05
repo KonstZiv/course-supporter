@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import Course, SourceMaterial, Tenant
+from course_supporter.storage.orm import MaterialEntry, MaterialNode, Tenant
 
 pytestmark = pytest.mark.requires_db
 
@@ -22,17 +22,21 @@ class TestJobCreate:
     """Job creation against real PostgreSQL."""
 
     async def test_create_generates_uuidv7(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """Job.id is a valid UUIDv7 (version 7)."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         assert job.id is not None
         assert job.id.version == 7
 
     async def test_create_stores_jsonb_input_params(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """input_params dict round-trips through JSONB correctly."""
         params = {
@@ -42,7 +46,8 @@ class TestJobCreate:
         }
         repo = JobRepository(db_session)
         job = await repo.create(
-            course_id=seed_course.id,
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
             job_type="ingest",
             input_params=params,
         )
@@ -52,11 +57,15 @@ class TestJobCreate:
         assert fetched.input_params == params
 
     async def test_create_server_default_queued_at(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """queued_at is set by server_default=func.now()."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         # Force reload from DB to see server_default
         await db_session.refresh(job, attribute_names=["queued_at"])
@@ -73,12 +82,16 @@ class TestJobLifecycleSuccess:
     async def test_full_success_lifecycle(
         self,
         db_session: AsyncSession,
-        seed_course: Course,
-        seed_material: SourceMaterial,
+        seed_root_node: MaterialNode,
+        seed_material_entry: MaterialEntry,
     ) -> None:
         """queued -> active -> complete with all timestamps and result."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
         assert job.status == "queued"
         assert job.started_at is None
         assert job.completed_at is None
@@ -94,11 +107,15 @@ class TestJobLifecycleSuccess:
         assert complete_job.completed_at is not None
 
     async def test_active_sets_started_at(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """Transition to active populates started_at timestamp."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         active_job = await repo.update_status(job.id, "active")
 
@@ -111,11 +128,15 @@ class TestJobLifecycleFailureRetry:
     """Failure + retry lifecycle."""
 
     async def test_full_failure_retry_lifecycle(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """queued -> active -> failed -> queued (retry)."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         # queued -> active
         await repo.update_status(job.id, "active")
@@ -137,11 +158,15 @@ class TestJobTransitionValidation:
     """Invalid transitions enforced by repository."""
 
     async def test_invalid_transition_raises(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """queued -> complete raises ValueError (must go through active)."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         with pytest.raises(ValueError, match="Invalid job status transition"):
             await repo.update_status(job.id, "complete")
@@ -154,11 +179,15 @@ class TestJobQueries:
         self,
         db_session: AsyncSession,
         seed_tenant: Tenant,
-        seed_course: Course,
+        seed_root_node: MaterialNode,
     ) -> None:
-        """Returns job when tenant matches via Course JOIN."""
+        """Returns job when tenant matches."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_tenant.id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         found = await repo.get_by_id_for_tenant(job.id, seed_tenant.id)
         assert found is not None
@@ -167,40 +196,22 @@ class TestJobQueries:
     async def test_get_by_id_for_tenant_wrong_tenant(
         self,
         db_session: AsyncSession,
-        seed_course: Course,
+        seed_root_node: MaterialNode,
     ) -> None:
         """Returns None when tenant_id does not match."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
 
         wrong_tenant_id = uuid.uuid4()
         found = await repo.get_by_id_for_tenant(job.id, wrong_tenant_id)
         assert found is None
 
-    async def test_get_active_for_course(
-        self, db_session: AsyncSession, seed_course: Course
-    ) -> None:
-        """Returns only queued/active jobs, ordered by queued_at."""
-        repo = JobRepository(db_session)
-
-        # Create jobs in different statuses
-        job_queued = await repo.create(course_id=seed_course.id, job_type="ingest")
-        job_active = await repo.create(course_id=seed_course.id, job_type="ingest")
-        await repo.update_status(job_active.id, "active")
-
-        job_complete = await repo.create(course_id=seed_course.id, job_type="ingest")
-        await repo.update_status(job_complete.id, "active")
-        await repo.update_status(job_complete.id, "complete")
-
-        active_jobs = await repo.get_active_for_course(seed_course.id)
-        active_ids = [j.id for j in active_jobs]
-
-        assert job_queued.id in active_ids
-        assert job_active.id in active_ids
-        assert job_complete.id not in active_ids
-
     async def test_count_pending(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """count_pending returns accurate count with mixed statuses."""
         repo = JobRepository(db_session)
@@ -210,21 +221,33 @@ class TestJobQueries:
 
         # Add 3 queued
         for _ in range(3):
-            await repo.create(course_id=seed_course.id, job_type="ingest")
+            await repo.create(
+                tenant_id=seed_root_node.tenant_id,
+                node_id=seed_root_node.id,
+                job_type="ingest",
+            )
 
         # Add 1 active (not counted)
-        job_active = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job_active = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
         await repo.update_status(job_active.id, "active")
 
         count = await repo.count_pending()
         assert count == initial_count + 3
 
     async def test_set_arq_job_id_persists(
-        self, db_session: AsyncSession, seed_course: Course
+        self, db_session: AsyncSession, seed_root_node: MaterialNode
     ) -> None:
         """set_arq_job_id updates and the value is readable after flush."""
         repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            node_id=seed_root_node.id,
+            job_type="ingest",
+        )
         assert job.arq_job_id is None
 
         await repo.set_arq_job_id(job.id, "arq:test:abc123")
@@ -232,43 +255,3 @@ class TestJobQueries:
         fetched = await repo.get_by_id(job.id)
         assert fetched is not None
         assert fetched.arq_job_id == "arq:test:abc123"
-
-
-class TestGetForCourse:
-    """get_for_course filtering and ordering."""
-
-    async def test_get_for_course_filters(
-        self, db_session: AsyncSession, seed_course: Course
-    ) -> None:
-        """Filters by status and job_type, ordered by queued_at desc."""
-        repo = JobRepository(db_session)
-
-        # Create jobs of different types
-        j1 = await repo.create(course_id=seed_course.id, job_type="ingest")
-        j2 = await repo.create(course_id=seed_course.id, job_type="structure")
-        j3 = await repo.create(course_id=seed_course.id, job_type="ingest")
-        await repo.update_status(j3.id, "active")
-
-        # Filter by job_type=ingest
-        ingest_jobs = await repo.get_for_course(seed_course.id, job_type="ingest")
-        ingest_ids = [j.id for j in ingest_jobs]
-        assert j1.id in ingest_ids
-        assert j3.id in ingest_ids
-        assert j2.id not in ingest_ids
-
-        # Filter by status=queued
-        queued_jobs = await repo.get_for_course(seed_course.id, status="queued")
-        queued_ids = [j.id for j in queued_jobs]
-        assert j1.id in queued_ids
-        assert j2.id in queued_ids
-        assert j3.id not in queued_ids  # active now
-
-        # Ordering: desc by queued_at — verify all 3 present
-        all_jobs = await repo.get_for_course(seed_course.id)
-        all_ids = [j.id for j in all_jobs]
-        assert j1.id in all_ids
-        assert j2.id in all_ids
-        assert j3.id in all_ids
-        # Timestamps should be non-increasing (desc order)
-        timestamps = [j.queued_at for j in all_jobs]
-        assert timestamps == sorted(timestamps, reverse=True)

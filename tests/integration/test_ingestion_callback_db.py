@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.ingestion_callback import IngestionCallback
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.repositories import SourceMaterialRepository
+from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 
 pytestmark = pytest.mark.requires_db
 
@@ -26,11 +26,11 @@ class TestOnSuccessDB:
         session_factory: async_sessionmaker[AsyncSession],
         committed_job_and_material: dict[str, Any],
     ) -> None:
-        """Both Job and SourceMaterial updated atomically.
+        """Both Job and MaterialEntry updated atomically.
 
-        Pre-conditions: Job=active, Material=processing.
+        Pre-conditions: Job=active, MaterialEntry=pending.
         After on_success:
-          - Material.status == 'done', content_snapshot set
+          - MaterialEntry.state == 'done', processed_content set
           - Job.status == 'complete'
         """
         jid = committed_job_and_material["job_id"]
@@ -43,7 +43,7 @@ class TestOnSuccessDB:
         # Verify in a fresh session
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = SourceMaterialRepository(session)
+            mat_repo = MaterialEntryRepository(session)
 
             job = await job_repo.get_by_id(jid)
             material = await mat_repo.get_by_id(mid)
@@ -52,9 +52,8 @@ class TestOnSuccessDB:
         assert job.status == "complete"
         assert job.completed_at is not None
         assert material is not None
-        assert material.status == "done"
-        assert material.content_snapshot == content
-        assert material.processed_at is not None
+        assert material.state == "done"
+        assert material.processed_content == content
 
 
 class TestOnFailureDB:
@@ -78,7 +77,7 @@ class TestOnFailureDB:
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = SourceMaterialRepository(session)
+            mat_repo = MaterialEntryRepository(session)
 
             job = await job_repo.get_by_id(jid)
             material = await mat_repo.get_by_id(mid)
@@ -89,7 +88,7 @@ class TestOnFailureDB:
         assert job.completed_at is not None
 
         assert material is not None
-        assert material.status == "error"
+        assert material.state == "error"
         assert material.error_message == error_msg
 
     async def test_failure_independent_of_rollback(

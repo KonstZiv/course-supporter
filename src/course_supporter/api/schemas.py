@@ -13,55 +13,6 @@ from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.source import SourceType
 from course_supporter.storage.orm import GenerationMode, MappingValidationState
 
-# --- Course ---
-
-
-class CourseCreateRequest(BaseModel):
-    """Request body for POST /courses."""
-
-    title: str = Field(..., min_length=1, max_length=500)
-    description: str | None = None
-
-
-class CourseResponse(BaseModel):
-    """Response for course creation and listing."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    description: str | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class CourseListResponse(BaseModel):
-    """Paginated response for ``GET /courses``.
-
-    Contains a list of courses and pagination metadata.
-    Use ``limit`` and ``offset`` query parameters to page
-    through results.
-
-    Example::
-
-        {
-            "items": [{"id": "...", "title": "Python 101", ...}],
-            "total": 42,
-            "limit": 20,
-            "offset": 0
-        }
-    """
-
-    items: list[CourseResponse] = Field(
-        description="List of courses for the current page."
-    )
-    total: int = Field(
-        description="Total number of courses matching the query (across all pages)."
-    )
-    limit: int = Field(description="Maximum items per page (as requested).")
-    offset: int = Field(description="Number of items skipped (as requested).")
-
-
 # --- Slide-Video Mapping ---
 
 
@@ -103,7 +54,7 @@ class ValidationErrorResponse(BaseModel):
 
 
 class SlideVideoMapRequest(BaseModel):
-    """Request body for POST /courses/{id}/nodes/{node_id}/slide-mapping."""
+    """Request body for POST /nodes/{node_id}/slide-mapping."""
 
     mappings: list[SlideVideoMapEntry] = Field(..., min_length=1)
 
@@ -176,30 +127,12 @@ class SlideVideoMapItemResponse(BaseModel):
 
 
 class SlideVideoMapListResponse(BaseModel):
-    """List of slide-video mappings for a material tree node.
-
-    Each mapping links a specific slide (by number) in a presentation
-    to a timecode range in a video. Returned sorted by ``order``
-    (ascending, 0-based). An empty ``items`` list (with ``total: 0``)
-    is returned when the node has no mappings — this is not an error.
-
-    .. note::
-
-        Currently returns **all** mappings for the node (no pagination).
-        ``limit`` / ``offset`` query parameters and a separate ``count``
-        query will be added when pagination is needed.
-    """
+    """List of slide-video mappings for a material tree node."""
 
     items: list[SlideVideoMapItemResponse] = Field(
         description="Mappings ordered by ``order`` (0-based)."
     )
-    total: int = Field(
-        description=(
-            "Total number of mappings for this node. Currently equals "
-            "``len(items)``; will reflect the full count once pagination "
-            "is introduced."
-        ),
-    )
+    total: int = Field(description="Total number of mappings for this node.")
 
 
 class RejectedMappingResponse(BaseModel):
@@ -228,249 +161,14 @@ class SlideVideoMapResponse(BaseModel):
     hints: dict[str, str]
 
 
-# --- Course Detail (nested) ---
-
-
-class ExerciseResponse(BaseModel):
-    """Exercise within a lesson."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    description: str
-    reference_solution: str | None
-    grading_criteria: str | None
-    difficulty_level: int | None
-
-
-class ConceptResponse(BaseModel):
-    """Concept card within a lesson."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    definition: str
-    examples: list[str] | None
-    timecodes: list[str] | None
-    slide_references: list[int] | None
-    web_references: list[dict[str, str]] | None
-
-
-class LessonResponse(BaseModel):
-    """Lesson within a module."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    order: int
-    video_start_timecode: str | None
-    video_end_timecode: str | None
-    slide_range: dict[str, int] | None
-    concepts: list[ConceptResponse]
-    exercises: list[ExerciseResponse]
-
-
-class ModuleResponse(BaseModel):
-    """Module within a course."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    description: str | None
-    learning_goal: str | None
-    difficulty: str | None
-    order: int
-    lessons: list[LessonResponse]
-
-
-class SourceMaterialResponse(BaseModel):
-    """Source material attached to a course."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    source_type: str
-    source_url: str
-    filename: str | None
-    status: str
-    created_at: datetime
-
-
-class MaterialEntrySummaryResponse(BaseModel):
-    """Compact material entry within the course detail tree.
-
-    A lighter version of ``MaterialEntryResponse`` omitting
-    ``pending_job_id`` and ``updated_at`` to keep the tree
-    payload concise. Includes the derived ``state`` field.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    source_type: str = Field(
-        description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
-    )
-    source_url: str = Field(description="URL or S3 path to the raw material.")
-    filename: str | None = Field(description="Original filename, if available.")
-    order: int = Field(description="0-based position among sibling materials.")
-    state: str = Field(
-        description=(
-            "Derived lifecycle state: "
-            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
-        ),
-    )
-    error_message: str | None = Field(
-        description="Error from the last failed processing attempt, if any."
-    )
-    created_at: datetime = Field(description="When this entry was created.")
-
-
-class NodeWithMaterialsResponse(BaseModel):
-    """Recursive tree node with attached materials.
-
-    Used in ``CourseDetailResponse.material_tree`` to provide
-    the full hierarchical view including materials at each level.
-
-    Example (abbreviated)::
-
-        {
-            "title": "Module 1",
-            "materials": [{"source_type": "video", "state": "ready", ...}],
-            "children": [
-                {"title": "Lesson 1.1", "materials": [...], "children": []}
-            ]
-        }
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
-    title: str = Field(description="Node title.")
-    description: str | None = Field(description="Optional node description.")
-    learning_goal: str | None = Field(
-        default=None, description="Learning goal for this node."
-    )
-    expected_knowledge: list[str] | None = Field(
-        default=None, description="Expected knowledge items."
-    )
-    expected_skills: list[str] | None = Field(
-        default=None, description="Expected skills items."
-    )
-    order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
-        description="Merkle hash of this node's content. ``null`` if not computed."
-    )
-    materials: list[MaterialEntrySummaryResponse] = Field(
-        default_factory=list,
-        description="Materials attached directly to this node.",
-    )
-    children: list[NodeWithMaterialsResponse] = Field(
-        default_factory=list,
-        description="Child nodes, recursively nested.",
-    )
-    created_at: datetime = Field(description="When this node was created.")
-    updated_at: datetime = Field(description="When this node was last modified.")
-
-
-class CourseDetailResponse(BaseModel):
-    """Full course detail with nested structure.
-
-    Includes the legacy ``source_materials`` flat list (for backward
-    compatibility) and the new ``material_tree`` with recursive nodes,
-    attached materials, and derived states.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    description: str | None
-    learning_goal: str | None
-    created_at: datetime
-    updated_at: datetime
-    modules: list[ModuleResponse]
-    source_materials: list[SourceMaterialResponse]
-    course_fingerprint: str | None = Field(
-        default=None,
-        description=(
-            "Merkle hash of the entire material tree. "
-            "``null`` if any node fingerprint is missing."
-        ),
-    )
-    material_tree: list[NodeWithMaterialsResponse] = Field(
-        default_factory=list,
-        description=(
-            "Hierarchical material tree with nested children and "
-            "attached materials. Empty list if no tree has been built."
-        ),
-    )
-
-
-class LessonDetailResponse(BaseModel):
-    """Lesson detail with concepts and exercises."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    order: int
-    video_start_timecode: str | None
-    video_end_timecode: str | None
-    slide_range: dict[str, int] | None
-    concepts: list[ConceptResponse]
-    exercises: list[ExerciseResponse]
-
-
-# --- Materials ---
-
-
-class MaterialCreateResponse(BaseModel):
-    """Response for material creation."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    source_type: str
-    source_url: str
-    filename: str | None
-    status: str
-    created_at: datetime
-    job_id: uuid.UUID | None = None
-
-
-# --- Jobs ---
-
-
-class JobResponse(BaseModel):
-    """Response for GET /jobs/{job_id}."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    job_type: str
-    priority: str
-    status: str
-    course_id: uuid.UUID | None
-    node_id: uuid.UUID | None
-    arq_job_id: str | None
-    error_message: str | None
-    queued_at: datetime
-    started_at: datetime | None
-    completed_at: datetime | None
-    estimated_at: datetime | None
-
-
 # --- Material Tree Nodes ---
 
 
 class NodeCreateRequest(BaseModel):
     """Request body for creating a material tree node.
 
-    Used by both root node creation (``POST /courses/{id}/nodes``)
-    and child node creation (``POST /courses/{id}/nodes/{node_id}/children``).
+    Used by both root node creation (``POST /nodes``)
+    and child node creation (``POST /nodes/{node_id}/children``).
 
     Example::
 
@@ -575,7 +273,7 @@ class NodeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
-    course_id: uuid.UUID = Field(description="Course this node belongs to.")
+    tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
     parent_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
@@ -601,30 +299,14 @@ class NodeResponse(BaseModel):
 class NodeTreeResponse(BaseModel):
     """Recursive tree node with nested children.
 
-    Returned by ``GET /courses/{id}/nodes/tree``. Each node
+    Returned by ``GET /nodes/{node_id}/tree``. Each node
     contains its children, forming a full tree structure.
-
-    Example response::
-
-        [
-            {
-                "id": "...",
-                "title": "Module 1",
-                "children": [
-                    {
-                        "id": "...",
-                        "title": "Lesson 1.1",
-                        "children": []
-                    }
-                ]
-            }
-        ]
     """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
-    course_id: uuid.UUID = Field(description="Course this node belongs to.")
+    tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
     parent_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
@@ -651,24 +333,89 @@ class NodeTreeResponse(BaseModel):
     updated_at: datetime = Field(description="When this node was last modified.")
 
 
+class NodeListResponse(BaseModel):
+    """Paginated list of root nodes (courses).
+
+    Root nodes (parent_id IS NULL) serve as top-level entities.
+    """
+
+    items: list[NodeResponse] = Field(description="Root nodes for the current page.")
+    total: int = Field(description="Total number of root nodes (across all pages).")
+    limit: int = Field(description="Maximum items per page (as requested).")
+    offset: int = Field(description="Number of items skipped (as requested).")
+
+
 # --- Material Entries ---
 
 
-class MaterialEntryCreateRequest(BaseModel):
-    """Request body for adding a material to a tree node.
+class MaterialEntrySummaryResponse(BaseModel):
+    """Compact material entry within the tree detail.
 
-    Creates a ``MaterialEntry`` under the specified node and
-    auto-enqueues ingestion. The response includes the ``job_id``
-    for tracking progress via ``GET /jobs/{job_id}``.
-
-    Example::
-
-        {
-            "source_type": "presentation",
-            "source_url": "https://example.com/slides.pdf",
-            "filename": "slides.pdf"
-        }
+    A lighter version of ``MaterialEntryResponse`` omitting
+    ``pending_job_id`` and ``updated_at`` to keep the tree
+    payload concise. Includes the derived ``state`` field.
     """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
+    source_type: str = Field(
+        description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    source_url: str = Field(description="URL or S3 path to the raw material.")
+    filename: str | None = Field(description="Original filename, if available.")
+    order: int = Field(description="0-based position among sibling materials.")
+    state: str = Field(
+        description=(
+            "Derived lifecycle state: "
+            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
+        ),
+    )
+    error_message: str | None = Field(
+        description="Error from the last failed processing attempt, if any."
+    )
+    created_at: datetime = Field(description="When this entry was created.")
+
+
+class NodeWithMaterialsResponse(BaseModel):
+    """Recursive tree node with attached materials.
+
+    Used in tree detail to provide the full hierarchical view
+    including materials at each level.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
+    title: str = Field(description="Node title.")
+    description: str | None = Field(description="Optional node description.")
+    learning_goal: str | None = Field(
+        default=None, description="Learning goal for this node."
+    )
+    expected_knowledge: list[str] | None = Field(
+        default=None, description="Expected knowledge items."
+    )
+    expected_skills: list[str] | None = Field(
+        default=None, description="Expected skills items."
+    )
+    order: int = Field(description="0-based position among siblings.")
+    node_fingerprint: str | None = Field(
+        description="Merkle hash of this node's content. ``null`` if not computed."
+    )
+    materials: list[MaterialEntrySummaryResponse] = Field(
+        default_factory=list,
+        description="Materials attached directly to this node.",
+    )
+    children: list[NodeWithMaterialsResponse] = Field(
+        default_factory=list,
+        description="Child nodes, recursively nested.",
+    )
+    created_at: datetime = Field(description="When this node was created.")
+    updated_at: datetime = Field(description="When this node was last modified.")
+
+
+class MaterialEntryCreateRequest(BaseModel):
+    """Request body for adding a material to a tree node."""
 
     source_type: SourceType = Field(
         ...,
@@ -681,36 +428,19 @@ class MaterialEntryCreateRequest(BaseModel):
     source_url: str = Field(
         ...,
         max_length=2000,
-        description=(
-            "URL or S3 path to the raw material. "
-            "For file uploads, this is populated by the upload endpoint."
-        ),
+        description="URL or S3 path to the raw material.",
         examples=["https://example.com/slides.pdf", "s3://bucket/key"],
     )
     filename: str | None = Field(
         default=None,
         max_length=500,
-        description=(
-            "Original filename for display purposes. Optional for URL-based materials."
-        ),
+        description="Original filename for display purposes.",
         examples=["slides.pdf", "lecture-01.mp4"],
     )
 
 
 class MaterialEntryResponse(BaseModel):
-    """Response schema for a single material entry.
-
-    The ``state`` field is a derived property computed from the entry's
-    internal fields (see ``MaterialState`` enum for possible values):
-
-    - ``raw`` — uploaded but not yet processed
-    - ``pending`` — ingestion job is in progress
-    - ``ready`` — processed successfully, hashes match
-    - ``integrity_broken`` — raw source changed after processing
-    - ``error`` — last processing attempt failed
-
-    Returned by list and detail operations.
-    """
+    """Response schema for a single material entry."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -742,8 +472,7 @@ class MaterialEntryCreateResponse(BaseModel):
     """Response for material entry creation.
 
     Extends the base response with ``job_id`` — the ID of the
-    ingestion job that was auto-enqueued. Use
-    ``GET /api/v1/jobs/{job_id}`` to track processing status.
+    ingestion job that was auto-enqueued.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -770,23 +499,37 @@ class MaterialEntryCreateResponse(BaseModel):
     created_at: datetime = Field(description="When this entry was created.")
 
 
+# --- Jobs ---
+
+
+class JobResponse(BaseModel):
+    """Response for GET /jobs/{job_id}."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    job_type: str
+    priority: str
+    status: str
+    tenant_id: uuid.UUID | None
+    node_id: uuid.UUID | None
+    arq_job_id: str | None
+    error_message: str | None
+    queued_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    estimated_at: datetime | None
+
+
 # --- Structure Generation ---
 
 
 class GenerateRequest(BaseModel):
-    """Request body for POST /courses/{id}/generate.
+    """Request body for POST /nodes/{node_id}/generate.
 
-    Triggers structure generation for the entire course (default)
-    or a specific subtree when ``node_id`` is provided.
+    The target node is specified in the URL path.
     """
 
-    node_id: uuid.UUID | None = Field(
-        default=None,
-        description=(
-            "Target node UUID for subtree generation. "
-            "``null`` or omitted for course-level generation."
-        ),
-    )
     mode: GenerationMode = Field(
         default=GenerationMode.FREE,
         description=(
@@ -797,10 +540,7 @@ class GenerateRequest(BaseModel):
 
 
 class MappingWarningResponse(BaseModel):
-    """Warning about a slide-video mapping with problematic validation state.
-
-    Non-blocking: does not prevent generation, only informs the user.
-    """
+    """Warning about a slide-video mapping with problematic validation state."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -813,11 +553,7 @@ class MappingWarningResponse(BaseModel):
 
 
 class GenerationPlanResponse(BaseModel):
-    """Response for POST /courses/{id}/generate.
-
-    Describes the enqueued work: generation job, prerequisite
-    ingestion jobs, or an existing snapshot for idempotent requests.
-    """
+    """Response for POST /nodes/{node_id}/generate."""
 
     generation_job: JobResponse | None = Field(
         default=None,
@@ -861,19 +597,12 @@ class ServiceCallSummary(BaseModel):
 
 
 class SnapshotSummaryResponse(BaseModel):
-    """Snapshot metadata without the full structure payload.
-
-    Used in list endpoints to keep response size small.
-    LLM metadata is available via the nested ``service_call`` field.
-    """
+    """Snapshot metadata without the full structure payload."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
-    course_id: uuid.UUID = Field(description="Course this snapshot belongs to.")
-    node_id: uuid.UUID | None = Field(
-        description="Target node UUID, or ``null`` for course-level snapshots."
-    )
+    node_id: uuid.UUID = Field(description="Target node for this snapshot.")
     mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
     node_fingerprint: str = Field(
         description="Merkle fingerprint of the target subtree at generation time."
@@ -889,11 +618,7 @@ class SnapshotSummaryResponse(BaseModel):
 
 
 class SnapshotDetailResponse(SnapshotSummaryResponse):
-    """Full snapshot including the generated structure.
-
-    Extends ``SnapshotSummaryResponse`` with the ``structure`` field
-    containing the complete ``CourseStructure`` as JSON.
-    """
+    """Full snapshot including the generated structure."""
 
     structure: dict[str, Any] = Field(
         description="Generated course structure (CourseStructure JSON)."
@@ -906,6 +631,6 @@ class SnapshotListResponse(BaseModel):
     items: list[SnapshotSummaryResponse] = Field(
         description="Snapshot summaries for the current page."
     )
-    total: int = Field(description="Total number of snapshots for this course.")
+    total: int = Field(description="Total number of snapshots for this node.")
     limit: int = Field(description="Maximum items per page (as requested).")
     offset: int = Field(description="Number of items skipped (as requested).")

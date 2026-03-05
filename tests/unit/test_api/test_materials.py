@@ -1,4 +1,8 @@
-"""Tests for POST /courses/{id}/materials endpoint."""
+"""Tests for material upload validation edge cases.
+
+Covers file extension validation per source_type that is NOT duplicated
+in ``test_material_entries.py`` (which tests CRUD + tenant isolation).
+"""
 
 import io
 import uuid
@@ -12,10 +16,8 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
-from course_supporter.storage.repositories import (
-    CourseRepository,
-    SourceMaterialRepository,
-)
+from course_supporter.storage.material_entry_repository import MaterialEntryRepository
+from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -26,32 +28,56 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-ENQUEUE_FUNC = "course_supporter.api.routes.courses.enqueue_ingestion"
+ENQUEUE_FUNC = "course_supporter.api.routes.materials.enqueue_ingestion"
 
 
-def _make_material_mock(
+def _mock_node(
     *,
-    source_type: str = "web",
-    source_url: str = "https://example.com/article",
-    filename: str | None = None,
-    status: str = "pending",
+    node_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """Create a mock SourceMaterial ORM object."""
-    m = MagicMock()
-    m.id = uuid.uuid4()
-    m.source_type = source_type
-    m.source_url = source_url
-    m.filename = filename
-    m.status = status
-    m.created_at = datetime.now(UTC)
-    return m
+    """Create a mock node that passes tenant isolation."""
+    node = MagicMock()
+    node.id = node_id or uuid.uuid4()
+    node.tenant_id = tenant_id or STUB_TENANT.tenant_id
+    return node
 
 
-def _make_job_mock() -> MagicMock:
-    """Create a mock Job ORM object."""
-    j = MagicMock()
-    j.id = uuid.uuid4()
-    return j
+def _mock_entry(
+    *,
+    node_id: uuid.UUID | None = None,
+    source_type: str = "text",
+    source_url: str = "https://example.com/doc.md",
+    filename: str | None = None,
+    state: str = "raw",
+) -> MagicMock:
+    """Create a mock MaterialEntry."""
+    entry = MagicMock()
+    entry.id = uuid.uuid4()
+    entry.node_id = node_id or uuid.uuid4()
+    entry.source_type = source_type
+    entry.source_url = source_url
+    entry.filename = filename
+    entry.order = 0
+    entry.state = state
+    entry.error_message = None
+    entry.pending_job_id = None
+    entry.job_id = None
+    entry.created_at = datetime.now(UTC)
+    entry.updated_at = datetime.now(UTC)
+    return entry
+
+
+def _mock_job() -> MagicMock:
+    """Create a mock Job returned by enqueue_ingestion."""
+    job = MagicMock()
+    job.id = uuid.uuid4()
+    return job
+
+
+@pytest.fixture()
+def node_id() -> uuid.UUID:
+    return uuid.uuid4()
 
 
 @pytest.fixture()
@@ -94,136 +120,15 @@ async def client(
     app.dependency_overrides.clear()
 
 
-class TestCreateMaterialAPI:
-    async def test_create_material_with_url_returns_201(
-        self, client: AsyncClient
+class TestMaterialUploadValidation:
+    """File extension validation edge cases for POST /nodes/{nid}/materials."""
+
+    async def test_video_rejects_pdf_file(
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials with source_url returns 201."""
-        course_id = uuid.uuid4()
-        material = _make_material_mock()
-        job = _make_job_mock()
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=MagicMock()),
-            patch.object(SourceMaterialRepository, "create", return_value=material),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
-        ):
-            response = await client.post(
-                f"/api/v1/courses/{course_id}/materials",
-                data={
-                    "source_type": "web",
-                    "source_url": "https://example.com/article",
-                },
-            )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["id"] == str(material.id)
-        assert data["status"] == "pending"
-        assert data["job_id"] == str(job.id)
-
-    async def test_create_material_with_file_returns_201(
-        self, client: AsyncClient, mock_s3: AsyncMock
-    ) -> None:
-        """POST /materials with file upload returns 201."""
-        course_id = uuid.uuid4()
-        material = _make_material_mock(
-            source_type="presentation",
-            source_url="http://localhost:9000/key/file.pdf",
-            filename="slides.pdf",
-        )
-        job = _make_job_mock()
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=MagicMock()),
-            patch.object(SourceMaterialRepository, "create", return_value=material),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
-        ):
-            response = await client.post(
-                f"/api/v1/courses/{course_id}/materials",
-                data={"source_type": "presentation"},
-                files={
-                    "file": (
-                        "slides.pdf",
-                        io.BytesIO(b"PDF content"),
-                        "application/pdf",
-                    )
-                },
-            )
-        assert response.status_code == 201
-        mock_s3.upload_smart.assert_awaited_once()
-        assert response.json()["job_id"] == str(job.id)
-
-    async def test_create_material_course_not_found(self, client: AsyncClient) -> None:
-        """POST /materials returns 404 for missing course."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            response = await client.post(
-                f"/api/v1/courses/{uuid.uuid4()}/materials",
-                data={
-                    "source_type": "web",
-                    "source_url": "https://example.com",
-                },
-            )
-        assert response.status_code == 404
-
-    async def test_create_material_invalid_source_type(
-        self, client: AsyncClient
-    ) -> None:
-        """POST /materials rejects invalid source_type."""
-        response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
-            data={
-                "source_type": "invalid",
-                "source_url": "https://example.com",
-            },
-        )
-        assert response.status_code == 422
-
-    async def test_create_material_no_url_no_file(self, client: AsyncClient) -> None:
-        """POST /materials rejects when neither URL nor file provided."""
-        response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
-            data={"source_type": "web"},
-        )
-        assert response.status_code == 422
-
-    async def test_create_material_returns_pending_status(
-        self, client: AsyncClient
-    ) -> None:
-        """Created material starts with 'pending' status."""
-        material = _make_material_mock(status="pending")
-        job = _make_job_mock()
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=MagicMock()),
-            patch.object(
-                SourceMaterialRepository,
-                "create",
-                return_value=material,
-            ),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
-        ):
-            response = await client.post(
-                f"/api/v1/courses/{uuid.uuid4()}/materials",
-                data={
-                    "source_type": "web",
-                    "source_url": "https://example.com",
-                },
-            )
-        assert response.json()["status"] == "pending"
-
-    async def test_web_source_type_rejects_file(self, client: AsyncClient) -> None:
-        """POST /materials rejects file upload for source_type 'web'."""
-        response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
-            data={"source_type": "web"},
-            files={
-                "file": ("page.html", io.BytesIO(b"<html>"), "text/html"),
-            },
-        )
-        assert response.status_code == 422
-        assert "does not accept file uploads" in response.json()["detail"]
-
-    async def test_video_rejects_pdf_file(self, client: AsyncClient) -> None:
         """POST /materials rejects .pdf file for source_type 'video'."""
         response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "video"},
             files={
                 "file": (
@@ -238,12 +143,11 @@ class TestCreateMaterialAPI:
         assert "'.mp4'" in response.json()["detail"]
 
     async def test_presentation_rejects_mp4_file(
-        self,
-        client: AsyncClient,
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """POST /materials rejects .mp4 file for source_type 'presentation'."""
         response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "presentation"},
             files={
                 "file": (
@@ -256,29 +160,28 @@ class TestCreateMaterialAPI:
         assert response.status_code == 422
         assert "'.mp4' is not allowed" in response.json()["detail"]
 
-    async def test_text_accepts_docx(self, client: AsyncClient) -> None:
+    async def test_text_accepts_docx(
+        self, client: AsyncClient, node_id: uuid.UUID, mock_s3: AsyncMock
+    ) -> None:
         """POST /materials accepts .docx for source_type 'text'."""
-        material = _make_material_mock(
+        entry = _mock_entry(
+            node_id=node_id,
             source_type="text",
             source_url="http://localhost:9000/key/notes.docx",
             filename="notes.docx",
         )
-        job = _make_job_mock()
+        job = _mock_job()
         with (
             patch.object(
-                CourseRepository,
+                MaterialNodeRepository,
                 "get_by_id",
-                return_value=MagicMock(),
+                return_value=_mock_node(node_id=node_id),
             ),
-            patch.object(
-                SourceMaterialRepository,
-                "create",
-                return_value=material,
-            ),
+            patch.object(MaterialEntryRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
-                f"/api/v1/courses/{uuid.uuid4()}/materials",
+                f"/api/v1/nodes/{node_id}/materials",
                 data={"source_type": "text"},
                 files={
                     "file": (
@@ -291,12 +194,11 @@ class TestCreateMaterialAPI:
         assert response.status_code == 201
 
     async def test_file_without_extension_rejected(
-        self,
-        client: AsyncClient,
+        self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
         """POST /materials rejects file without extension."""
         response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/materials",
+            f"/api/v1/nodes/{node_id}/materials",
             data={"source_type": "video"},
             files={
                 "file": (
@@ -307,3 +209,28 @@ class TestCreateMaterialAPI:
             },
         )
         assert response.status_code == 422
+
+    async def test_create_material_returns_state(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Created material includes state in response."""
+        entry = _mock_entry(node_id=node_id, state="raw")
+        job = _mock_job()
+        with (
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(MaterialEntryRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            response = await client.post(
+                f"/api/v1/nodes/{node_id}/materials",
+                data={
+                    "source_type": "web",
+                    "source_url": "https://example.com",
+                },
+            )
+        assert response.status_code == 201
+        assert response.json()["state"] == "raw"

@@ -2,11 +2,11 @@
 
 Checks whether a new generation request overlaps with any active
 (queued/running) generation job. Two scopes overlap when one is an
-ancestor of the other (or they target the same node/course).
+ancestor of the other (or they target the same node).
 
 Overlap table (from AR-6):
     Active scope  |  New request  |  Result
-    Course (all)  |  Node A       |  409 — Node A nested in course
+    Root (all)    |  Node A       |  409 — Node A nested in root
     Node A        |  Node A1      |  409 — A1 nested in A
     Node A        |  Node B       |  202 — independent subtrees
     Node A1       |  Node A2      |  202 — siblings
@@ -35,26 +35,26 @@ class ConflictInfo:
 
 async def detect_conflict(
     session: AsyncSession,
-    course_id: uuid.UUID,
+    root_node_id: uuid.UUID,
     target_node_id: uuid.UUID | None,
     active_jobs: list[Job],
 ) -> ConflictInfo | None:
     """Check if *target_node_id* overlaps with any active generation job.
 
-    Loads all nodes for the course in a single query, builds an
+    Loads all nodes under *root_node_id* via recursive CTE, builds an
     in-memory parent map, then checks ancestor relationships without
     additional DB round-trips.
 
     Args:
-        session: DB session for loading course nodes.
-        course_id: Course being generated.
-        target_node_id: Target node (None = course-level).
-        active_jobs: Active generation jobs for the same course.
+        session: DB session for loading tree nodes.
+        root_node_id: Root of the material tree (parent_id IS NULL).
+        target_node_id: Target node (None = whole tree from root).
+        active_jobs: Active generation jobs for the same tree.
 
     Returns:
         ``ConflictInfo`` for the first conflicting job, or ``None``.
     """
-    parent_map = await _load_parent_map(session, course_id)
+    parent_map = await _load_parent_map(session, root_node_id)
     target_ancestors = _ancestor_set(parent_map, target_node_id)
 
     for job in active_jobs:
@@ -82,14 +82,19 @@ async def detect_conflict(
 
 async def _load_parent_map(
     session: AsyncSession,
-    course_id: uuid.UUID,
+    root_node_id: uuid.UUID,
 ) -> dict[uuid.UUID, uuid.UUID | None]:
-    """Load all nodes for a course and return {node_id: parent_id} map.
+    """Load all nodes under root_node_id via recursive CTE.
 
-    Single query — O(N) where N is number of nodes in the course.
+    Returns {node_id: parent_id} map.
     """
+    base = select(MaterialNode.id).where(MaterialNode.id == root_node_id)
+    cte = base.cte(name="subtree", recursive=True)
+    recursive = select(MaterialNode.id).join(cte, MaterialNode.parent_id == cte.c.id)
+    cte = cte.union_all(recursive)
+
     stmt = select(MaterialNode.id, MaterialNode.parent_id).where(
-        MaterialNode.course_id == course_id,
+        MaterialNode.id.in_(select(cte.c.id)),
     )
     result = await session.execute(stmt)
     return {row.id: row.parent_id for row in result.all()}
@@ -154,10 +159,10 @@ def _overlap_reason(
 ) -> str:
     """Human-readable conflict reason for fast-path overlaps."""
     if target_node_id is None and job_node_id is None:
-        return "both target the entire course"
+        return "both target the entire tree"
     if target_node_id == job_node_id:
         return "both target the same node"
     if job_node_id is None:
-        return "active job covers entire course"
+        return "active job covers entire tree"
     # target_node_id is None
-    return "new request covers entire course"
+    return "new request covers entire tree"

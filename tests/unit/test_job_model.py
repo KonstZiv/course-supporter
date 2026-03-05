@@ -14,7 +14,7 @@ class TestJobModel:
         columns = {c.name for c in Job.__table__.columns}
         expected = {
             "id",
-            "course_id",
+            "tenant_id",
             "node_id",
             "job_type",
             "priority",
@@ -30,18 +30,22 @@ class TestJobModel:
         }
         assert expected.issubset(columns)
 
-    def test_course_fk(self) -> None:
+    def test_node_fk(self) -> None:
         fks = {fk.target_fullname for fk in Job.__table__.foreign_keys}
-        assert "courses.id" in fks
+        assert "material_nodes.id" in fks
+
+    def test_tenant_fk(self) -> None:
+        fks = {fk.target_fullname for fk in Job.__table__.foreign_keys}
+        assert "tenants.id" in fks
 
     def test_indexes(self) -> None:
         indexed_cols = set()
         for idx in Job.__table__.indexes:
             for col in idx.columns:
                 indexed_cols.add(col.name)
-        assert "course_id" in indexed_cols
         assert "node_id" in indexed_cols
         assert "status" in indexed_cols
+        assert "tenant_id" in indexed_cols
 
     def test_default_status(self) -> None:
         col = Job.__table__.columns["status"]

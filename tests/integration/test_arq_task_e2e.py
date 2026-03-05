@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.models.source import SourceType
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.repositories import SourceMaterialRepository
+from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 
 pytestmark = pytest.mark.requires_db
 
@@ -76,12 +76,13 @@ class TestArqIngestMaterialE2E:
         4. Assert DB: Job=complete, Material=done, content_snapshot set.
         """
         mid = committed_seeds["material_id"]
-        cid = committed_seeds["course_id"]
+        tid = committed_seeds["tenant_id"]
+        nid = committed_seeds["node_id"]
 
         # Create job in DB
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(course_id=cid, job_type="ingest")
+            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
             await session.commit()
             job_id = job.id
 
@@ -109,7 +110,7 @@ class TestArqIngestMaterialE2E:
         # Verify final DB state
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = SourceMaterialRepository(session)
+            mat_repo = MaterialEntryRepository(session)
 
             final_job = await job_repo.get_by_id(job_id)
             final_mat = await mat_repo.get_by_id(mid)
@@ -118,8 +119,8 @@ class TestArqIngestMaterialE2E:
         assert final_job.status == "complete"
         assert final_job.completed_at is not None
         assert final_mat is not None
-        assert final_mat.status == "done"
-        assert final_mat.content_snapshot == content
+        assert final_mat.state == "done"
+        assert final_mat.processed_content is not None
 
     async def test_failure_full_lifecycle(
         self,
@@ -134,11 +135,12 @@ class TestArqIngestMaterialE2E:
         4. Assert DB: Job=failed, Material=error, error_message set.
         """
         mid = committed_seeds["material_id"]
-        cid = committed_seeds["course_id"]
+        tid = committed_seeds["tenant_id"]
+        nid = committed_seeds["node_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(course_id=cid, job_type="ingest")
+            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
             await session.commit()
             job_id = job.id
 
@@ -166,7 +168,7 @@ class TestArqIngestMaterialE2E:
         # Verify final DB state
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = SourceMaterialRepository(session)
+            mat_repo = MaterialEntryRepository(session)
 
             final_job = await job_repo.get_by_id(job_id)
             final_mat = await mat_repo.get_by_id(mid)
@@ -177,7 +179,7 @@ class TestArqIngestMaterialE2E:
         assert final_job.completed_at is not None
 
         assert final_mat is not None
-        assert final_mat.status == "error"
+        assert final_mat.state == "error"
         assert error_msg in (final_mat.error_message or "")
 
     async def test_unknown_source_type_fails(
@@ -191,11 +193,12 @@ class TestArqIngestMaterialE2E:
         triggering the on_failure callback.
         """
         mid = committed_seeds["material_id"]
-        cid = committed_seeds["course_id"]
+        tid = committed_seeds["tenant_id"]
+        nid = committed_seeds["node_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(course_id=cid, job_type="ingest")
+            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
             await session.commit()
             job_id = job.id
 

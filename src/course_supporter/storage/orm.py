@@ -6,7 +6,6 @@ from enum import StrEnum
 from typing import Any
 
 import uuid_utils as uuid7_lib
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DateTime,
     Enum,
@@ -18,7 +17,6 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -81,50 +79,16 @@ class APIKey(Base):
 
 
 # ──────────────────────────────────────────────
-# Course & Source Materials
+# Material Tree
 # ──────────────────────────────────────────────
-
-
-class Course(Base):
-    __tablename__ = "courses"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
-    title: Mapped[str] = mapped_column(String(500))
-    description: Mapped[str | None] = mapped_column(Text)
-    learning_goal: Mapped[str | None] = mapped_column(Text)
-    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
-    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    # Relationships
-    tenant: Mapped["Tenant"] = relationship()
-    source_materials: Mapped[list["SourceMaterial"]] = relationship(
-        back_populates="course", cascade="all, delete-orphan"
-    )
-    modules: Mapped[list["Module"]] = relationship(
-        back_populates="course", cascade="all, delete-orphan"
-    )
-    material_nodes: Mapped[list["MaterialNode"]] = relationship(
-        back_populates="course", cascade="all, delete-orphan"
-    )
-    snapshots: Mapped[list["StructureSnapshot"]] = relationship(
-        back_populates="course", cascade="all, delete-orphan"
-    )
 
 
 class MaterialNode(Base):
     """Node in the material tree (recursive adjacency list).
 
-    Represents a folder-like grouping within a course. Materials
-    (MaterialEntry, added in S2-014) attach to nodes at any depth.
+    Root nodes (parent_id IS NULL) serve as "courses" — top-level
+    entities owned by a tenant. Child nodes form an arbitrary-depth
+    hierarchy for organising materials.
     """
 
     __tablename__ = "material_nodes"
@@ -132,9 +96,6 @@ class MaterialNode(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("courses.id", ondelete="CASCADE"), index=True
     )
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
@@ -155,7 +116,6 @@ class MaterialNode(Base):
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
-    course: Mapped["Course"] = relationship(back_populates="material_nodes")
     parent: Mapped["MaterialNode | None"] = relationship(
         back_populates="children",
         remote_side="MaterialNode.id",
@@ -169,6 +129,10 @@ class MaterialNode(Base):
         cascade="all, delete-orphan",
     )
     slide_video_mappings: Mapped[list["SlideVideoMapping"]] = relationship(
+        back_populates="node",
+        cascade="all, delete-orphan",
+    )
+    snapshots: Mapped[list["StructureSnapshot"]] = relationship(
         back_populates="node",
         cascade="all, delete-orphan",
     )
@@ -268,46 +232,6 @@ class MaterialEntry(Base):
     pending_job: Mapped["Job | None"] = relationship(back_populates="material_entries")
 
 
-class SourceMaterial(Base):
-    __tablename__ = "source_materials"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("courses.id", ondelete="CASCADE")
-    )
-    source_type: Mapped[str] = mapped_column(
-        Enum(
-            "video",
-            "presentation",
-            "text",
-            "web",
-            name="source_type_enum",
-        )
-    )
-    source_url: Mapped[str] = mapped_column(String(2000))
-    filename: Mapped[str | None] = mapped_column(String(500))
-    status: Mapped[str] = mapped_column(
-        Enum(
-            "pending",
-            "processing",
-            "done",
-            "error",
-            name="processing_status_enum",
-        ),
-        default="pending",
-    )
-    content_snapshot: Mapped[str | None] = mapped_column(Text)
-    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    error_message: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    # Relationships
-    course: Mapped["Course"] = relationship(back_populates="source_materials")
-
-
 class MappingValidationState(StrEnum):
     """Validation state for slide-video mappings."""
 
@@ -369,12 +293,12 @@ class SlideVideoMapping(Base):
 
 
 # ──────────────────────────────────────────────
-# Course Structure Snapshots
+# Structure Snapshots
 # ──────────────────────────────────────────────
 
 
 NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
-"""Sentinel UUID used in COALESCE expressions for nullable node_id."""
+"""Sentinel UUID used in COALESCE expressions for nullable columns."""
 
 
 class GenerationMode(StrEnum):
@@ -387,22 +311,22 @@ class GenerationMode(StrEnum):
 class StructureSnapshot(Base):
     """Immutable snapshot of a generated course structure.
 
-    Tied to a specific (course, node, fingerprint, mode) combination
+    Tied to a specific (node, fingerprint, mode) combination
     for idempotency: re-generating with the same inputs returns the
     existing snapshot instead of calling the LLM again.
 
     LLM metadata (model_id, tokens, cost) is stored in the linked
     ExternalServiceCall record — no duplication in the snapshot.
 
-    When ``node_id`` is NULL the snapshot covers the entire course.
+    ``node_id`` references the root MaterialNode (= course) for
+    course-level snapshots, or a child node for subtree snapshots.
     """
 
     __tablename__ = "structure_snapshots"
     __table_args__ = (
         Index(
             "uq_snapshots_identity",
-            "course_id",
-            text(f"COALESCE(node_id, '{NIL_UUID}'::uuid)"),
+            "node_id",
             "node_fingerprint",
             "mode",
             unique=True,
@@ -410,10 +334,7 @@ class StructureSnapshot(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("courses.id", ondelete="CASCADE"), index=True
-    )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(
+    node_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
     )
     externalservicecall_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -428,110 +349,8 @@ class StructureSnapshot(Base):
     )
 
     # Relationships
-    course: Mapped["Course"] = relationship(back_populates="snapshots")
-    node: Mapped["MaterialNode | None"] = relationship()
+    node: Mapped["MaterialNode"] = relationship(back_populates="snapshots")
     service_call: Mapped["ExternalServiceCall | None"] = relationship()
-
-
-# ──────────────────────────────────────────────
-# Course Structure
-# ──────────────────────────────────────────────
-
-
-class Module(Base):
-    __tablename__ = "modules"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    course_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("courses.id", ondelete="CASCADE")
-    )
-    title: Mapped[str] = mapped_column(String(500))
-    description: Mapped[str | None] = mapped_column(Text)
-    learning_goal: Mapped[str | None] = mapped_column(Text)
-    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
-    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
-    difficulty: Mapped[str | None] = mapped_column(String(20))
-    order: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    # Relationships
-    course: Mapped["Course"] = relationship(back_populates="modules")
-    lessons: Mapped[list["Lesson"]] = relationship(
-        back_populates="module", cascade="all, delete-orphan"
-    )
-
-
-class Lesson(Base):
-    __tablename__ = "lessons"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    module_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("modules.id", ondelete="CASCADE")
-    )
-    title: Mapped[str] = mapped_column(String(500))
-    order: Mapped[int] = mapped_column(Integer)
-    video_start_timecode: Mapped[str | None] = mapped_column(String(20))
-    video_end_timecode: Mapped[str | None] = mapped_column(String(20))
-    slide_range: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    # Relationships
-    module: Mapped["Module"] = relationship(back_populates="lessons")
-    concepts: Mapped[list["Concept"]] = relationship(
-        back_populates="lesson", cascade="all, delete-orphan"
-    )
-    exercises: Mapped[list["Exercise"]] = relationship(
-        back_populates="lesson", cascade="all, delete-orphan"
-    )
-
-
-class Concept(Base):
-    __tablename__ = "concepts"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    lesson_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("lessons.id", ondelete="CASCADE")
-    )
-    title: Mapped[str] = mapped_column(String(500))
-    definition: Mapped[str] = mapped_column(Text)
-    examples: Mapped[list[Any] | None] = mapped_column(JSONB)
-    timecodes: Mapped[list[Any] | None] = mapped_column(JSONB)
-    slide_references: Mapped[list[Any] | None] = mapped_column(JSONB)
-    web_references: Mapped[list[Any] | None] = mapped_column(JSONB)
-    # WARNING: Vector dimension is tied to a specific embedding model.
-    # 1536 = OpenAI text-embedding-3-small. Changing the model later
-    # requires an ALTER COLUMN migration. Consider making this configurable
-    # or choosing a model before committing to a dimension.
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    # Relationships
-    lesson: Mapped["Lesson"] = relationship(back_populates="concepts")
-
-
-class Exercise(Base):
-    __tablename__ = "exercises"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    lesson_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("lessons.id", ondelete="CASCADE")
-    )
-    description: Mapped[str] = mapped_column(Text)
-    reference_solution: Mapped[str | None] = mapped_column(Text)
-    grading_criteria: Mapped[str | None] = mapped_column(Text)
-    difficulty_level: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    # Relationships
-    lesson: Mapped["Lesson"] = relationship(back_populates="exercises")
 
 
 # ──────────────────────────────────────────────
@@ -542,10 +361,12 @@ class Exercise(Base):
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    course_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("courses.id", ondelete="SET NULL"), index=True
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
-    node_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="SET NULL"), index=True
+    )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
@@ -561,7 +382,7 @@ class Job(Base):
     estimated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    course: Mapped["Course | None"] = relationship()
+    tenant: Mapped["Tenant | None"] = relationship()
     material_entries: Mapped[list["MaterialEntry"]] = relationship(
         back_populates="pending_job"
     )

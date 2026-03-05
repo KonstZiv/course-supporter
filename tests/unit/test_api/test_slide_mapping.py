@@ -19,10 +19,7 @@ from course_supporter.storage.mapping_validation import (
 )
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import MappingValidationState
-from course_supporter.storage.repositories import (
-    CourseRepository,
-    SlideVideoMappingRepository,
-)
+from course_supporter.storage.repositories import SlideVideoMappingRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -57,6 +54,17 @@ def _make_svm_mock(
     svm.validated_at = None
     svm.created_at = datetime.now(UTC)
     return svm
+
+
+def _mock_node(
+    node_id: uuid.UUID,
+    tenant_id: uuid.UUID = STUB_TENANT.tenant_id,
+) -> MagicMock:
+    """Create a mock MaterialNode with tenant_id for tenant isolation."""
+    node = MagicMock()
+    node.id = node_id
+    node.tenant_id = tenant_id
+    return node
 
 
 @pytest.fixture()
@@ -121,21 +129,16 @@ def _failed_result(index: int) -> MappingValidationResult:
 
 
 def _route_patches(
-    course_id: uuid.UUID,
     node_id: uuid.UUID,
     validation_results: list[MappingValidationResult],
     batch_create_records: list[MagicMock],
     existing_mappings: list[MagicMock] | None = None,
 ):
     """Context manager with all common patches for the slide-mapping route."""
-    mock_course = MagicMock()
-    mock_course.id = course_id
-    mock_node = MagicMock()
-    mock_node.course_id = course_id
+    node = _mock_node(node_id)
 
     return (
-        patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-        patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+        patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
         patch.object(
             MappingValidationService,
             "validate_batch",
@@ -157,22 +160,20 @@ def _route_patches(
 class TestSlideVideoMappingAPI:
     @pytest.mark.asyncio
     async def test_full_success_returns_201(self, client: AsyncClient) -> None:
-        """All mappings valid → 201, failed=0, skipped=0."""
-        course_id = uuid.uuid4()
+        """All mappings valid -> 201, failed=0, skipped=0."""
         node_id = uuid.uuid4()
         records = [
             _make_svm_mock(slide_number=1, node_id=node_id),
             _make_svm_mock(slide_number=2, node_id=node_id),
         ]
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0), _validated_result(1)],
             records,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
             )
         assert response.status_code == 201
@@ -187,19 +188,17 @@ class TestSlideVideoMappingAPI:
 
     @pytest.mark.asyncio
     async def test_partial_success_returns_207(self, client: AsyncClient) -> None:
-        """Some created, some rejected → 207."""
-        course_id = uuid.uuid4()
+        """Some created, some rejected -> 207."""
         node_id = uuid.uuid4()
         records = [_make_svm_mock(slide_number=1, node_id=node_id)]
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0), _failed_result(1)],
             records,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
             )
         assert response.status_code == 207
@@ -211,18 +210,16 @@ class TestSlideVideoMappingAPI:
 
     @pytest.mark.asyncio
     async def test_all_failed_returns_422(self, client: AsyncClient) -> None:
-        """All invalid → 422."""
-        course_id = uuid.uuid4()
+        """All invalid -> 422."""
         node_id = uuid.uuid4()
         patches = _route_patches(
-            course_id,
             node_id,
             [_failed_result(0), _failed_result(1)],
-            [],  # no records created
+            [],
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
             )
         assert response.status_code == 422
@@ -232,8 +229,7 @@ class TestSlideVideoMappingAPI:
 
     @pytest.mark.asyncio
     async def test_duplicate_skipped_returns_201(self, client: AsyncClient) -> None:
-        """Duplicate submit → skipped=N, 201."""
-        course_id = uuid.uuid4()
+        """Duplicate submit -> skipped=N, 201."""
         node_id = uuid.uuid4()
         pres_id = uuid.uuid4()
         vid_id = uuid.uuid4()
@@ -242,15 +238,14 @@ class TestSlideVideoMappingAPI:
         existing.video_timecode_start = "00:05:30"
 
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0)],
-            [],  # nothing created
+            [],
             existing_mappings=[existing],
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={
                     "mappings": [_make_mapping_payload(pres_id=pres_id, vid_id=vid_id)]
                 },
@@ -264,8 +259,7 @@ class TestSlideVideoMappingAPI:
 
     @pytest.mark.asyncio
     async def test_mixed_duplicate_and_new(self, client: AsyncClient) -> None:
-        """Mix of new and duplicate → correct counts."""
-        course_id = uuid.uuid4()
+        """Mix of new and duplicate -> correct counts."""
         node_id = uuid.uuid4()
         pres_id = uuid.uuid4()
         vid_id = uuid.uuid4()
@@ -275,15 +269,14 @@ class TestSlideVideoMappingAPI:
 
         new_record = _make_svm_mock(slide_number=4, node_id=node_id)
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0), _validated_result(1)],
             [new_record],
             existing_mappings=[existing],
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={
                     "mappings": [
                         _make_mapping_payload(pres_id=pres_id, vid_id=vid_id),
@@ -299,8 +292,7 @@ class TestSlideVideoMappingAPI:
 
     @pytest.mark.asyncio
     async def test_partial_with_skipped_and_rejected(self, client: AsyncClient) -> None:
-        """Created + skipped + rejected → 207."""
-        course_id = uuid.uuid4()
+        """Created + skipped + rejected -> 207."""
         node_id = uuid.uuid4()
         pres_id = uuid.uuid4()
         vid_id = uuid.uuid4()
@@ -310,15 +302,14 @@ class TestSlideVideoMappingAPI:
 
         new_record = _make_svm_mock(slide_number=4, node_id=node_id)
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0), _validated_result(1), _failed_result(2)],
             [new_record],
             existing_mappings=[existing],
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={
                     "mappings": [
                         _make_mapping_payload(pres_id=pres_id, vid_id=vid_id),
@@ -338,18 +329,16 @@ class TestSlideVideoMappingAPI:
         self, client: AsyncClient
     ) -> None:
         """Hints present when rejected > 0."""
-        course_id = uuid.uuid4()
         node_id = uuid.uuid4()
         records = [_make_svm_mock(node_id=node_id)]
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0), _failed_result(1)],
             records,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload(), _make_mapping_payload()]},
             )
         data = response.json()
@@ -359,68 +348,45 @@ class TestSlideVideoMappingAPI:
     @pytest.mark.asyncio
     async def test_response_no_hints_on_full_success(self, client: AsyncClient) -> None:
         """Hints empty when full success."""
-        course_id = uuid.uuid4()
         node_id = uuid.uuid4()
         records = [_make_svm_mock(node_id=node_id)]
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0)],
             records,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload()]},
             )
         data = response.json()
         assert data["hints"] == {}
 
     @pytest.mark.asyncio
-    async def test_create_slide_mapping_course_not_found(
-        self, client: AsyncClient
-    ) -> None:
-        """POST slide-mapping returns 404 for missing course."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            response = await client.post(
-                f"/api/v1/courses/{uuid.uuid4()}/nodes/{uuid.uuid4()}/slide-mapping",
-                json={"mappings": [_make_mapping_payload()]},
-            )
-        assert response.status_code == 404
-
-    @pytest.mark.asyncio
     async def test_create_slide_mapping_node_not_found(
         self, client: AsyncClient
     ) -> None:
         """POST slide-mapping returns 404 for missing node."""
-        mock_course = MagicMock()
-        mock_course.id = uuid.uuid4()
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=None),
-        ):
+        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
             response = await client.post(
-                f"/api/v1/courses/{mock_course.id}/nodes/{uuid.uuid4()}/slide-mapping",
+                f"/api/v1/nodes/{uuid.uuid4()}/slide-mapping",
                 json={"mappings": [_make_mapping_payload()]},
             )
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_create_slide_mapping_node_wrong_course(
+    async def test_create_slide_mapping_node_wrong_tenant(
         self, client: AsyncClient
     ) -> None:
-        """POST slide-mapping returns 404 when node belongs to another course."""
-        course_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        mock_node = MagicMock()
-        mock_node.course_id = uuid.uuid4()  # different course
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+        """POST slide-mapping returns 404 when node belongs to another tenant."""
+        node_id = uuid.uuid4()
+        wrong_tenant_node = _mock_node(node_id, tenant_id=uuid.uuid4())
+        with patch.object(
+            MaterialNodeRepository, "get_by_id", return_value=wrong_tenant_node
         ):
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{uuid.uuid4()}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload()]},
             )
         assert response.status_code == 404
@@ -431,7 +397,7 @@ class TestSlideVideoMappingAPI:
     ) -> None:
         """POST slide-mapping rejects empty mappings list."""
         response = await client.post(
-            f"/api/v1/courses/{uuid.uuid4()}/nodes/{uuid.uuid4()}/slide-mapping",
+            f"/api/v1/nodes/{uuid.uuid4()}/slide-mapping",
             json={"mappings": []},
         )
         assert response.status_code == 422
@@ -441,19 +407,17 @@ class TestSlideVideoMappingAPI:
         self, client: AsyncClient
     ) -> None:
         """Response mappings include validation_state field."""
-        course_id = uuid.uuid4()
         node_id = uuid.uuid4()
         record = _make_svm_mock(node_id=node_id)
         record.validation_state = "validated"
         patches = _route_patches(
-            course_id,
             node_id,
             [_validated_result(0)],
             [record],
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3]:
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={"mappings": [_make_mapping_payload()]},
             )
         mapping = response.json()["mappings"][0]
@@ -463,31 +427,24 @@ class TestSlideVideoMappingAPI:
 
 
 class TestListSlideMapping:
-    """Tests for GET /courses/{id}/nodes/{node_id}/slide-mapping."""
+    """Tests for GET /nodes/{node_id}/slide-mapping."""
 
     @pytest.mark.asyncio
     async def test_list_returns_200_with_mappings(self, client: AsyncClient) -> None:
-        """Happy path — returns mappings list."""
-        course_id = uuid.uuid4()
+        """Happy path -- returns mappings list."""
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        mock_node = MagicMock()
-        mock_node.course_id = course_id
+        node = _mock_node(node_id)
         records = [
             _make_svm_mock(slide_number=1, node_id=node_id),
             _make_svm_mock(slide_number=2, node_id=node_id),
         ]
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 SlideVideoMappingRepository, "get_by_node_id", return_value=records
             ),
         ):
-            response = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
-            )
+            response = await client.get(f"/api/v1/nodes/{node_id}/slide-mapping")
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
@@ -495,139 +452,114 @@ class TestListSlideMapping:
 
     @pytest.mark.asyncio
     async def test_list_returns_empty_list(self, client: AsyncClient) -> None:
-        """Node with no mappings → 200, items=[], total=0."""
-        course_id = uuid.uuid4()
+        """Node with no mappings -> 200, items=[], total=0."""
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        mock_node = MagicMock()
-        mock_node.course_id = course_id
+        node = _mock_node(node_id)
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 SlideVideoMappingRepository, "get_by_node_id", return_value=[]
             ),
         ):
-            response = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
-            )
+            response = await client.get(f"/api/v1/nodes/{node_id}/slide-mapping")
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
         assert data["items"] == []
 
     @pytest.mark.asyncio
-    async def test_list_course_not_found_returns_404(self, client: AsyncClient) -> None:
-        """GET slide-mapping returns 404 for missing course."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            response = await client.get(
-                f"/api/v1/courses/{uuid.uuid4()}/nodes/{uuid.uuid4()}/slide-mapping",
-            )
-        assert response.status_code == 404
-        assert response.json()["detail"] == "Course not found"
-
-    @pytest.mark.asyncio
     async def test_list_node_not_found_returns_404(self, client: AsyncClient) -> None:
         """GET slide-mapping returns 404 for missing node."""
-        course_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=None),
+        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+            response = await client.get(f"/api/v1/nodes/{uuid.uuid4()}/slide-mapping")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Node not found"
+
+    @pytest.mark.asyncio
+    async def test_list_node_wrong_tenant_returns_404(
+        self, client: AsyncClient
+    ) -> None:
+        """GET slide-mapping returns 404 when node belongs to another tenant."""
+        node_id = uuid.uuid4()
+        wrong_tenant_node = _mock_node(node_id, tenant_id=uuid.uuid4())
+        with patch.object(
+            MaterialNodeRepository, "get_by_id", return_value=wrong_tenant_node
         ):
-            response = await client.get(
-                f"/api/v1/courses/{course_id}/nodes/{uuid.uuid4()}/slide-mapping",
-            )
+            response = await client.get(f"/api/v1/nodes/{node_id}/slide-mapping")
         assert response.status_code == 404
         assert response.json()["detail"] == "Node not found"
 
 
 class TestDeleteSlideMapping:
-    """Tests for DELETE /courses/{id}/slide-mapping/{mapping_id}."""
+    """Tests for DELETE /slide-mapping/{mapping_id}."""
 
     @pytest.mark.asyncio
     async def test_delete_returns_204(self, client: AsyncClient) -> None:
-        """Happy path — mapping deleted."""
-        course_id = uuid.uuid4()
+        """Happy path -- mapping deleted."""
         mapping_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
         mock_mapping = MagicMock()
         mock_mapping.node_id = node_id
-        mock_node = MagicMock()
-        mock_node.course_id = course_id
+        node = _mock_node(node_id)
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(
                 SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
             ),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
             patch.object(SlideVideoMappingRepository, "delete", return_value=None),
         ):
-            response = await client.delete(
-                f"/api/v1/courses/{course_id}/slide-mapping/{mapping_id}",
-            )
+            response = await client.delete(f"/api/v1/slide-mapping/{mapping_id}")
         assert response.status_code == 204
-
-    @pytest.mark.asyncio
-    async def test_delete_course_not_found_returns_404(
-        self, client: AsyncClient
-    ) -> None:
-        """DELETE returns 404 for missing course."""
-        with patch.object(CourseRepository, "get_by_id", return_value=None):
-            response = await client.delete(
-                f"/api/v1/courses/{uuid.uuid4()}/slide-mapping/{uuid.uuid4()}",
-            )
-        assert response.status_code == 404
-        assert response.json()["detail"] == "Course not found"
 
     @pytest.mark.asyncio
     async def test_delete_mapping_not_found_returns_404(
         self, client: AsyncClient
     ) -> None:
         """DELETE returns 404 for missing mapping."""
-        course_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
-        with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
-            patch.object(SlideVideoMappingRepository, "get_by_id", return_value=None),
-        ):
-            response = await client.delete(
-                f"/api/v1/courses/{course_id}/slide-mapping/{uuid.uuid4()}",
-            )
+        with patch.object(SlideVideoMappingRepository, "get_by_id", return_value=None):
+            response = await client.delete(f"/api/v1/slide-mapping/{uuid.uuid4()}")
         assert response.status_code == 404
         assert response.json()["detail"] == "Mapping not found"
 
     @pytest.mark.asyncio
-    async def test_delete_mapping_wrong_course_returns_404(
+    async def test_delete_mapping_wrong_tenant_returns_404(
         self, client: AsyncClient
     ) -> None:
-        """DELETE returns 404 when mapping belongs to node in another course."""
-        course_id = uuid.uuid4()
+        """DELETE returns 404 when mapping's node belongs to another tenant."""
         mapping_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
         mock_mapping = MagicMock()
         mock_mapping.node_id = node_id
-        mock_node = MagicMock()
-        mock_node.course_id = uuid.uuid4()  # different course
+        wrong_tenant_node = _mock_node(node_id, tenant_id=uuid.uuid4())
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(
                 SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
             ),
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
+            patch.object(
+                MaterialNodeRepository, "get_by_id", return_value=wrong_tenant_node
+            ),
         ):
-            response = await client.delete(
-                f"/api/v1/courses/{course_id}/slide-mapping/{mapping_id}",
-            )
+            response = await client.delete(f"/api/v1/slide-mapping/{mapping_id}")
         assert response.status_code == 404
-        assert response.json()["detail"] == "Mapping not found in this course"
+        assert response.json()["detail"] == "Mapping not found"
+
+    @pytest.mark.asyncio
+    async def test_delete_mapping_node_not_found_returns_404(
+        self, client: AsyncClient
+    ) -> None:
+        """DELETE returns 404 when mapping's node does not exist."""
+        mapping_id = uuid.uuid4()
+        mock_mapping = MagicMock()
+        mock_mapping.node_id = uuid.uuid4()
+        with (
+            patch.object(
+                SlideVideoMappingRepository, "get_by_id", return_value=mock_mapping
+            ),
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=None),
+        ):
+            response = await client.delete(f"/api/v1/slide-mapping/{mapping_id}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Mapping not found"
 
 
 class TestSlideVideoMappingRepository:

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import Course, Job
+from course_supporter.storage.orm import Job, MaterialNode
 
 # Valid job status transitions
 JOB_TRANSITIONS: dict[str, set[str]] = {
@@ -23,7 +23,9 @@ JOB_TRANSITIONS: dict[str, set[str]] = {
 class JobRepository:
     """Repository for job tracking operations.
 
-    Not tenant-scoped — jobs are accessed via course_id or directly by id.
+    Not tenant-scoped — jobs are accessed via node_id or directly by id.
+    Tenant isolation is enforced via ``get_by_id_for_tenant`` which joins
+    through ``MaterialNode.tenant_id``.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -32,7 +34,7 @@ class JobRepository:
     async def create(
         self,
         *,
-        course_id: uuid.UUID | None = None,
+        tenant_id: uuid.UUID | None = None,
         node_id: uuid.UUID | None = None,
         job_type: str,
         priority: str = "normal",
@@ -43,7 +45,7 @@ class JobRepository:
     ) -> Job:
         """Create a new job record."""
         job = Job(
-            course_id=course_id,
+            tenant_id=tenant_id,
             node_id=node_id,
             job_type=job_type,
             priority=priority,
@@ -122,33 +124,41 @@ class JobRepository:
     ) -> Job | None:
         """Get a job by ID, ensuring it belongs to the given tenant.
 
-        Joins through ``job.course_id → course.tenant_id`` for isolation.
-        Jobs without a ``course_id`` are not accessible via this method.
+        Joins through ``job.node_id → material_node.tenant_id`` for isolation.
+        Falls back to ``job.tenant_id`` for jobs without a linked node.
         """
+        # Try node-based isolation first
         stmt = (
             select(Job)
-            .join(Course, Job.course_id == Course.id)
-            .where(Job.id == job_id, Course.tenant_id == tenant_id)
+            .join(MaterialNode, Job.node_id == MaterialNode.id)
+            .where(Job.id == job_id, MaterialNode.tenant_id == tenant_id)
         )
+        result = await self._session.execute(stmt)
+        job = result.scalar_one_or_none()
+        if job is not None:
+            return job
+
+        # Fallback: direct tenant_id on job
+        stmt = select(Job).where(Job.id == job_id, Job.tenant_id == tenant_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_active_for_course(self, course_id: uuid.UUID) -> list[Job]:
-        """Get all active (queued or running) jobs for a course."""
+    async def get_active_for_node(self, node_id: uuid.UUID) -> list[Job]:
+        """Get all active (queued or running) jobs for a node."""
         stmt = (
             select(Job)
-            .where(Job.course_id == course_id, Job.status.in_(["queued", "active"]))
+            .where(Job.node_id == node_id, Job.status.in_(["queued", "active"]))
             .order_by(Job.queued_at)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_active_generation_jobs(self, course_id: uuid.UUID) -> list[Job]:
-        """Get active generation jobs (queued or running) for a course."""
+    async def get_active_generation_jobs(self, node_id: uuid.UUID) -> list[Job]:
+        """Get active generation jobs (queued or running) for a node."""
         stmt = (
             select(Job)
             .where(
-                Job.course_id == course_id,
+                Job.node_id == node_id,
                 Job.status.in_(["queued", "active"]),
                 Job.job_type == "generate_structure",
             )
@@ -157,11 +167,19 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_active_for_node(self, node_id: uuid.UUID) -> list[Job]:
-        """Get all active jobs for a specific node."""
+    async def get_active_generation_jobs_in_tree(
+        self, node_ids: list[uuid.UUID]
+    ) -> list[Job]:
+        """Get active generation jobs targeting any node in the tree."""
+        if not node_ids:
+            return []
         stmt = (
             select(Job)
-            .where(Job.node_id == node_id, Job.status.in_(["queued", "active"]))
+            .where(
+                Job.node_id.in_(node_ids),
+                Job.status.in_(["queued", "active"]),
+                Job.job_type == "generate_structure",
+            )
             .order_by(Job.queued_at)
         )
         result = await self._session.execute(stmt)
@@ -174,20 +192,3 @@ class JobRepository:
         stmt = select(func.count()).select_from(Job).where(Job.status == "queued")
         result = await self._session.execute(stmt)
         return result.scalar_one()
-
-    async def get_for_course(
-        self,
-        course_id: uuid.UUID,
-        *,
-        status: str | None = None,
-        job_type: str | None = None,
-    ) -> list[Job]:
-        """Get jobs for a course with optional filters."""
-        stmt = select(Job).where(Job.course_id == course_id)
-        if status is not None:
-            stmt = stmt.where(Job.status == status)
-        if job_type is not None:
-            stmt = stmt.where(Job.job_type == job_type)
-        stmt = stmt.order_by(Job.queued_at.desc())
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())

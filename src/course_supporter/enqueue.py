@@ -18,7 +18,8 @@ async def enqueue_ingestion(
     *,
     redis: ArqRedis,
     session: AsyncSession,
-    course_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    node_id: uuid.UUID,
     material_id: uuid.UUID,
     source_type: str,
     source_url: str,
@@ -31,8 +32,9 @@ async def enqueue_ingestion(
     Args:
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
-        course_id: Course owning the material.
-        material_id: SourceMaterial to ingest.
+        tenant_id: Owning tenant UUID.
+        node_id: MaterialNode that owns the material entry.
+        material_id: MaterialEntry to ingest.
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or S3 path to the source file.
         priority: Job priority (NORMAL respects work window).
@@ -41,12 +43,13 @@ async def enqueue_ingestion(
         The created Job with ``arq_job_id`` set.
     """
     log = structlog.get_logger().bind(
-        course_id=str(course_id), material_id=str(material_id)
+        node_id=str(node_id), material_id=str(material_id)
     )
     repo = JobRepository(session)
 
     job = await repo.create(
-        course_id=course_id,
+        tenant_id=tenant_id,
+        node_id=node_id,
         job_type="ingest",
         priority=priority.value,
         input_params={
@@ -81,8 +84,9 @@ async def enqueue_generation(
     *,
     redis: ArqRedis,
     session: AsyncSession,
-    course_id: uuid.UUID,
-    node_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    target_node_id: uuid.UUID | None = None,
     mode: Literal["free", "guided"] = "free",
     depends_on: list[str] | None = None,  # Job UUIDs as strings
 ) -> Job:
@@ -93,28 +97,32 @@ async def enqueue_generation(
     Args:
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
-        course_id: Course to generate structure for.
-        node_id: Target node UUID (None = whole course).
+        tenant_id: Owning tenant UUID.
+        root_node_id: Root MaterialNode UUID of the tree.
+        target_node_id: Target node UUID (None = whole tree).
         mode: Generation mode ('free' or 'guided').
         depends_on: List of Job UUIDs (str) this job depends on.
 
     Returns:
         The created Job with ``arq_job_id`` set.
     """
+    # Job.node_id stores the actual target (root if whole tree)
+    effective_node_id = target_node_id or root_node_id
+
     log = structlog.get_logger().bind(
-        course_id=str(course_id),
-        node_id=str(node_id),
+        root_node_id=str(root_node_id),
+        target_node_id=str(target_node_id),
     )
     repo = JobRepository(session)
 
     job = await repo.create(
-        course_id=course_id,
-        node_id=node_id,
+        tenant_id=tenant_id,
+        node_id=effective_node_id,
         job_type="generate_structure",
         depends_on=depends_on,
         input_params={
-            "course_id": str(course_id),
-            "node_id": str(node_id) if node_id else None,
+            "root_node_id": str(root_node_id),
+            "target_node_id": str(target_node_id) if target_node_id else None,
             "mode": mode,
         },
     )
@@ -122,8 +130,8 @@ async def enqueue_generation(
     arq_job = await redis.enqueue_job(
         "arq_generate_structure",
         str(job.id),
-        str(course_id),
-        str(node_id) if node_id else None,
+        str(root_node_id),
+        str(target_node_id) if target_node_id else None,
         mode,
     )
 

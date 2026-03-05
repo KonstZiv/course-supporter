@@ -12,7 +12,6 @@ from course_supporter.storage.snapshot_repository import SnapshotRepository
 def _mock_snapshot(
     *,
     snapshot_id: uuid.UUID | None = None,
-    course_id: uuid.UUID | None = None,
     node_id: uuid.UUID | None = None,
     node_fingerprint: str = "abc123",
     mode: str = "free",
@@ -22,8 +21,7 @@ def _mock_snapshot(
     """Create a mock StructureSnapshot."""
     snap = MagicMock(spec=StructureSnapshot)
     snap.id = snapshot_id or uuid.uuid4()
-    snap.course_id = course_id or uuid.uuid4()
-    snap.node_id = node_id
+    snap.node_id = node_id or uuid.uuid4()
     snap.node_fingerprint = node_fingerprint
     snap.mode = mode
     snap.structure = structure or {"title": "Test"}
@@ -48,7 +46,7 @@ class TestCreate:
         repo = SnapshotRepository(session)
 
         result = await repo.create(
-            course_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
             node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
@@ -62,7 +60,7 @@ class TestCreate:
         repo = SnapshotRepository(session)
 
         await repo.create(
-            course_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
             node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
@@ -76,7 +74,7 @@ class TestCreate:
         repo = SnapshotRepository(session)
 
         await repo.create(
-            course_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
             node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
@@ -92,7 +90,7 @@ class TestCreate:
         esc_id = uuid.uuid4()
 
         result = await repo.create(
-            course_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
             node_fingerprint="abc123",
             mode="guided",
             structure={"title": "Test"},
@@ -108,7 +106,6 @@ class TestCreate:
         node_id = uuid.uuid4()
 
         result = await repo.create(
-            course_id=uuid.uuid4(),
             node_id=node_id,
             node_fingerprint="abc123",
             mode="free",
@@ -116,20 +113,6 @@ class TestCreate:
         )
 
         assert result.node_id == node_id
-
-    async def test_create_course_level_node_id_none(self) -> None:
-        """create() without node_id defaults to None (course-level)."""
-        session = _make_session()
-        repo = SnapshotRepository(session)
-
-        result = await repo.create(
-            course_id=uuid.uuid4(),
-            node_fingerprint="abc123",
-            mode="free",
-            structure={"title": "Test"},
-        )
-
-        assert result.node_id is None
 
 
 class TestGetById:
@@ -174,7 +157,6 @@ class TestFindByIdentity:
         repo = SnapshotRepository(session)
 
         result = await repo.find_by_identity(
-            course_id=snap.course_id,
             node_id=snap.node_id,
             node_fingerprint=snap.node_fingerprint,
             mode=snap.mode,
@@ -191,36 +173,16 @@ class TestFindByIdentity:
         repo = SnapshotRepository(session)
 
         result = await repo.find_by_identity(
-            course_id=uuid.uuid4(),
-            node_id=None,
+            node_id=uuid.uuid4(),
             node_fingerprint="nonexistent",
             mode="free",
         )
 
         assert result is None
 
-    async def test_find_by_identity_course_level(self) -> None:
-        """find_by_identity() works with node_id=None (course-level)."""
-        session = _make_session()
-        snap = _mock_snapshot(node_id=None)
-        exec_result = MagicMock()
-        exec_result.scalar_one_or_none.return_value = snap
-        session.execute.return_value = exec_result
-        repo = SnapshotRepository(session)
-
-        result = await repo.find_by_identity(
-            course_id=snap.course_id,
-            node_id=None,
-            node_fingerprint=snap.node_fingerprint,
-            mode=snap.mode,
-        )
-
-        assert result is snap
-        assert result.node_id is None
-
 
 class TestGetLatest:
-    """SnapshotRepository.get_latest_for_node / get_latest_for_course tests."""
+    """SnapshotRepository.get_latest_for_node tests."""
 
     async def test_get_latest_for_node(self) -> None:
         """get_latest_for_node() returns most recent snapshot for node."""
@@ -231,7 +193,7 @@ class TestGetLatest:
         session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
-        result = await repo.get_latest_for_node(snap.course_id, snap.node_id)
+        result = await repo.get_latest_for_node(snap.node_id)
 
         assert result is snap
 
@@ -243,46 +205,49 @@ class TestGetLatest:
         session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
-        result = await repo.get_latest_for_node(uuid.uuid4(), uuid.uuid4())
-
-        assert result is None
-
-    async def test_get_latest_for_course(self) -> None:
-        """get_latest_for_course() returns most recent course-level snapshot."""
-        session = _make_session()
-        snap = _mock_snapshot(node_id=None)
-        exec_result = MagicMock()
-        exec_result.scalar_one_or_none.return_value = snap
-        session.execute.return_value = exec_result
-        repo = SnapshotRepository(session)
-
-        result = await repo.get_latest_for_course(snap.course_id)
-
-        assert result is snap
-
-    async def test_get_latest_for_course_empty(self) -> None:
-        """get_latest_for_course() returns None when no snapshots exist."""
-        session = _make_session()
-        exec_result = MagicMock()
-        exec_result.scalar_one_or_none.return_value = None
-        session.execute.return_value = exec_result
-        repo = SnapshotRepository(session)
-
-        result = await repo.get_latest_for_course(uuid.uuid4())
+        result = await repo.get_latest_for_node(uuid.uuid4())
 
         assert result is None
 
 
-class TestListForCourse:
-    """SnapshotRepository.list_for_course tests."""
+class TestCountForNode:
+    """SnapshotRepository.count_for_node tests."""
 
-    async def test_list_for_course_returns_all(self) -> None:
-        """list_for_course() returns all snapshots for a course."""
+    async def test_count_for_node(self) -> None:
+        """count_for_node() returns integer count."""
         session = _make_session()
-        course_id = uuid.uuid4()
+        exec_result = MagicMock()
+        exec_result.scalar_one.return_value = 5
+        session.execute.return_value = exec_result
+        repo = SnapshotRepository(session)
+
+        result = await repo.count_for_node(uuid.uuid4())
+
+        assert result == 5
+
+    async def test_count_for_node_empty(self) -> None:
+        """count_for_node() returns 0 when no snapshots."""
+        session = _make_session()
+        exec_result = MagicMock()
+        exec_result.scalar_one.return_value = 0
+        session.execute.return_value = exec_result
+        repo = SnapshotRepository(session)
+
+        result = await repo.count_for_node(uuid.uuid4())
+
+        assert result == 0
+
+
+class TestListForNode:
+    """SnapshotRepository.list_for_node tests."""
+
+    async def test_list_for_node_returns_all(self) -> None:
+        """list_for_node() returns all snapshots for a node."""
+        session = _make_session()
+        node_id = uuid.uuid4()
         snaps = [
-            _mock_snapshot(course_id=course_id),
-            _mock_snapshot(course_id=course_id),
+            _mock_snapshot(node_id=node_id),
+            _mock_snapshot(node_id=node_id),
         ]
         scalars_mock = MagicMock()
         scalars_mock.all.return_value = snaps
@@ -291,12 +256,12 @@ class TestListForCourse:
         session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
-        result = await repo.list_for_course(course_id)
+        result = await repo.list_for_node(node_id)
 
         assert len(result) == 2
 
-    async def test_list_for_course_empty(self) -> None:
-        """list_for_course() returns empty list when no snapshots."""
+    async def test_list_for_node_empty(self) -> None:
+        """list_for_node() returns empty list when no snapshots."""
         session = _make_session()
         scalars_mock = MagicMock()
         scalars_mock.all.return_value = []
@@ -305,6 +270,6 @@ class TestListForCourse:
         session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
-        result = await repo.list_for_course(uuid.uuid4())
+        result = await repo.list_for_node(uuid.uuid4())
 
         assert result == []

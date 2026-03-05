@@ -1,22 +1,14 @@
-"""Post-ingestion callback: update Job, Material, and future extension hooks.
+"""Post-ingestion callback: update Job and MaterialEntry records.
 
 After an ingestion job completes (success or failure), this service:
-1. Updates SourceMaterial status and content.
+1. Updates MaterialEntry processing state.
 2. Updates Job status (complete/failed).
-3. [Future — Epic 3] Invalidates Merkle fingerprints up the tree.
-4. [Future — Epic 5] Triggers revalidation of blocked SlideVideoMappings.
+3. Invalidates Merkle fingerprints up the tree.
+4. Triggers revalidation of blocked SlideVideoMappings.
 
 The two-session pattern is encapsulated here: the caller provides a
 session_factory, and this service handles rollback + error-session
 internally for failure paths.
-
-.. note::
-    **S2-014 migration note**: When ``MaterialEntry`` replaces
-    ``SourceMaterial`` (Epic 2, S2-014), update this service to use
-    ``MaterialEntryRepository`` instead of ``SourceMaterialRepository``.
-    All tests must be re-verified for the new model's field names
-    (``processed_content`` vs ``content_snapshot``, ``pending_job_id``
-    clearing, ``processed_hash`` / ``processed_at`` setting).
 """
 
 from __future__ import annotations
@@ -28,14 +20,13 @@ from typing import TYPE_CHECKING
 import structlog
 
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class IngestionCallback:
-    """Handle post-ingestion updates for Job and Material records.
+    """Handle post-ingestion updates for Job and MaterialEntry records.
 
     Encapsulates the two-session pattern: success path uses the
     provided session, failure path opens a fresh session to persist
@@ -51,19 +42,17 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         content_json: str,
-        is_new_model: bool = False,
+        is_new_model: bool = True,
     ) -> None:
         """Handle successful ingestion completion.
 
-        When ``is_new_model`` is True, uses ``MaterialEntryRepository``
-        (``complete_processing``). Otherwise falls back to legacy
-        ``SourceMaterialRepository`` (``update_status → done``).
+        Uses ``MaterialEntryRepository`` (``complete_processing``).
 
         Args:
             job_id: The Job tracking this ingestion.
             material_id: The material that was processed.
             content_json: Serialized SourceDocument JSON.
-            is_new_model: True when the material is a MaterialEntry.
+            is_new_model: Legacy param, always True.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
@@ -72,23 +61,17 @@ class IngestionCallback:
         async with self._session_factory() as session:
             job_repo = JobRepository(session)
 
-            if is_new_model:
-                from course_supporter.storage.material_entry_repository import (
-                    MaterialEntryRepository,
-                )
+            from course_supporter.storage.material_entry_repository import (
+                MaterialEntryRepository,
+            )
 
-                entry_repo = MaterialEntryRepository(session)
-                processed_hash = hashlib.sha256(content_json.encode()).hexdigest()
-                await entry_repo.complete_processing(
-                    material_id,
-                    processed_content=content_json,
-                    processed_hash=processed_hash,
-                )
-            else:
-                mat_repo = SourceMaterialRepository(session)
-                await mat_repo.update_status(
-                    material_id, "done", content_snapshot=content_json
-                )
+            entry_repo = MaterialEntryRepository(session)
+            processed_hash = hashlib.sha256(content_json.encode()).hexdigest()
+            await entry_repo.complete_processing(
+                material_id,
+                processed_content=content_json,
+                processed_hash=processed_hash,
+            )
 
             await job_repo.update_status(job_id, "complete")
 
@@ -106,22 +89,17 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         error_message: str,
-        is_new_model: bool = False,
+        is_new_model: bool = True,
     ) -> None:
         """Handle failed ingestion.
 
-        Opens a fresh session (the caller's session is expected to have
-        been rolled back already) to persist error state.
-
-        When ``is_new_model`` is True, uses ``MaterialEntryRepository``
-        (``fail_processing``). Otherwise falls back to legacy
-        ``SourceMaterialRepository`` (``update_status → error``).
+        Opens a fresh session to persist error state after rollback.
 
         Args:
             job_id: The Job tracking this ingestion.
             material_id: The material that failed.
             error_message: Human-readable error description.
-            is_new_model: True when the material is a MaterialEntry.
+            is_new_model: Legacy param, always True.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
@@ -132,23 +110,14 @@ class IngestionCallback:
 
             await job_repo.update_status(job_id, "failed", error_message=error_message)
 
-            if is_new_model:
-                from course_supporter.storage.material_entry_repository import (
-                    MaterialEntryRepository,
-                )
+            from course_supporter.storage.material_entry_repository import (
+                MaterialEntryRepository,
+            )
 
-                entry_repo = MaterialEntryRepository(session)
-                await entry_repo.fail_processing(
-                    material_id, error_message=error_message
-                )
-            else:
-                mat_repo = SourceMaterialRepository(session)
-                await mat_repo.update_status(
-                    material_id, "error", error_message=error_message
-                )
+            entry_repo = MaterialEntryRepository(session)
+            await entry_repo.fail_processing(material_id, error_message=error_message)
 
             # Extension point: update blocking_factors on mappings
-            # that reference this material (Epic 5, S2-042).
             await self._revalidate_blocked_mappings(session, material_id=material_id)
 
             await session.commit()
@@ -156,7 +125,7 @@ class IngestionCallback:
         log.info("ingestion_callback_failure", error=error_message)
 
     # ------------------------------------------------------------------
-    # Extension hooks — no-op stubs for future epics
+    # Extension hooks
     # ------------------------------------------------------------------
 
     async def _invalidate_fingerprints(
@@ -165,19 +134,7 @@ class IngestionCallback:
         *,
         material_id: uuid.UUID,
     ) -> None:
-        """Invalidate Merkle fingerprints from material up to course root.
-
-        **Current state**: no-op stub.
-
-        **Epic 3 (S2-027) implementation plan**:
-        1. Load the MaterialEntry (or its parent MaterialNode).
-        2. Walk up the tree via ``parent_id``, setting
-           ``node_fingerprint = NULL`` on each ancestor node.
-        3. Set course-level fingerprint to NULL.
-
-        All changes are flushed within the provided session
-        (caller commits).
-        """
+        """Invalidate Merkle fingerprints from material up to root."""
 
     async def _revalidate_blocked_mappings(
         self,

@@ -12,7 +12,7 @@ from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.storage.database import get_session
-from course_supporter.storage.repositories import CourseRepository
+from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 
 class TestInMemoryRateLimiter:
@@ -130,31 +130,38 @@ class TestRateLimitAPI:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                course = MagicMock()
-                course.id = uuid.uuid4()
-                course.title = "Test"
-                course.description = None
-                course.created_at = datetime.now(UTC)
-                course.updated_at = datetime.now(UTC)
+                node = MagicMock()
+                node.id = uuid.uuid4()
+                node.tenant_id = tenant.tenant_id
+                node.parent_id = None
+                node.title = "Test"
+                node.description = None
+                node.learning_goal = None
+                node.expected_knowledge = None
+                node.expected_skills = None
+                node.order = 0
+                node.node_fingerprint = None
+                node.created_at = datetime.now(UTC)
+                node.updated_at = datetime.now(UTC)
 
-                with patch.object(CourseRepository, "create", return_value=course):
+                with patch.object(MaterialNodeRepository, "create", return_value=node):
                     # First 2 requests should pass (limit=2)
                     r1 = await client.post(
-                        "/api/v1/courses",
-                        json={"title": "Course 1"},
+                        "/api/v1/nodes",
+                        json={"title": "Node 1"},
                     )
                     assert r1.status_code == 201
 
                     r2 = await client.post(
-                        "/api/v1/courses",
-                        json={"title": "Course 2"},
+                        "/api/v1/nodes",
+                        json={"title": "Node 2"},
                     )
                     assert r2.status_code == 201
 
                     # Third request should be rate limited
                     r3 = await client.post(
-                        "/api/v1/courses",
-                        json={"title": "Course 3"},
+                        "/api/v1/nodes",
+                        json={"title": "Node 3"},
                     )
                     assert r3.status_code == 429
                     assert r3.json()["detail"] == "Rate limit exceeded"

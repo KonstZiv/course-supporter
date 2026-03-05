@@ -70,14 +70,14 @@ class TestCourseCourseConflict:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=None,
             active_jobs=[job],
         )
 
         assert result is not None
         assert result.job_id == job.id
-        assert "entire course" in result.reason
+        assert "entire tree" in result.reason
 
 
 # ── Course ↔ Node ──
@@ -93,13 +93,13 @@ class TestCourseNodeConflict:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=uuid.uuid4(),
             active_jobs=[job],
         )
 
         assert result is not None
-        assert "active job covers entire course" in result.reason
+        assert "active job covers entire tree" in result.reason
 
     async def test_active_node_vs_target_course(self) -> None:
         """Active node-level job conflicts with course-level request."""
@@ -109,13 +109,13 @@ class TestCourseNodeConflict:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=None,
             active_jobs=[job],
         )
 
         assert result is not None
-        assert "new request covers entire course" in result.reason
+        assert "new request covers entire tree" in result.reason
 
 
 # ── Same Node ──
@@ -132,7 +132,7 @@ class TestSameNodeConflict:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=node_id,
             active_jobs=[job],
         )
@@ -157,7 +157,7 @@ class TestParentChildConflict:
         job = _mock_job(node_id=parent_id)
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=child_id,
             active_jobs=[job],
         )
@@ -175,7 +175,7 @@ class TestParentChildConflict:
         job = _mock_job(node_id=child_id)
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=parent_id,
             active_jobs=[job],
         )
@@ -198,7 +198,7 @@ class TestParentChildConflict:
         job = _mock_job(node_id=root_id)
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=grandchild_id,
             active_jobs=[job],
         )
@@ -228,7 +228,7 @@ class TestSiblingsNoConflict:
         job = _mock_job(node_id=sibling_a)
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=sibling_b,
             active_jobs=[job],
         )
@@ -255,7 +255,7 @@ class TestSiblingsNoConflict:
         job = _mock_job(node_id=leaf_a_id)
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=leaf_b_id,
             active_jobs=[job],
         )
@@ -275,7 +275,7 @@ class TestNoActiveJobs:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=uuid.uuid4(),
             active_jobs=[],
         )
@@ -288,7 +288,7 @@ class TestNoActiveJobs:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=None,
             active_jobs=[],
         )
@@ -314,7 +314,7 @@ class TestMultipleActiveJobs:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=node_id,
             active_jobs=[job1, job2],
         )
@@ -339,7 +339,7 @@ class TestMultipleActiveJobs:
         jobs = [_mock_job(node_id=sib_a), _mock_job(node_id=sib_b)]
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=sib_c,
             active_jobs=jobs,
         )
@@ -361,7 +361,7 @@ class TestConflictInfoFields:
 
         result = await detect_conflict(
             session,
-            course_id=uuid.uuid4(),
+            root_node_id=uuid.uuid4(),
             target_node_id=node_id,
             active_jobs=[job],
         )

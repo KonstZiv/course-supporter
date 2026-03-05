@@ -87,11 +87,11 @@ class _Deps:
     ) -> None:
         # MaterialNodeRepository
         self.node_repo = AsyncMock()
-        self.node_repo.get_tree = AsyncMock(return_value=root_nodes)
+        self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
         # JobRepository
         self.job_repo = AsyncMock()
-        self.job_repo.get_active_generation_jobs = AsyncMock(
+        self.job_repo.get_active_generation_jobs_in_tree = AsyncMock(
             return_value=active_gen_jobs or [],
         )
 
@@ -125,12 +125,14 @@ class _Deps:
 async def _run(
     deps: _Deps,
     *,
-    course_id: uuid.UUID | None = None,
-    node_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    root_node_id: uuid.UUID | None = None,
+    target_node_id: uuid.UUID | None = None,
     mode: str = "free",
 ) -> GenerationPlan:
     """Run trigger_generation with all dependencies patched."""
-    cid = course_id or uuid.uuid4()
+    tid = tenant_id or uuid.uuid4()
+    rid = root_node_id or uuid.uuid4()
     session = AsyncMock()
     redis = AsyncMock()
 
@@ -171,8 +173,9 @@ async def _run(
         return await trigger_generation(
             redis=redis,
             session=session,
-            course_id=cid,
-            node_id=node_id,
+            tenant_id=tid,
+            root_node_id=rid,
+            target_node_id=target_node_id,
             mode=mode,
         )
 
@@ -207,7 +210,7 @@ class TestPartitionEntries:
 class TestAllReadyNoSnapshot:
     @pytest.mark.asyncio
     async def test_enqueues_generation(self) -> None:
-        """All READY, no existing snapshot → generation job enqueued."""
+        """All READY, no existing snapshot -> generation job enqueued."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
         deps = _Deps(root_nodes=[root])
@@ -224,7 +227,7 @@ class TestAllReadyNoSnapshot:
 class TestAllReadyIdempotent:
     @pytest.mark.asyncio
     async def test_returns_existing_snapshot(self) -> None:
-        """All READY, snapshot exists → idempotent, no jobs."""
+        """All READY, snapshot exists -> idempotent, no jobs."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
         snap = _make_snapshot()
@@ -241,7 +244,7 @@ class TestAllReadyIdempotent:
 class TestStalePresent:
     @pytest.mark.asyncio
     async def test_enqueues_ingestion_and_generation(self) -> None:
-        """Stale (RAW) entries → ingestion + generation with depends_on."""
+        """Stale (RAW) entries -> ingestion + generation with depends_on."""
         raw = _make_entry(state="raw")
         ready = _make_entry(state="ready")
         root = _make_node(materials=[raw, ready])
@@ -303,7 +306,7 @@ class TestErrorEntries:
 class TestConflictDetected:
     @pytest.mark.asyncio
     async def test_raises_conflict_error(self) -> None:
-        """Active generation overlap → GenerationConflictError."""
+        """Active generation overlap -> GenerationConflictError."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
         conflict = MagicMock()
@@ -319,23 +322,23 @@ class TestConflictDetected:
 class TestNodeNotFound:
     @pytest.mark.asyncio
     async def test_raises_node_not_found(self) -> None:
-        """Non-existent node_id → NodeNotFoundError."""
+        """Non-existent target_node_id -> NodeNotFoundError."""
         root = _make_node()
         deps = _Deps(root_nodes=[root])
 
         with pytest.raises(NodeNotFoundError):
-            await _run(deps, node_id=uuid.uuid4())
+            await _run(deps, target_node_id=uuid.uuid4())
 
 
 class TestCourseLevelFingerprint:
     @pytest.mark.asyncio
     async def test_uses_course_fingerprint(self) -> None:
-        """Course-level (node_id=None) uses ensure_course_fp."""
+        """Course-level (target_node_id=None) uses ensure_course_fp."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
         deps = _Deps(root_nodes=[root])
 
-        await _run(deps, node_id=None)
+        await _run(deps, target_node_id=None)
 
         deps.fp_service.ensure_course_fp.assert_awaited_once()
         deps.fp_service.ensure_node_fp.assert_not_awaited()
@@ -344,7 +347,7 @@ class TestCourseLevelFingerprint:
 class TestNoMaterials:
     @pytest.mark.asyncio
     async def test_empty_subtree_raises(self) -> None:
-        """Empty subtree → NoReadyMaterialsError."""
+        """Empty subtree -> NoReadyMaterialsError."""
         root = _make_node(materials=[])
         deps = _Deps(root_nodes=[root])
 
@@ -371,7 +374,7 @@ def _make_mapping_orm(
 class TestMappingWarnings:
     @pytest.mark.asyncio
     async def test_no_problematic_mappings(self) -> None:
-        """No problematic mappings → empty warnings."""
+        """No problematic mappings -> empty warnings."""
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry])
         deps = _Deps(root_nodes=[root], problematic_mappings=[])

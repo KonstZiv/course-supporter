@@ -29,7 +29,7 @@ def _make_job_mock(
     job_type: str = "ingest",
     priority: str = "normal",
     status: str = "queued",
-    course_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
     node_id: uuid.UUID | None = None,
     arq_job_id: str | None = "arq:test:123",
     error_message: str | None = None,
@@ -44,7 +44,8 @@ def _make_job_mock(
     job.job_type = job_type
     job.priority = priority
     job.status = status
-    job.course_id = course_id or uuid.uuid4()
+    job.tenant_id = uuid.uuid4()
+    job.course_id = None  # removed field
     job.node_id = node_id
     job.arq_job_id = arq_job_id
     job.error_message = error_message
@@ -95,7 +96,7 @@ class TestGetJob:
         assert data["job_type"] == "ingest"
         assert data["priority"] == "normal"
         assert data["status"] == "active"
-        assert data["course_id"] == str(job.course_id)
+        assert data["tenant_id"] == str(job.tenant_id)
         assert data["arq_job_id"] == "arq:test:123"
         assert data["started_at"] is not None
         assert data["error_message"] is None

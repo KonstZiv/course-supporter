@@ -53,15 +53,13 @@ def find_node_bfs(
 
 def resolve_target_nodes(
     root_nodes: list[MaterialNode],
-    course_id: uuid.UUID,
-    node_id: uuid.UUID | None,
+    node_id: uuid.UUID | None = None,
 ) -> tuple[MaterialNode | None, list[MaterialNode]]:
     """Resolve target node and flatten its subtree.
 
     Args:
-        root_nodes: Root-level nodes from get_tree().
-        course_id: Course UUID (for error messages).
-        node_id: Target node UUID, or None for whole course.
+        root_nodes: Root-level nodes from get_subtree().
+        node_id: Target node UUID, or None for whole tree.
 
     Returns:
         Tuple of (target_node_or_None, flat_node_list).
@@ -74,7 +72,7 @@ def resolve_target_nodes(
     if node_id is not None:
         target = find_node_bfs(root_nodes, node_id)
         if target is None:
-            msg = f"Node {node_id} not found in course {course_id}"
+            msg = f"Node {node_id} not found in tree"
             raise NodeNotFoundError(msg)
         return target, flatten_subtree(target)
 

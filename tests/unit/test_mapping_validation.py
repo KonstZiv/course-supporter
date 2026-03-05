@@ -1023,16 +1023,13 @@ class TestRouteReturns422OnValidationError:
             MaterialNodeRepository,
         )
         from course_supporter.storage.repositories import (
-            CourseRepository,
             SlideVideoMappingRepository,
         )
 
-        course_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
         mock_node = MagicMock()
-        mock_node.course_id = course_id
+        mock_node.id = node_id
+        mock_node.tenant_id = STUB_TENANT.tenant_id
 
         validation_err = MappingValidationError(
             field="presentation_entry_id",
@@ -1047,7 +1044,6 @@ class TestRouteReturns422OnValidationError:
         )
 
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
             patch.object(
                 MappingValidationService,
@@ -1061,7 +1057,7 @@ class TestRouteReturns422OnValidationError:
             ),
         ):
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={
                     "mappings": [
                         {
@@ -1091,16 +1087,13 @@ class TestRouteReturns422OnValidationError:
             MaterialNodeRepository,
         )
         from course_supporter.storage.repositories import (
-            CourseRepository,
             SlideVideoMappingRepository,
         )
 
-        course_id = uuid.uuid4()
         node_id = uuid.uuid4()
-        mock_course = MagicMock()
-        mock_course.id = course_id
         mock_node = MagicMock()
-        mock_node.course_id = course_id
+        mock_node.id = node_id
+        mock_node.tenant_id = STUB_TENANT.tenant_id
 
         ok_result = MappingValidationResult(
             index=0,
@@ -1139,7 +1132,6 @@ class TestRouteReturns422OnValidationError:
         svm_record.created_at = datetime.now(UTC)
 
         with (
-            patch.object(CourseRepository, "get_by_id", return_value=mock_course),
             patch.object(MaterialNodeRepository, "get_by_id", return_value=mock_node),
             patch.object(
                 MappingValidationService,
@@ -1158,7 +1150,7 @@ class TestRouteReturns422OnValidationError:
             ),
         ):
             response = await client.post(
-                f"/api/v1/courses/{course_id}/nodes/{node_id}/slide-mapping",
+                f"/api/v1/nodes/{node_id}/slide-mapping",
                 json={
                     "mappings": [
                         {

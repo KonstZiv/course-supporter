@@ -276,7 +276,7 @@ class TestResolveTargetNodes:
         child = _make_node(title="Child")
         root = _make_node(title="Root", children=[child])
 
-        target, flat = resolve_target_nodes([root], uuid.uuid4(), None)
+        target, flat = resolve_target_nodes([root], None)
 
         assert target is None
         assert len(flat) == 2
@@ -294,7 +294,7 @@ class TestResolveTargetNodes:
         )
         root = _make_node(title="Root", children=[child])
 
-        target, flat = resolve_target_nodes([root], uuid.uuid4(), child_id)
+        target, flat = resolve_target_nodes([root], child_id)
 
         assert target is child
         assert len(flat) == 2
@@ -307,7 +307,7 @@ class TestResolveTargetNodes:
         root = _make_node(title="Root")
 
         with pytest.raises(NodeNotFoundError):
-            resolve_target_nodes([root], uuid.uuid4(), uuid.uuid4())
+            resolve_target_nodes([root], uuid.uuid4())
 
     def test_multiple_roots_course_level(self) -> None:
         """Multiple roots with node_id=None flattens all."""
@@ -317,7 +317,6 @@ class TestResolveTargetNodes:
 
         _, flat = resolve_target_nodes(
             [root1, root2],
-            uuid.uuid4(),
             None,
         )
 
@@ -325,7 +324,7 @@ class TestResolveTargetNodes:
 
     def test_empty_roots(self) -> None:
         """Empty root list with node_id=None returns empty flat list."""
-        target, flat = resolve_target_nodes([], uuid.uuid4(), None)
+        target, flat = resolve_target_nodes([], None)
 
         assert target is None
         assert flat == []

@@ -212,13 +212,15 @@ class TestRouting:
     @pytest.mark.asyncio
     async def test_api_v1_prefix_registered(self, client: AsyncClient) -> None:
         """Routes are registered under /api/v1."""
-        from course_supporter.storage.repositories import CourseRepository
+        from course_supporter.storage.material_node_repository import (
+            MaterialNodeRepository,
+        )
 
         with (
-            patch.object(CourseRepository, "list_all", return_value=[]),
-            patch.object(CourseRepository, "count", return_value=0),
+            patch.object(MaterialNodeRepository, "list_roots", return_value=[]),
+            patch.object(MaterialNodeRepository, "count_roots", return_value=0),
         ):
-            response = await client.get("/api/v1/courses")
+            response = await client.get("/api/v1/nodes")
         assert response.status_code == 200
 
 

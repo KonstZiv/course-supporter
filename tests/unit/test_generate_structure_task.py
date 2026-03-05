@@ -148,7 +148,7 @@ def job_id() -> str:
 
 
 @pytest.fixture()
-def course_id() -> str:
+def root_node_id() -> str:
     return str(uuid.uuid4())
 
 
@@ -174,7 +174,7 @@ class _MockDeps:
 
         # MaterialNodeRepository
         self.node_repo = AsyncMock()
-        self.node_repo.get_tree = AsyncMock(return_value=root_nodes)
+        self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
         # FingerprintService
         self.fp_service = AsyncMock()
@@ -222,10 +222,10 @@ def _make_session_factory(
 
 async def _run_task(
     job_id: str,
-    course_id: str,
+    root_node_id: str,
     deps: _MockDeps,
     *,
-    node_id: str | None = None,
+    target_node_id: str | None = None,
     mode: str = "free",
 ) -> None:
     """Run arq_generate_structure with all dependencies patched."""
@@ -273,8 +273,8 @@ async def _run_task(
         await arq_generate_structure(
             ctx,
             job_id,
-            course_id,
-            node_id=node_id,
+            root_node_id,
+            target_node_id=target_node_id,
             mode=mode,
         )
 
@@ -286,7 +286,7 @@ class TestHappyPathNodeLevel:
     async def test_node_level_generates_snapshot(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
         node_id_str: str,
     ) -> None:
         """Happy path: node-level generation creates snapshot and completes job."""
@@ -298,7 +298,7 @@ class TestHappyPathNodeLevel:
         snap = _make_snapshot()
         deps = _MockDeps(root_nodes=[root], created_snapshot=snap)
 
-        await _run_task(job_id, course_id, deps, node_id=node_id_str)
+        await _run_task(job_id, root_node_id, deps, target_node_id=node_id_str)
 
         # Agent was called
         deps.agent.run_with_metadata.assert_called_once()
@@ -312,13 +312,13 @@ class TestHappyPathNodeLevel:
 
 
 class TestHappyPathCourseLevel:
-    """Course-level generation: node_id=None → course fingerprint."""
+    """Course-level generation: target_node_id=None → course fingerprint."""
 
     @pytest.mark.asyncio
     async def test_course_level_uses_course_fingerprint(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Course-level generation calls ensure_course_fp."""
         entry = _make_entry(state="ready")
@@ -326,7 +326,7 @@ class TestHappyPathCourseLevel:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps, node_id=None)
+        await _run_task(job_id, root_node_id, deps, target_node_id=None)
 
         deps.fp_service.ensure_course_fp.assert_called_once_with([root])
         deps.fp_service.ensure_node_fp.assert_not_called()
@@ -339,7 +339,7 @@ class TestIdempotency:
     async def test_idempotent_skips_agent(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Idempotency: existing snapshot skips LLM call."""
         entry = _make_entry(state="ready")
@@ -348,7 +348,7 @@ class TestIdempotency:
 
         deps = _MockDeps(root_nodes=[root], find_identity=existing)
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         deps.agent.run_with_metadata.assert_not_called()
         deps.snap_repo.create.assert_not_called()
@@ -365,7 +365,7 @@ class TestNoReadyMaterials:
     async def test_no_ready_materials_fails_job(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Task fails when no READY materials found."""
         raw_entry = _make_entry(state="raw")
@@ -373,7 +373,7 @@ class TestNoReadyMaterials:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         deps.agent.run_with_metadata.assert_not_called()
 
@@ -385,7 +385,7 @@ class TestAgentError:
     async def test_agent_error_fails_job(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Task fails when ArchitectAgent raises."""
         entry = _make_entry(state="ready")
@@ -394,7 +394,7 @@ class TestAgentError:
         deps = _MockDeps(root_nodes=[root])
         deps.agent.run_with_metadata.side_effect = RuntimeError("LLM boom")
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         deps.snap_repo.create.assert_not_called()
 
@@ -406,7 +406,7 @@ class TestMixedStates:
     async def test_only_ready_entries_merged(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Only READY materials are collected for merge."""
         ready = _make_entry(state="ready")
@@ -416,7 +416,7 @@ class TestMixedStates:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         # MergeStep.merge called with 1 document (only ready)
         merge_call = deps.merge_instance.merge
@@ -432,7 +432,7 @@ class TestMappingsFiltering:
     async def test_validated_mappings_only(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Only validated mappings become SlideTimecodeRef."""
         entry = _make_entry(state="ready")
@@ -449,7 +449,7 @@ class TestMappingsFiltering:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         merge_call = deps.merge_instance.merge
         merge_call.assert_called_once()
@@ -465,7 +465,7 @@ class TestLLMMetadata:
     async def test_esc_created_and_linked(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Snapshot receives externalservicecall_id from created ESC."""
         entry = _make_entry(state="ready")
@@ -474,7 +474,7 @@ class TestLLMMetadata:
         gen_result = _sample_gen_result()
         deps = _MockDeps(root_nodes=[root], gen_result=gen_result)
 
-        await _run_task(job_id, course_id, deps)
+        await _run_task(job_id, root_node_id, deps)
 
         create_kwargs = deps.snap_repo.create.call_args.kwargs
         assert "externalservicecall_id" in create_kwargs
@@ -491,7 +491,7 @@ class TestModePassthrough:
     async def test_guided_mode_in_snapshot(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Mode is passed to snapshot create and find_by_identity."""
         entry = _make_entry(state="ready")
@@ -499,7 +499,7 @@ class TestModePassthrough:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps, mode="guided")
+        await _run_task(job_id, root_node_id, deps, mode="guided")
 
         # find_by_identity called with mode="guided"
         identity_kwargs = deps.snap_repo.find_by_identity.call_args.kwargs
@@ -517,7 +517,7 @@ class TestGuidedModeAgent:
     async def test_guided_mode_passes_existing_structure(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Guided mode passes serialized tree as existing_structure."""
         entry = _make_entry(state="ready")
@@ -527,7 +527,7 @@ class TestGuidedModeAgent:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps, mode="guided")
+        await _run_task(job_id, root_node_id, deps, mode="guided")
 
         run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
         assert run_kwargs["existing_structure"] is not None
@@ -537,7 +537,7 @@ class TestGuidedModeAgent:
     async def test_guided_mode_preserves_hierarchy(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Guided mode serializes nested tree with children."""
         import json
@@ -554,7 +554,7 @@ class TestGuidedModeAgent:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps, mode="guided")
+        await _run_task(job_id, root_node_id, deps, mode="guided")
 
         run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
         tree = json.loads(run_kwargs["existing_structure"])
@@ -566,7 +566,7 @@ class TestGuidedModeAgent:
     async def test_free_mode_no_existing_structure(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
         """Free mode passes existing_structure=None to agent."""
         entry = _make_entry(state="ready")
@@ -574,7 +574,7 @@ class TestGuidedModeAgent:
 
         deps = _MockDeps(root_nodes=[root])
 
-        await _run_task(job_id, course_id, deps, mode="free")
+        await _run_task(job_id, root_node_id, deps, mode="free")
 
         run_kwargs = deps.agent.run_with_metadata.call_args.kwargs
         assert run_kwargs["existing_structure"] is None
@@ -587,13 +587,13 @@ class TestNodeNotFound:
     async def test_node_not_found_fails(
         self,
         job_id: str,
-        course_id: str,
+        root_node_id: str,
     ) -> None:
-        """Task fails when target node_id not found in tree."""
+        """Task fails when target target_node_id not found in tree."""
         root = _make_node()
         deps = _MockDeps(root_nodes=[root])
 
         missing_nid = str(uuid.uuid4())
-        await _run_task(job_id, course_id, deps, node_id=missing_nid)
+        await _run_task(job_id, root_node_id, deps, target_node_id=missing_nid)
 
         deps.agent.run_with_metadata.assert_not_called()

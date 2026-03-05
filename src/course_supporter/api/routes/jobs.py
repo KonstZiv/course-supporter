@@ -31,9 +31,9 @@ async def get_job(
 ) -> JobResponse:
     """Get job status by ID.
 
-    Tenant isolation enforced via job.course_id → course.tenant_id.
-    Returns 404 if the job does not exist or does not belong to the
-    current tenant.
+    Tenant isolation enforced via job.node_id → node.tenant_id,
+    with fallback to job.tenant_id. Returns 404 if the job does
+    not exist or does not belong to the current tenant.
     """
     repo = JobRepository(session)
     job = await repo.get_by_id_for_tenant(job_id, tenant.tenant_id)

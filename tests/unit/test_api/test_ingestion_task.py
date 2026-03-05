@@ -1,11 +1,11 @@
-"""Tests for background ingestion tasks (legacy and ARQ)."""
+"""Tests for ARQ-based background ingestion task."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from course_supporter.api.tasks import arq_ingest_material, ingest_material
+from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.models.source import SourceDocument, SourceType
 
 _FACTORY = "course_supporter.api.tasks.create_processors"
@@ -16,11 +16,7 @@ _ENTRY_REPO = (
 
 
 def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
-    """Create a mock async_sessionmaker that returns an async ctx manager.
-
-    async_sessionmaker() returns a context manager directly (not a coroutine),
-    so we use MagicMock with __aenter__/__aexit__.
-    """
+    """Create a mock async_sessionmaker that returns an async ctx manager."""
     if session is None:
         session = AsyncMock()
         session.add = MagicMock()
@@ -31,26 +27,6 @@ def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
 
     factory = MagicMock(return_value=ctx)
     return factory
-
-
-def _make_two_session_factory(
-    main_session: AsyncMock, error_session: AsyncMock
-) -> MagicMock:
-    """Create factory returning different sessions for main and error paths."""
-    call_count = 0
-
-    def make_ctx() -> MagicMock:
-        nonlocal call_count
-        call_count += 1
-        ctx = MagicMock()
-        if call_count <= 1:
-            ctx.__aenter__ = AsyncMock(return_value=main_session)
-        else:
-            ctx.__aenter__ = AsyncMock(return_value=error_session)
-        ctx.__aexit__ = AsyncMock(return_value=None)
-        return ctx
-
-    return MagicMock(side_effect=make_ctx)
 
 
 def _make_arq_ctx(
@@ -91,134 +67,11 @@ def _failing_processors(
     return {source_type: mock_proc}
 
 
-class TestIngestMaterial:
-    """Tests for the legacy ingest_material function."""
-
-    async def test_ingestion_success(self) -> None:
-        """ingest_material() processes and transitions to done."""
-        material_id = uuid.uuid4()
-        doc = SourceDocument(
-            source_type=SourceType.WEB,
-            source_url="https://example.com",
-        )
-        mock_material = MagicMock()
-        mock_material.source_url = "https://example.com"
-        mock_material.source_type = SourceType.WEB
-
-        factory = _make_session_factory()
-
-        with (
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_repo_cls,
-            patch(_HEAVY),
-            patch(_FACTORY, return_value=_mock_processors(doc)),
-        ):
-            mock_repo = mock_repo_cls.return_value
-            mock_repo.update_status = AsyncMock()
-            mock_repo.get_by_id = AsyncMock(return_value=mock_material)
-
-            await ingest_material(
-                material_id,
-                "web",
-                "https://example.com",
-                factory,
-            )
-
-        assert mock_repo.update_status.call_count == 2
-        calls = mock_repo.update_status.call_args_list
-        assert calls[0].args == (material_id, "processing")
-        assert calls[1].args == (material_id, "done")
-
-    async def test_ingestion_error_sets_error_status(self) -> None:
-        """ingest_material() transitions to error on failure."""
-        material_id = uuid.uuid4()
-
-        main_session = AsyncMock()
-        main_session.add = MagicMock()
-        error_session = AsyncMock()
-        error_session.add = MagicMock()
-
-        mock_material = MagicMock()
-        mock_material.source_url = "https://example.com"
-        mock_material.source_type = SourceType.WEB
-
-        factory = _make_two_session_factory(main_session, error_session)
-
-        with (
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_repo_cls,
-            patch(_HEAVY),
-            patch(
-                _FACTORY,
-                return_value=_failing_processors(error="Processing failed"),
-            ),
-        ):
-            repo_instances: list[MagicMock] = []
-
-            def make_repo(session: object) -> MagicMock:
-                repo = MagicMock()
-                repo.update_status = AsyncMock()
-                repo.get_by_id = AsyncMock(return_value=mock_material)
-                repo_instances.append(repo)
-                return repo
-
-            mock_repo_cls.side_effect = make_repo
-
-            await ingest_material(
-                material_id,
-                "web",
-                "https://example.com",
-                factory,
-            )
-
-        assert len(repo_instances) >= 2
-        error_repo = repo_instances[-1]
-        error_repo.update_status.assert_awaited_once()
-        call_args = error_repo.update_status.call_args
-        assert call_args.args[1] == "error"
-        assert "Processing failed" in str(call_args.kwargs.get("error_message", ""))
-
-    async def test_ingestion_invalid_source_type(self) -> None:
-        """ingest_material() fails for unknown source_type."""
-        material_id = uuid.uuid4()
-
-        main_session = AsyncMock()
-        main_session.add = MagicMock()
-        error_session = AsyncMock()
-        error_session.add = MagicMock()
-
-        factory = _make_two_session_factory(main_session, error_session)
-
-        with (
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_repo_cls,
-            patch(_HEAVY),
-            patch(_FACTORY, return_value={}),
-        ):
-            repo_instances: list[MagicMock] = []
-
-            def make_repo(session: object) -> MagicMock:
-                repo = MagicMock()
-                repo.update_status = AsyncMock()
-                repo_instances.append(repo)
-                return repo
-
-            mock_repo_cls.side_effect = make_repo
-
-            await ingest_material(
-                material_id,
-                "invalid",
-                "https://example.com",
-                factory,
-            )
-
-        error_repo = repo_instances[-1]
-        error_repo.update_status.assert_awaited_once()
-        call_args = error_repo.update_status.call_args
-        assert call_args.args[1] == "error"
+def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
+    """Create a mock MaterialEntry."""
+    entry = MagicMock()
+    entry.source_url = source_url
+    return entry
 
 
 class TestArqIngestMaterial:
@@ -236,25 +89,18 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.storage.job_repository.JobRepository"
             ) as mock_job_repo_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_repo_cls,
             patch(_ENTRY_REPO) as mock_entry_cls,
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
             ) as mock_cb_cls,
             patch(_HEAVY),
-            patch(
-                _FACTORY,
-                return_value=_mock_processors(),
-            ),
+            patch(_FACTORY, return_value=_mock_processors()),
         ):
             mock_job_repo_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat_repo_cls.return_value.update_status = AsyncMock()
-            mock_mat_repo_cls.return_value.get_by_id = AsyncMock(
-                return_value=MagicMock()
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_entry()
             )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
 
             await arq_ingest_material(
@@ -271,9 +117,10 @@ class TestArqIngestMaterial:
         mock_check.assert_called_once_with(JobPriority.IMMEDIATE)
 
     async def test_success_delegates_to_callback(self) -> None:
-        """On success (legacy model): job activated, callback.on_success called."""
+        """On success: job activated, set_pending called, callback.on_success called."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
+        jid = uuid.UUID(job_id)
         mid = uuid.UUID(material_id)
         factory = _make_session_factory()
         ctx = _make_arq_ctx(factory=factory)
@@ -287,9 +134,6 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.storage.job_repository.JobRepository"
             ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
             patch(_ENTRY_REPO) as mock_entry_cls,
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
@@ -299,10 +143,10 @@ class TestArqIngestMaterial:
         ):
             mock_job = mock_job_cls.return_value
             mock_job.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat = mock_mat_cls.return_value
-            mock_mat.update_status = AsyncMock()
-            mock_mat.get_by_id = AsyncMock(return_value=MagicMock())
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_entry()
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
@@ -310,19 +154,16 @@ class TestArqIngestMaterial:
                 ctx, job_id, material_id, "web", "https://example.com"
             )
 
-        # Job activated in main session
-        mock_job.update_status.assert_awaited_once_with(uuid.UUID(job_id), "active")
-        # Material set to processing in main session (legacy path)
-        mock_mat.update_status.assert_awaited_once_with(mid, "processing")
-        # Completion delegated to callback with is_new_model=False
+        mock_job.update_status.assert_awaited_once_with(jid, "active")
+        mock_entry_cls.return_value.set_pending.assert_awaited_once_with(mid, jid)
         mock_cb_cls.return_value.on_success.assert_awaited_once()
         call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
-        assert call_kwargs["job_id"] == uuid.UUID(job_id)
+        assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
-        assert call_kwargs["is_new_model"] is False
+        assert call_kwargs["is_new_model"] is True
 
     async def test_error_delegates_to_callback(self) -> None:
-        """On error (legacy model): session rolled back, callback.on_failure called."""
+        """On error: session rolled back, callback.on_failure called."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
         jid = uuid.UUID(job_id)
@@ -338,9 +179,6 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.storage.job_repository.JobRepository"
             ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
             patch(_ENTRY_REPO) as mock_entry_cls,
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
@@ -352,9 +190,10 @@ class TestArqIngestMaterial:
             ),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat_cls.return_value.update_status = AsyncMock()
-            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=MagicMock())
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_entry()
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
@@ -362,15 +201,44 @@ class TestArqIngestMaterial:
                 ctx, job_id, material_id, "web", "https://example.com"
             )
 
-        # Main session rolled back
         session.rollback.assert_awaited_once()
-        # Failure delegated to callback with is_new_model=False
         mock_cb_cls.return_value.on_failure.assert_awaited_once()
         call_kwargs = mock_cb_cls.return_value.on_failure.call_args.kwargs
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
         assert "boom" in call_kwargs["error_message"]
-        assert call_kwargs["is_new_model"] is False
+        assert call_kwargs["is_new_model"] is True
+
+    async def test_entry_not_found_returns_early(self) -> None:
+        """When MaterialEntry not found, returns early without processing."""
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        factory = _make_session_factory()
+        ctx = _make_arq_ctx(factory=factory)
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(_ENTRY_REPO) as mock_entry_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=_mock_processors()),
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
+
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com"
+            )
+
+        mock_cb_cls.return_value.on_success.assert_not_awaited()
+        mock_cb_cls.return_value.on_failure.assert_not_awaited()
 
     async def test_retry_on_closed_window(self) -> None:
         """NORMAL priority outside window raises arq.Retry."""
@@ -406,8 +274,10 @@ class TestArqIngestMaterial:
         material_id = str(uuid.uuid4())
         factory = _make_session_factory()
 
-        mock_material = MagicMock()
-        mock_material.source_url = "http://localhost:9000/course-materials/courses/f.md"
+        mock_entry_obj = MagicMock()
+        mock_entry_obj.source_url = (
+            "http://localhost:9000/course-materials/courses/f.md"
+        )
 
         mock_s3 = MagicMock()
         mock_s3.extract_key = MagicMock(return_value="courses/f.md")
@@ -436,9 +306,6 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.storage.job_repository.JobRepository"
             ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
             patch(_ENTRY_REPO) as mock_entry_cls,
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
@@ -448,9 +315,10 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "exists", AsyncMock(return_value=False)),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat_cls.return_value.update_status = AsyncMock()
-            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=mock_entry_obj
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
 
             await arq_ingest_material(
@@ -463,11 +331,6 @@ class TestArqIngestMaterial:
 
         mock_s3.download_file.assert_awaited_once_with("courses/f.md")
         assert captured_url == str(tmp)
-        # ORM source_url restored after processing to prevent DB pollution
-        assert (
-            mock_material.source_url
-            == "http://localhost:9000/course-materials/courses/f.md"
-        )
 
     async def test_temp_file_cleaned_up_on_success_and_error(self) -> None:
         """Temp file from S3 download is unlinked in finally block."""
@@ -479,8 +342,10 @@ class TestArqIngestMaterial:
         material_id = str(uuid.uuid4())
         factory = _make_session_factory()
 
-        mock_material = MagicMock()
-        mock_material.source_url = "http://localhost:9000/course-materials/courses/f.md"
+        mock_entry_obj = MagicMock()
+        mock_entry_obj.source_url = (
+            "http://localhost:9000/course-materials/courses/f.md"
+        )
 
         tmp = Path("/tmp/test-cleanup.md")
         mock_s3 = MagicMock()
@@ -498,9 +363,6 @@ class TestArqIngestMaterial:
             patch(
                 "course_supporter.storage.job_repository.JobRepository"
             ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
             patch(_ENTRY_REPO) as mock_entry_cls,
             patch(
                 "course_supporter.ingestion_callback.IngestionCallback"
@@ -516,9 +378,10 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "unlink", mock_unlink),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat_cls.return_value.update_status = AsyncMock()
-            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=mock_entry_obj
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
@@ -530,160 +393,3 @@ class TestArqIngestMaterial:
             )
 
         mock_unlink.assert_awaited_once_with(missing_ok=True)
-
-
-class TestArqIngestMaterialEntry:
-    """Tests for arq_ingest_material with MaterialEntry (new model)."""
-
-    async def test_new_model_success_uses_set_pending(self) -> None:
-        """MaterialEntry path: set_pending called instead of update_status."""
-        job_id = str(uuid.uuid4())
-        material_id = str(uuid.uuid4())
-        jid = uuid.UUID(job_id)
-        mid = uuid.UUID(material_id)
-        factory = _make_session_factory()
-        ctx = _make_arq_ctx(factory=factory)
-
-        mock_entry = MagicMock()
-        mock_entry.source_url = "https://example.com/slides.pdf"
-        doc = SourceDocument(
-            source_type=SourceType.PRESENTATION,
-            source_url="https://example.com/slides.pdf",
-        )
-
-        with (
-            patch("course_supporter.job_priority.check_work_window"),
-            patch(
-                "course_supporter.storage.job_repository.JobRepository"
-            ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
-            patch(_ENTRY_REPO) as mock_entry_cls,
-            patch(
-                "course_supporter.ingestion_callback.IngestionCallback"
-            ) as mock_cb_cls,
-            patch(_HEAVY),
-            patch(
-                _FACTORY,
-                return_value=_mock_processors(doc, source_type=SourceType.PRESENTATION),
-            ),
-        ):
-            mock_job_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
-            mock_entry_cls.return_value.set_pending = AsyncMock()
-            mock_cb_cls.return_value.on_success = AsyncMock()
-            mock_cb_cls.return_value.on_failure = AsyncMock()
-
-            await arq_ingest_material(
-                ctx,
-                job_id,
-                material_id,
-                "presentation",
-                "https://example.com/slides.pdf",
-            )
-
-        # set_pending called (new model path)
-        mock_entry_cls.return_value.set_pending.assert_awaited_once_with(mid, jid)
-        # Legacy update_status NOT called
-        mock_mat_cls.return_value.update_status.assert_not_called()
-        # Callback with is_new_model=True
-        call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
-        assert call_kwargs["is_new_model"] is True
-
-    async def test_new_model_error_passes_is_new_model_true(self) -> None:
-        """MaterialEntry path: on_failure receives is_new_model=True."""
-        job_id = str(uuid.uuid4())
-        material_id = str(uuid.uuid4())
-
-        session = AsyncMock()
-        session.add = MagicMock()
-        factory = _make_session_factory(session)
-        ctx = _make_arq_ctx(factory=factory)
-
-        mock_entry = MagicMock()
-        mock_entry.source_url = "https://example.com/slides.pdf"
-
-        with (
-            patch("course_supporter.job_priority.check_work_window"),
-            patch(
-                "course_supporter.storage.job_repository.JobRepository"
-            ) as mock_job_cls,
-            patch("course_supporter.api.tasks.SourceMaterialRepository"),
-            patch(_ENTRY_REPO) as mock_entry_cls,
-            patch(
-                "course_supporter.ingestion_callback.IngestionCallback"
-            ) as mock_cb_cls,
-            patch(_HEAVY),
-            patch(
-                _FACTORY,
-                return_value=_failing_processors(
-                    error="boom", source_type=SourceType.PRESENTATION
-                ),
-            ),
-        ):
-            mock_job_cls.return_value.update_status = AsyncMock()
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
-            mock_entry_cls.return_value.set_pending = AsyncMock()
-            mock_cb_cls.return_value.on_success = AsyncMock()
-            mock_cb_cls.return_value.on_failure = AsyncMock()
-
-            await arq_ingest_material(
-                ctx,
-                job_id,
-                material_id,
-                "presentation",
-                "https://example.com/slides.pdf",
-            )
-
-        call_kwargs = mock_cb_cls.return_value.on_failure.call_args.kwargs
-        assert call_kwargs["is_new_model"] is True
-        assert "boom" in call_kwargs["error_message"]
-
-    async def test_fallback_to_legacy_when_entry_not_found(self) -> None:
-        """When MaterialEntry not found, falls back to SourceMaterial."""
-        job_id = str(uuid.uuid4())
-        material_id = str(uuid.uuid4())
-        mid = uuid.UUID(material_id)
-        factory = _make_session_factory()
-        ctx = _make_arq_ctx(factory=factory)
-
-        doc = SourceDocument(
-            source_type=SourceType.WEB, source_url="https://example.com"
-        )
-
-        with (
-            patch("course_supporter.job_priority.check_work_window"),
-            patch(
-                "course_supporter.storage.job_repository.JobRepository"
-            ) as mock_job_cls,
-            patch(
-                "course_supporter.api.tasks.SourceMaterialRepository"
-            ) as mock_mat_cls,
-            patch(_ENTRY_REPO) as mock_entry_cls,
-            patch(
-                "course_supporter.ingestion_callback.IngestionCallback"
-            ) as mock_cb_cls,
-            patch(_HEAVY),
-            patch(_FACTORY, return_value=_mock_processors(doc)),
-        ):
-            mock_job_cls.return_value.update_status = AsyncMock()
-            # Entry not found → fallback
-            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mock_mat_cls.return_value.update_status = AsyncMock()
-            mock_mat_cls.return_value.get_by_id = AsyncMock(return_value=MagicMock())
-            mock_cb_cls.return_value.on_success = AsyncMock()
-
-            await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com"
-            )
-
-        # Legacy path: update_status("processing") called
-        mock_mat_cls.return_value.update_status.assert_awaited_once_with(
-            mid, "processing"
-        )
-        # set_pending NOT called
-        mock_entry_cls.return_value.set_pending.assert_not_called()
-        # Callback with is_new_model=False
-        call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
-        assert call_kwargs["is_new_model"] is False

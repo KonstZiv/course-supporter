@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
-from course_supporter.storage.repositories import SourceMaterialRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
@@ -90,7 +89,7 @@ async def arq_ingest_material(
     source_url: str,
     priority: str = "normal",
 ) -> None:
-    """ARQ task: process a source material with job tracking.
+    """ARQ task: process a MaterialEntry with job tracking.
 
     Thin orchestrator: validates priority, transitions to active,
     runs the processor, then delegates completion handling to
@@ -99,7 +98,7 @@ async def arq_ingest_material(
     Args:
         ctx: ARQ worker context (session_factory, model_router, engine).
         job_id: Job UUID as string (ARQ serializes via JSON).
-        material_id: SourceMaterial UUID as string.
+        material_id: MaterialEntry UUID as string.
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or S3 path to the source file.
         priority: Job priority ('normal' or 'immediate').
@@ -131,19 +130,15 @@ async def arq_ingest_material(
     async with session_factory() as session:
         job_repo = JobRepository(session)
         entry_repo = MaterialEntryRepository(session)
-        mat_repo = SourceMaterialRepository(session)
 
-        # Detect model: try MaterialEntry first, fallback to SourceMaterial
         entry = await entry_repo.get_by_id(mid)
-        is_new_model = entry is not None
+        if entry is None:
+            log.error("material_entry_not_found", material_id=material_id)
+            return
 
         try:
             await job_repo.update_status(jid, "active")
-
-            if is_new_model:
-                await entry_repo.set_pending(mid, jid)
-            else:
-                await mat_repo.update_status(mid, "processing")
+            await entry_repo.set_pending(mid, jid)
             await session.commit()
 
             try:
@@ -153,17 +148,7 @@ async def arq_ingest_material(
                 msg = f"Unsupported source_type: {source_type}"
                 raise ValueError(msg) from None
 
-            material: _HasSourceUrl
-            if is_new_model:
-                material = entry  # type: ignore[assignment]
-            else:
-                old_mat = await mat_repo.get_by_id(mid)
-                if old_mat is None:
-                    msg = f"SourceMaterial not found: {mid}"
-                    raise ValueError(msg)
-                material = old_mat
-
-            async with _resolve_s3_url(material, s3) as resolved:
+            async with _resolve_s3_url(entry, s3) as resolved:
                 doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
@@ -174,7 +159,7 @@ async def arq_ingest_material(
                 job_id=jid,
                 material_id=mid,
                 error_message=str(exc),
-                is_new_model=is_new_model,
+                is_new_model=True,
             )
             log.error("ingestion_failed", error=str(exc))
             return
@@ -183,14 +168,13 @@ async def arq_ingest_material(
         job_id=jid,
         material_id=mid,
         content_json=content,
-        is_new_model=is_new_model,
+        is_new_model=True,
     )
     log.info("ingestion_done")
 
 
 def _resolve_target_nodes(
     root_nodes: list[MaterialNode],
-    course_id: uuid.UUID,
     node_id: uuid.UUID | None,
 ) -> tuple[MaterialNode | None, list[MaterialNode]]:
     """Resolve target node and flatten its subtree.
@@ -199,7 +183,7 @@ def _resolve_target_nodes(
     """
     from course_supporter.tree_utils import resolve_target_nodes
 
-    return resolve_target_nodes(root_nodes, course_id, node_id)
+    return resolve_target_nodes(root_nodes, node_id)
 
 
 def _collect_ready_documents(
@@ -266,8 +250,8 @@ def _collect_validated_mappings(
 async def arq_generate_structure(
     ctx: dict[str, Any],
     job_id: str,
-    course_id: str,
-    node_id: str | None = None,
+    root_node_id: str,
+    target_node_id: str | None = None,
     mode: Literal["free", "guided"] = "free",
 ) -> None:
     """ARQ task: generate course structure via ArchitectAgent.
@@ -279,8 +263,8 @@ async def arq_generate_structure(
     Args:
         ctx: ARQ worker context (session_factory, model_router).
         job_id: Job UUID as string (ARQ JSON serialization).
-        course_id: Course UUID as string.
-        node_id: Optional target node UUID. None = whole course.
+        root_node_id: Root MaterialNode UUID as string.
+        target_node_id: Optional target node UUID. None = whole tree.
         mode: Generation mode ('free' or 'guided').
     """
     from course_supporter.agents.architect import ArchitectAgent
@@ -293,16 +277,16 @@ async def arq_generate_structure(
     from course_supporter.storage.snapshot_repository import SnapshotRepository
 
     jid = uuid.UUID(job_id)
-    cid = uuid.UUID(course_id)
-    nid = uuid.UUID(node_id) if node_id else None
+    rid = uuid.UUID(root_node_id)
+    nid = uuid.UUID(target_node_id) if target_node_id else None
 
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     router: ModelRouter = ctx["model_router"]
 
     log = structlog.get_logger().bind(
         job_id=job_id,
-        course_id=course_id,
-        node_id=node_id,
+        root_node_id=root_node_id,
+        target_node_id=target_node_id,
         mode=mode,
     )
     log.info("generate_structure_started")
@@ -315,11 +299,11 @@ async def arq_generate_structure(
 
             # Load tree → resolve target → flatten
             node_repo = MaterialNodeRepository(session)
-            root_nodes: list[MaterialNode] = await node_repo.get_tree(
-                cid,
+            root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+                rid,
                 include_materials=True,
             )
-            target, flat_nodes = _resolve_target_nodes(root_nodes, cid, nid)
+            target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
 
             # Collect data for generation
             documents = _collect_ready_documents(flat_nodes)
@@ -345,11 +329,13 @@ async def arq_generate_structure(
                 fingerprint = await fp_service.ensure_course_fp(root_nodes)
             await session.commit()
 
+            # Effective node_id for snapshot identity
+            effective_node_id = nid or rid
+
             # Idempotency check
             snap_repo = SnapshotRepository(session)
             existing = await snap_repo.find_by_identity(
-                course_id=cid,
-                node_id=nid,
+                node_id=effective_node_id,
                 node_fingerprint=fingerprint,
                 mode=mode,
             )
@@ -390,8 +376,7 @@ async def arq_generate_structure(
 
             # Save snapshot with ESC FK
             snapshot = await snap_repo.create(
-                course_id=cid,
-                node_id=nid,
+                node_id=effective_node_id,
                 node_fingerprint=fingerprint,
                 mode=mode,
                 structure=gen_result.structure.model_dump(),
@@ -413,65 +398,3 @@ async def arq_generate_structure(
                 )
                 await err_session.commit()
             log.error("generate_structure_failed", error=str(exc))
-
-
-async def ingest_material(
-    material_id: uuid.UUID,
-    source_type: str,
-    source_url: str,
-    session_factory: async_sessionmaker[AsyncSession],
-    router: ModelRouter | None = None,
-    s3: S3Client | None = None,
-) -> None:
-    """Process a source material in the background (legacy).
-
-    Kept for backward compatibility. New code should use
-    :func:`arq_ingest_material` via the ARQ worker.
-    """
-    log = structlog.get_logger().bind(
-        material_id=str(material_id), source_type=source_type
-    )
-    log.info("ingestion_started")
-
-    heavy = create_heavy_steps(router=router)
-    processors = create_processors(heavy)
-
-    async with session_factory() as session:
-        repo = SourceMaterialRepository(session)
-        try:
-            await repo.update_status(material_id, "processing")
-            await session.commit()
-
-            try:
-                st = SourceType(source_type)
-                processor = processors[st]
-            except (ValueError, KeyError):
-                msg = f"Unsupported source_type: {source_type}"
-                raise ValueError(msg) from None
-
-            material = await repo.get_by_id(material_id)
-            if material is None:
-                msg = f"SourceMaterial not found: {material_id}"
-                raise ValueError(msg)
-
-            async with _resolve_s3_url(material, s3) as resolved:
-                doc = await processor.process(resolved, router=router)
-
-            content = doc.model_dump_json()
-            await repo.update_status(material_id, "done", content_snapshot=content)
-            await session.commit()
-            log.info("ingestion_done")
-
-        except Exception as exc:
-            await session.rollback()
-
-            async with session_factory() as error_session:
-                error_repo = SourceMaterialRepository(error_session)
-                await error_repo.update_status(
-                    material_id,
-                    "error",
-                    error_message=str(exc),
-                )
-                await error_session.commit()
-
-            log.error("ingestion_failed", error=str(exc))

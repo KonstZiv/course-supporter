@@ -26,18 +26,56 @@ class _Unset(Enum):
 class MaterialNodeRepository:
     """Repository for material tree node operations.
 
-    Not tenant-scoped — tenant isolation is ensured at the API layer
-    by verifying course ownership before accessing nodes.
+    Root nodes (parent_id IS NULL) represent "courses" — top-level
+    entities owned by a tenant. Tenant isolation is enforced at the
+    API layer via ``node.tenant_id``.
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    # ── Root node (= course) operations ──
+
+    async def list_roots(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[MaterialNode]:
+        """List root nodes for a tenant, ordered newest first."""
+        stmt = (
+            select(MaterialNode)
+            .where(
+                MaterialNode.tenant_id == tenant_id,
+                MaterialNode.parent_id.is_(None),
+            )
+            .order_by(MaterialNode.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_roots(self, tenant_id: uuid.UUID) -> int:
+        """Count root nodes for a tenant."""
+        stmt = (
+            select(func.count())
+            .select_from(MaterialNode)
+            .where(
+                MaterialNode.tenant_id == tenant_id,
+                MaterialNode.parent_id.is_(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
+    # ── CRUD ──
+
     async def create(
         self,
         *,
         tenant_id: uuid.UUID,
-        course_id: uuid.UUID,
         title: str,
         parent_id: uuid.UUID | None = None,
         description: str | None = None,
@@ -46,7 +84,6 @@ class MaterialNodeRepository:
 
         Args:
             tenant_id: FK to the owning tenant.
-            course_id: FK to the parent course.
             title: Node title.
             parent_id: FK to parent node (None for root).
             description: Optional node description.
@@ -54,10 +91,9 @@ class MaterialNodeRepository:
         Returns:
             The newly created MaterialNode.
         """
-        next_order = await self._next_sibling_order(course_id, parent_id)
+        next_order = await self._next_sibling_order(parent_id)
         node = MaterialNode(
             tenant_id=tenant_id,
-            course_id=course_id,
             parent_id=parent_id,
             title=title,
             description=description,
@@ -71,12 +107,12 @@ class MaterialNodeRepository:
         """Get a node by primary key."""
         return await self._session.get(MaterialNode, node_id)
 
-    async def get_roots(self, course_id: uuid.UUID) -> list[MaterialNode]:
-        """Get root nodes (parent_id=None) for a course, ordered."""
+    async def get_roots(self, tenant_id: uuid.UUID) -> list[MaterialNode]:
+        """Get root nodes (parent_id=None) for a tenant, ordered."""
         stmt = (
             select(MaterialNode)
             .where(
-                MaterialNode.course_id == course_id,
+                MaterialNode.tenant_id == tenant_id,
                 MaterialNode.parent_id.is_(None),
             )
             .order_by(MaterialNode.order)
@@ -94,28 +130,40 @@ class MaterialNodeRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_tree(
+    # ── Tree operations ──
+
+    async def get_subtree(
         self,
-        course_id: uuid.UUID,
+        root_id: uuid.UUID,
         *,
         include_materials: bool = False,
     ) -> list[MaterialNode]:
-        """Load all nodes for a course and return root nodes with children populated.
+        """Load entire subtree rooted at *root_id* and return with children populated.
 
-        Loads all nodes in one query, then assembles the tree in Python.
-        Children are sorted by ``order`` at each level.
+        Uses a recursive CTE to find all descendant node IDs, then loads
+        full ORM objects in a single query. Tree assembly happens in Python.
 
         Args:
-            course_id: Course to load the tree for.
+            root_id: UUID of the root node.
             include_materials: If True, eager-load ``MaterialEntry``
-                relationships (ordered by ``order``) for each node.
+                relationships for each node.
 
         Returns:
-            List of root MaterialNode instances with ``children`` populated.
+            List containing the root node with ``children`` populated
+            recursively. Returns empty list if root_id not found.
         """
+        # Recursive CTE: start from root_id, walk down via parent_id
+        base = select(MaterialNode.id).where(MaterialNode.id == root_id)
+        cte = base.cte(name="subtree", recursive=True)
+        recursive = select(MaterialNode.id).join(
+            cte, MaterialNode.parent_id == cte.c.id
+        )
+        cte = cte.union_all(recursive)
+
+        # Load full node objects
         stmt = (
             select(MaterialNode)
-            .where(MaterialNode.course_id == course_id)
+            .where(MaterialNode.id.in_(select(cte.c.id)))
             .order_by(MaterialNode.order)
         )
         if include_materials:
@@ -128,17 +176,13 @@ class MaterialNodeRepository:
         roots: list[MaterialNode] = []
 
         for node in all_nodes:
-            # Use set_committed_value to bypass ORM backref synchronization.
-            # Direct assignment (node.children = []) triggers lazy-load of
-            # existing children for backref sync, which fails in async context
-            # with MissingGreenlet.
             if hasattr(node, "_sa_instance_state"):
                 set_committed_value(node, "children", [])
             else:
                 node.children = []
 
         for node in all_nodes:
-            if node.parent_id is None:
+            if node.parent_id is None or node.parent_id not in by_id:
                 roots.append(node)
             else:
                 parent = by_id.get(node.parent_id)
@@ -184,7 +228,7 @@ class MaterialNodeRepository:
 
         old_parent_id = node.parent_id
         node.parent_id = new_parent_id
-        node.order = await self._next_sibling_order(node.course_id, new_parent_id)
+        node.order = await self._next_sibling_order(new_parent_id)
         await self._session.flush()
         # Invalidate both old and new parent chains
         await self._invalidate_node_chain(old_parent_id)
@@ -221,8 +265,8 @@ class MaterialNodeRepository:
         stmt = (
             select(MaterialNode)
             .where(
-                MaterialNode.course_id == node.course_id,
                 MaterialNode.parent_id == node.parent_id,
+                MaterialNode.tenant_id == node.tenant_id,
             )
             .order_by(MaterialNode.order)
         )
@@ -308,13 +352,11 @@ class MaterialNodeRepository:
 
     async def _next_sibling_order(
         self,
-        course_id: uuid.UUID,
         parent_id: uuid.UUID | None,
     ) -> int:
         """Get next order value for siblings under the given parent."""
         # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = select(func.coalesce(func.max(MaterialNode.order) + 1, 0)).where(
-            MaterialNode.course_id == course_id,
             MaterialNode.parent_id == parent_id,
         )
         result = await self._session.execute(stmt)

@@ -62,7 +62,7 @@ class TestAuthMiddleware:
     @pytest.mark.asyncio
     async def test_missing_api_key_header(self, client: AsyncClient) -> None:
         """Request without X-API-Key header returns 401."""
-        response = await client.get(f"/api/v1/courses/{uuid.uuid4()}")
+        response = await client.get(f"/api/v1/nodes/{uuid.uuid4()}")
         assert response.status_code == 401
 
     @pytest.mark.asyncio
@@ -75,7 +75,7 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         response = await client.get(
-            f"/api/v1/courses/{uuid.uuid4()}",
+            f"/api/v1/nodes/{uuid.uuid4()}",
             headers={"X-API-Key": "cs_test_invalidkey123456"},
         )
         assert response.status_code == 401
@@ -94,7 +94,7 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         response = await client.get(
-            f"/api/v1/courses/{uuid.uuid4()}",
+            f"/api/v1/nodes/{uuid.uuid4()}",
             headers={"X-API-Key": "cs_test_inactivekey123456"},
         )
         assert response.status_code == 401
@@ -113,7 +113,7 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         response = await client.get(
-            f"/api/v1/courses/{uuid.uuid4()}",
+            f"/api/v1/nodes/{uuid.uuid4()}",
             headers={"X-API-Key": "cs_test_inactivetenantkey"},
         )
         assert response.status_code == 401
@@ -131,7 +131,7 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         response = await client.get(
-            f"/api/v1/courses/{uuid.uuid4()}",
+            f"/api/v1/nodes/{uuid.uuid4()}",
             headers={"X-API-Key": "cs_test_expiredkey123456"},
         )
         assert response.status_code == 401
@@ -147,13 +147,13 @@ class TestAuthMiddleware:
         mock_result.scalar_one_or_none.return_value = record
         mock_session.execute.return_value = mock_result
 
-        # Patch the repository to return a course
+        # Patch the repository to return no node
         with patch(
-            "course_supporter.storage.repositories.CourseRepository.get_with_structure",
+            "course_supporter.storage.material_node_repository.MaterialNodeRepository.get_by_id",
             return_value=None,
         ):
             response = await client.get(
-                f"/api/v1/courses/{uuid.uuid4()}",
+                f"/api/v1/nodes/{uuid.uuid4()}",
                 headers={"X-API-Key": "cs_test_validkey123456"},
             )
         # 404 means we got past auth and into the endpoint logic
@@ -174,15 +174,15 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         with patch(
-            "course_supporter.storage.repositories.CourseRepository.get_with_structure",
+            "course_supporter.storage.material_node_repository.MaterialNodeRepository.get_by_id",
         ) as mock_get:
             mock_get.return_value = None
             response = await client.get(
-                f"/api/v1/courses/{uuid.uuid4()}",
+                f"/api/v1/nodes/{uuid.uuid4()}",
                 headers={"X-API-Key": "cs_test_contextkey123456"},
             )
 
-        # Verify auth passed (404 from missing course, not 401)
+        # Verify auth passed (404 from missing node, not 401)
         assert response.status_code == 404
         # Verify the DB query was executed with the hashed key
         call_args = mock_session.execute.call_args

@@ -27,7 +27,7 @@ from course_supporter.models.source import (
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import SourceMaterial
+    from course_supporter.storage.orm import MaterialEntry as SourceMaterial
 
 logger = structlog.get_logger()
 

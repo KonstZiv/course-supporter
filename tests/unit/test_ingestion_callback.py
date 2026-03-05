@@ -7,8 +7,10 @@ import pytest
 
 from course_supporter.ingestion_callback import IngestionCallback
 
-# Top-level imports in ingestion_callback — patch on the importing module
-_MAT_REPO = "course_supporter.ingestion_callback.SourceMaterialRepository"
+# Patch targets — imports inside ingestion_callback functions
+_ENTRY_REPO = (
+    "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+)
 _JOB_REPO = "course_supporter.ingestion_callback.JobRepository"
 _VALIDATION_SVC = "course_supporter.storage.mapping_validation.MappingValidationService"
 
@@ -46,26 +48,27 @@ class TestOnSuccess:
             svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
             yield
 
-    async def test_material_updated_to_done(self) -> None:
-        """SourceMaterial status transitions to 'done' with content."""
+    async def test_material_processing_completed(self) -> None:
+        """MaterialEntry complete_processing called with content and hash."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
         content = '{"key": "value"}'
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_repo = mat_cls.return_value
-            mat_repo.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_success(job_id=jid, material_id=mid, content_json=content)
 
-        mat_repo.update_status.assert_awaited_once_with(
-            mid, "done", content_snapshot=content
-        )
+        entry_cls.return_value.complete_processing.assert_awaited_once()
+        call_kwargs = entry_cls.return_value.complete_processing.call_args
+        assert call_kwargs.args[0] == mid
+        assert call_kwargs.kwargs["processed_content"] == content
+        assert len(call_kwargs.kwargs["processed_hash"]) == 64  # SHA-256 hex
 
     async def test_job_updated_to_complete(self) -> None:
         """Job status transitions to 'complete'."""
@@ -74,10 +77,10 @@ class TestOnSuccess:
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_repo = job_cls.return_value
             job_repo.update_status = AsyncMock()
 
@@ -91,10 +94,10 @@ class TestOnSuccess:
         session = factory._mock_session
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_success(
@@ -111,13 +114,13 @@ class TestOnSuccess:
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
             patch.object(
                 callback, "_invalidate_fingerprints", new_callable=AsyncMock
             ) as mock_fp,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_success(
@@ -136,7 +139,7 @@ class TestOnSuccess:
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
             patch.object(
                 callback,
@@ -144,7 +147,7 @@ class TestOnSuccess:
                 new_callable=AsyncMock,
             ) as mock_rv,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_success(
@@ -163,10 +166,10 @@ class TestOnSuccess:
         session = factory._mock_session
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_success(
@@ -175,7 +178,7 @@ class TestOnSuccess:
                 content_json="{}",
             )
 
-        mat_cls.assert_called_once_with(session)
+        entry_cls.assert_called_once_with(session)
         job_cls.assert_called_once_with(session)
 
 
@@ -196,10 +199,10 @@ class TestOnFailure:
         error = "PDF parsing failed"
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_repo = job_cls.return_value
             job_repo.update_status = AsyncMock()
 
@@ -210,24 +213,23 @@ class TestOnFailure:
         )
 
     async def test_material_updated_to_error(self) -> None:
-        """SourceMaterial status transitions to 'error' with message."""
+        """MaterialEntry fail_processing called with error message."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
         error = "Whisper timeout"
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_repo = mat_cls.return_value
-            mat_repo.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
-        mat_repo.update_status.assert_awaited_once_with(
-            mid, "error", error_message=error
+        entry_cls.return_value.fail_processing.assert_awaited_once_with(
+            mid, error_message=error
         )
 
     async def test_session_committed(self) -> None:
@@ -236,10 +238,10 @@ class TestOnFailure:
         session = factory._mock_session
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_failure(
@@ -251,16 +253,12 @@ class TestOnFailure:
         session.commit.assert_awaited_once()
 
     async def test_revalidate_hook_called_on_failure(self) -> None:
-        """_revalidate_blocked_mappings called on failure too.
-
-        When material fails, blocked mappings need their
-        blocking_factors updated (material_error type).
-        """
+        """_revalidate_blocked_mappings called on failure too."""
         callback, _ = _make_callback()
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
             patch.object(
                 callback,
@@ -268,7 +266,7 @@ class TestOnFailure:
                 new_callable=AsyncMock,
             ) as mock_rv,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_failure(
@@ -287,10 +285,10 @@ class TestOnFailure:
         session = factory._mock_session
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
 
             await callback.on_failure(
@@ -299,7 +297,7 @@ class TestOnFailure:
                 error_message="error",
             )
 
-        mat_cls.assert_called_once_with(session)
+        entry_cls.assert_called_once_with(session)
         job_cls.assert_called_once_with(session)
 
 
@@ -313,19 +311,19 @@ class TestOnSuccessErrors:
             yield
 
     async def test_material_not_found_propagates(self) -> None:
-        """ValueError from material repo propagates to caller."""
+        """ValueError from entry repo propagates to caller."""
         callback, _ = _make_callback()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock(
-                side_effect=ValueError("SourceMaterial not found: xxx")
+            entry_cls.return_value.complete_processing = AsyncMock(
+                side_effect=ValueError("MaterialEntry not found: xxx")
             )
             job_cls.return_value.update_status = AsyncMock()
 
-            with pytest.raises(ValueError, match="SourceMaterial not found"):
+            with pytest.raises(ValueError, match="MaterialEntry not found"):
                 await callback.on_success(
                     job_id=uuid.uuid4(),
                     material_id=uuid.uuid4(),
@@ -337,10 +335,10 @@ class TestOnSuccessErrors:
         callback, _ = _make_callback()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock(
                 side_effect=ValueError("Job xxx not found")
             )
@@ -367,10 +365,10 @@ class TestOnFailureErrors:
         callback, _ = _make_callback()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock(
                 side_effect=ValueError("Job not found")
             )
@@ -402,11 +400,11 @@ class TestRevalidateBlockedMappingsCallback:
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
             patch(_VALIDATION_SVC) as svc_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.complete_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
             svc_cls.return_value.revalidate_blocked = AsyncMock(return_value=0)
 
@@ -422,11 +420,11 @@ class TestRevalidateBlockedMappingsCallback:
         mid = uuid.uuid4()
 
         with (
-            patch(_MAT_REPO) as mat_cls,
+            patch(_ENTRY_REPO) as entry_cls,
             patch(_JOB_REPO) as job_cls,
             patch(_VALIDATION_SVC) as svc_cls,
         ):
-            mat_cls.return_value.update_status = AsyncMock()
+            entry_cls.return_value.fail_processing = AsyncMock()
             job_cls.return_value.update_status = AsyncMock()
             svc_cls.return_value.revalidate_blocked = AsyncMock(return_value=0)
 
@@ -437,136 +435,8 @@ class TestRevalidateBlockedMappingsCallback:
         svc_cls.return_value.revalidate_blocked.assert_awaited_once_with(mid)
 
 
-class TestOnSuccessNewModel:
-    """IngestionCallback.on_success with is_new_model=True."""
-
-    _ENTRY_REPO = (
-        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
-    )
-
-    @pytest.fixture(autouse=True)
-    def _mock_revalidation(self) -> None:  # type: ignore[misc]
-        with patch(_VALIDATION_SVC) as svc:
-            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
-            yield
-
-    async def test_entry_repo_complete_processing_called(self) -> None:
-        """MaterialEntryRepository.complete_processing called with hash."""
-        callback, _ = _make_callback()
-        jid = uuid.uuid4()
-        mid = uuid.uuid4()
-        content = '{"key": "value"}'
-
-        with (
-            patch(self._ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=jid,
-                material_id=mid,
-                content_json=content,
-                is_new_model=True,
-            )
-
-        entry_cls.return_value.complete_processing.assert_awaited_once()
-        call_kwargs = entry_cls.return_value.complete_processing.call_args
-        assert call_kwargs.args[0] == mid
-        assert call_kwargs.kwargs["processed_content"] == content
-        assert len(call_kwargs.kwargs["processed_hash"]) == 64  # SHA-256 hex
-
-    async def test_legacy_repo_not_called_for_new_model(self) -> None:
-        """SourceMaterialRepository not used when is_new_model=True."""
-        callback, _ = _make_callback()
-
-        with (
-            patch(self._ENTRY_REPO) as entry_cls,
-            patch(_MAT_REPO) as mat_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-            mat_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                content_json="{}",
-                is_new_model=True,
-            )
-
-        mat_cls.return_value.update_status.assert_not_awaited()
-
-
-class TestOnFailureNewModel:
-    """IngestionCallback.on_failure with is_new_model=True."""
-
-    _ENTRY_REPO = (
-        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
-    )
-
-    @pytest.fixture(autouse=True)
-    def _mock_revalidation(self) -> None:  # type: ignore[misc]
-        with patch(_VALIDATION_SVC) as svc:
-            svc.return_value.revalidate_blocked = AsyncMock(return_value=0)
-            yield
-
-    async def test_entry_repo_fail_processing_called(self) -> None:
-        """MaterialEntryRepository.fail_processing called with error."""
-        callback, _ = _make_callback()
-        jid = uuid.uuid4()
-        mid = uuid.uuid4()
-        error = "Processing failed"
-
-        with (
-            patch(self._ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_failure(
-                job_id=jid,
-                material_id=mid,
-                error_message=error,
-                is_new_model=True,
-            )
-
-        entry_cls.return_value.fail_processing.assert_awaited_once_with(
-            mid, error_message=error
-        )
-
-    async def test_legacy_repo_not_called_for_new_model_failure(self) -> None:
-        """SourceMaterialRepository not used on failure when is_new_model=True."""
-        callback, _ = _make_callback()
-
-        with (
-            patch(self._ENTRY_REPO) as entry_cls,
-            patch(_MAT_REPO) as mat_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-            mat_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_failure(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                error_message="error",
-                is_new_model=True,
-            )
-
-        mat_cls.return_value.update_status.assert_not_awaited()
-
-
 class TestCallbackIntegrationWithArqTask:
     """Verify arq_ingest_material delegates to IngestionCallback."""
-
-    _ENTRY_REPO = (
-        "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
-    )
 
     async def test_success_delegates_to_callback(self) -> None:
         """On successful processing, callback.on_success is called."""
@@ -591,11 +461,15 @@ class TestCallbackIntegrationWithArqTask:
         factory = MagicMock(return_value=ctx_manager)
         router = MagicMock()
 
-        mock_material = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.source_url = "https://example.com"
 
         ctx = {"session_factory": factory, "model_router": router}
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+        _arq_entry_repo = (
+            "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+        )
         _factory = "course_supporter.api.tasks.create_processors"
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
 
@@ -603,15 +477,13 @@ class TestCallbackIntegrationWithArqTask:
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
-            patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
-            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_arq_entry_repo) as entry_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
         ):
             job_cls.return_value.update_status = AsyncMock()
-            entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mat_cls.return_value.update_status = AsyncMock()
-            mat_cls.return_value.get_by_id = AsyncMock(return_value=mock_material)
+            entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
+            entry_cls.return_value.set_pending = AsyncMock()
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 
@@ -646,22 +518,29 @@ class TestCallbackIntegrationWithArqTask:
         ctx = {"session_factory": factory, "model_router": router}
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
+        _arq_entry_repo = (
+            "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+        )
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
         _factory_fn = "course_supporter.api.tasks.create_processors"
+
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(side_effect=RuntimeError("boom"))
+
+        mock_entry = MagicMock()
+        mock_entry.source_url = "https://example.com"
 
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
-            patch("course_supporter.api.tasks.SourceMaterialRepository") as mat_cls,
-            patch(self._ENTRY_REPO) as entry_cls,
+            patch(_arq_entry_repo) as entry_cls,
             patch(_heavy),
-            patch(_factory_fn, return_value={"web": MagicMock()}),
+            patch(_factory_fn, return_value={"web": mock_processor}),
         ):
             job_cls.return_value.update_status = AsyncMock()
-            entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
-            mat_cls.return_value.update_status = AsyncMock()
-            mat_cls.return_value.get_by_id = AsyncMock(return_value=None)
+            entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
+            entry_cls.return_value.set_pending = AsyncMock()
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 
@@ -673,4 +552,4 @@ class TestCallbackIntegrationWithArqTask:
         call_kwargs = cb_cls.return_value.on_failure.call_args.kwargs
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
-        assert "not found" in call_kwargs["error_message"]
+        assert "boom" in call_kwargs["error_message"]

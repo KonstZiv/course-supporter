@@ -160,12 +160,19 @@ class TestConvertToStructureNodes:
         assert exercise.description == "Do something"
         assert exercise.success_criteria == "Must work"
 
-    def test_exercise_difficulty_mapping_easy(self, snapshot_id: uuid.UUID) -> None:
-        nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
-        exercise = nodes[3]
-        assert exercise.difficulty == "easy"  # level 2 → easy
-
-    def test_exercise_difficulty_mapping_medium(self, snapshot_id: uuid.UUID) -> None:
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [
+            (1, "easy"),
+            (2, "easy"),
+            (3, "medium"),
+            (4, "hard"),
+            (5, "hard"),
+        ],
+    )
+    def test_exercise_difficulty_mapping(
+        self, snapshot_id: uuid.UUID, level: int, expected: str
+    ) -> None:
         structure = CourseStructure(
             title="C",
             modules=[
@@ -175,7 +182,7 @@ class TestConvertToStructureNodes:
                         LessonOutput(
                             title="L",
                             exercises=[
-                                ExerciseOutput(description="E", difficulty_level=3),
+                                ExerciseOutput(description="E", difficulty_level=level),
                             ],
                         )
                     ],
@@ -184,28 +191,7 @@ class TestConvertToStructureNodes:
         )
         nodes = convert_to_structure_nodes(structure, snapshot_id)
         exercise = next(n for n in nodes if n.node_type == "exercise")
-        assert exercise.difficulty == "medium"
-
-    def test_exercise_difficulty_mapping_hard(self, snapshot_id: uuid.UUID) -> None:
-        structure = CourseStructure(
-            title="C",
-            modules=[
-                ModuleOutput(
-                    title="M",
-                    lessons=[
-                        LessonOutput(
-                            title="L",
-                            exercises=[
-                                ExerciseOutput(description="E", difficulty_level=5),
-                            ],
-                        )
-                    ],
-                )
-            ],
-        )
-        nodes = convert_to_structure_nodes(structure, snapshot_id)
-        exercise = next(n for n in nodes if n.node_type == "exercise")
-        assert exercise.difficulty == "hard"
+        assert exercise.difficulty == expected
 
     def test_multiple_modules_ordering(self, snapshot_id: uuid.UUID) -> None:
         structure = CourseStructure(
@@ -262,7 +248,9 @@ class TestConvertToStructureNodes:
         ids = [n.id for n in nodes]
         assert len(set(ids)) == len(ids)
 
-    def test_module_none_description(self, snapshot_id: uuid.UUID) -> None:
+    def test_module_empty_knowledge_skills_are_none(
+        self, snapshot_id: uuid.UUID
+    ) -> None:
         """Module with empty expected_knowledge/skills produces None."""
         structure = CourseStructure(
             title="C",

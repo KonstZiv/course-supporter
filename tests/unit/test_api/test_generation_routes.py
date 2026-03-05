@@ -19,7 +19,7 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import GenerationPlan, MappingWarning
 from course_supporter.storage.database import get_session
-from course_supporter.storage.orm import MappingValidationState
+from course_supporter.storage.orm import MappingValidationState, StructureNodeType
 
 STUB_TENANT = MagicMock(
     tenant_id=uuid.uuid4(),
@@ -111,7 +111,7 @@ def _mock_structure_node(
     *,
     node_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
-    node_type: str = "module",
+    node_type: str = StructureNodeType.MODULE,
     order: int = 0,
     title: str = "Node",
 ) -> MagicMock:
@@ -135,6 +135,11 @@ def _mock_structure_node(
     sn.common_mistakes = None
     sn.teaching_strategy = None
     sn.activities = None
+    sn.teaching_style = None
+    sn.deep_dive_references = None
+    sn.timecodes = None
+    sn.slide_references = None
+    sn.web_references = None
     sn.children = []
     return sn
 
@@ -144,17 +149,21 @@ def _mock_structure_tree() -> list[MagicMock]:
     mod_id = uuid.uuid4()
     les_id = uuid.uuid4()
     return [
-        _mock_structure_node(node_id=mod_id, title="Module 1", node_type="module"),
+        _mock_structure_node(
+            node_id=mod_id,
+            title="Module 1",
+            node_type=StructureNodeType.MODULE,
+        ),
         _mock_structure_node(
             node_id=les_id,
             parent_id=mod_id,
             title="Lesson 1",
-            node_type="lesson",
+            node_type=StructureNodeType.LESSON,
         ),
         _mock_structure_node(
             parent_id=les_id,
             title="Concept 1",
-            node_type="concept",
+            node_type=StructureNodeType.CONCEPT,
         ),
     ]
 
@@ -663,6 +672,33 @@ class TestGetSnapshot:
         data = resp.json()
         assert data["id"] == str(SNAPSHOT_ID)
         assert "structure" in data
+
+    async def test_200_with_recursive_tree(self, client: AsyncClient) -> None:
+        """Returns snapshot with nested structure_tree from DB nodes."""
+        snap = _make_snapshot()
+        tree_nodes = _mock_structure_tree()
+
+        with (
+            patch(_REPO_PATH) as mock_repo_cls,
+            patch(_SNAP_PATH) as mock_snap_cls,
+            patch(_SN_REPO_PATH) as mock_sn_cls,
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
+            mock_snap_cls.return_value.get_by_id = AsyncMock(return_value=snap)
+            mock_sn_cls.return_value.get_tree = AsyncMock(return_value=tree_nodes)
+            resp = await client.get(
+                f"/api/v1/nodes/{NODE_ID}/structure/snapshots/{SNAPSHOT_ID}",
+            )
+
+        assert resp.status_code == 200
+        tree = resp.json()["structure_tree"]
+        assert len(tree) == 1
+        assert tree[0]["title"] == "Module 1"
+        assert len(tree[0]["children"]) == 1
+        lesson = tree[0]["children"][0]
+        assert lesson["title"] == "Lesson 1"
+        assert len(lesson["children"]) == 1
+        assert lesson["children"][0]["title"] == "Concept 1"
 
     async def test_404_not_found(self, client: AsyncClient) -> None:
         """Non-existent snapshot returns 404."""

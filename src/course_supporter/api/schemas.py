@@ -640,6 +640,11 @@ class StructureNodeResponse(BaseModel):
     common_mistakes: list[str] | None = None
     teaching_strategy: str | None = None
     activities: list[str] | None = None
+    teaching_style: str | None = None
+    deep_dive_references: list[dict[str, Any]] | None = None
+    timecodes: list[dict[str, Any]] | None = None
+    slide_references: list[dict[str, Any]] | None = None
+    web_references: list[dict[str, Any]] | None = None
     children: list[StructureNodeResponse] = Field(default_factory=list)
 
 

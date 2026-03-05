@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from course_supporter.models.course import CourseStructure
+from course_supporter.models.course import CourseStructure, LessonOutput
 from course_supporter.storage.orm import StructureNode, StructureNodeType, _uuid7
 
 
@@ -117,21 +117,21 @@ def convert_to_structure_nodes(
 
 
 def _build_timecodes(
-    lesson: object,
+    lesson: LessonOutput,
 ) -> list[dict[str, str]] | None:
     """Extract timecode range from LessonOutput."""
-    start = getattr(lesson, "video_start_timecode", None)
-    end = getattr(lesson, "video_end_timecode", None)
+    start = lesson.video_start_timecode
+    end = lesson.video_end_timecode
     if start:
         return [{"start": start, "end": end or ""}]
     return None
 
 
 def _build_slide_refs(
-    lesson: object,
+    lesson: LessonOutput,
 ) -> list[dict[str, int]] | None:
     """Extract slide range from LessonOutput."""
-    slide_range = getattr(lesson, "slide_range", None)
+    slide_range = lesson.slide_range
     if slide_range:
         return [{"start": slide_range.start, "end": slide_range.end}]
     return None

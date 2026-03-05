@@ -39,6 +39,11 @@ def _make_sn(
         "common_mistakes": None,
         "teaching_strategy": None,
         "activities": None,
+        "teaching_style": None,
+        "deep_dive_references": None,
+        "timecodes": None,
+        "slide_references": None,
+        "web_references": None,
         "children": [],
     }
     defaults.update(kwargs)

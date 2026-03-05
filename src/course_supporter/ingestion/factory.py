@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from course_supporter.ingestion.heavy_steps import (
     DescribeSlidesFunc,
+    ParsePDFFunc,
     ScrapeWebFunc,
     TranscribeFunc,
 )
@@ -38,6 +39,7 @@ class HeavySteps:
     """
 
     transcribe: TranscribeFunc
+    parse_pdf: ParsePDFFunc
     describe_slides: DescribeSlidesFunc | None  # None → text-only PDF
     scrape_web: ScrapeWebFunc
 
@@ -57,6 +59,7 @@ def create_heavy_steps(
     Returns:
         HeavySteps bundle with all callable implementations.
     """
+    from course_supporter.ingestion.parse_pdf import local_parse_pdf
     from course_supporter.ingestion.scrape_web import local_scrape_web
     from course_supporter.ingestion.transcribe import local_transcribe
 
@@ -70,6 +73,7 @@ def create_heavy_steps(
 
     return HeavySteps(
         transcribe=local_transcribe,
+        parse_pdf=local_parse_pdf,
         describe_slides=describe_slides_func,
         scrape_web=local_scrape_web,
     )
@@ -91,6 +95,7 @@ def create_processors(
             transcribe_func=heavy.transcribe,
         ),
         SourceType.PRESENTATION: PresentationProcessor(
+            parse_pdf_func=heavy.parse_pdf,
             describe_slides_func=heavy.describe_slides,
         ),
         SourceType.TEXT: TextProcessor(),

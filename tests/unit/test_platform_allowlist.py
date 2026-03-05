@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,7 +37,7 @@ class TestCheckPlatform:
     """check_platform returns warning for unverified, None for verified."""
 
     @pytest.fixture(autouse=True)
-    def _patch_registry(self) -> None:  # type: ignore[return]
+    def _patch_registry(self) -> Iterator[None]:
         registry = PlatformRegistryConfig.model_validate(
             {
                 "platforms": {

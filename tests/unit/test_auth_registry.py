@@ -47,9 +47,11 @@ class TestLoadAuthRegistry:
             load_auth_registry(bad)
 
     def test_validation_error(self, tmp_path: Path) -> None:
+        from pydantic import ValidationError
+
         bad = tmp_path / "bad.yaml"
         bad.write_text("scopes:\n  prep:\n    wrong_field: x\n")
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(ValidationError):
             load_auth_registry(bad)
 
 

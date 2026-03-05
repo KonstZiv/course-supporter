@@ -39,37 +39,47 @@ def upgrade() -> None:
 
     # 3. Data migration: create ExternalServiceCall for each existing snapshot
     # that has LLM metadata, then link via FK.
+    # Use a temp table to map snapshot_id → esc_id, because CTE INSERT
+    # RETURNING cannot reference source columns from the SELECT.
     op.execute(
         """
-        WITH new_esc AS (
-            INSERT INTO external_service_calls
-                (id, action, strategy, provider, model_id, prompt_ref,
-                 unit_type, unit_in, unit_out, cost_usd, success, created_at)
-            SELECT
-                gen_random_uuid(),
-                'course_structuring',
-                ss.mode,
-                'unknown',
-                COALESCE(ss.model_id, 'unknown'),
-                ss.prompt_version,
-                'tokens',
-                ss.tokens_in,
-                ss.tokens_out,
-                ss.cost_usd,
-                true,
-                ss.created_at
-            FROM structure_snapshots ss
-            WHERE ss.model_id IS NOT NULL
-               OR ss.tokens_in IS NOT NULL
-            RETURNING id, created_at
-        )
-        UPDATE structure_snapshots ss
-        SET externalservicecall_id = new_esc.id
-        FROM new_esc
-        WHERE ss.created_at = new_esc.created_at
-          AND ss.externalservicecall_id IS NULL
+        CREATE TEMP TABLE _snap_esc_map AS
+        SELECT
+            ss.id AS snapshot_id,
+            gen_random_uuid() AS esc_id,
+            ss.mode,
+            COALESCE(ss.model_id, 'unknown') AS model_id,
+            ss.prompt_version,
+            ss.tokens_in,
+            ss.tokens_out,
+            ss.cost_usd,
+            ss.created_at
+        FROM structure_snapshots ss
+        WHERE ss.model_id IS NOT NULL
+           OR ss.tokens_in IS NOT NULL
         """
     )
+    op.execute(
+        """
+        INSERT INTO external_service_calls
+            (id, action, strategy, provider, model_id, prompt_ref,
+             unit_type, unit_in, unit_out, cost_usd, success, created_at)
+        SELECT
+            m.esc_id, 'course_structuring', m.mode, 'unknown', m.model_id,
+            m.prompt_version, 'tokens', m.tokens_in, m.tokens_out,
+            m.cost_usd, true, m.created_at
+        FROM _snap_esc_map m
+        """
+    )
+    op.execute(
+        """
+        UPDATE structure_snapshots ss
+        SET externalservicecall_id = m.esc_id
+        FROM _snap_esc_map m
+        WHERE ss.id = m.snapshot_id
+        """
+    )
+    op.execute("DROP TABLE _snap_esc_map")
 
     # 4. Drop duplicated LLM metadata columns
     op.drop_column("structure_snapshots", "prompt_version")

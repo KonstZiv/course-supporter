@@ -381,6 +381,18 @@ async def arq_generate_structure(
                 externalservicecall_id=esc.id,
             )
 
+            # Convert LLM output → StructureNode tree and persist
+            from course_supporter.storage.structure_node_repository import (
+                StructureNodeRepository,
+            )
+            from course_supporter.structure_conversion import (
+                convert_to_structure_nodes,
+            )
+
+            sn_nodes = convert_to_structure_nodes(gen_result.structure, snapshot.id)
+            sn_repo = StructureNodeRepository(session)
+            await sn_repo.create_tree(sn_nodes)
+
             # Job → complete
             await job_repo.update_status(jid, "complete")
             await session.commit()

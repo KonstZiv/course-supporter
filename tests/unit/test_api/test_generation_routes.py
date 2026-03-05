@@ -38,6 +38,9 @@ _REPO_PATH = "course_supporter.api.routes.generation.MaterialNodeRepository"
 _SNAP_PATH = "course_supporter.api.routes.generation.SnapshotRepository"
 _TRIGGER_PATH = "course_supporter.api.routes.generation.trigger_generation"
 _FIND_ROOT_PATH = "course_supporter.api.routes.generation._find_root_id"
+_SN_REPO_PATH = (
+    "course_supporter.storage.structure_node_repository.StructureNodeRepository"
+)
 
 
 # -- Helpers --
@@ -438,11 +441,13 @@ class TestGetLatestStructure:
         with (
             patch(_REPO_PATH) as mock_repo_cls,
             patch(_SNAP_PATH) as mock_snap_cls,
+            patch(_SN_REPO_PATH) as mock_sn_cls,
         ):
             mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
             mock_snap_cls.return_value.get_latest_for_node = AsyncMock(
                 return_value=snap
             )
+            mock_sn_cls.return_value.get_tree = AsyncMock(return_value=[])
             resp = await client.get(
                 f"/api/v1/nodes/{NODE_ID}/structure",
             )
@@ -452,6 +457,7 @@ class TestGetLatestStructure:
         assert data["id"] == str(SNAPSHOT_ID)
         assert "structure" in data
         assert data["structure"]["title"] == "Test Course"
+        assert data["structure_tree"] == []
 
     async def test_404_no_snapshot(self, client: AsyncClient) -> None:
         """Returns 404 when no snapshot exists."""
@@ -564,9 +570,11 @@ class TestGetSnapshot:
         with (
             patch(_REPO_PATH) as mock_repo_cls,
             patch(_SNAP_PATH) as mock_snap_cls,
+            patch(_SN_REPO_PATH) as mock_sn_cls,
         ):
             mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
             mock_snap_cls.return_value.get_by_id = AsyncMock(return_value=snap)
+            mock_sn_cls.return_value.get_tree = AsyncMock(return_value=[])
             resp = await client.get(
                 f"/api/v1/nodes/{NODE_ID}/structure/snapshots/{SNAPSHOT_ID}",
             )
@@ -641,11 +649,13 @@ class TestTenantIsolation:
         with (
             patch(_REPO_PATH) as mock_repo_cls,
             patch(_SNAP_PATH) as mock_snap_cls,
+            patch(_SN_REPO_PATH) as mock_sn_cls,
         ):
             mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
             mock_snap_cls.return_value.get_latest_for_node = AsyncMock(
                 return_value=_make_snapshot()
             )
+            mock_sn_cls.return_value.get_tree = AsyncMock(return_value=[])
             await client.get(
                 f"/api/v1/nodes/{NODE_ID}/structure",
             )

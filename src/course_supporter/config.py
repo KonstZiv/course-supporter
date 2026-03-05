@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     # --- Registries ---
     model_registry_path: Path = Path("config/models.yaml")
     auth_registry_path: Path = Path("config/auth.yaml")
+    platform_registry_path: Path = Path("config/platforms.yaml")
 
     # --- Convenience properties ---
     @property

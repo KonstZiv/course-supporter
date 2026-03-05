@@ -736,6 +736,10 @@ class MaterialEntryCreateResponse(BaseModel):
         default=None,
         description="ID of the auto-enqueued ingestion job for progress tracking.",
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings (e.g. unverified platform).",
+    )
     created_at: datetime = Field(description="When this entry was created.")
 
 

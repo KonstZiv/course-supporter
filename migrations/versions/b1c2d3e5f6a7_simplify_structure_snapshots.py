@@ -1,6 +1,6 @@
 """Simplify structure snapshots: rename table, drop LLM metadata, add ESC FK.
 
-Revision ID: b1c2d3e4f5a6
+Revision ID: b1c2d3e5f6a7
 Revises: a7b8c9d0e1f2
 Create Date: 2026-03-05 12:00:00.000000+00:00
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers
-revision: str = "b1c2d3e4f5a6"
+revision: str = "b1c2d3e5f6a7"
 down_revision: Union[str, None] = "a7b8c9d0e1f2"
 branch_labels: Union[str, tuple[str, ...], None] = None
 depends_on: Union[str, tuple[str, ...], None] = None

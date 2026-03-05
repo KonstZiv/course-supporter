@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from course_supporter.storage.orm import CourseStructureSnapshot
+from course_supporter.storage.orm import StructureSnapshot
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 
@@ -17,20 +17,18 @@ def _mock_snapshot(
     node_fingerprint: str = "abc123",
     mode: str = "free",
     structure: dict[str, object] | None = None,
+    externalservicecall_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """Create a mock CourseStructureSnapshot."""
-    snap = MagicMock(spec=CourseStructureSnapshot)
+    """Create a mock StructureSnapshot."""
+    snap = MagicMock(spec=StructureSnapshot)
     snap.id = snapshot_id or uuid.uuid4()
     snap.course_id = course_id or uuid.uuid4()
     snap.node_id = node_id
     snap.node_fingerprint = node_fingerprint
     snap.mode = mode
     snap.structure = structure or {"title": "Test"}
-    snap.prompt_version = None
-    snap.model_id = None
-    snap.tokens_in = None
-    snap.tokens_out = None
-    snap.cost_usd = None
+    snap.externalservicecall_id = externalservicecall_id
+    snap.service_call = None
     return snap
 
 
@@ -45,7 +43,7 @@ class TestCreate:
     """SnapshotRepository.create tests."""
 
     async def test_create_returns_snapshot(self) -> None:
-        """create() returns a CourseStructureSnapshot instance."""
+        """create() returns a StructureSnapshot instance."""
         session = _make_session()
         repo = SnapshotRepository(session)
 
@@ -56,7 +54,7 @@ class TestCreate:
             structure={"title": "Test"},
         )
 
-        assert isinstance(result, CourseStructureSnapshot)
+        assert isinstance(result, StructureSnapshot)
 
     async def test_create_adds_to_session(self) -> None:
         """create() calls session.add()."""
@@ -87,28 +85,21 @@ class TestCreate:
         session.flush.assert_awaited_once()
         session.commit.assert_not_awaited()
 
-    async def test_create_with_llm_metadata(self) -> None:
-        """create() passes LLM metadata fields to the ORM object."""
+    async def test_create_with_esc_fk(self) -> None:
+        """create() passes externalservicecall_id to the ORM object."""
         session = _make_session()
         repo = SnapshotRepository(session)
+        esc_id = uuid.uuid4()
 
         result = await repo.create(
             course_id=uuid.uuid4(),
             node_fingerprint="abc123",
             mode="guided",
             structure={"title": "Test"},
-            prompt_version="v1",
-            model_id="gemini-2.0-flash",
-            tokens_in=500,
-            tokens_out=1200,
-            cost_usd=0.003,
+            externalservicecall_id=esc_id,
         )
 
-        assert result.prompt_version == "v1"
-        assert result.model_id == "gemini-2.0-flash"
-        assert result.tokens_in == 500
-        assert result.tokens_out == 1200
-        assert result.cost_usd == 0.003
+        assert result.externalservicecall_id == esc_id
 
     async def test_create_with_node_id(self) -> None:
         """create() sets node_id for node-level snapshot."""
@@ -148,7 +139,9 @@ class TestGetById:
         """get_by_id() returns snapshot when found."""
         session = _make_session()
         snap = _mock_snapshot()
-        session.get.return_value = snap
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = snap
+        session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
         result = await repo.get_by_id(snap.id)
@@ -158,7 +151,9 @@ class TestGetById:
     async def test_get_by_id_not_found(self) -> None:
         """get_by_id() returns None when not found."""
         session = _make_session()
-        session.get.return_value = None
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = None
+        session.execute.return_value = exec_result
         repo = SnapshotRepository(session)
 
         result = await repo.get_by_id(uuid.uuid4())

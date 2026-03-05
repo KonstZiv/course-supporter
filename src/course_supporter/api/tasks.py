@@ -360,6 +360,7 @@ async def arq_generate_structure(
                 return
 
             # Generate via ArchitectAgent
+            from course_supporter.storage.orm import ExternalServiceCall
             from course_supporter.tree_utils import serialize_tree_for_guided
 
             existing_structure = (
@@ -370,18 +371,31 @@ async def arq_generate_structure(
                 context, existing_structure=existing_structure
             )
 
-            # Save snapshot
+            # Persist LLM metadata as ExternalServiceCall
+            esc = ExternalServiceCall(
+                action="course_structuring",
+                strategy=mode,
+                provider=gen_result.response.provider,
+                model_id=gen_result.response.model_id,
+                prompt_ref=gen_result.prompt_version,
+                unit_type="tokens",
+                unit_in=gen_result.response.tokens_in,
+                unit_out=gen_result.response.tokens_out,
+                latency_ms=gen_result.response.latency_ms,
+                cost_usd=gen_result.response.cost_usd,
+                success=True,
+            )
+            session.add(esc)
+            await session.flush()
+
+            # Save snapshot with ESC FK
             snapshot = await snap_repo.create(
                 course_id=cid,
                 node_id=nid,
                 node_fingerprint=fingerprint,
                 mode=mode,
                 structure=gen_result.structure.model_dump(),
-                prompt_version=gen_result.prompt_version,
-                model_id=gen_result.response.model_id,
-                tokens_in=gen_result.response.tokens_in,
-                tokens_out=gen_result.response.tokens_out,
-                cost_usd=gen_result.response.cost_usd,
+                externalservicecall_id=esc.id,
             )
 
             # Job → complete

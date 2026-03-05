@@ -115,7 +115,7 @@ class Course(Base):
     material_nodes: Mapped[list["MaterialNode"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
-    snapshots: Mapped[list["CourseStructureSnapshot"]] = relationship(
+    snapshots: Mapped[list["StructureSnapshot"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
 
@@ -377,17 +377,20 @@ class GenerationMode(StrEnum):
     GUIDED = "guided"
 
 
-class CourseStructureSnapshot(Base):
+class StructureSnapshot(Base):
     """Immutable snapshot of a generated course structure.
 
     Tied to a specific (course, node, fingerprint, mode) combination
     for idempotency: re-generating with the same inputs returns the
     existing snapshot instead of calling the LLM again.
 
+    LLM metadata (model_id, tokens, cost) is stored in the linked
+    ExternalServiceCall record — no duplication in the snapshot.
+
     When ``node_id`` is NULL the snapshot covers the entire course.
     """
 
-    __tablename__ = "course_structure_snapshots"
+    __tablename__ = "structure_snapshots"
     __table_args__ = (
         Index(
             "uq_snapshots_identity",
@@ -406,16 +409,12 @@ class CourseStructureSnapshot(Base):
     node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="CASCADE"), index=True
     )
+    externalservicecall_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_service_calls.id", ondelete="SET NULL"), index=True
+    )
     node_fingerprint: Mapped[str] = mapped_column(String(64))
     mode: Mapped[GenerationMode] = mapped_column(String(20))
     structure: Mapped[dict[str, Any]] = mapped_column(JSONB)
-
-    # ── LLM metadata ──
-    prompt_version: Mapped[str | None] = mapped_column(String(50))
-    model_id: Mapped[str | None] = mapped_column(String(100))
-    tokens_in: Mapped[int | None] = mapped_column(Integer)
-    tokens_out: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column(Float)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -424,6 +423,7 @@ class CourseStructureSnapshot(Base):
     # Relationships
     course: Mapped["Course"] = relationship(back_populates="snapshots")
     node: Mapped["MaterialNode | None"] = relationship()
+    service_call: Mapped["ExternalServiceCall | None"] = relationship()
 
 
 # ──────────────────────────────────────────────

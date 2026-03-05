@@ -75,11 +75,16 @@ def _make_snapshot(
     snap.node_id = node_id
     snap.mode = "free"
     snap.node_fingerprint = "a" * 64
-    snap.prompt_version = "v1"
-    snap.model_id = "gemini-2.0-flash"
-    snap.tokens_in = 1000
-    snap.tokens_out = 500
-    snap.cost_usd = 0.01
+    snap.externalservicecall_id = uuid.uuid4()
+    snap.service_call = MagicMock(
+        id=snap.externalservicecall_id,
+        provider="gemini",
+        model_id="gemini-2.0-flash",
+        prompt_ref="v1",
+        unit_in=1000,
+        unit_out=500,
+        cost_usd=0.01,
+    )
     snap.structure = structure or {"title": "Test Course", "modules": []}
     snap.created_at = NOW
     return snap

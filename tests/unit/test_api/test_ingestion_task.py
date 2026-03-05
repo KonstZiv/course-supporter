@@ -272,10 +272,9 @@ class TestArqIngestMaterial:
         material_id = str(uuid.uuid4())
         factory = _make_session_factory()
 
+        original_s3_url = "http://localhost:9000/course-materials/courses/f.md"
         mock_entry_obj = MagicMock()
-        mock_entry_obj.source_url = (
-            "http://localhost:9000/course-materials/courses/f.md"
-        )
+        mock_entry_obj.source_url = original_s3_url
 
         mock_s3 = MagicMock()
         mock_s3.extract_key = MagicMock(return_value="courses/f.md")
@@ -329,6 +328,8 @@ class TestArqIngestMaterial:
 
         mock_s3.download_file.assert_awaited_once_with("courses/f.md")
         assert captured_url == str(tmp)
+        # ORM object source_url must remain unchanged (proxy, not mutation)
+        assert mock_entry_obj.source_url == original_s3_url
 
     async def test_temp_file_cleaned_up_on_success_and_error(self) -> None:
         """Temp file from S3 download is unlinked in finally block."""

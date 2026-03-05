@@ -109,8 +109,9 @@ class Settings(BaseSettings):
     # Other providers have their own SDKs with built-in endpoints.
     deepseek_base_url: str = "https://api.deepseek.com"
 
-    # --- Model Registry ---
+    # --- Registries ---
     model_registry_path: Path = Path("config/models.yaml")
+    auth_registry_path: Path = Path("config/auth.yaml")
 
     # --- Convenience properties ---
     @property

@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
+from course_supporter.auth.registry import AuthScope
 
 _tenant_dep = Depends(get_current_tenant)
 
@@ -43,12 +44,11 @@ def require_scope(
             )
 
         # 2. Rate limit check — explicit per scope
-        if matched_scope == "prep":
+        if matched_scope == AuthScope.PREP:
             limit = tenant.rate_limit_prep
-        elif matched_scope == "check":
+        elif matched_scope == AuthScope.CHECK:
             limit = tenant.rate_limit_check
         else:
-            # Future scopes fall back to check limit
             limit = tenant.rate_limit_check
         key = f"{tenant.tenant_id}:{matched_scope}"
         allowed, retry_after = rate_limiter.check(key, limit)

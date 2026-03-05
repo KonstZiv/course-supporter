@@ -159,7 +159,6 @@ async def arq_ingest_material(
                 job_id=jid,
                 material_id=mid,
                 error_message=str(exc),
-                is_new_model=True,
             )
             log.error("ingestion_failed", error=str(exc))
             return
@@ -168,7 +167,6 @@ async def arq_ingest_material(
         job_id=jid,
         material_id=mid,
         content_json=content,
-        is_new_model=True,
     )
     log.info("ingestion_done")
 

@@ -109,8 +109,10 @@ class TestFindRootId:
 
         assert result == root_id
 
-    async def test_missing_node_returns_fallback(self) -> None:
-        """If node is not found mid-chain, returns original id as fallback."""
+    async def test_missing_node_raises_500(self) -> None:
+        """If node is not found mid-chain, raises HTTPException 500."""
+        from fastapi import HTTPException
+
         from course_supporter.api.routes.generation import _find_root_id
 
         node_id = uuid.uuid4()
@@ -122,9 +124,11 @@ class TestFindRootId:
             repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=None,
             )
-            result = await _find_root_id(session, node_id)
+            with pytest.raises(HTTPException) as exc_info:
+                await _find_root_id(session, node_id)
 
-        assert result == node_id
+        assert exc_info.value.status_code == 500
+        assert "Data inconsistency" in str(exc_info.value.detail)
 
 
 # ── 2. _require_node_for_tenant (generation.py) ──

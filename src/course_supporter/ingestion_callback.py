@@ -42,7 +42,6 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         content_json: str,
-        is_new_model: bool = True,
     ) -> None:
         """Handle successful ingestion completion.
 
@@ -52,7 +51,6 @@ class IngestionCallback:
             job_id: The Job tracking this ingestion.
             material_id: The material that was processed.
             content_json: Serialized SourceDocument JSON.
-            is_new_model: Legacy param, always True.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)
@@ -89,7 +87,6 @@ class IngestionCallback:
         job_id: uuid.UUID,
         material_id: uuid.UUID,
         error_message: str,
-        is_new_model: bool = True,
     ) -> None:
         """Handle failed ingestion.
 
@@ -99,7 +96,6 @@ class IngestionCallback:
             job_id: The Job tracking this ingestion.
             material_id: The material that failed.
             error_message: Human-readable error description.
-            is_new_model: Legacy param, always True.
         """
         log = structlog.get_logger().bind(
             job_id=str(job_id), material_id=str(material_id)

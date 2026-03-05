@@ -78,7 +78,10 @@ async def _find_root_id(
     while True:
         node = await repo.get_by_id(current_id)
         if node is None:
-            return node_id  # fallback — should not happen
+            raise HTTPException(
+                status_code=500,
+                detail="Data inconsistency: parent node not found during root lookup",
+            )
         if node.parent_id is None:
             return node.id
         current_id = node.parent_id

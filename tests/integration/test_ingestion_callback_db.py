@@ -38,9 +38,7 @@ class TestOnSuccessDB:
         content = '{"sections": [{"title": "Test"}]}'
 
         callback = IngestionCallback(session_factory)
-        await callback.on_success(
-            job_id=jid, material_id=mid, content_json=content, is_new_model=True
-        )
+        await callback.on_success(job_id=jid, material_id=mid, content_json=content)
 
         # Verify in a fresh session
         async with session_factory() as session:
@@ -75,9 +73,7 @@ class TestOnFailureDB:
         error_msg = "LLM provider timeout after 30s"
 
         callback = IngestionCallback(session_factory)
-        await callback.on_failure(
-            job_id=jid, material_id=mid, error_message=error_msg, is_new_model=True
-        )
+        await callback.on_failure(job_id=jid, material_id=mid, error_message=error_msg)
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
@@ -120,7 +116,6 @@ class TestOnFailureDB:
             job_id=jid,
             material_id=mid,
             error_message="Crashed processing session",
-            is_new_model=True,
         )
 
         # Verify the error state was committed

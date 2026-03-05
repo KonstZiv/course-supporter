@@ -160,7 +160,6 @@ class TestArqIngestMaterial:
         call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
-        assert call_kwargs["is_new_model"] is True
 
     async def test_error_delegates_to_callback(self) -> None:
         """On error: session rolled back, callback.on_failure called."""
@@ -207,7 +206,6 @@ class TestArqIngestMaterial:
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
         assert "boom" in call_kwargs["error_message"]
-        assert call_kwargs["is_new_model"] is True
 
     async def test_entry_not_found_returns_early(self) -> None:
         """When MaterialEntry not found, returns early without processing."""

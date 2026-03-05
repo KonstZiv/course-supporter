@@ -9,7 +9,7 @@ from course_supporter.models.source import SourceDocument
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import MaterialEntry as SourceMaterial
+    from course_supporter.storage.orm import MaterialEntry
 
 
 class ProcessingError(Exception):
@@ -23,14 +23,14 @@ class UnsupportedFormatError(ProcessingError):
 class SourceProcessor(abc.ABC):
     """Abstract base class for all source material processors.
 
-    Each processor transforms a SourceMaterial into a SourceDocument
+    Each processor transforms a MaterialEntry into a SourceDocument
     containing extracted ContentChunks.
     """
 
     @abc.abstractmethod
     async def process(
         self,
-        source: SourceMaterial,
+        source: MaterialEntry,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:

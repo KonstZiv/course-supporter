@@ -7,13 +7,16 @@ from types import SimpleNamespace
 
 from course_supporter.api.routes.generation import _flat_to_tree
 from course_supporter.api.schemas import StructureNodeResponse
+from course_supporter.storage.orm import StructureNodeType
+
+SNT = StructureNodeType
 
 
 def _make_sn(
     *,
     node_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
-    node_type: str = "module",
+    node_type: str = SNT.MODULE,
     order: int = 0,
     title: str = "Node",
     **kwargs: object,
@@ -64,9 +67,9 @@ class TestFlatToTree:
 
     def test_parent_child(self) -> None:
         parent_id = uuid.uuid4()
-        parent = _make_sn(node_id=parent_id, title="Parent", node_type="module")
+        parent = _make_sn(node_id=parent_id, title="Parent", node_type=SNT.MODULE)
         child = _make_sn(
-            parent_id=parent_id, title="Child", node_type="lesson", order=0
+            parent_id=parent_id, title="Child", node_type=SNT.LESSON, order=0
         )
         result = _flat_to_tree([parent, child])
         assert len(result) == 1
@@ -77,11 +80,11 @@ class TestFlatToTree:
     def test_three_level_tree(self) -> None:
         mod_id = uuid.uuid4()
         les_id = uuid.uuid4()
-        mod = _make_sn(node_id=mod_id, title="Module", node_type="module")
+        mod = _make_sn(node_id=mod_id, title="Module", node_type=SNT.MODULE)
         les = _make_sn(
-            node_id=les_id, parent_id=mod_id, title="Lesson", node_type="lesson"
+            node_id=les_id, parent_id=mod_id, title="Lesson", node_type=SNT.LESSON
         )
-        con = _make_sn(parent_id=les_id, title="Concept", node_type="concept")
+        con = _make_sn(parent_id=les_id, title="Concept", node_type=SNT.CONCEPT)
         result = _flat_to_tree([mod, les, con])
         assert len(result) == 1
         assert len(result[0].children) == 1
@@ -115,7 +118,7 @@ class TestStructureNodeResponse:
     def test_from_attributes(self) -> None:
         sn = _make_sn(
             title="Test",
-            node_type="module",
+            node_type=SNT.MODULE,
             description="Desc",
             difficulty="easy",
         )
@@ -129,13 +132,13 @@ class TestStructureNodeResponse:
     def test_recursive_serialization(self) -> None:
         resp = StructureNodeResponse(
             id=uuid.uuid4(),
-            node_type="module",
+            node_type=SNT.MODULE,
             order=0,
             title="M1",
             children=[
                 StructureNodeResponse(
                     id=uuid.uuid4(),
-                    node_type="lesson",
+                    node_type=SNT.LESSON,
                     order=0,
                     title="L1",
                 )

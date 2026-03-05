@@ -15,6 +15,7 @@ from course_supporter.models.course import (
     SlideRange,
     WebReference,
 )
+from course_supporter.storage.orm import StructureNodeType
 from course_supporter.structure_conversion import convert_to_structure_nodes
 
 
@@ -85,7 +86,7 @@ class TestConvertToStructureNodes:
     def test_module_fields(self, snapshot_id: uuid.UUID) -> None:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
         module = nodes[0]
-        assert module.node_type == "module"
+        assert module.node_type == StructureNodeType.MODULE
         assert module.title == "Module 1"
         assert module.description == "Intro module"
         assert module.learning_goal == "Learn basics"
@@ -103,7 +104,7 @@ class TestConvertToStructureNodes:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
         module = nodes[0]
         lesson = nodes[1]
-        assert lesson.node_type == "lesson"
+        assert lesson.node_type == StructureNodeType.LESSON
         assert lesson.parent_structurenode_id == module.id
         assert lesson.title == "Lesson 1"
 
@@ -121,7 +122,7 @@ class TestConvertToStructureNodes:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
         lesson = nodes[1]
         concept = nodes[2]
-        assert concept.node_type == "concept"
+        assert concept.node_type == StructureNodeType.CONCEPT
         assert concept.parent_structurenode_id == lesson.id
         assert concept.title == "Concept 1"
         assert concept.description == "A basic concept"
@@ -154,7 +155,7 @@ class TestConvertToStructureNodes:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
         lesson = nodes[1]
         exercise = nodes[3]
-        assert exercise.node_type == "exercise"
+        assert exercise.node_type == StructureNodeType.EXERCISE
         assert exercise.parent_structurenode_id == lesson.id
         assert exercise.title == "Exercise 1"
         assert exercise.description == "Do something"
@@ -190,7 +191,7 @@ class TestConvertToStructureNodes:
             ],
         )
         nodes = convert_to_structure_nodes(structure, snapshot_id)
-        exercise = next(n for n in nodes if n.node_type == "exercise")
+        exercise = next(n for n in nodes if n.node_type == StructureNodeType.EXERCISE)
         assert exercise.difficulty == expected
 
     def test_multiple_modules_ordering(self, snapshot_id: uuid.UUID) -> None:
@@ -218,7 +219,7 @@ class TestConvertToStructureNodes:
             modules=[ModuleOutput(title="M", lessons=[LessonOutput(title="L")])],
         )
         nodes = convert_to_structure_nodes(structure, snapshot_id)
-        lesson = next(n for n in nodes if n.node_type == "lesson")
+        lesson = next(n for n in nodes if n.node_type == StructureNodeType.LESSON)
         assert lesson.timecodes is None
         assert lesson.slide_references is None
 
@@ -238,7 +239,7 @@ class TestConvertToStructureNodes:
             ],
         )
         nodes = convert_to_structure_nodes(structure, snapshot_id)
-        concept = next(n for n in nodes if n.node_type == "concept")
+        concept = next(n for n in nodes if n.node_type == StructureNodeType.CONCEPT)
         assert concept.timecodes is None
         assert concept.slide_references is None
         assert concept.web_references is None

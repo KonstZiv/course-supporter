@@ -17,7 +17,7 @@ rate_limiter = InMemoryRateLimiter(window_seconds=60)
 
 
 def require_scope(
-    *required_scopes: str,
+    *required_scopes: AuthScope,
 ) -> Callable[..., Coroutine[Any, Any, TenantContext]]:
     """Dependency factory: require at least one scope, then enforce rate limit.
 

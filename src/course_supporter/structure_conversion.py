@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from course_supporter.models.course import CourseStructure
-from course_supporter.storage.orm import StructureNode, _uuid7
+from course_supporter.storage.orm import StructureNode, StructureNodeType, _uuid7
 
 
 def convert_to_structure_nodes(
@@ -33,7 +33,7 @@ def convert_to_structure_nodes(
                 id=mod_id,
                 structuresnapshot_id=snapshot_id,
                 parent_structurenode_id=None,
-                node_type="module",
+                node_type=StructureNodeType.MODULE,
                 order=mod_idx,
                 title=module.title,
                 description=module.description or None,
@@ -59,7 +59,7 @@ def convert_to_structure_nodes(
                     id=les_id,
                     structuresnapshot_id=snapshot_id,
                     parent_structurenode_id=mod_id,
-                    node_type="lesson",
+                    node_type=StructureNodeType.LESSON,
                     order=les_idx,
                     title=lesson.title,
                     timecodes=_build_timecodes(lesson),
@@ -73,7 +73,7 @@ def convert_to_structure_nodes(
                         id=_uuid7(),
                         structuresnapshot_id=snapshot_id,
                         parent_structurenode_id=les_id,
-                        node_type="concept",
+                        node_type=StructureNodeType.CONCEPT,
                         order=con_idx,
                         title=concept.title,
                         description=concept.definition,
@@ -104,7 +104,7 @@ def convert_to_structure_nodes(
                         id=_uuid7(),
                         structuresnapshot_id=snapshot_id,
                         parent_structurenode_id=les_id,
-                        node_type="exercise",
+                        node_type=StructureNodeType.EXERCISE,
                         order=ex_idx,
                         title=f"Exercise {ex_idx + 1}",
                         description=exercise.description,

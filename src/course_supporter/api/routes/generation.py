@@ -45,6 +45,7 @@ from course_supporter.generation_orchestrator import trigger_generation
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import StructureNode
 from course_supporter.storage.snapshot_repository import SnapshotRepository
+from course_supporter.storage.structure_node_repository import StructureNodeRepository
 
 logger = structlog.get_logger()
 
@@ -171,10 +172,6 @@ async def _build_snapshot_detail(
     snapshot: object,
 ) -> SnapshotDetailResponse:
     """Build SnapshotDetailResponse with structure_tree from DB."""
-    from course_supporter.storage.structure_node_repository import (
-        StructureNodeRepository,
-    )
-
     resp = SnapshotDetailResponse.model_validate(snapshot)
     sn_repo = StructureNodeRepository(session)
     flat_nodes = await sn_repo.get_tree(resp.id)

@@ -40,7 +40,7 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("node_type", sa.String(30), nullable=False, index=True),
-        sa.Column("order", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("order", sa.Integer(), nullable=False, server_default=sa.text("0")),
         # Section 1: Formal & organisational
         sa.Column("title", sa.String(500), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),

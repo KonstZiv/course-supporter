@@ -45,6 +45,10 @@ jobs:
               fi
             done
 
+            echo "=== Cleanup ==="
+            docker image prune -af --filter "until=24h"
+            docker builder prune -af --filter "until=24h"
+
             echo "=== Deploy complete: $(date) ==="
 
       - name: Smoke test

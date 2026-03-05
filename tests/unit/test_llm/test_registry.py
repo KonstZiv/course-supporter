@@ -1,4 +1,4 @@
-"""Tests for model registry configuration."""
+"""Tests for unified external service registry."""
 
 from pathlib import Path
 
@@ -14,39 +14,54 @@ from course_supporter.llm.registry import (
 
 @pytest.fixture
 def valid_config() -> dict:
-    """Minimal valid registry config."""
+    """Minimal valid registry config in new format."""
     return {
-        "models": {
-            "model-a": {
-                "provider": "gemini",
-                "capabilities": ["vision", "structured_output"],
-                "max_context": 100000,
-                "cost_per_1k": {"input": 0.001, "output": 0.002},
+        "providers": {
+            "gemini": {
+                "type": "llm",
+                "models": [
+                    {
+                        "id": "model-a",
+                        "capabilities": ["vision", "structured_output"],
+                        "max_context": 100000,
+                        "unit_type": "tokens",
+                        "cost_per_1k_in": 0.001,
+                        "cost_per_1k_out": 0.002,
+                    },
+                ],
             },
-            "model-b": {
-                "provider": "deepseek",
-                "capabilities": ["structured_output"],
-                "max_context": 65000,
-                "cost_per_1k": {"input": 0.0001, "output": 0.0002},
+            "deepseek": {
+                "type": "llm",
+                "models": [
+                    {
+                        "id": "model-b",
+                        "capabilities": ["structured_output"],
+                        "max_context": 65000,
+                        "unit_type": "tokens",
+                        "cost_per_1k_in": 0.0001,
+                        "cost_per_1k_out": 0.0002,
+                    },
+                ],
             },
+        },
+        "strategies": {
+            "default": {"providers": ["gemini", "deepseek"], "fallback": True},
         },
         "actions": {
             "analyze": {
-                "description": "Analyze content",
+                "strategy": "default",
                 "requires": ["structured_output"],
+                "chain": {
+                    "default": ["model-a", "model-b"],
+                    "budget": ["model-b"],
+                },
             },
             "see": {
-                "description": "Vision task",
+                "strategy": "default",
                 "requires": ["vision", "structured_output"],
-            },
-        },
-        "routing": {
-            "analyze": {
-                "default": ["model-a", "model-b"],
-                "budget": ["model-b"],
-            },
-            "see": {
-                "default": ["model-a"],
+                "chain": {
+                    "default": ["model-a"],
+                },
             },
         },
     }
@@ -78,45 +93,59 @@ class TestRegistryValidation:
         cfg = ModelRegistryConfig.model_validate(valid_config)
         assert len(cfg.models) == 2
         assert len(cfg.actions) == 2
-        assert len(cfg.routing) == 2
+        assert len(cfg.providers) == 2
 
-    def test_model_id_populated_from_key(self, valid_config: dict) -> None:
+    def test_model_id_populated(self, valid_config: dict) -> None:
         cfg = ModelRegistryConfig.model_validate(valid_config)
         assert cfg.models["model-a"].model_id == "model-a"
         assert cfg.models["model-b"].model_id == "model-b"
 
-    def test_unknown_model_in_routing(self, valid_config: dict) -> None:
-        valid_config["routing"]["analyze"]["default"] = ["nonexistent"]
+    def test_provider_populated(self, valid_config: dict) -> None:
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["model-a"].provider == "gemini"
+        assert cfg.models["model-b"].provider == "deepseek"
+
+    def test_unit_type_populated(self, valid_config: dict) -> None:
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["model-a"].unit_type == "tokens"
+
+    def test_cost_flattened(self, valid_config: dict) -> None:
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        m = cfg.models["model-a"]
+        assert m.cost_per_1k.input == pytest.approx(0.001)
+        assert m.cost_per_1k.output == pytest.approx(0.002)
+
+    def test_unknown_model_in_chain(self, valid_config: dict) -> None:
+        valid_config["actions"]["analyze"]["chain"]["default"] = ["nonexistent"]
         with pytest.raises(ValueError, match="unknown model"):
             ModelRegistryConfig.model_validate(valid_config)
 
-    def test_unknown_action_in_routing(self, valid_config: dict) -> None:
-        valid_config["routing"]["unknown_action"] = {"default": ["model-a"]}
-        with pytest.raises(ValueError, match="unknown action"):
-            ModelRegistryConfig.model_validate(valid_config)
-
-    def test_missing_default_strategy(self, valid_config: dict) -> None:
-        valid_config["routing"]["analyze"] = {"quality": ["model-a"]}
-        with pytest.raises(ValueError, match="'default' strategy"):
+    def test_missing_default_chain(self, valid_config: dict) -> None:
+        valid_config["actions"]["analyze"]["chain"] = {"quality": ["model-a"]}
+        with pytest.raises(ValueError, match="'default' entry"):
             ModelRegistryConfig.model_validate(valid_config)
 
     def test_capability_mismatch(self, valid_config: dict) -> None:
         # model-b lacks vision, but "see" requires it
-        valid_config["routing"]["see"]["default"] = ["model-b"]
+        valid_config["actions"]["see"]["chain"]["default"] = ["model-b"]
         with pytest.raises(ValueError, match="lacks required capabilities"):
             ModelRegistryConfig.model_validate(valid_config)
 
     def test_empty_chain(self, valid_config: dict) -> None:
-        valid_config["routing"]["analyze"]["default"] = []
+        valid_config["actions"]["analyze"]["chain"]["default"] = []
         with pytest.raises(ValueError, match="empty model chain"):
             ModelRegistryConfig.model_validate(valid_config)
 
+    def test_no_chain_defined(self, valid_config: dict) -> None:
+        valid_config["actions"]["analyze"]["chain"] = {}
+        with pytest.raises(ValueError, match="has no chain"):
+            ModelRegistryConfig.model_validate(valid_config)
+
     def test_multiple_errors_collected(self, valid_config: dict) -> None:
-        valid_config["routing"]["analyze"]["default"] = ["nonexistent"]
-        valid_config["routing"]["see"]["default"] = ["model-b"]
+        valid_config["actions"]["analyze"]["chain"]["default"] = ["nonexistent"]
+        valid_config["actions"]["see"]["chain"]["default"] = ["model-b"]
         with pytest.raises(ValueError) as exc_info:
             ModelRegistryConfig.model_validate(valid_config)
-        # Both errors should be in the message
         msg = str(exc_info.value)
         assert "unknown model" in msg
         assert "lacks required capabilities" in msg
@@ -171,7 +200,7 @@ class TestGetAvailableStrategies:
 
 class TestLoadRegistry:
     def test_load_from_file(self, valid_config: dict, tmp_path: Path) -> None:
-        p = tmp_path / "models.yaml"
+        p = tmp_path / "services.yaml"
         p.write_text(yaml.dump(valid_config), encoding="utf-8")
         cfg = load_registry(p)
         assert len(cfg.models) == 2
@@ -182,13 +211,13 @@ class TestLoadRegistry:
 
     def test_invalid_yaml(self, tmp_path: Path) -> None:
         p = tmp_path / "bad.yaml"
-        p.write_text("models:\n  - :\n  bad: [unclosed", encoding="utf-8")
+        p.write_text("providers:\n  - :\n  bad: [unclosed", encoding="utf-8")
         with pytest.raises(ValueError, match="Failed to parse"):
             load_registry(p)
 
     def test_real_config_file(self) -> None:
-        """Validate the actual config/models.yaml."""
-        cfg_path = Path("config/models.yaml")
+        """Validate the actual config/external_services.yaml."""
+        cfg_path = Path("config/external_services.yaml")
         if cfg_path.exists():
             cfg = load_registry(cfg_path)
             assert len(cfg.models) > 0

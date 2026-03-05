@@ -37,7 +37,7 @@ def create_model_router(
     Returns:
         Configured ModelRouter ready for use.
     """
-    registry = load_registry(settings.model_registry_path)
+    registry = load_registry(settings.external_services_path)
     providers = create_providers(settings)
 
     log_callback = None

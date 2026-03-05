@@ -140,11 +140,11 @@ class TestCreateModelRouter:
         mock_providers.return_value = {}
 
         settings = MagicMock()
-        settings.model_registry_path = "config/models.yaml"
+        settings.external_services_path = "config/external_services.yaml"
 
         router = create_model_router(settings)
 
-        mock_load.assert_called_once_with(settings.model_registry_path)
+        mock_load.assert_called_once_with(settings.external_services_path)
         mock_providers.assert_called_once_with(settings)
         assert router._log_callback is None
 
@@ -159,7 +159,7 @@ class TestCreateModelRouter:
         mock_providers.return_value = {}
 
         settings = MagicMock()
-        settings.model_registry_path = "config/models.yaml"
+        settings.external_services_path = "config/external_services.yaml"
         session_factory = AsyncMock()
 
         router = create_model_router(settings, session_factory)

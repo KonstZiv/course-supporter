@@ -40,8 +40,8 @@ def _empty_summary_row() -> MagicMock:
         successful_calls=0,
         failed_calls=0,
         total_cost_usd=0.0,
-        total_tokens_in=0,
-        total_tokens_out=0,
+        total_units_in=0,
+        total_units_out=0,
         avg_latency_ms=0.0,
     )
 
@@ -52,8 +52,8 @@ def _filled_summary_row() -> MagicMock:
         successful_calls=4,
         failed_calls=1,
         total_cost_usd=0.0123,
-        total_tokens_in=5000,
-        total_tokens_out=2000,
+        total_units_in=5000,
+        total_units_out=2000,
         avg_latency_ms=450.5,
     )
 
@@ -77,7 +77,7 @@ class TestExternalServiceCallRepositorySummary:
 
         assert summary.total_calls == 0
         assert summary.total_cost_usd == 0.0
-        assert summary.total_tokens_in == 0
+        assert summary.total_units_in == 0
         assert summary.avg_latency_ms == 0.0
 
     async def test_get_summary_with_data(self) -> None:
@@ -94,8 +94,8 @@ class TestExternalServiceCallRepositorySummary:
         assert summary.successful_calls == 4
         assert summary.failed_calls == 1
         assert summary.total_cost_usd == pytest.approx(0.0123)
-        assert summary.total_tokens_in == 5000
-        assert summary.total_tokens_out == 2000
+        assert summary.total_units_in == 5000
+        assert summary.total_units_out == 2000
         assert summary.avg_latency_ms == pytest.approx(450.5)
 
 
@@ -112,16 +112,16 @@ class TestExternalServiceCallRepositoryGrouped:
                     "group": "architect",
                     "calls": 3,
                     "cost_usd": 0.01,
-                    "tokens_in": 3000,
-                    "tokens_out": 1500,
+                    "units_in": 3000,
+                    "units_out": 1500,
                     "avg_latency_ms": 400.0,
                 },
                 {
                     "group": "summarize",
                     "calls": 2,
                     "cost_usd": 0.005,
-                    "tokens_in": 2000,
-                    "tokens_out": 500,
+                    "units_in": 2000,
+                    "units_out": 500,
                     "avg_latency_ms": 300.0,
                 },
             ]
@@ -146,8 +146,8 @@ class TestExternalServiceCallRepositoryGrouped:
                     "group": "gemini",
                     "calls": 4,
                     "cost_usd": 0.008,
-                    "tokens_in": 4000,
-                    "tokens_out": 1800,
+                    "units_in": 4000,
+                    "units_out": 1800,
                     "avg_latency_ms": 350.0,
                 },
             ]
@@ -171,8 +171,8 @@ class TestExternalServiceCallRepositoryGrouped:
                     "group": "gemini-2.0-flash",
                     "calls": 3,
                     "cost_usd": 0.006,
-                    "tokens_in": 3000,
-                    "tokens_out": 1500,
+                    "units_in": 3000,
+                    "units_out": 1500,
                     "avg_latency_ms": 400.0,
                 },
             ]
@@ -198,8 +198,8 @@ class TestCostReportAPI:
                 successful_calls=2,
                 failed_calls=0,
                 total_cost_usd=0.005,
-                total_tokens_in=1000,
-                total_tokens_out=500,
+                total_units_in=1000,
+                total_units_out=500,
                 avg_latency_ms=200.0,
             ),
             by_action=[
@@ -207,8 +207,8 @@ class TestCostReportAPI:
                     group="architect",
                     calls=2,
                     cost_usd=0.005,
-                    tokens_in=1000,
-                    tokens_out=500,
+                    units_in=1000,
+                    units_out=500,
                     avg_latency_ms=200.0,
                 ),
             ],
@@ -304,8 +304,8 @@ class TestCostReportCLI:
                 successful_calls=3,
                 failed_calls=0,
                 total_cost_usd=0.0075,
-                total_tokens_in=3000,
-                total_tokens_out=1500,
+                total_units_in=3000,
+                total_units_out=1500,
                 avg_latency_ms=300.0,
             ),
             by_action=[
@@ -313,8 +313,8 @@ class TestCostReportCLI:
                     group="architect",
                     calls=3,
                     cost_usd=0.0075,
-                    tokens_in=3000,
-                    tokens_out=1500,
+                    units_in=3000,
+                    units_out=1500,
                     avg_latency_ms=300.0,
                 ),
             ],
@@ -337,8 +337,8 @@ class TestCostReportCLI:
                 successful_calls=1,
                 failed_calls=0,
                 total_cost_usd=0.001,
-                total_tokens_in=100,
-                total_tokens_out=50,
+                total_units_in=100,
+                total_units_out=50,
                 avg_latency_ms=100.0,
             ),
             by_action=[],

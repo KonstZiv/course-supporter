@@ -1,0 +1,116 @@
+# ============================================================
+# Unified external service registry
+# ============================================================
+# Covers LLM providers, transcription, and future integrations.
+# ModelRouter uses strategies + actions to build fallback chains.
+
+providers:
+  gemini:
+    type: llm
+    models:
+      - id: gemini-2.5-flash
+        capabilities: [vision, structured_output, long_context]
+        max_context: 1048576
+        unit_type: tokens
+        cost_per_1k_in: 0.00015
+        cost_per_1k_out: 0.0006
+      - id: gemini-2.5-pro
+        capabilities: [vision, structured_output, long_context]
+        max_context: 1048576
+        unit_type: tokens
+        cost_per_1k_in: 0.00125
+        cost_per_1k_out: 0.005
+
+  anthropic:
+    type: llm
+    models:
+      - id: claude-sonnet
+        capabilities: [structured_output, long_context]
+        max_context: 200000
+        unit_type: tokens
+        cost_per_1k_in: 0.003
+        cost_per_1k_out: 0.015
+
+  openai:
+    type: llm
+    models:
+      - id: gpt-4o-mini
+        capabilities: [vision, structured_output]
+        max_context: 128000
+        unit_type: tokens
+        cost_per_1k_in: 0.00015
+        cost_per_1k_out: 0.0006
+
+  deepseek:
+    type: llm
+    models:
+      - id: deepseek-chat
+        capabilities: [structured_output]
+        max_context: 65536
+        unit_type: tokens
+        cost_per_1k_in: 0.00014
+        cost_per_1k_out: 0.00028
+
+  whisper:
+    type: transcription
+    models:
+      - id: base
+        unit_type: minutes
+        local: true
+
+strategies:
+  default:
+    providers: [gemini, anthropic, openai, deepseek]
+    fallback: true
+  quality:
+    providers: [anthropic, gemini]
+    fallback: true
+  budget:
+    providers: [deepseek, gemini]
+    fallback: true
+  transcription:
+    providers: [gemini, whisper]
+    fallback: true
+
+actions:
+  video_analysis:
+    strategy: default
+    requires: [vision, long_context]
+    chain:
+      default: [gemini-2.5-flash, gemini-2.5-pro]
+      quality: [gemini-2.5-pro, gemini-2.5-flash]
+      budget: [gemini-2.5-flash]
+
+  presentation_analysis:
+    strategy: default
+    requires: [vision, structured_output]
+    chain:
+      default: [gemini-2.5-flash, gpt-4o-mini]
+      quality: [gemini-2.5-pro, gemini-2.5-flash]
+
+  course_structuring:
+    strategy: default
+    requires: [structured_output]
+    chain:
+      default: [gemini-2.5-flash, deepseek-chat]
+      quality: [claude-sonnet, gemini-2.5-pro]
+      budget: [deepseek-chat]
+
+  text_processing:
+    strategy: default
+    requires: [structured_output]
+    chain:
+      default: [deepseek-chat, gemini-2.5-flash]
+      quality: [claude-sonnet, gemini-2.5-flash]
+      budget: [deepseek-chat]
+
+  transcribe:
+    strategy: transcription
+    chain:
+      default: [gemini-2.5-flash]
+
+  describe_slides:
+    strategy: default
+    requires: [vision]
+    chain:
+      default: [gemini-2.5-flash, gpt-4o-mini]

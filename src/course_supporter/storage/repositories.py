@@ -661,10 +661,10 @@ class ExternalServiceCallRepository:
                 "total_cost_usd"
             ),
             func.coalesce(func.sum(ExternalServiceCall.unit_in), 0).label(
-                "total_tokens_in"
+                "total_units_in"
             ),
             func.coalesce(func.sum(ExternalServiceCall.unit_out), 0).label(
-                "total_tokens_out"
+                "total_units_out"
             ),
             func.coalesce(func.avg(ExternalServiceCall.latency_ms), 0.0).label(
                 "avg_latency_ms"
@@ -679,8 +679,8 @@ class ExternalServiceCallRepository:
             successful_calls=row.successful_calls,
             failed_calls=row.failed_calls,
             total_cost_usd=float(row.total_cost_usd),
-            total_tokens_in=int(row.total_tokens_in),
-            total_tokens_out=int(row.total_tokens_out),
+            total_units_in=int(row.total_units_in),
+            total_units_out=int(row.total_units_out),
             avg_latency_ms=float(row.avg_latency_ms),
         )
 
@@ -718,10 +718,10 @@ class ExternalServiceCallRepository:
                     "cost_usd"
                 ),
                 func.coalesce(func.sum(ExternalServiceCall.unit_in), 0).label(
-                    "tokens_in"
+                    "units_in"
                 ),
                 func.coalesce(func.sum(ExternalServiceCall.unit_out), 0).label(
-                    "tokens_out"
+                    "units_out"
                 ),
                 func.coalesce(func.avg(ExternalServiceCall.latency_ms), 0.0).label(
                     "avg_latency_ms"
@@ -739,8 +739,8 @@ class ExternalServiceCallRepository:
                 group=row.group,
                 calls=row.calls,
                 cost_usd=float(row.cost_usd),
-                tokens_in=int(row.tokens_in),
-                tokens_out=int(row.tokens_out),
+                units_in=int(row.units_in),
+                units_out=int(row.units_out),
                 avg_latency_ms=float(row.avg_latency_ms),
             )
             for row in result.all()

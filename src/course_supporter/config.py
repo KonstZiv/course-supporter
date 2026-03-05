@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     # --- LLM Default Models ---
     # Configurable per environment via env vars.
-    # Will be superseded by models.yaml registry in S1-008.
+    # Defaults can be overridden via external_services.yaml registry.
     gemini_default_model: str = "gemini-2.5-flash"
     anthropic_default_model: str = "claude-sonnet-4-20250514"
     openai_default_model: str = "gpt-4o-mini"
@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
 
     # --- Registries ---
-    model_registry_path: Path = Path("config/models.yaml")
+    external_services_path: Path = Path("config/external_services.yaml")
     auth_registry_path: Path = Path("config/auth.yaml")
     platform_registry_path: Path = Path("config/platforms.yaml")
 

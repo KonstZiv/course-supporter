@@ -4,14 +4,14 @@ from pydantic import BaseModel
 
 
 class CostSummary(BaseModel):
-    """Aggregate summary of all LLM calls."""
+    """Aggregate summary of all external service calls."""
 
     total_calls: int
     successful_calls: int
     failed_calls: int
     total_cost_usd: float
-    total_tokens_in: int
-    total_tokens_out: int
+    total_units_in: int
+    total_units_out: int
     avg_latency_ms: float
 
 
@@ -21,8 +21,8 @@ class GroupedCost(BaseModel):
     group: str
     calls: int
     cost_usd: float
-    tokens_in: int
-    tokens_out: int
+    units_in: int
+    units_out: int
     avg_latency_ms: float
 
 

@@ -617,11 +617,44 @@ class SnapshotSummaryResponse(BaseModel):
     created_at: datetime = Field(description="When this snapshot was created.")
 
 
+class StructureNodeResponse(BaseModel):
+    """Recursive node in a generated course structure tree."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    node_type: str
+    order: int
+    title: str
+    description: str | None = None
+    learning_goal: str | None = None
+    expected_knowledge: list[dict[str, str]] | None = None
+    expected_skills: list[dict[str, str]] | None = None
+    prerequisites: list[str] | None = None
+    difficulty: str | None = None
+    estimated_duration: int | None = None
+    success_criteria: str | None = None
+    assessment_method: str | None = None
+    competencies: list[str] | None = None
+    key_concepts: list[dict[str, str]] | None = None
+    common_mistakes: list[str] | None = None
+    teaching_strategy: str | None = None
+    activities: list[str] | None = None
+    teaching_style: str | None = None
+    deep_dive_references: list[dict[str, Any]] | None = None
+    timecodes: list[dict[str, Any]] | None = None
+    slide_references: list[dict[str, Any]] | None = None
+    web_references: list[dict[str, Any]] | None = None
+    children: list[StructureNodeResponse] = Field(default_factory=list)
+
+
 class SnapshotDetailResponse(SnapshotSummaryResponse):
     """Full snapshot including the generated structure."""
 
-    structure: dict[str, Any] = Field(
-        description="Generated course structure (CourseStructure JSON)."
+    structure: dict[str, Any] = Field(description="Raw CourseStructure JSON from LLM.")
+    structure_tree: list[StructureNodeResponse] = Field(
+        default_factory=list,
+        description="Parsed structure as a recursive node tree.",
     )
 
 

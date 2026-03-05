@@ -14,6 +14,7 @@ Routes
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Annotated
 
 import structlog
@@ -30,6 +31,7 @@ from course_supporter.api.schemas import (
     SnapshotDetailResponse,
     SnapshotListResponse,
     SnapshotSummaryResponse,
+    StructureNodeResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
@@ -41,7 +43,9 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import trigger_generation
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
+from course_supporter.storage.orm import StructureNode, StructureSnapshot
 from course_supporter.storage.snapshot_repository import SnapshotRepository
+from course_supporter.storage.structure_node_repository import StructureNodeRepository
 
 logger = structlog.get_logger()
 
@@ -163,6 +167,42 @@ async def generate_structure(
     )
 
 
+async def _build_snapshot_detail(
+    session: AsyncSession,
+    snapshot: StructureSnapshot,
+) -> SnapshotDetailResponse:
+    """Build SnapshotDetailResponse with structure_tree from DB."""
+    resp = SnapshotDetailResponse.model_validate(snapshot)
+    sn_repo = StructureNodeRepository(session)
+    flat_nodes = await sn_repo.get_tree(resp.id)
+
+    if flat_nodes:
+        resp.structure_tree = _flat_to_tree(flat_nodes)
+    return resp
+
+
+def _flat_to_tree(
+    flat_nodes: Sequence[StructureNode],
+) -> list[StructureNodeResponse]:
+    """Convert flat node list into nested StructureNodeResponse tree."""
+    node_map: dict[uuid.UUID, StructureNodeResponse] = {}
+    roots: list[StructureNodeResponse] = []
+
+    for n in flat_nodes:
+        resp = StructureNodeResponse.model_validate(n)
+        resp.children = []
+        node_map[resp.id] = resp
+
+    for n in flat_nodes:
+        resp = node_map[n.id]
+        if n.parent_structurenode_id is None:
+            roots.append(resp)
+        elif n.parent_structurenode_id in node_map:
+            node_map[n.parent_structurenode_id].children.append(resp)
+
+    return roots
+
+
 @router.get("/nodes/{node_id}/structure")
 async def get_latest_structure(
     node_id: uuid.UUID,
@@ -184,7 +224,7 @@ async def get_latest_structure(
             detail="No structure snapshot found.",
         )
 
-    return SnapshotDetailResponse.model_validate(snapshot)
+    return await _build_snapshot_detail(session, snapshot)
 
 
 @router.get("/nodes/{node_id}/structure/history")
@@ -236,4 +276,4 @@ async def get_snapshot(
             detail="Snapshot not found.",
         )
 
-    return SnapshotDetailResponse.model_validate(snapshot)
+    return await _build_snapshot_detail(session, snapshot)

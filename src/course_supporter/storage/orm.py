@@ -308,6 +308,94 @@ class GenerationMode(StrEnum):
     GUIDED = "guided"
 
 
+class StructureNodeType(StrEnum):
+    """Type of a node in the generated course structure."""
+
+    MODULE = "module"
+    LESSON = "lesson"
+    CONCEPT = "concept"
+    EXERCISE = "exercise"
+
+
+class StructureNode(Base):
+    """Recursive node in a generated course structure.
+
+    Each node belongs to a ``StructureSnapshot`` and forms an
+    arbitrary-depth tree via ``parent_id`` self-reference.
+    Root nodes (parent_id IS NULL) are top-level modules.
+
+    Fields are organised into six sections corresponding to
+    different agent / pipeline stages that populate them.
+    """
+
+    __tablename__ = "structure_nodes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    structuresnapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("structure_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    parent_structurenode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("structure_nodes.id", ondelete="CASCADE"), index=True
+    )
+    node_type: Mapped[str] = mapped_column(String(30), index=True)
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Section 1: Formal & organisational (Methodologist agent) ──
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(Text)
+    expected_knowledge: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    prerequisites: Mapped[list[str] | None] = mapped_column(JSONB)
+    difficulty: Mapped[str | None] = mapped_column(String(20))
+    estimated_duration: Mapped[int | None] = mapped_column(Integer)
+
+    # ── Section 2: Results & assessment ──
+    success_criteria: Mapped[str | None] = mapped_column(Text)
+    assessment_method: Mapped[str | None] = mapped_column(String(50))
+    competencies: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    # ── Section 3: Methodological accents ──
+    key_concepts: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    common_mistakes: Mapped[list[str] | None] = mapped_column(JSONB)
+    teaching_strategy: Mapped[str | None] = mapped_column(String(50))
+    activities: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    # ── Section 4: Context & adaptivity ──
+    teaching_style: Mapped[str | None] = mapped_column(String(50))
+    deep_dive_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    content_version: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # ── Section 5: Material references (Indexer agent) ──
+    timecodes: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    slide_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    web_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+
+    # ── Section 6: Semantic search (Embedding pipeline) ──
+    # embedding: Mapped[...] — deferred until pgvector integration
+
+    # ── Timestamps ──
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    snapshot: Mapped["StructureSnapshot"] = relationship(
+        back_populates="structure_nodes"
+    )
+    parent: Mapped["StructureNode | None"] = relationship(
+        back_populates="children",
+        remote_side="StructureNode.id",
+    )
+    children: Mapped[list["StructureNode"]] = relationship(
+        back_populates="parent",
+        cascade="all, delete-orphan",
+    )
+
+
 class StructureSnapshot(Base):
     """Immutable snapshot of a generated course structure.
 
@@ -351,6 +439,9 @@ class StructureSnapshot(Base):
     # Relationships
     node: Mapped["MaterialNode"] = relationship(back_populates="snapshots")
     service_call: Mapped["ExternalServiceCall | None"] = relationship()
+    structure_nodes: Mapped[list["StructureNode"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan"
+    )
 
 
 # ──────────────────────────────────────────────

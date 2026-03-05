@@ -21,8 +21,6 @@ class TestJobModel:
             "status",
             "arq_job_id",
             "input_params",
-            "result_material_id",
-            "result_snapshot_id",
             "depends_on",
             "error_message",
             "queued_at",
@@ -35,10 +33,6 @@ class TestJobModel:
     def test_course_fk(self) -> None:
         fks = {fk.target_fullname for fk in Job.__table__.foreign_keys}
         assert "courses.id" in fks
-
-    def test_check_constraint_exists(self) -> None:
-        constraints = {c.name for c in Job.__table__.constraints if c.name}
-        assert "chk_job_result_exclusive" in constraints
 
     def test_indexes(self) -> None:
         indexed_cols = set()
@@ -102,31 +96,3 @@ class TestJobRepositoryInit:
         session = MagicMock()
         repo = JobRepository(session)
         assert repo._session is session
-
-
-class TestExclusiveResultValidation:
-    """Verify app-level check for mutually exclusive result FKs."""
-
-    async def test_both_result_ids_raises(self) -> None:
-        import uuid
-        from unittest.mock import AsyncMock, MagicMock
-
-        session = MagicMock()
-        repo = JobRepository(session)
-
-        # Simulate existing active job.
-        fake_job = MagicMock()
-        fake_job.status = "active"
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = fake_job
-        session.execute = AsyncMock(return_value=result_mock)
-
-        import pytest
-
-        with pytest.raises(ValueError, match="Cannot set both"):
-            await repo.update_status(
-                uuid.uuid4(),
-                "complete",
-                result_material_id=uuid.uuid4(),
-                result_snapshot_id=uuid.uuid4(),
-            )

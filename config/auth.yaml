@@ -1,0 +1,10 @@
+# ============================================================
+# Auth: API scopes and their metadata
+# ============================================================
+scopes:
+  prep:
+    description: "Course preparation operations (CRUD, upload, generation)"
+    rate_limit_field: rate_limit_prep
+  check:
+    description: "Course checking operations (read-only queries, mentoring)"
+    rate_limit_field: rate_limit_check

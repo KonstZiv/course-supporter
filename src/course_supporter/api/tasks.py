@@ -355,11 +355,7 @@ async def arq_generate_structure(
             )
             if existing is not None:
                 log.info("generate_structure_idempotent", snapshot_id=str(existing.id))
-                await job_repo.update_status(
-                    jid,
-                    "complete",
-                    result_snapshot_id=existing.id,
-                )
+                await job_repo.update_status(jid, "complete")
                 await session.commit()
                 return
 
@@ -389,11 +385,7 @@ async def arq_generate_structure(
             )
 
             # Job → complete
-            await job_repo.update_status(
-                jid,
-                "complete",
-                result_snapshot_id=snapshot.id,
-            )
+            await job_repo.update_status(jid, "complete")
             await session.commit()
             log.info("generate_structure_done", snapshot_id=str(snapshot.id))
 

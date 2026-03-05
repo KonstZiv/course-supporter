@@ -1,0 +1,18 @@
+# ============================================================
+# Platform allowlist: verified domains per source_type
+# ============================================================
+# Unverified URLs still process (best effort) but API returns a warning.
+platforms:
+  video:
+    verified:
+      - youtube.com
+      - youtu.be
+    untested:
+      - vimeo.com  # yt-dlp supports it, needs QA verification
+  web:
+    verified:
+      - wikipedia.org
+      - github.com
+      - docs.python.org
+      - developer.mozilla.org
+      - realpython.com

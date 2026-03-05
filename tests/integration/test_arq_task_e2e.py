@@ -117,8 +117,6 @@ class TestArqIngestMaterialE2E:
         assert final_job is not None
         assert final_job.status == "complete"
         assert final_job.completed_at is not None
-        assert final_job.result_material_id == mid
-
         assert final_mat is not None
         assert final_mat.status == "done"
         assert final_mat.content_snapshot == content

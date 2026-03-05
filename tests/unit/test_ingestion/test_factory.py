@@ -27,6 +27,7 @@ class TestCreateHeavySteps:
 
         assert isinstance(heavy, HeavySteps)
         assert heavy.transcribe is not None
+        assert heavy.parse_pdf is not None
         assert heavy.describe_slides is not None
         assert heavy.scrape_web is not None
 
@@ -35,6 +36,7 @@ class TestCreateHeavySteps:
         heavy = create_heavy_steps()
 
         assert heavy.transcribe is not None
+        assert heavy.parse_pdf is not None
         assert heavy.describe_slides is None
         assert heavy.scrape_web is not None
 
@@ -44,6 +46,13 @@ class TestCreateHeavySteps:
 
         heavy = create_heavy_steps()
         assert heavy.transcribe is local_transcribe
+
+    def test_parse_pdf_is_local_parse_pdf(self) -> None:
+        """parse_pdf points to local_parse_pdf."""
+        from course_supporter.ingestion.parse_pdf import local_parse_pdf
+
+        heavy = create_heavy_steps()
+        assert heavy.parse_pdf is local_parse_pdf
 
     def test_scrape_web_is_local_scrape_web(self) -> None:
         """scrape_web points to local_scrape_web."""
@@ -73,7 +82,9 @@ class TestCreateHeavySteps:
         assert isinstance(heavy.describe_slides, functools.partial)
         assert heavy.describe_slides.func is local_describe_slides
 
-    @pytest.mark.parametrize("field", ["transcribe", "describe_slides", "scrape_web"])
+    @pytest.mark.parametrize(
+        "field", ["transcribe", "parse_pdf", "describe_slides", "scrape_web"]
+    )
     def test_heavy_steps_is_frozen(self, field: str) -> None:
         """HeavySteps is immutable — all fields reject assignment."""
         router = AsyncMock()
@@ -135,6 +146,15 @@ class TestCreateProcessors:
         assert isinstance(video, VideoProcessor)
         assert isinstance(video._whisper, WhisperVideoProcessor)
         assert video._whisper._transcribe_func is heavy.transcribe
+
+    def test_presentation_processor_has_parse_pdf_func(self) -> None:
+        """PresentationProcessor has injected parse_pdf_func."""
+        heavy = create_heavy_steps()
+        processors = create_processors(heavy)
+
+        pres = processors[SourceType.PRESENTATION]
+        assert isinstance(pres, PresentationProcessor)
+        assert pres._parse_pdf_func is heavy.parse_pdf
 
     def test_presentation_processor_has_describe_func(self) -> None:
         """PresentationProcessor has injected describe_slides_func."""

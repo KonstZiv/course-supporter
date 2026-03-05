@@ -10,8 +10,6 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.job_repository import JobRepository
@@ -91,12 +89,9 @@ class TestJobLifecycleSuccess:
         assert active_job.started_at is not None
 
         # active -> complete
-        complete_job = await repo.update_status(
-            job.id, "complete", result_material_id=seed_material.id
-        )
+        complete_job = await repo.update_status(job.id, "complete")
         assert complete_job.status == "complete"
         assert complete_job.completed_at is not None
-        assert complete_job.result_material_id == seed_material.id
 
     async def test_active_sets_started_at(
         self, db_session: AsyncSession, seed_course: Course
@@ -150,29 +145,6 @@ class TestJobTransitionValidation:
 
         with pytest.raises(ValueError, match="Invalid job status transition"):
             await repo.update_status(job.id, "complete")
-
-    async def test_check_constraint_both_results(
-        self, db_session: AsyncSession, seed_course: Course
-    ) -> None:
-        """DB CHECK prevents both result_material_id AND result_snapshot_id."""
-        repo = JobRepository(db_session)
-        job = await repo.create(course_id=seed_course.id, job_type="ingest")
-
-        # Bypass app-level validation via raw SQL
-        with pytest.raises(IntegrityError, match="chk_job_result_exclusive"):
-            await db_session.execute(
-                text("""
-                    UPDATE jobs
-                    SET result_material_id = :mid, result_snapshot_id = :sid
-                    WHERE id = :jid
-                """),
-                {
-                    "mid": uuid.uuid4(),
-                    "sid": uuid.uuid4(),
-                    "jid": job.id,
-                },
-            )
-            await db_session.flush()
 
 
 class TestJobQueries:

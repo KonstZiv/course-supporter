@@ -11,13 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.api.deps import get_session
 from course_supporter.api.schemas import JobResponse
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.storage.job_repository import JobRepository
 
 router = APIRouter(tags=["jobs"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 
 
 @router.get("/jobs/{job_id}")

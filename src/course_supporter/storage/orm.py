@@ -8,7 +8,6 @@ from typing import Any
 import uuid_utils as uuid7_lib
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -227,9 +226,6 @@ class MaterialEntry(Base):
         ForeignKey("jobs.id", ondelete="SET NULL"), index=True
     )
     pending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    # ── Fingerprint ──
-    content_fingerprint: Mapped[str | None] = mapped_column(String(64))
 
     # ── Errors ──
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -538,13 +534,6 @@ class Exercise(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
-    __table_args__ = (
-        CheckConstraint(
-            "NOT (result_material_id IS NOT NULL AND result_snapshot_id IS NOT NULL)",
-            name="chk_job_result_exclusive",
-        ),
-    )
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     course_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("courses.id", ondelete="SET NULL"), index=True
@@ -555,8 +544,6 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     arq_job_id: Mapped[str | None] = mapped_column(String(100))
     input_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    result_material_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
-    result_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     depends_on: Mapped[list[str] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(

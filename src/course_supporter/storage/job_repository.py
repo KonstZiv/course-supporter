@@ -68,8 +68,6 @@ class JobRepository:
         status: str,
         *,
         error_message: str | None = None,
-        result_material_id: uuid.UUID | None = None,
-        result_snapshot_id: uuid.UUID | None = None,
         now: datetime | None = None,
     ) -> Job:
         """Transition job to a new status with validation.
@@ -102,13 +100,6 @@ class JobRepository:
             values["completed_at"] = now
             if error_message is not None:
                 values["error_message"] = error_message
-            if result_material_id is not None and result_snapshot_id is not None:
-                msg = "Cannot set both result_material_id and result_snapshot_id"
-                raise ValueError(msg)
-            if result_material_id is not None:
-                values["result_material_id"] = result_material_id
-            if result_snapshot_id is not None:
-                values["result_snapshot_id"] = result_snapshot_id
 
         stmt = update(Job).where(Job.id == job_id).values(**values)
         await self._session.execute(stmt)

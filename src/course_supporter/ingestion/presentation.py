@@ -14,6 +14,9 @@ from course_supporter.ingestion.base import (
 from course_supporter.ingestion.heavy_steps import (
     DescribeSlidesFunc,
     DescribeSlidesParams,
+    ParsePDFFunc,
+    ParsePDFParams,
+    PDFPageText,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -42,9 +45,18 @@ class PresentationProcessor(SourceProcessor):
     def __init__(
         self,
         *,
+        parse_pdf_func: ParsePDFFunc | None = None,
         describe_slides_func: DescribeSlidesFunc | None = None,
     ) -> None:
+        self._parse_pdf_func = parse_pdf_func or self._default_parse_pdf_func()
         self._describe_slides_func = describe_slides_func
+
+    @staticmethod
+    def _default_parse_pdf_func() -> ParsePDFFunc:
+        """Lazy-import fallback for when no parse_pdf is injected."""
+        from course_supporter.ingestion.parse_pdf import local_parse_pdf
+
+        return local_parse_pdf
 
     async def process(
         self,
@@ -101,31 +113,24 @@ class PresentationProcessor(SourceProcessor):
         Returns:
             Tuple of (chunks, page_count).
         """
-        import fitz
+        # Phase 1: extract text via injected heavy step
+        pdf_pages: list[PDFPageText] = await self._parse_pdf_func(
+            str(path), ParsePDFParams()
+        )
 
-        # Phase 1: extract text from each page
         text_chunks: list[ContentChunk] = []
-        doc = fitz.open(str(path))
+        for pp in pdf_pages:
+            text_chunks.append(
+                ContentChunk(
+                    chunk_type=ChunkType.SLIDE_TEXT,
+                    text=pp.text,
+                    index=pp.page_number,
+                    metadata={"slide_number": pp.page_number},
+                )
+            )
 
-        try:
-            page_count = len(doc)
-
-            for page_idx in range(page_count):
-                page = doc[page_idx]
-                slide_number = page_idx + 1
-                text = page.get_text().strip()
-
-                if text:
-                    text_chunks.append(
-                        ContentChunk(
-                            chunk_type=ChunkType.SLIDE_TEXT,
-                            text=text,
-                            index=slide_number,
-                            metadata={"slide_number": slide_number},
-                        )
-                    )
-        finally:
-            doc.close()
+        # page_count: max page number from results, or 0
+        page_count = max((pp.page_number for pp in pdf_pages), default=0)
 
         # Phase 2: optional vision descriptions via injected heavy step
         descriptions_map: dict[int, str] = {}

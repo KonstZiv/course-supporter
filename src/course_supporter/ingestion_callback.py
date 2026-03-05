@@ -90,9 +90,7 @@ class IngestionCallback:
                     material_id, "done", content_snapshot=content_json
                 )
 
-            await job_repo.update_status(
-                job_id, "complete", result_material_id=material_id
-            )
+            await job_repo.update_status(job_id, "complete")
 
             # Extension points
             await self._invalidate_fingerprints(session, material_id=material_id)
@@ -173,10 +171,9 @@ class IngestionCallback:
 
         **Epic 3 (S2-027) implementation plan**:
         1. Load the MaterialEntry (or its parent MaterialNode).
-        2. Set ``content_fingerprint = NULL`` on the entry.
-        3. Walk up the tree via ``parent_id``, setting
+        2. Walk up the tree via ``parent_id``, setting
            ``node_fingerprint = NULL`` on each ancestor node.
-        4. Set course-level fingerprint to NULL.
+        3. Set course-level fingerprint to NULL.
 
         All changes are flushed within the provided session
         (caller commits).

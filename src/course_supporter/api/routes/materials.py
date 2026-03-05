@@ -32,8 +32,13 @@ from course_supporter.api.schemas import (
     MaterialEntryCreateResponse,
     MaterialEntryResponse,
 )
-from course_supporter.api.upload_validation import ALLOWED_EXTENSIONS, file_extension
+from course_supporter.api.upload_validation import (
+    ALLOWED_EXTENSIONS,
+    check_platform,
+    file_extension,
+)
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.source import SourceType
@@ -49,8 +54,10 @@ router = APIRouter(tags=["materials"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
-PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 
@@ -233,6 +240,11 @@ async def create_material(
     )
     response = MaterialEntryCreateResponse.model_validate(entry)
     response.job_id = job.id
+
+    warning = check_platform(source_type, actual_url)
+    if warning:
+        response.warnings.append(warning)
+
     return response
 
 

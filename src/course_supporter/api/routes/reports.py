@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.models.reports import CostReport
 from course_supporter.storage.database import async_session
@@ -12,7 +13,9 @@ from course_supporter.storage.repositories import LLMCallRepository
 
 router = APIRouter(tags=["reports"])
 
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 
 
 @router.get("/reports/cost", response_model=CostReport)

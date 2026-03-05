@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.ingestion.base import UnsupportedFormatError
-from course_supporter.ingestion.heavy_steps import SlideDescription
+from course_supporter.ingestion.heavy_steps import PDFPageText, SlideDescription
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.models.source import ChunkType, SourceDocument, SourceType
 
@@ -24,25 +24,21 @@ def _make_source(
     return source
 
 
-def _make_fitz_doc(pages: list[MagicMock]) -> MagicMock:
-    """Create a mock fitz.Document with indexed page access."""
-    mock_doc = MagicMock()
-    mock_doc.__len__ = lambda self: len(pages)
-    mock_doc.__getitem__ = lambda self, idx: pages[idx]
-    return mock_doc
+def _mock_parse_pdf(pages: list[PDFPageText]) -> AsyncMock:
+    """Create a mock ParsePDFFunc returning given pages."""
+    return AsyncMock(return_value=pages)
 
 
 class TestPDFProcessing:
     async def test_text_extraction(self) -> None:
-        """Mock fitz -> chunks with SLIDE_TEXT type."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "Slide 1 content"
-
-        mock_doc = _make_fitz_doc([mock_page])
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        """parse_pdf_func -> chunks with SLIDE_TEXT type."""
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Slide 1 content"),
+            ]
+        )
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         assert isinstance(doc, SourceDocument)
         assert doc.source_type == SourceType.PRESENTATION
@@ -52,20 +48,22 @@ class TestPDFProcessing:
 
     async def test_with_vision_analysis(self) -> None:
         """Injected describe_slides_func -> SLIDE_DESCRIPTION chunks."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "Text"
-
-        mock_doc = _make_fitz_doc([mock_page])
-
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Text"),
+            ]
+        )
         mock_describe = AsyncMock(
             return_value=[
                 SlideDescription(slide_number=1, description="Diagram showing flow"),
             ]
         )
 
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor(describe_slides_func=mock_describe)
-            doc = await proc.process(_make_source())
+        proc = PresentationProcessor(
+            parse_pdf_func=mock_parse,
+            describe_slides_func=mock_describe,
+        )
+        doc = await proc.process(_make_source())
 
         desc_chunks = [
             c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_DESCRIPTION
@@ -75,27 +73,27 @@ class TestPDFProcessing:
 
     async def test_empty_pdf(self) -> None:
         """No pages -> empty chunks."""
-        mock_doc = _make_fitz_doc([])
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        mock_parse = _mock_parse_pdf([])
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         assert doc.chunks == []
         assert doc.metadata["page_count"] == 0
 
     async def test_vision_failure_graceful(self) -> None:
         """describe_slides_func raises -> text-only chunks (no crash)."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "Text content"
-
-        mock_doc = _make_fitz_doc([mock_page])
-
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Text content"),
+            ]
+        )
         mock_describe = AsyncMock(side_effect=RuntimeError("Vision failed"))
 
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor(describe_slides_func=mock_describe)
-            doc = await proc.process(_make_source())
+        proc = PresentationProcessor(
+            parse_pdf_func=mock_parse,
+            describe_slides_func=mock_describe,
+        )
+        doc = await proc.process(_make_source())
 
         text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
         assert len(text_chunks) == 1
@@ -106,14 +104,13 @@ class TestPDFProcessing:
 
     async def test_no_describe_func_text_only(self) -> None:
         """No describe_slides_func -> text-only chunks (no crash)."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "Text content"
-
-        mock_doc = _make_fitz_doc([mock_page])
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Text content"),
+            ]
+        )
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
         assert len(text_chunks) == 1
@@ -123,29 +120,22 @@ class TestPDFProcessing:
         assert len(desc_chunks) == 0
 
     async def test_empty_page_text_skipped(self) -> None:
-        """Pages with only whitespace produce no chunks."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "   \n  "
-
-        mock_doc = _make_fitz_doc([mock_page])
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        """Pages with only whitespace are not returned by parse_pdf."""
+        mock_parse = _mock_parse_pdf([])  # parse_pdf strips empty pages
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         assert doc.chunks == []
-        assert doc.metadata["page_count"] == 1
+        assert doc.metadata["page_count"] == 0
 
     async def test_interleaved_chunk_order(self) -> None:
         """Chunks are interleaved: Text1, Desc1, Text2, Desc2."""
-        mock_pages = []
-        for i in range(2):
-            page = MagicMock()
-            page.get_text.return_value = f"Slide {i + 1}"
-            mock_pages.append(page)
-
-        mock_doc = _make_fitz_doc(mock_pages)
-
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Slide 1"),
+                PDFPageText(page_number=2, text="Slide 2"),
+            ]
+        )
         mock_describe = AsyncMock(
             return_value=[
                 SlideDescription(slide_number=1, description="Desc 1"),
@@ -153,9 +143,11 @@ class TestPDFProcessing:
             ]
         )
 
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor(describe_slides_func=mock_describe)
-            doc = await proc.process(_make_source())
+        proc = PresentationProcessor(
+            parse_pdf_func=mock_parse,
+            describe_slides_func=mock_describe,
+        )
+        doc = await proc.process(_make_source())
 
         assert len(doc.chunks) == 4
         assert doc.chunks[0].chunk_type == ChunkType.SLIDE_TEXT
@@ -167,42 +159,23 @@ class TestPDFProcessing:
         assert doc.chunks[3].chunk_type == ChunkType.SLIDE_DESCRIPTION
         assert doc.chunks[3].index == 2
 
-    async def test_describe_func_called_with_path_and_params(self) -> None:
-        """describe_slides_func receives str(path) and DescribeSlidesParams."""
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = "Text"
+    async def test_parse_pdf_func_called_with_path_and_params(self) -> None:
+        """parse_pdf_func receives str(path) and ParsePDFParams."""
+        mock_parse = _mock_parse_pdf([])
 
-        mock_doc = _make_fitz_doc([mock_page])
-        mock_describe = AsyncMock(return_value=[])
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        await proc.process(_make_source(url="file:///slides.pdf"))
 
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor(describe_slides_func=mock_describe)
-            await proc.process(_make_source(url="file:///slides.pdf"))
-
-        mock_describe.assert_awaited_once()
-        args = mock_describe.call_args
-        # Path normalizes "file:///slides.pdf" -> "file:/slides.pdf"
+        mock_parse.assert_awaited_once()
+        args = mock_parse.call_args
         assert args[0][0] == str(Path("file:///slides.pdf"))
 
-    async def test_describe_func_called_once_for_multi_page_pdf(self) -> None:
-        """describe_slides_func is called once per PDF, not once per page."""
-        mock_pages = [MagicMock() for _ in range(5)]
-        for i, page in enumerate(mock_pages):
-            page.get_text.return_value = f"Slide {i + 1}"
+    async def test_default_parse_pdf_func(self) -> None:
+        """Without injected parse_pdf, falls back to local_parse_pdf."""
+        proc = PresentationProcessor()
+        from course_supporter.ingestion.parse_pdf import local_parse_pdf
 
-        mock_doc = _make_fitz_doc(mock_pages)
-        mock_describe = AsyncMock(
-            return_value=[
-                SlideDescription(slide_number=i + 1, description=f"Desc {i + 1}")
-                for i in range(5)
-            ]
-        )
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor(describe_slides_func=mock_describe)
-            await proc.process(_make_source())
-
-        mock_describe.assert_awaited_once()
+        assert proc._parse_pdf_func is local_parse_pdf
 
 
 class TestPPTXProcessing:
@@ -279,17 +252,15 @@ class TestPresentationProcessorValidation:
 
     async def test_slide_numbering(self) -> None:
         """Chunk index and metadata use 1-based slide numbers."""
-        mock_pages = []
-        for i in range(3):
-            page = MagicMock()
-            page.get_text.return_value = f"Slide {i + 1}"
-            mock_pages.append(page)
-
-        mock_doc = _make_fitz_doc(mock_pages)
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        mock_parse = _mock_parse_pdf(
+            [
+                PDFPageText(page_number=1, text="Slide 1"),
+                PDFPageText(page_number=2, text="Slide 2"),
+                PDFPageText(page_number=3, text="Slide 3"),
+            ]
+        )
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         for i, chunk in enumerate(doc.chunks):
             assert chunk.metadata["slide_number"] == i + 1
@@ -297,11 +268,9 @@ class TestPresentationProcessorValidation:
 
     async def test_source_document_metadata(self) -> None:
         """page_count and format in metadata."""
-        mock_doc = _make_fitz_doc([])
-
-        with patch("fitz.open", return_value=mock_doc):
-            proc = PresentationProcessor()
-            doc = await proc.process(_make_source())
+        mock_parse = _mock_parse_pdf([])
+        proc = PresentationProcessor(parse_pdf_func=mock_parse)
+        doc = await proc.process(_make_source())
 
         assert doc.metadata["format"] == "pdf"
         assert doc.metadata["page_count"] == 0

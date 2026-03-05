@@ -36,6 +36,7 @@ from course_supporter.api.schemas import (
     NodeUpdateRequest,
 )
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import CourseRepository
@@ -45,8 +46,10 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["nodes"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 
 
 async def _require_course(

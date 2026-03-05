@@ -29,6 +29,7 @@ from course_supporter.api.schemas import (
 )
 from course_supporter.api.upload_validation import ALLOWED_EXTENSIONS, file_extension
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.course import SlideVideoMapEntry
@@ -61,8 +62,10 @@ def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
-PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 

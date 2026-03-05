@@ -32,6 +32,7 @@ from course_supporter.api.schemas import (
     SnapshotSummaryResponse,
 )
 from course_supporter.auth.context import TenantContext
+from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.errors import (
     GenerationConflictError,
@@ -47,8 +48,10 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["generation"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
-SharedDep = Annotated[TenantContext, Depends(require_scope("prep", "check"))]
+PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+SharedDep = Annotated[
+    TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
+]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 

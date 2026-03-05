@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import anyio
 import structlog
 from aiobotocore.session import get_session as get_aio_session
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 from fastapi import UploadFile
 
@@ -55,6 +56,10 @@ class S3Client:
             endpoint_url=self._endpoint_url,
             aws_access_key_id=self._access_key,
             aws_secret_access_key=self._secret_key,
+            config=BotoConfig(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+            ),
         )
         self._client = await self._client_ctx.__aenter__()
 
@@ -296,10 +301,22 @@ class S3Client:
             msg = "S3Client not initialized. Use 'async with S3Client(...)'"
             raise RuntimeError(msg)
 
-        response = await self._client.get_object(
-            Bucket=self._bucket,
-            Key=key,
-        )
+        log = structlog.get_logger()
+        try:
+            response = await self._client.get_object(
+                Bucket=self._bucket,
+                Key=key,
+            )
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            log.error(
+                "s3_download_failed",
+                key=key,
+                bucket=self._bucket,
+                error_code=error_code,
+                error=str(e),
+            )
+            raise
 
         is_temp = dest is None
         if dest is None:

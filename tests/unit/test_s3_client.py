@@ -253,3 +253,80 @@ class TestDownloadFile:
         )
         with pytest.raises(RuntimeError, match="not initialized"):
             await client.download_file("some/key.txt")
+
+    @pytest.mark.asyncio
+    async def test_download_file_raises_client_error(self) -> None:
+        """download_file() re-raises ClientError from S3 with logging."""
+        from botocore.exceptions import ClientError
+
+        client = S3Client(
+            endpoint_url="https://s3.us-west-004.backblazeb2.com",
+            access_key="key",
+            secret_key="secret",
+            bucket="my-bucket",
+        )
+        client._client = AsyncMock()
+        client._client.get_object.side_effect = ClientError(
+            error_response={"Error": {"Code": "NoSuchKey", "Message": "Not Found"}},
+            operation_name="GetObject",
+        )
+
+        with pytest.raises(ClientError):
+            await client.download_file("missing/key.pdf")
+
+    @pytest.mark.asyncio
+    async def test_download_file_cleans_temp_on_stream_error(self) -> None:
+        """download_file() removes temp file if streaming fails."""
+        stream = AsyncMock()
+        stream.read = AsyncMock(side_effect=OSError("network error"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=stream)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+
+        client = S3Client(
+            endpoint_url="http://localhost:9000",
+            access_key="key",
+            secret_key="secret",
+            bucket="my-bucket",
+        )
+        client._client = AsyncMock()
+        client._client.get_object = AsyncMock(return_value={"Body": ctx})
+
+        with pytest.raises(OSError, match="network error"):
+            await client.download_file("docs/file.pdf")
+
+
+class TestS3Config:
+    """Tests for S3Client configuration."""
+
+    @pytest.mark.asyncio
+    async def test_open_uses_s3v4_signature(self) -> None:
+        """S3Client.open() passes SigV4 and path-style config to aiobotocore."""
+        client = S3Client(
+            endpoint_url="https://s3.us-west-004.backblazeb2.com",
+            access_key="key",
+            secret_key="secret",
+            bucket="my-bucket",
+        )
+
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        client._session.create_client = MagicMock(return_value=mock_ctx)
+
+        await client.open()
+
+        client._session.create_client.assert_called_once()
+        call_kwargs = client._session.create_client.call_args
+        assert call_kwargs[0] == ("s3",)
+        assert (
+            call_kwargs[1]["endpoint_url"] == "https://s3.us-west-004.backblazeb2.com"
+        )
+        assert call_kwargs[1]["aws_access_key_id"] == "key"
+        assert call_kwargs[1]["aws_secret_access_key"] == "secret"
+
+        from botocore.config import Config as BotoConfig
+
+        config: BotoConfig = call_kwargs[1]["config"]
+        assert config.signature_version == "s3v4"
+        assert config.s3["addressing_style"] == "path"

@@ -350,6 +350,15 @@ class NodeWithMaterialsResponse(BaseModel):
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
+    learning_goal: str | None = Field(
+        default=None, description="Learning goal for this node."
+    )
+    expected_knowledge: list[str] | None = Field(
+        default=None, description="Expected knowledge items."
+    )
+    expected_skills: list[str] | None = Field(
+        default=None, description="Expected skills items."
+    )
     order: int = Field(description="0-based position among siblings.")
     node_fingerprint: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
@@ -572,6 +581,15 @@ class NodeResponse(BaseModel):
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
+    learning_goal: str | None = Field(
+        default=None, description="Learning goal for this node."
+    )
+    expected_knowledge: list[str] | None = Field(
+        default=None, description="Expected knowledge items."
+    )
+    expected_skills: list[str] | None = Field(
+        default=None, description="Expected skills items."
+    )
     order: int = Field(description="0-based position among siblings.")
     node_fingerprint: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
@@ -612,6 +630,15 @@ class NodeTreeResponse(BaseModel):
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
+    learning_goal: str | None = Field(
+        default=None, description="Learning goal for this node."
+    )
+    expected_knowledge: list[str] | None = Field(
+        default=None, description="Expected knowledge items."
+    )
+    expected_skills: list[str] | None = Field(
+        default=None, description="Expected skills items."
+    )
     order: int = Field(description="0-based position among siblings.")
     node_fingerprint: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."

@@ -102,6 +102,7 @@ async def create_root_node(
 
     repo = MaterialNodeRepository(session)
     node = await repo.create(
+        tenant_id=tenant.tenant_id,
         course_id=course_id,
         title=body.title,
         description=body.description,
@@ -135,6 +136,7 @@ async def create_child_node(
     await _require_node(repo, node_id, course_id)
 
     node = await repo.create(
+        tenant_id=tenant.tenant_id,
         course_id=course_id,
         parent_id=node_id,
         title=body.title,

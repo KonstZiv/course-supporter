@@ -155,6 +155,9 @@ def _mock_node(
     node.description = description
     node.order = order
     node.node_fingerprint = node_fingerprint
+    node.learning_goal = None
+    node.expected_knowledge = None
+    node.expected_skills = None
     node.children = children or []
     node.materials = materials or []
     node.created_at = datetime.now(UTC)

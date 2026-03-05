@@ -51,10 +51,12 @@ class TestCreate:
         session.add = MagicMock()
         repo = MaterialNodeRepository(session)
 
+        tenant_id = uuid.uuid4()
         course_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=0):
             result = await repo.create(
+                tenant_id=tenant_id,
                 course_id=course_id,
                 title="Module 1",
             )
@@ -74,11 +76,13 @@ class TestCreate:
         session.add = MagicMock()
         repo = MaterialNodeRepository(session)
 
+        tenant_id = uuid.uuid4()
         course_id = uuid.uuid4()
         parent_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=3):
             result = await repo.create(
+                tenant_id=tenant_id,
                 course_id=course_id,
                 parent_id=parent_id,
                 title="Subtopic",

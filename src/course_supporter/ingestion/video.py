@@ -37,7 +37,7 @@ from course_supporter.models.source import (
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import MaterialEntry as SourceMaterial
+    from course_supporter.storage.orm import MaterialEntry
 
 logger = structlog.get_logger()
 
@@ -71,7 +71,7 @@ class GeminiVideoProcessor(SourceProcessor):
 
     async def process(
         self,
-        source: SourceMaterial,
+        source: MaterialEntry,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
@@ -224,7 +224,7 @@ class WhisperVideoProcessor(SourceProcessor):
 
     async def process(
         self,
-        source: SourceMaterial,
+        source: MaterialEntry,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
@@ -430,7 +430,7 @@ class VideoProcessor(SourceProcessor):
 
     async def process(
         self,
-        source: SourceMaterial,
+        source: MaterialEntry,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:

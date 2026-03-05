@@ -110,7 +110,7 @@ class TestMaterialEntryModel:
         assert str(node_id) in r
 
     def test_source_type_reuses_enum(self) -> None:
-        """source_type uses existing source_type_enum (shared with SourceMaterial)."""
+        """source_type uses source_type_enum."""
         col = MaterialEntry.__table__.c.source_type
         assert col.type.name == "source_type_enum"  # type: ignore[union-attr]
 

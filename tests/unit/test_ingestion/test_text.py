@@ -14,7 +14,7 @@ def _make_source(
     url: str = "file:///doc.md",
     filename: str = "doc.md",
 ) -> MagicMock:
-    """Create a mock SourceMaterial."""
+    """Create a mock MaterialEntry."""
     source = MagicMock()
     source.source_type = source_type
     source.source_url = url

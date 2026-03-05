@@ -95,8 +95,8 @@ class Course(Base):
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
     learning_goal: Mapped[str | None] = mapped_column(Text)
-    expected_knowledge: Mapped[list[Any] | None] = mapped_column(JSONB)
-    expected_skills: Mapped[list[Any] | None] = mapped_column(JSONB)
+    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -130,6 +130,9 @@ class MaterialNode(Base):
     __tablename__ = "material_nodes"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
     course_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("courses.id", ondelete="CASCADE"), index=True
     )
@@ -138,6 +141,9 @@ class MaterialNode(Base):
     )
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(Text)
+    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
     order: Mapped[int] = mapped_column(Integer, default=0)
     node_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
@@ -148,6 +154,7 @@ class MaterialNode(Base):
     )
 
     # Relationships
+    tenant: Mapped["Tenant"] = relationship()
     course: Mapped["Course"] = relationship(back_populates="material_nodes")
     parent: Mapped["MaterialNode | None"] = relationship(
         back_populates="children",
@@ -441,8 +448,8 @@ class Module(Base):
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
     learning_goal: Mapped[str | None] = mapped_column(Text)
-    expected_knowledge: Mapped[list[Any] | None] = mapped_column(JSONB)
-    expected_skills: Mapped[list[Any] | None] = mapped_column(JSONB)
+    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
     difficulty: Mapped[str | None] = mapped_column(String(20))
     order: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(

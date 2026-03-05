@@ -36,6 +36,7 @@ class MaterialNodeRepository:
     async def create(
         self,
         *,
+        tenant_id: uuid.UUID,
         course_id: uuid.UUID,
         title: str,
         parent_id: uuid.UUID | None = None,
@@ -44,6 +45,7 @@ class MaterialNodeRepository:
         """Create a new node with auto-incremented order among siblings.
 
         Args:
+            tenant_id: FK to the owning tenant.
             course_id: FK to the parent course.
             title: Node title.
             parent_id: FK to parent node (None for root).
@@ -54,6 +56,7 @@ class MaterialNodeRepository:
         """
         next_order = await self._next_sibling_order(course_id, parent_id)
         node = MaterialNode(
+            tenant_id=tenant_id,
             course_id=course_id,
             parent_id=parent_id,
             title=title,

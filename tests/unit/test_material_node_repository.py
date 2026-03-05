@@ -51,10 +51,12 @@ class TestCreate:
         session.add = MagicMock()
         repo = MaterialNodeRepository(session)
 
+        tenant_id = uuid.uuid4()
         course_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=0):
             result = await repo.create(
+                tenant_id=tenant_id,
                 course_id=course_id,
                 title="Module 1",
             )
@@ -64,6 +66,7 @@ class TestCreate:
         added_node = session.add.call_args[0][0]
         assert isinstance(added_node, MaterialNode)
         assert added_node.title == "Module 1"
+        assert added_node.tenant_id == tenant_id
         assert added_node.parent_id is None
         assert added_node.order == 0
         assert result is added_node
@@ -74,11 +77,13 @@ class TestCreate:
         session.add = MagicMock()
         repo = MaterialNodeRepository(session)
 
+        tenant_id = uuid.uuid4()
         course_id = uuid.uuid4()
         parent_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=3):
             result = await repo.create(
+                tenant_id=tenant_id,
                 course_id=course_id,
                 parent_id=parent_id,
                 title="Subtopic",
@@ -91,6 +96,24 @@ class TestCreate:
         assert added_node.order == 3
         assert added_node.description == "Details"
         assert result is added_node
+
+    async def test_create_stores_new_fields_as_none_by_default(self) -> None:
+        """New learning fields default to None when not provided."""
+        session = AsyncMock()
+        session.add = MagicMock()
+        repo = MaterialNodeRepository(session)
+
+        with patch.object(repo, "_next_sibling_order", return_value=0):
+            result = await repo.create(
+                tenant_id=uuid.uuid4(),
+                course_id=uuid.uuid4(),
+                title="Node",
+            )
+
+        assert result.description is None
+        assert result.learning_goal is None
+        assert result.expected_knowledge is None
+        assert result.expected_skills is None
 
 
 class TestGetById:

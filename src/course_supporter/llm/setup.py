@@ -31,7 +31,7 @@ def create_model_router(
 
     Args:
         settings: Application settings with API keys and registry path.
-        session_factory: If provided, LLM calls are logged to llm_calls table.
+        session_factory: If provided, calls are logged to external_service_calls table.
         max_attempts: Max retry attempts per model (default 2).
 
     Returns:

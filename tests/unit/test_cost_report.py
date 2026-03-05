@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
-from course_supporter.storage.repositories import LLMCallRepository
+from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -62,8 +62,8 @@ def _grouped_rows(groups: list[dict[str, Any]]) -> list[MagicMock]:
     return [_mock_row(**g) for g in groups]
 
 
-class TestLLMCallRepositorySummary:
-    """Tests for LLMCallRepository.get_summary."""
+class TestExternalServiceCallRepositorySummary:
+    """Tests for ExternalServiceCallRepository.get_summary."""
 
     async def test_get_summary_empty_table(self) -> None:
         """Empty table returns zeroes."""
@@ -72,7 +72,7 @@ class TestLLMCallRepositorySummary:
         mock_result.one.return_value = _empty_summary_row()
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 0
@@ -87,7 +87,7 @@ class TestLLMCallRepositorySummary:
         mock_result.one.return_value = _filled_summary_row()
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         summary = await repo.get_summary()
 
         assert summary.total_calls == 5
@@ -99,7 +99,7 @@ class TestLLMCallRepositorySummary:
         assert summary.avg_latency_ms == pytest.approx(450.5)
 
 
-class TestLLMCallRepositoryGrouped:
+class TestExternalServiceCallRepositoryGrouped:
     """Tests for grouped cost queries."""
 
     async def test_get_by_action_groups(self) -> None:
@@ -128,7 +128,7 @@ class TestLLMCallRepositoryGrouped:
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_action()
 
         assert len(groups) == 2
@@ -154,7 +154,7 @@ class TestLLMCallRepositoryGrouped:
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_provider()
 
         assert len(groups) == 1
@@ -179,7 +179,7 @@ class TestLLMCallRepositoryGrouped:
         )
         session.execute.return_value = mock_result
 
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         groups = await repo.get_by_model()
 
         assert len(groups) == 1
@@ -233,7 +233,7 @@ class TestCostReportAPI:
                     mock_session_ctx,
                 ),
                 patch(
-                    "course_supporter.api.routes.reports.LLMCallRepository",
+                    "course_supporter.api.routes.reports.ExternalServiceCallRepository",
                 ) as mock_repo_cls,
             ):
                 repo_instance = AsyncMock()
@@ -269,7 +269,7 @@ class TestCostReportAPI:
                     mock_session_ctx,
                 ),
                 patch(
-                    "course_supporter.api.routes.reports.LLMCallRepository",
+                    "course_supporter.api.routes.reports.ExternalServiceCallRepository",
                 ) as mock_repo_cls,
             ):
                 repo_instance = AsyncMock()

@@ -9,7 +9,7 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.models.reports import CostReport
 from course_supporter.storage.database import async_session
-from course_supporter.storage.repositories import LLMCallRepository
+from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 router = APIRouter(tags=["reports"])
 
@@ -20,7 +20,7 @@ SharedDep = Annotated[
 
 @router.get("/reports/cost", response_model=CostReport)
 async def get_cost_report(tenant: SharedDep) -> CostReport:
-    """Get LLM call cost report with summary and breakdowns."""
+    """Get external service call cost report with summary and breakdowns."""
     async with async_session() as session:
-        repo = LLMCallRepository(session, tenant.tenant_id)
+        repo = ExternalServiceCallRepository(session, tenant.tenant_id)
         return await repo.get_full_report()

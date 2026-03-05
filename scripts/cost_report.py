@@ -13,7 +13,7 @@ import json
 
 from course_supporter.models.reports import CostReport
 from course_supporter.storage.database import async_session
-from course_supporter.storage.repositories import LLMCallRepository
+from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,7 +31,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def fetch_report() -> CostReport:
     """Fetch cost report from database."""
     async with async_session() as session:
-        repo = LLMCallRepository(session)
+        repo = ExternalServiceCallRepository(session)
         return await repo.get_full_report()
 
 

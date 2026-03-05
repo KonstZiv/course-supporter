@@ -565,20 +565,24 @@ class Job(Base):
 # ──────────────────────────────────────────────
 
 
-class LLMCall(Base):
-    __tablename__ = "llm_calls"
+class ExternalServiceCall(Base):
+    __tablename__ = "external_service_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
     action: Mapped[str] = mapped_column(String(100), default="")
     strategy: Mapped[str] = mapped_column(String(50), default="default")
     provider: Mapped[str] = mapped_column(String(50))
     model_id: Mapped[str] = mapped_column(String(100))
-    prompt_version: Mapped[str | None] = mapped_column(String(50))
-    tokens_in: Mapped[int | None] = mapped_column(Integer)
-    tokens_out: Mapped[int | None] = mapped_column(Integer)
+    prompt_ref: Mapped[str | None] = mapped_column(String(50))
+    unit_type: Mapped[str | None] = mapped_column(String(20))
+    unit_in: Mapped[int | None] = mapped_column(Integer)
+    unit_out: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Float)
     success: Mapped[bool] = mapped_column(default=True)
@@ -589,3 +593,4 @@ class LLMCall(Base):
 
     # Relationships
     tenant: Mapped["Tenant | None"] = relationship()
+    job: Mapped["Job | None"] = relationship()

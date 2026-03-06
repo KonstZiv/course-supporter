@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -202,18 +203,24 @@ class JobRepository:
             List of newly failed job IDs (may be empty).
         """
         msg = error_message or f"Dependency {failed_job_id} failed"
-        dependents = await self._find_dependents(failed_job_id)
 
+        queue: deque[uuid.UUID] = deque([failed_job_id])
+        seen: set[uuid.UUID] = set()
         failed_ids: list[uuid.UUID] = []
-        for job in dependents:
-            if job.status in ("queued", "active"):
-                job.status = "failed"
-                job.error_message = msg
-                job.completed_at = datetime.now(UTC)
-                failed_ids.append(job.id)
-                # Recursive propagation
-                child_failed = await self.propagate_failure(job.id)
-                failed_ids.extend(child_failed)
+
+        while queue:
+            current_id = queue.popleft()
+            dependents = await self._find_dependents(current_id)
+            for job in dependents:
+                if job.id in seen:
+                    continue
+                seen.add(job.id)
+                if job.status in ("queued", "active"):
+                    job.status = "failed"
+                    job.error_message = msg
+                    job.completed_at = datetime.now(UTC)
+                    failed_ids.append(job.id)
+                    queue.append(job.id)
 
         if failed_ids:
             await self._session.flush()

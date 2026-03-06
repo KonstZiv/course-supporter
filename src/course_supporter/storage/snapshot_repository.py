@@ -33,6 +33,11 @@ class SnapshotRepository:
         mode: GenerationMode | str,
         structure: dict[str, Any],
         externalservicecall_id: uuid.UUID | None = None,
+        step_type: str | None = None,
+        summary: str | None = None,
+        core_concepts: list[str] | None = None,
+        mentioned_concepts: list[str] | None = None,
+        corrections: dict[str, Any] | None = None,
     ) -> StructureSnapshot:
         """Create a new snapshot record."""
         snapshot = StructureSnapshot(
@@ -41,6 +46,11 @@ class SnapshotRepository:
             mode=mode,
             structure=structure,
             externalservicecall_id=externalservicecall_id,
+            step_type=step_type,
+            summary=summary,
+            core_concepts=core_concepts,
+            mentioned_concepts=mentioned_concepts,
+            corrections=corrections,
         )
         self._session.add(snapshot)
         await self._session.flush()

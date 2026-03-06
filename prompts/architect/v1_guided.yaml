@@ -127,6 +127,8 @@ user_prompt_template: |
 
   {context}
 
+  {children_context}
+
   ## Task
 
   Based on the existing structure and the materials above:

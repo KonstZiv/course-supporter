@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import structlog
 
@@ -119,6 +119,7 @@ class ArchitectAgent:
         context: CourseContext,
         *,
         existing_structure: str | None = None,
+        children_context: str | None = None,
     ) -> GenerationResult:
         """Generate course structure with full LLM metadata.
 
@@ -128,6 +129,7 @@ class ArchitectAgent:
         Args:
             context: Unified course context from ingestion pipeline.
             existing_structure: Serialized existing tree for guided mode.
+            children_context: Formatted children summaries for per-node DAG.
 
         Returns:
             GenerationResult with structure, prompt_version, and LLMResponse.
@@ -136,7 +138,11 @@ class ArchitectAgent:
             AllModelsFailedError: If all models in all strategies fail.
             FileNotFoundError: If prompt file not found.
         """
-        prepared = self._prepare_prompts(context, existing_structure=existing_structure)
+        prepared = self._prepare_prompts(
+            context,
+            existing_structure=existing_structure,
+            children_context=children_context,
+        )
         structure, response = await self._generate(
             prepared, documents_count=len(context.documents)
         )
@@ -151,6 +157,7 @@ class ArchitectAgent:
         context: CourseContext,
         *,
         existing_structure: str | None = None,
+        children_context: str | None = None,
     ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
@@ -161,6 +168,7 @@ class ArchitectAgent:
         Args:
             context: Course context to serialize into the prompt.
             existing_structure: Serialized existing tree for guided mode.
+            children_context: Formatted children summaries for per-node DAG.
 
         Returns:
             PreparedPrompt with system prompt, formatted user prompt,
@@ -177,6 +185,7 @@ class ArchitectAgent:
             kwargs["existing_structure"] = (
                 existing_structure or "No existing structure provided."
             )
+        kwargs["children_context"] = children_context or ""
 
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
@@ -262,9 +271,11 @@ class ArchitectAgent:
             step_input.slide_timecode_refs or None,
             material_tree=step_input.material_tree or None,
         )
+        children_context = _format_children_context(step_input.children_summaries)
         gen_result = await self.run_with_metadata(
             context,
             existing_structure=step_input.existing_structure,
+            children_context=children_context,
         )
         return StepOutput(
             structure=gen_result.structure,
@@ -274,3 +285,25 @@ class ArchitectAgent:
             prompt_version=gen_result.prompt_version,
             response=gen_result.response,
         )
+
+
+def _format_children_context(
+    children_summaries: list[Any],
+) -> str | None:
+    """Format children summaries as text for the LLM prompt.
+
+    Returns None when there are no children summaries (leaf node).
+    """
+    if not children_summaries:
+        return None
+
+    lines = ["## Children Summaries", ""]
+    for cs in children_summaries:
+        lines.append(f"### {cs.title}")
+        lines.append(f"**Summary:** {cs.summary}")
+        if cs.core_concepts:
+            lines.append(f"**Core concepts:** {', '.join(cs.core_concepts)}")
+        if cs.mentioned_concepts:
+            lines.append(f"**Mentioned concepts:** {', '.join(cs.mentioned_concepts)}")
+        lines.append("")
+    return "\n".join(lines)

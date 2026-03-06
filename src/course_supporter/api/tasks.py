@@ -416,6 +416,47 @@ async def arq_generate_structure(
             log.error("generate_structure_failed", error=str(exc))
 
 
+async def _load_children_summaries(
+    session: AsyncSession,
+    node: MaterialNode,
+) -> list[Any]:
+    """Load NodeSummary list from latest snapshots of child nodes.
+
+    Args:
+        session: Active DB session.
+        node: Parent MaterialNode (children relationship loaded).
+
+    Returns:
+        List of NodeSummary for children that have snapshots.
+    """
+    from course_supporter.models.step import NodeSummary
+    from course_supporter.storage.snapshot_repository import SnapshotRepository
+
+    if not node.children:
+        return []
+
+    child_ids = [c.id for c in node.children]
+    snap_repo = SnapshotRepository(session)
+    latest = await snap_repo.get_latest_for_nodes(child_ids)
+
+    summaries: list[NodeSummary] = []
+    for child in node.children:
+        snap = latest.get(child.id)
+        if snap is None or snap.summary is None:
+            continue
+        summaries.append(
+            NodeSummary(
+                node_id=child.id,
+                title=child.title,
+                summary=snap.summary,
+                core_concepts=snap.core_concepts or [],
+                mentioned_concepts=snap.mentioned_concepts or [],
+                structure_snapshot_id=snap.id,
+            )
+        )
+    return summaries
+
+
 def _build_step_input(
     *,
     effective_node_id: uuid.UUID,
@@ -425,12 +466,11 @@ def _build_step_input(
     tree_summary: list[MaterialNodeSummary],
     flat_nodes: list[MaterialNode],
     mode: Literal["free", "guided"],
+    children_summaries: list[Any] | None = None,
 ) -> StepInput:
     """Assemble StepInput from collected tree data.
 
     Builds existing_structure for guided mode via tree serialization.
-    Children/parent/sibling summaries are empty until S3-020b adds
-    the sliding window context.
     """
     from course_supporter.models.step import StepInput as _StepInput
     from course_supporter.tree_utils import serialize_tree_for_guided
@@ -442,7 +482,7 @@ def _build_step_input(
         node_id=effective_node_id,
         step_type=step_type,
         materials=documents,
-        children_summaries=[],
+        children_summaries=children_summaries or [],
         parent_context=None,
         sibling_summaries=[],
         existing_structure=existing_structure,
@@ -592,13 +632,17 @@ async def arq_execute_step(
             )
             target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
 
-            # Collect data
+            # Collect data from target subtree
             documents = _collect_ready_documents(flat_nodes)
             mappings = _collect_validated_mappings(flat_nodes)
 
             from course_supporter.tree_utils import build_material_tree_summary
 
             tree_summary = build_material_tree_summary(flat_nodes)
+
+            # Load children summaries from previous generation steps
+            target_node = target if target is not None else root_nodes[0]
+            children_summaries = await _load_children_summaries(session, target_node)
 
             # Compute fingerprint
             fp_service = FingerprintService(session)
@@ -632,6 +676,7 @@ async def arq_execute_step(
                 tree_summary=tree_summary,
                 flat_nodes=flat_nodes,
                 mode=mode,
+                children_summaries=children_summaries,
             )
 
             agent = ArchitectAgent(router, mode=mode)

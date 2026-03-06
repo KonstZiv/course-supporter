@@ -130,6 +130,7 @@ class _MockDeps:
         self.snap_repo.create = AsyncMock(
             return_value=created_snapshot or _make_snapshot(),
         )
+        self.snap_repo.get_latest_for_nodes = AsyncMock(return_value={})
 
         self.agent = AsyncMock()
         self.agent.execute = AsyncMock(
@@ -312,6 +313,59 @@ class TestStepInputAssembly:
         step_input = deps.agent.execute.call_args[0][0]
         assert len(step_input.slide_timecode_refs) == 1
         assert step_input.slide_timecode_refs[0].slide_number == 1
+
+
+class TestChildrenSummaries:
+    """Children summaries loaded from latest snapshots of child nodes."""
+
+    async def test_children_summaries_passed_to_agent(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Parent node receives children summaries in StepInput."""
+        from course_supporter.models.step import StepInput
+
+        child = _make_node(title="Child Topic")
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry], children=[child])
+
+        child_snap = MagicMock()
+        child_snap.id = uuid.uuid4()
+        child_snap.materialnode_id = child.id
+        child_snap.summary = "Child covers basics"
+        child_snap.core_concepts = ["variables"]
+        child_snap.mentioned_concepts = ["functions"]
+
+        deps = _MockDeps(root_nodes=[root])
+        deps.snap_repo.get_latest_for_nodes = AsyncMock(
+            return_value={child.id: child_snap},
+        )
+
+        await _run_task(job_id, root_node_id, deps)
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert isinstance(step_input, StepInput)
+        assert len(step_input.children_summaries) == 1
+        summary = step_input.children_summaries[0]
+        assert summary.node_id == child.id
+        assert summary.title == "Child Topic"
+        assert summary.summary == "Child covers basics"
+        assert summary.core_concepts == ["variables"]
+
+    async def test_children_without_snapshots_skipped(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Children without snapshots are excluded from summaries."""
+        child = _make_node(title="No Snapshot Child")
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry], children=[child])
+
+        deps = _MockDeps(root_nodes=[root])
+        # get_latest_for_nodes returns empty dict (default)
+
+        await _run_task(job_id, root_node_id, deps)
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.children_summaries == []
 
 
 class TestIdempotency:

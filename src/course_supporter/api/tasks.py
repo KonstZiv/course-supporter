@@ -17,7 +17,7 @@ from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.models.course import SlideTimecodeRef
+    from course_supporter.models.course import MaterialNodeSummary, SlideTimecodeRef
     from course_supporter.models.source import SourceDocument
     from course_supporter.models.step import Correction, StepInput, StepOutput, StepType
     from course_supporter.storage.orm import MaterialNode
@@ -422,7 +422,7 @@ def _build_step_input(
     step_type: StepType,
     documents: list[SourceDocument],
     mappings: list[SlideTimecodeRef],
-    tree_summary: list[Any],
+    tree_summary: list[MaterialNodeSummary],
     flat_nodes: list[MaterialNode],
     mode: Literal["free", "guided"],
 ) -> StepInput:

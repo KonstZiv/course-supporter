@@ -86,7 +86,7 @@ class StepInput:
     parent_context: NodeSummary | None
     sibling_summaries: list[NodeSummary]
 
-    # Existing structure (for guided/refine modes)
+    # Existing structure JSON from serialize_tree_for_guided() — internal only
     existing_structure: str | None
 
     # Generation parameters

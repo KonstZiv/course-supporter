@@ -95,6 +95,7 @@ def mock_s3() -> AsyncMock:
     s3.upload_smart = AsyncMock(
         return_value=("http://localhost:9000/course-materials/key/file.pdf", 1024)
     )
+    s3.extract_key = MagicMock(return_value=None)
     return s3
 
 
@@ -449,6 +450,50 @@ class TestDeleteMaterial:
         ):
             resp = await client.delete(f"/api/v1/materials/{entry.id}")
         assert resp.status_code == 404
+
+    async def test_s3_file_cleaned_up(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """S3 file is deleted when material has an S3-backed source_url."""
+        entry = _mock_entry(node_id=node_id)
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/file.pdf")
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(MaterialEntryRepository, "delete", return_value=None),
+        ):
+            resp = await client.delete(f"/api/v1/materials/{entry.id}")
+        assert resp.status_code == 204
+        mock_s3.delete_object.assert_awaited_once_with("tenants/t/file.pdf")
+
+    async def test_no_s3_cleanup_for_external_url(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """External URLs are not deleted from S3."""
+        entry = _mock_entry(node_id=node_id)
+        mock_s3.extract_key = MagicMock(return_value=None)
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(MaterialEntryRepository, "delete", return_value=None),
+        ):
+            resp = await client.delete(f"/api/v1/materials/{entry.id}")
+        assert resp.status_code == 204
+        mock_s3.delete_object.assert_not_awaited()
 
 
 class TestRetryMaterial:

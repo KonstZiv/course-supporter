@@ -375,10 +375,12 @@ async def delete_material(
     entry_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
+    s3: S3Dep,
 ) -> None:
-    """Delete a material entry.
+    """Delete a material entry and its S3 file if applicable.
 
-    Removes the material and its processed content permanently.
+    Removes the material from DB and cleans up the S3 object
+    if the source_url points to our bucket.
     """
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
@@ -386,10 +388,19 @@ async def delete_material(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
 
+    # Clean up S3 file if source_url is an S3 path
+    s3_key = s3.extract_key(entry.source_url)
+    if s3_key is not None:
+        await s3.delete_object(s3_key)
+
     await entry_repo.delete(entry.id)
     await session.commit()
 
-    logger.info("material_entry_deleted", entry_id=str(entry_id))
+    logger.info(
+        "material_entry_deleted",
+        entry_id=str(entry_id),
+        s3_cleaned=s3_key is not None,
+    )
 
 
 @router.post("/materials/{entry_id}/retry")

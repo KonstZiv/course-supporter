@@ -10,7 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_current_tenant
+from course_supporter.api.deps import get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
@@ -61,9 +61,17 @@ def mock_session() -> AsyncMock:
 
 
 @pytest.fixture()
-async def client(mock_session: AsyncMock) -> AsyncClient:
+def mock_s3() -> AsyncMock:
+    s3 = AsyncMock()
+    s3.extract_key = MagicMock(return_value=None)
+    return s3
+
+
+@pytest.fixture()
+async def client(mock_session: AsyncMock, mock_s3: AsyncMock) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
+    app.dependency_overrides[get_s3_client] = lambda: mock_s3
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -370,8 +378,13 @@ class TestDeleteNode:
     async def test_returns_204(self, client: AsyncClient) -> None:
         """Successful deletion returns 204 No Content."""
         node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.materials = []
         with (
             patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
+            ),
             patch.object(MaterialNodeRepository, "delete", return_value=None),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
@@ -389,3 +402,47 @@ class TestDeleteNode:
         with patch.object(MaterialNodeRepository, "get_by_id", return_value=node):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 404
+
+    async def test_cleans_s3_files(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """S3 files from subtree materials are deleted after DB cascade."""
+        entry = MagicMock()
+        entry.source_url = "http://localhost:9000/bucket/tenants/t/file.pdf"
+        node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.materials = [entry]
+        tree_node.children = []
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/file.pdf")
+        with (
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
+            ),
+            patch.object(MaterialNodeRepository, "delete", return_value=None),
+        ):
+            resp = await client.delete(f"/api/v1/nodes/{node.id}")
+        assert resp.status_code == 204
+        mock_s3.delete_object.assert_awaited_once_with("tenants/t/file.pdf")
+
+    async def test_no_s3_cleanup_for_external_urls(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """External URLs (non-S3) are not deleted from S3."""
+        entry = MagicMock()
+        entry.source_url = "https://example.com/video.mp4"
+        node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.materials = [entry]
+        tree_node.children = []
+        mock_s3.extract_key = MagicMock(return_value=None)
+        with (
+            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
+            ),
+            patch.object(MaterialNodeRepository, "delete", return_value=None),
+        ):
+            resp = await client.delete(f"/api/v1/nodes/{node.id}")
+        assert resp.status_code == 204
+        mock_s3.delete_object.assert_not_awaited()

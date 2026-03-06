@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
+from course_supporter.models.step import NodeSummary
+from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
@@ -21,14 +23,12 @@ if TYPE_CHECKING:
     from course_supporter.models.source import SourceDocument
     from course_supporter.models.step import (
         Correction,
-        NodeSummary,
         StepInput,
         StepOutput,
         StepType,
     )
     from course_supporter.storage.orm import MaterialNode, StructureSnapshot
     from course_supporter.storage.s3 import S3Client
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 
 class _HasSourceUrl(Protocol):
@@ -280,7 +280,6 @@ async def arq_generate_structure(
     from course_supporter.storage.material_node_repository import (
         MaterialNodeRepository,
     )
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
 
     jid = uuid.UUID(job_id)
     rid = uuid.UUID(root_node_id)
@@ -427,9 +426,7 @@ def _snapshot_to_summary(
     snap: StructureSnapshot,
 ) -> NodeSummary:
     """Convert a MaterialNode + its latest snapshot into NodeSummary."""
-    from course_supporter.models.step import NodeSummary as _NodeSummary
-
-    return _NodeSummary(
+    return NodeSummary(
         node_id=node.id,
         title=node.title,
         summary=snap.summary or "",
@@ -452,8 +449,6 @@ async def _load_children_summaries(
     Returns:
         List of NodeSummary for children that have snapshots.
     """
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
-
     if not node.children:
         return []
 
@@ -483,8 +478,6 @@ async def _load_parent_context(
     Returns:
         NodeSummary of the parent, or None if root or no snapshot.
     """
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
-
     if node.parent_materialnode_id is None or node.parent is None:
         return None
 
@@ -509,8 +502,6 @@ async def _load_sibling_summaries(
     Returns:
         List of NodeSummary for siblings that have snapshots.
     """
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
-
     if node.parent is None:
         return []
 
@@ -676,7 +667,6 @@ async def arq_execute_step(
     from course_supporter.storage.material_node_repository import (
         MaterialNodeRepository,
     )
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
 
     jid = uuid.UUID(job_id)
     rid = uuid.UUID(root_node_id)

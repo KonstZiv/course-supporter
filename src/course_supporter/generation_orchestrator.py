@@ -184,22 +184,26 @@ def _node_has_content(
     )
 
 
+def _build_parent_map(
+    nodes: list[MaterialNode],
+) -> dict[uuid.UUID, MaterialNode]:
+    """Build child_id → parent mapping from a list of tree nodes."""
+    parent_map: dict[uuid.UUID, MaterialNode] = {}
+    for n in nodes:
+        for child in n.children:
+            parent_map[child.id] = n
+    return parent_map
+
+
 def _find_parent_reconcile(
     node: MaterialNode,
-    ordered_nodes: list[MaterialNode],
+    parent_map: dict[uuid.UUID, MaterialNode],
     node_reconcile_jobs: dict[uuid.UUID, Job],
 ) -> Job | None:
     """Find the reconcile job of the nearest ancestor that has one.
 
-    Walks up the pre-order list to find a parent with a reconcile job.
-    Uses a child→parent lookup built from the ordered nodes.
+    Walks up via parent_map to find a parent with a reconcile job.
     """
-    # Build child→parent map from the tree structure
-    parent_map: dict[uuid.UUID, MaterialNode] = {}
-    for n in ordered_nodes:
-        for child in n.children:
-            parent_map[child.id] = n
-
     current = node
     while current.id in parent_map:
         parent = parent_map[current.id]
@@ -373,6 +377,7 @@ async def trigger_generation(
         root_gen_job_id = str(generation_jobs[-1].id)
 
     reconcile_order = _pre_order(target_roots)
+    parent_map = _build_parent_map(reconcile_order)
     for node in reconcile_order:
         # Skip leaf nodes (no children to reconcile)
         if not node.children:
@@ -386,7 +391,7 @@ async def trigger_generation(
         if not reconciliation_jobs and root_gen_job_id:
             rec_deps.append(root_gen_job_id)
         # Subsequent reconcile jobs depend on parent's reconcile job
-        parent_rec = _find_parent_reconcile(node, reconcile_order, node_reconcile_jobs)
+        parent_rec = _find_parent_reconcile(node, parent_map, node_reconcile_jobs)
         if parent_rec is not None:
             rec_deps.append(str(parent_rec.id))
 

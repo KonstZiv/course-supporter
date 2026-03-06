@@ -137,6 +137,36 @@ async def _collect_mapping_warnings(
     ]
 
 
+def _post_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
+    """Flatten tree nodes in post-order (children before parents).
+
+    Uses iterative traversal to avoid recursion limits.
+    """
+    order: list[MaterialNode] = []
+    stack: list[MaterialNode] = list(reversed(nodes))
+    while stack:
+        node = stack.pop()
+        order.append(node)
+        for child in reversed(node.children):
+            stack.append(child)
+    order.reverse()
+    return order
+
+
+def _node_has_content(
+    node: MaterialNode,
+    children_with_jobs: set[uuid.UUID],
+) -> bool:
+    """Check if a node should get a generation job.
+
+    A node needs generation if it has own materials (any state)
+    or at least one child already has a generation job.
+    """
+    return bool(node.materials) or bool(
+        {c.id for c in node.children} & children_with_jobs
+    )
+
+
 async def trigger_generation(
     *,
     redis: ArqRedis,
@@ -146,11 +176,12 @@ async def trigger_generation(
     target_node_id: uuid.UUID | None = None,
     mode: Literal["free", "guided"] = "free",
 ) -> GenerationPlan:
-    """Orchestrate cascade generation for a tree or subtree.
+    """Orchestrate per-node bottom-up generation DAG.
 
-    Detects stale materials, enqueues ingestion for non-PENDING ones,
-    then enqueues structure generation with ``depends_on``. If all
-    materials are READY, checks fingerprint for idempotency.
+    Builds a DAG of per-node generation jobs in post-order
+    (leaves first, parents wait on children). Each node's
+    generation depends on its own ingestion jobs plus its
+    children's generation jobs.
 
     The caller is responsible for committing the session.
 
@@ -171,17 +202,16 @@ async def trigger_generation(
         NoReadyMaterialsError: If subtree has no materials at all.
     """
     from course_supporter.conflict_detection import detect_conflict
-    from course_supporter.enqueue import enqueue_generation, enqueue_ingestion
+    from course_supporter.enqueue import enqueue_ingestion, enqueue_step
     from course_supporter.errors import (
         GenerationConflictError,
         NoReadyMaterialsError,
     )
-    from course_supporter.fingerprint import FingerprintService
     from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.material_node_repository import (
         MaterialNodeRepository,
     )
-    from course_supporter.storage.snapshot_repository import SnapshotRepository
+    from course_supporter.storage.orm import MaterialState
     from course_supporter.tree_utils import resolve_target_nodes
 
     log = structlog.get_logger().bind(
@@ -202,10 +232,9 @@ async def trigger_generation(
     # 1b. Collect mapping warnings (non-blocking)
     mapping_warnings = await _collect_mapping_warnings(session, flat_nodes)
 
-    # 2. Conflict detection — get active gen jobs for any node in the tree
+    # 2. Conflict detection
     job_repo = JobRepository(session)
     all_tree_node_ids = [n.id for n in flat_nodes]
-    # Also include nodes outside target subtree for full-tree conflict check
     from course_supporter.tree_utils import flatten_subtree
 
     if target_node_id is not None and root_nodes:
@@ -226,103 +255,75 @@ async def trigger_generation(
     if conflict is not None:
         raise GenerationConflictError(conflict)
 
-    # 3. Partition entries
+    # 3. Check there are any materials at all
     stale, ready = _partition_entries(flat_nodes)
-
     if not stale and not ready:
         msg = "No materials found in target subtree"
         raise NoReadyMaterialsError(msg)
 
-    # 4. If stale materials exist → cascade ingestion + generation
-    if stale:
-        ingestion_jobs: list[Job] = []
-        depends_on_ids: list[str] = []
+    # 4. Build per-node DAG in post-order (bottom-up)
+    target_roots = [target] if target is not None else root_nodes
+    processing_order = _post_order(target_roots)
 
-        # Collect existing pending job IDs (skip re-enqueue)
-        pending_ids = _collect_job_ids(stale)
-        depends_on_ids.extend(pending_ids)
+    ingestion_jobs: list[Job] = []
+    generation_jobs: list[Job] = []
+    node_gen_jobs: dict[uuid.UUID, Job] = {}
 
-        # Enqueue ingestion for non-PENDING stale entries
-        for entry in stale:
+    for node in processing_order:
+        # Per-node ingestion dependencies
+        node_deps: list[str] = []
+        for entry in node.materials:
+            if entry.state == MaterialState.READY:
+                continue
             if entry.job_id is not None:
-                continue  # already has an in-flight job
-            job = await enqueue_ingestion(
-                redis=redis,
-                session=session,
-                tenant_id=tenant_id,
-                node_id=entry.materialnode_id,
-                material_id=entry.id,
-                source_type=entry.source_type,
-                source_url=entry.source_url,
-            )
-            ingestion_jobs.append(job)
-            depends_on_ids.append(str(job.id))
+                node_deps.append(str(entry.job_id))
+            else:
+                ing_job = await enqueue_ingestion(
+                    redis=redis,
+                    session=session,
+                    tenant_id=tenant_id,
+                    node_id=node.id,
+                    material_id=entry.id,
+                    source_type=entry.source_type,
+                    source_url=entry.source_url,
+                )
+                ingestion_jobs.append(ing_job)
+                node_deps.append(str(ing_job.id))
 
-        # Enqueue generation with depends_on
-        gen_job = await enqueue_generation(
+        # Children generation dependencies
+        children_deps = [
+            str(node_gen_jobs[child.id].id)
+            for child in node.children
+            if child.id in node_gen_jobs
+        ]
+        node_deps.extend(children_deps)
+
+        # Skip nodes with no content (no materials, no children with jobs)
+        nodes_with_jobs = set(node_gen_jobs.keys())
+        if not _node_has_content(node, nodes_with_jobs):
+            continue
+
+        gen_job = await enqueue_step(
             redis=redis,
             session=session,
             tenant_id=tenant_id,
             root_node_id=root_node_id,
-            target_node_id=target_node_id,
+            target_node_id=node.id,
             mode=mode,
-            depends_on=depends_on_ids if depends_on_ids else None,
+            step_type="generate",
+            depends_on=node_deps if node_deps else None,
         )
+        generation_jobs.append(gen_job)
+        node_gen_jobs[node.id] = gen_job
 
-        log.info(
-            "trigger_generation_cascade",
-            ingestion_count=len(ingestion_jobs),
-            pending_count=len(pending_ids),
-            generation_job_id=str(gen_job.id),
-        )
-        return GenerationPlan(
-            ingestion_jobs=ingestion_jobs,
-            generation_jobs=[gen_job],
-            mapping_warnings=mapping_warnings,
-            estimated_llm_calls=1,
-        )
-
-    # 5. All READY → check idempotency via fingerprint
-    fp_service = FingerprintService(session)
-    # Effective node for fingerprint: target node or root node
-    effective_node_id = target_node_id or root_node_id
-    if target is not None:
-        fingerprint = await fp_service.ensure_node_fp(target)
-    else:
-        fingerprint = await fp_service.ensure_course_fp(root_nodes)
-
-    snap_repo = SnapshotRepository(session)
-    existing = await snap_repo.find_by_identity(
-        node_id=effective_node_id,
-        node_fingerprint=fingerprint,
-        mode=mode,
-    )
-    if existing is not None:
-        log.info(
-            "trigger_generation_idempotent",
-            snapshot_id=str(existing.id),
-        )
-        return GenerationPlan(
-            existing_snapshot_id=existing.id,
-            is_idempotent=True,
-            mapping_warnings=mapping_warnings,
-        )
-
-    # 6. Enqueue generation (all READY, no existing snapshot)
-    gen_job = await enqueue_generation(
-        redis=redis,
-        session=session,
-        tenant_id=tenant_id,
-        root_node_id=root_node_id,
-        target_node_id=target_node_id,
-        mode=mode,
-    )
     log.info(
-        "trigger_generation_enqueued",
-        generation_job_id=str(gen_job.id),
+        "trigger_generation_dag_built",
+        generation_jobs_count=len(generation_jobs),
+        ingestion_jobs_count=len(ingestion_jobs),
     )
     return GenerationPlan(
-        generation_jobs=[gen_job],
+        ingestion_jobs=ingestion_jobs,
+        generation_jobs=generation_jobs,
         mapping_warnings=mapping_warnings,
-        estimated_llm_calls=1,
+        estimated_llm_calls=len(generation_jobs),
     )

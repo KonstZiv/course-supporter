@@ -83,7 +83,7 @@ def upgrade() -> None:
     )
 
     # slide_video_mappings: presentation_entry_id index
-    op.drop_index("ix_svm_pres", table_name="slide_video_mappings")
+    op.drop_index("ix_svm_presentation", table_name="slide_video_mappings")
     op.create_index(
         "ix_svm_pres_materialentry",
         "slide_video_mappings",
@@ -265,19 +265,7 @@ def upgrade() -> None:
         "COMMENT ON COLUMN jobs.input_params IS 'JSONB of task-specific parameters'"
     )
 
-    # external_service_calls
-    op.execute(
-        "COMMENT ON COLUMN external_service_calls.call_type IS "
-        "'Service type: llm, transcription, embedding, etc.'"
-    )
-    op.execute(
-        "COMMENT ON COLUMN external_service_calls.input_data IS "
-        "'JSONB of request payload sent to external service'"
-    )
-    op.execute(
-        "COMMENT ON COLUMN external_service_calls.output_data IS "
-        "'JSONB of response received from external service'"
-    )
+    # external_service_calls — no non-obvious columns to comment
 
 
 def downgrade() -> None:
@@ -324,7 +312,7 @@ def downgrade() -> None:
 
     op.drop_index("ix_svm_pres_materialentry", table_name="slide_video_mappings")
     op.create_index(
-        "ix_svm_pres",
+        "ix_svm_presentation",
         "slide_video_mappings",
         ["presentation_materialentry_id"],
     )

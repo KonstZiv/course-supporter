@@ -100,16 +100,12 @@ def upgrade() -> None:
     op.drop_table("courses")
 
     # ── 5. Drop orphan enum types ──
-
-    op.execute("DROP TYPE IF EXISTS source_type_enum")
+    # source_type_enum is still used by material_entries.source_type — keep it
     op.execute("DROP TYPE IF EXISTS processing_status_enum")
 
 
 def downgrade() -> None:
-    # Recreate enum types
-    op.execute(
-        "CREATE TYPE source_type_enum AS ENUM ('video', 'presentation', 'text', 'web')"
-    )
+    # Recreate orphan enum types (source_type_enum still exists — not dropped)
     op.execute(
         "CREATE TYPE processing_status_enum "
         "AS ENUM ('pending', 'processing', 'done', 'error')"

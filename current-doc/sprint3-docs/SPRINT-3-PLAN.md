@@ -27,7 +27,7 @@
 | 7 | FK Rename + DB Comments | L | Phase 6 | S3-016 |
 | 8 | Documentation | M | Phase 7 | S3-017, S3-018 |
 | 9 | Cascading Job Failure | M | Phase 1 | S3-019 |
-| 10 | Recursive Generation | XL | Phase 6, 9 | S3-020 |
+| 10 | Recursive Generation | XL | Phase 6, 9 | S3-020a, S3-020b, S3-020c, S3-020d |
 | 11 | Full File Upload | L | Phase 4 | S3-021 |
 
 ---
@@ -77,6 +77,21 @@ Phase 4 ──→ Phase 11 (File upload, parallel with Phase 8+)
 | 4 (Course) | HIGH — all routes, repos, tests | Sub-phases: additive → rewrite → drop |
 | 6 (StructureNode) | HIGH — нова recursive table + data migration | LLM output format незмінний |
 | 7 (FK rename) | MEDIUM — механічний але масивний | IDE search-replace, CI gate |
-| 10 (Recursive gen) | MEDIUM — multi-pass LLM | Incremental (pass by pass) |
+| 10 (Recursive gen) | MEDIUM — multi-pass LLM | Incremental: 4 підзадачі, кожна — окремий PR |
 
-## Total Tasks: 21 (S3-001 .. S3-021)
+## Phase 10 Details (Recursive Generation)
+
+Розбита на 4 підзадачі згідно ADR (`ADR-recursive-generation.md`):
+
+| Задача | Складність | Опис | Залежність |
+|--------|-----------|------|------------|
+| S3-020a | L | Контракти (StepInput/StepOutput/NodeSummary) + рефакторинг Step Executor | S3-015, S3-019 |
+| S3-020b | L | Bottom-up DAG оркестрація + per-node генерація з children summaries | S3-020a |
+| S3-020c | XL | Reconciliation pass + ковзне вікно (батько/sibling'и/діти) | S3-020b |
+| S3-020d | M | Selective refine pass після правок користувача | S3-020c |
+
+```
+S3-020a → S3-020b → S3-020c → S3-020d
+```
+
+## Total Tasks: 24 (S3-001 .. S3-021, S3-020 розбита на a/b/c/d)

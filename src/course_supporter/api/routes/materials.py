@@ -9,11 +9,13 @@ Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
 ------
-- ``POST   /nodes/{nid}/materials``       — Add material to node
-- ``GET    /nodes/{nid}/materials``        — List materials for node
-- ``GET    /materials/{mid}``              — Get single material
-- ``DELETE /materials/{mid}``              — Delete material
-- ``POST   /materials/{mid}/retry``        — Retry failed ingestion
+- ``POST   /nodes/{nid}/materials``              — Add material to node
+- ``POST   /nodes/{nid}/materials/upload-url``    — Get presigned upload URL
+- ``POST   /nodes/{nid}/materials/confirm-upload``— Confirm presigned upload
+- ``GET    /nodes/{nid}/materials``               — List materials for node
+- ``GET    /materials/{mid}``                     — Get single material
+- ``DELETE /materials/{mid}``                     — Delete material
+- ``POST   /materials/{mid}/retry``               — Retry failed ingestion
 """
 
 from __future__ import annotations
@@ -28,8 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
+    ConfirmUploadRequest,
     MaterialEntryCreateResponse,
     MaterialEntryResponse,
+    PresignedUrlRequest,
+    PresignedUrlResponse,
 )
 from course_supporter.api.upload_validation import (
     ALLOWED_EXTENSIONS,
@@ -209,6 +214,124 @@ async def create_material(
     if warning:
         response.warnings.append(warning)
 
+    return response
+
+
+PRESIGNED_URL_EXPIRY = 900  # 15 minutes
+
+
+@router.post("/nodes/{node_id}/materials/upload-url")
+async def get_upload_url(
+    node_id: uuid.UUID,
+    body: PresignedUrlRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+    s3: S3Dep,
+) -> PresignedUrlResponse:
+    """Generate a presigned URL for direct S3 upload.
+
+    The client should PUT the file content to the returned URL,
+    then call ``POST /nodes/{nid}/materials/confirm-upload`` with
+    the returned key.
+    """
+    if body.source_type == SourceType.WEB:
+        raise HTTPException(
+            status_code=422,
+            detail="source_type 'web' does not support file upload.",
+        )
+
+    allowed = ALLOWED_EXTENSIONS.get(body.source_type, frozenset())
+    ext = file_extension(body.filename)
+    if ext not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"File extension '{ext}' is not allowed "
+                f"for source_type '{body.source_type}'. "
+                f"Accepted: {sorted(allowed)}"
+            ),
+        )
+
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+
+    key = f"tenants/{tenant.tenant_id}/nodes/{node_id}/{uuid.uuid4()}/{body.filename}"
+
+    upload_url = await s3.generate_presigned_url(
+        key, body.content_type, expires_in=PRESIGNED_URL_EXPIRY
+    )
+
+    logger.info("presigned_url_generated", key=key, node_id=str(node_id))
+    return PresignedUrlResponse(
+        upload_url=upload_url,
+        key=key,
+        expires_in=PRESIGNED_URL_EXPIRY,
+    )
+
+
+@router.post("/nodes/{node_id}/materials/confirm-upload", status_code=201)
+async def confirm_upload(
+    node_id: uuid.UUID,
+    body: ConfirmUploadRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+    s3: S3Dep,
+    arq: ArqDep,
+) -> MaterialEntryCreateResponse:
+    """Confirm a presigned upload and create the MaterialEntry.
+
+    Verifies the file exists in S3, creates the database entry,
+    and enqueues ingestion.
+    """
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+
+    # Verify key belongs to this tenant and node
+    expected_prefix = f"tenants/{tenant.tenant_id}/nodes/{node_id}/"
+    if not body.key.startswith(expected_prefix):
+        raise HTTPException(
+            status_code=403,
+            detail="S3 key does not match tenant/node.",
+        )
+
+    # Verify file exists in S3
+    try:
+        await s3.head_object(body.key)
+    except Exception:
+        raise HTTPException(  # noqa: B904
+            status_code=404,
+            detail=("File not found in S3. Upload may have failed or expired."),
+        )
+
+    actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
+    s3_url = f"{s3._endpoint_url}/{s3._bucket}/{body.key}"
+
+    entry_repo = MaterialEntryRepository(session)
+    entry = await entry_repo.create(
+        node_id=node_id,
+        source_type=body.source_type,
+        source_url=s3_url,
+        filename=actual_filename,
+    )
+
+    job = await enqueue_ingestion(
+        redis=arq,
+        session=session,
+        tenant_id=tenant.tenant_id,
+        node_id=node_id,
+        material_id=entry.id,
+        source_type=body.source_type,
+        source_url=s3_url,
+    )
+    await session.commit()
+
+    logger.info(
+        "presigned_upload_confirmed",
+        entry_id=str(entry.id),
+        node_id=str(node_id),
+        key=body.key,
+        job_id=str(job.id),
+    )
+    response = MaterialEntryCreateResponse.model_validate(entry)
+    response.job_id = job.id
     return response
 
 

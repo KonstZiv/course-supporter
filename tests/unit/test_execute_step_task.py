@@ -196,6 +196,10 @@ async def _run_task(
             return_value=deps.agent,
         ),
         patch(
+            "course_supporter.agents.reconciler.ReconcileAgent",
+            return_value=deps.agent,
+        ),
+        patch(
             "course_supporter.tree_utils.build_material_tree_summary",
             return_value=deps.tree_summary,
         ),
@@ -640,3 +644,35 @@ class TestReconcileSlidingWindow:
         step_input = deps.agent.execute.call_args[0][0]
         assert step_input.parent_context is None
         assert step_input.sibling_summaries == []
+
+
+class TestAgentDispatch:
+    """Step Executor dispatches to correct agent based on step_type."""
+
+    async def test_reconcile_calls_agent_execute(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """step_type='reconcile' still calls agent.execute()."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, root_node_id, deps, step_type="reconcile")
+
+        deps.agent.execute.assert_called_once()
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.step_type.value == "reconcile"
+
+    async def test_generate_calls_agent_execute(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """step_type='generate' calls agent.execute()."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, root_node_id, deps, step_type="generate")
+
+        deps.agent.execute.assert_called_once()
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.step_type.value == "generate"

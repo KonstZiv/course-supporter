@@ -670,7 +670,6 @@ async def arq_execute_step(
         mode: Generation mode ('free' or 'guided').
         step_type: Step type ('generate', 'reconcile', 'refine').
     """
-    from course_supporter.agents.architect import ArchitectAgent
     from course_supporter.fingerprint import FingerprintService
     from course_supporter.models.step import StepType as _StepType
     from course_supporter.storage.job_repository import JobRepository
@@ -767,7 +766,15 @@ async def arq_execute_step(
                 sibling_summaries=sibling_sums,
             )
 
-            agent = ArchitectAgent(router, mode=mode)
+            agent: Any  # ArchitectAgent | ReconcileAgent
+            if st == _StepType.RECONCILE:
+                from course_supporter.agents.reconciler import ReconcileAgent
+
+                agent = ReconcileAgent(router, mode=mode)
+            else:
+                from course_supporter.agents.architect import ArchitectAgent
+
+                agent = ArchitectAgent(router, mode=mode)
             step_output = await agent.execute(step_input)
 
             snapshot_id = await _persist_step_result(

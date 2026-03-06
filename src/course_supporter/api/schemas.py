@@ -558,23 +558,17 @@ class MappingWarningResponse(BaseModel):
 class GenerationPlanResponse(BaseModel):
     """Response for POST /nodes/{node_id}/generate."""
 
-    generation_job: JobResponse | None = Field(
-        default=None,
-        description="The enqueued generation job. ``null`` for idempotent hits.",
+    generation_jobs: list[JobResponse] = Field(
+        default_factory=list,
+        description="Per-node generation jobs in bottom-up DAG order.",
     )
     ingestion_jobs: list[JobResponse] = Field(
         default_factory=list,
         description="Ingestion jobs enqueued for stale materials before generation.",
     )
-    existing_snapshot_id: uuid.UUID | None = Field(
-        default=None,
-        description="Existing snapshot UUID when the request is idempotent.",
-    )
-    is_idempotent: bool = Field(
-        description=(
-            "``true`` when an identical snapshot already exists "
-            "(same fingerprint and mode). No new work enqueued."
-        ),
+    estimated_llm_calls: int = Field(
+        default=0,
+        description="Total LLM calls expected for this plan.",
     )
     mapping_warnings: list[MappingWarningResponse] = Field(
         default_factory=list,

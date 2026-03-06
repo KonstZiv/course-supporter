@@ -34,14 +34,9 @@ system_prompt: |
 
   ## Output Schema
 
-  Return a JSON object conforming to the CourseStructure schema with these
-  additional requirements:
-
-  - The **structure** should be the reconciled (corrected) version of the
-    current node's structure with fixes applied.
-  - **summary**: updated summary reflecting reconciled state.
-  - **core_concepts**: updated core concepts after reconciliation.
-  - **mentioned_concepts**: updated mentioned concepts after reconciliation.
+  Return a JSON object conforming to the CourseStructure schema. Ensure the
+  `structure`, `summary`, `core_concepts`, and `mentioned_concepts` fields
+  reflect the reconciled state of the current node.
 
   ## Rules
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -182,6 +183,52 @@ class JobRepository:
             )
             .order_by(Job.queued_at)
         )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def propagate_failure(
+        self, failed_job_id: uuid.UUID, *, error_message: str | None = None
+    ) -> list[uuid.UUID]:
+        """Propagate failure to all dependent jobs recursively.
+
+        Finds jobs whose ``depends_on`` JSONB array contains the given
+        job ID, marks them as failed, and recurses into their dependents.
+
+        Args:
+            failed_job_id: UUID of the job that failed.
+            error_message: Override message. Defaults to
+                ``"Dependency <uuid> failed"``.
+
+        Returns:
+            List of newly failed job IDs (may be empty).
+        """
+        msg = error_message or f"Dependency {failed_job_id} failed"
+
+        queue: deque[uuid.UUID] = deque([failed_job_id])
+        seen: set[uuid.UUID] = set()
+        failed_ids: list[uuid.UUID] = []
+
+        while queue:
+            current_id = queue.popleft()
+            dependents = await self._find_dependents(current_id)
+            for job in dependents:
+                if job.id in seen:
+                    continue
+                seen.add(job.id)
+                if job.status in ("queued", "active"):
+                    job.status = "failed"
+                    job.error_message = msg
+                    job.completed_at = datetime.now(UTC)
+                    failed_ids.append(job.id)
+                    queue.append(job.id)
+
+        if failed_ids:
+            await self._session.flush()
+        return failed_ids
+
+    async def _find_dependents(self, job_id: uuid.UUID) -> list[Job]:
+        """Find all jobs whose depends_on contains the given job_id."""
+        stmt = select(Job).where(Job.depends_on.contains([str(job_id)]))
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

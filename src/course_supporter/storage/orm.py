@@ -565,13 +565,21 @@ class Job(Base):
     )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")
-    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="queued",
+        index=True,
+        comment="Lifecycle: queued → active → complete/failed; "
+        "also queued → cancelled, failed → queued (retry)",
+    )
     arq_job_id: Mapped[str | None] = mapped_column(String(100))
     input_params: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="JSONB of task-specific parameters"
     )
     depends_on: Mapped[list[str] | None] = mapped_column(
-        JSONB, comment="JSONB array of Job UUIDs that must complete first"
+        JSONB,
+        comment="JSONB array of jobs.id UUIDs (as strings) "
+        "that must complete before this job runs",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(

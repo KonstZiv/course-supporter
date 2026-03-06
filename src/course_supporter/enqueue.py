@@ -220,7 +220,7 @@ async def enqueue_step(
         job_id=str(job.id),
         mode=mode,
         step_type=step_type,
-        depends_on=depends_on,
+        depends_on_count=len(validated_deps) if validated_deps else 0,
         arq_job_id=arq_job.job_id if arq_job else None,
     )
     return job

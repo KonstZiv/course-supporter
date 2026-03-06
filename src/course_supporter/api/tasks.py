@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.agents.architect import ArchitectAgent
 from course_supporter.agents.reconciler import ReconcileAgent
+from course_supporter.agents.refine import RefineAgent
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import NodeSummary
@@ -757,9 +758,11 @@ async def arq_execute_step(
                 sibling_summaries=sibling_sums,
             )
 
-            agent: ArchitectAgent | ReconcileAgent
+            agent: ArchitectAgent | ReconcileAgent | RefineAgent
             if st == _StepType.RECONCILE:
                 agent = ReconcileAgent(router, mode=mode)
+            elif st == _StepType.REFINE:
+                agent = RefineAgent(router, mode=mode)
             else:
                 agent = ArchitectAgent(router, mode=mode)
             step_output = await agent.execute(step_input)

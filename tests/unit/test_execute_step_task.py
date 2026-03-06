@@ -200,6 +200,10 @@ async def _run_task(
             return_value=deps.agent,
         ),
         patch(
+            "course_supporter.api.tasks.RefineAgent",
+            return_value=deps.agent,
+        ),
+        patch(
             "course_supporter.tree_utils.build_material_tree_summary",
             return_value=deps.tree_summary,
         ),

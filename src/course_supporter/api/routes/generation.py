@@ -1,11 +1,13 @@
 """Structure generation API endpoints.
 
 Provides endpoints for triggering course structure generation,
-checking latest results, and browsing generation history.
+selective refinement after manual edits, checking latest results,
+and browsing generation history.
 
 Routes
 ------
 - ``POST  /nodes/{nid}/generate``                     — Trigger generation
+- ``POST  /nodes/{nid}/refine``                       — Trigger selective refine
 - ``GET   /nodes/{nid}/structure``                     — Latest snapshot
 - ``GET   /nodes/{nid}/structure/history``             — Snapshot list (metadata)
 - ``GET   /nodes/{nid}/structure/snapshots/{snap_id}`` — Snapshot detail
@@ -41,7 +43,7 @@ from course_supporter.errors import (
     NodeNotFoundError,
     NoReadyMaterialsError,
 )
-from course_supporter.generation_orchestrator import trigger_generation
+from course_supporter.generation_orchestrator import trigger_generation, trigger_refine
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import StructureNode, StructureSnapshot
 from course_supporter.storage.snapshot_repository import SnapshotRepository
@@ -157,6 +159,58 @@ async def generate_structure(
         mapping_warnings=[
             MappingWarningResponse.model_validate(w) for w in plan.mapping_warnings
         ],
+    )
+
+
+@router.post("/nodes/{node_id}/refine", status_code=202)
+async def refine_structure(
+    node_id: uuid.UUID,
+    body: GenerateRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+    arq: ArqDep,
+) -> GenerationPlanResponse:
+    """Trigger selective refine for a node after manual edits.
+
+    Creates a refine job for the target node and reconcile jobs
+    for each ancestor up to the root. Returns 202 if work was
+    enqueued, 404 if node not found.
+    """
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+
+    root_node_id = await _find_root_id(session, node_id)
+
+    try:
+        plan = await trigger_refine(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            root_node_id=root_node_id,
+            target_node_id=node_id,
+            mode=body.mode.value,
+        )
+    except NodeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Node not found") from exc
+
+    await session.commit()
+
+    logger.info(
+        "refine_triggered",
+        node_id=str(node_id),
+        mode=body.mode,
+        generation_jobs_count=len(plan.generation_jobs),
+        reconciliation_jobs_count=len(plan.reconciliation_jobs),
+        estimated_llm_calls=plan.estimated_llm_calls,
+    )
+
+    return GenerationPlanResponse(
+        generation_jobs=[JobResponse.model_validate(j) for j in plan.generation_jobs],
+        reconciliation_jobs=[
+            JobResponse.model_validate(j) for j in plan.reconciliation_jobs
+        ],
+        ingestion_jobs=[],
+        estimated_llm_calls=plan.estimated_llm_calls,
+        mapping_warnings=[],
     )
 
 

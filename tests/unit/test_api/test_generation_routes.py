@@ -205,7 +205,7 @@ class TestGenerateStructure:
     async def test_202_new_generation(self, client: AsyncClient) -> None:
         """New generation returns 202 with generation job."""
         gen_job = _make_job()
-        plan = GenerationPlan(generation_job=gen_job)
+        plan = GenerationPlan(generation_jobs=[gen_job])
 
         with (
             patch(_REPO_PATH) as mock_repo_cls,
@@ -221,8 +221,8 @@ class TestGenerateStructure:
         assert resp.status_code == 202
         data = resp.json()
         assert data["is_idempotent"] is False
-        assert data["generation_job"] is not None
-        assert data["generation_job"]["id"] == str(gen_job.id)
+        assert len(data["generation_jobs"]) == 1
+        assert data["generation_jobs"][0]["id"] == str(gen_job.id)
         assert data["existing_snapshot_id"] is None
 
     async def test_200_idempotent(self, client: AsyncClient) -> None:
@@ -247,7 +247,7 @@ class TestGenerateStructure:
         data = resp.json()
         assert data["is_idempotent"] is True
         assert data["existing_snapshot_id"] == str(SNAPSHOT_ID)
-        assert data["generation_job"] is None
+        assert data["generation_jobs"] == []
 
     async def test_202_cascade_with_ingestion(self, client: AsyncClient) -> None:
         """Cascade plan returns 202 with both ingestion and generation jobs."""
@@ -255,7 +255,7 @@ class TestGenerateStructure:
         gen_job = _make_job()
         plan = GenerationPlan(
             ingestion_jobs=[ing_job],
-            generation_job=gen_job,
+            generation_jobs=[gen_job],
         )
 
         with (
@@ -272,7 +272,7 @@ class TestGenerateStructure:
         assert resp.status_code == 202
         data = resp.json()
         assert len(data["ingestion_jobs"]) == 1
-        assert data["generation_job"] is not None
+        assert len(data["generation_jobs"]) >= 1
 
     async def test_404_node_not_found(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
@@ -355,7 +355,7 @@ class TestGenerateStructure:
     async def test_default_mode_is_free(self, client: AsyncClient) -> None:
         """Omitting mode defaults to 'free'."""
         gen_job = _make_job()
-        plan = GenerationPlan(generation_job=gen_job)
+        plan = GenerationPlan(generation_jobs=[gen_job])
 
         with (
             patch(_REPO_PATH) as mock_repo_cls,
@@ -382,7 +382,7 @@ class TestGenerateStructure:
         warning_id = uuid.uuid4()
         warning_node = uuid.uuid4()
         plan = GenerationPlan(
-            generation_job=gen_job,
+            generation_jobs=[gen_job],
             mapping_warnings=[
                 MappingWarning(
                     mapping_id=warning_id,
@@ -416,7 +416,7 @@ class TestGenerateStructure:
     async def test_202_no_warnings_empty_list(self, client: AsyncClient) -> None:
         """No warnings -> empty list in response."""
         gen_job = _make_job()
-        plan = GenerationPlan(generation_job=gen_job)
+        plan = GenerationPlan(generation_jobs=[gen_job])
 
         with (
             patch(_REPO_PATH) as mock_repo_cls,
@@ -437,7 +437,7 @@ class TestGenerateStructure:
         root_id = uuid.uuid4()
         child_id = uuid.uuid4()
         gen_job = _make_job(node_id=child_id)
-        plan = GenerationPlan(generation_job=gen_job)
+        plan = GenerationPlan(generation_jobs=[gen_job])
 
         with (
             patch(_REPO_PATH) as mock_repo_cls,
@@ -464,7 +464,7 @@ class TestGenerateStructure:
     async def test_trigger_root_node_target_is_none(self, client: AsyncClient) -> None:
         """When node IS the root, target_node_id is None."""
         gen_job = _make_job()
-        plan = GenerationPlan(generation_job=gen_job)
+        plan = GenerationPlan(generation_jobs=[gen_job])
 
         with (
             patch(_REPO_PATH) as mock_repo_cls,
@@ -746,7 +746,7 @@ class TestTenantIsolation:
             patch(
                 _TRIGGER_PATH,
                 new_callable=AsyncMock,
-                return_value=GenerationPlan(generation_job=_make_job()),
+                return_value=GenerationPlan(generation_jobs=[_make_job()]),
             ),
         ):
             mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())

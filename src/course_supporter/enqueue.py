@@ -146,3 +146,76 @@ async def enqueue_generation(
         arq_job_id=arq_job.job_id if arq_job else None,
     )
     return job
+
+
+async def enqueue_step(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    target_node_id: uuid.UUID,
+    mode: Literal["free", "guided"] = "free",
+    step_type: str = "generate",
+    depends_on: list[str] | None = None,
+) -> Job:
+    """Create a Job record and enqueue a step via arq_execute_step.
+
+    Unlike :func:`enqueue_generation`, this always targets a specific
+    node (no ``None`` for whole-tree) and routes to the generic
+    Step Executor.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: Active DB session (caller controls transaction).
+        tenant_id: Owning tenant UUID.
+        root_node_id: Root MaterialNode UUID of the tree.
+        target_node_id: Specific node UUID to generate for.
+        mode: Generation mode ('free' or 'guided').
+        step_type: Step type ('generate', 'reconcile', 'refine').
+        depends_on: List of Job UUIDs (str) this job depends on.
+
+    Returns:
+        The created Job with ``arq_job_id`` set.
+    """
+    log = structlog.get_logger().bind(
+        root_node_id=str(root_node_id),
+        target_node_id=str(target_node_id),
+        step_type=step_type,
+    )
+    repo = JobRepository(session)
+
+    job = await repo.create(
+        tenant_id=tenant_id,
+        materialnode_id=target_node_id,
+        job_type="generate_structure",
+        depends_on=depends_on,
+        input_params={
+            "root_node_id": str(root_node_id),
+            "target_node_id": str(target_node_id),
+            "mode": mode,
+            "step_type": step_type,
+        },
+    )
+
+    arq_job = await redis.enqueue_job(
+        "arq_execute_step",
+        str(job.id),
+        str(root_node_id),
+        str(target_node_id),
+        mode,
+        step_type,
+    )
+
+    if arq_job is not None:
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    log.info(
+        "step_job_enqueued",
+        job_id=str(job.id),
+        mode=mode,
+        step_type=step_type,
+        depends_on=depends_on,
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job

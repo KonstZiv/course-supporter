@@ -44,17 +44,24 @@ class GenerationPlan:
 
     Attributes:
         ingestion_jobs: Jobs created for stale material ingestion.
-        generation_job: Generation job (None if idempotent hit).
+        generation_jobs: Per-node generation jobs (bottom-up DAG order).
         existing_snapshot_id: Existing snapshot UUID if idempotent.
         is_idempotent: True when no new work is needed.
         mapping_warnings: Mappings with pending/failed validation states.
+        estimated_llm_calls: Total LLM calls expected for this plan.
     """
 
     ingestion_jobs: list[Job] = field(default_factory=list)
-    generation_job: Job | None = None
+    generation_jobs: list[Job] = field(default_factory=list)
     existing_snapshot_id: uuid.UUID | None = None
     is_idempotent: bool = False
     mapping_warnings: list[MappingWarning] = field(default_factory=list)
+    estimated_llm_calls: int = 0
+
+    @property
+    def generation_job(self) -> Job | None:
+        """First generation job, for backward compatibility."""
+        return self.generation_jobs[0] if self.generation_jobs else None
 
 
 def _partition_entries(
@@ -270,8 +277,9 @@ async def trigger_generation(
         )
         return GenerationPlan(
             ingestion_jobs=ingestion_jobs,
-            generation_job=gen_job,
+            generation_jobs=[gen_job],
             mapping_warnings=mapping_warnings,
+            estimated_llm_calls=1,
         )
 
     # 5. All READY → check idempotency via fingerprint
@@ -313,4 +321,8 @@ async def trigger_generation(
         "trigger_generation_enqueued",
         generation_job_id=str(gen_job.id),
     )
-    return GenerationPlan(generation_job=gen_job, mapping_warnings=mapping_warnings)
+    return GenerationPlan(
+        generation_jobs=[gen_job],
+        mapping_warnings=mapping_warnings,
+        estimated_llm_calls=1,
+    )

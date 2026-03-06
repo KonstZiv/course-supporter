@@ -146,21 +146,17 @@ async def generate_structure(
         node_id=str(node_id),
         mode=body.mode,
         is_idempotent=plan.is_idempotent,
-        generation_job_id=(
-            str(plan.generation_job.id) if plan.generation_job else None
-        ),
+        generation_jobs_count=len(plan.generation_jobs),
         ingestion_count=len(plan.ingestion_jobs),
+        estimated_llm_calls=plan.estimated_llm_calls,
     )
 
     return GenerationPlanResponse(
-        generation_job=(
-            JobResponse.model_validate(plan.generation_job)
-            if plan.generation_job
-            else None
-        ),
+        generation_jobs=[JobResponse.model_validate(j) for j in plan.generation_jobs],
         ingestion_jobs=[JobResponse.model_validate(j) for j in plan.ingestion_jobs],
         existing_snapshot_id=plan.existing_snapshot_id,
         is_idempotent=plan.is_idempotent,
+        estimated_llm_calls=plan.estimated_llm_calls,
         mapping_warnings=[
             MappingWarningResponse.model_validate(w) for w in plan.mapping_warnings
         ],

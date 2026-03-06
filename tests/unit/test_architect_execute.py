@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.agents.architect import ArchitectAgent
+from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import CourseContext, CourseStructure
 from course_supporter.models.step import StepInput, StepOutput, StepType
 
@@ -36,8 +37,14 @@ class TestArchitectExecute:
             core_concepts=["python"],
             mentioned_concepts=["java"],
         )
-        llm_response = MagicMock()
-        llm_response.model_id = "test-model"
+        llm_response = LLMResponse(
+            content="{}",
+            provider="test",
+            model_id="test-model",
+            tokens_in=10,
+            tokens_out=20,
+            cost_usd=0.001,
+        )
 
         with patch.object(
             agent,
@@ -80,7 +87,14 @@ class TestArchitectExecute:
         agent = ArchitectAgent(router, mode="guided")
 
         structure = CourseStructure(title="Test")
-        llm_response = MagicMock()
+        llm_response = LLMResponse(
+            content="{}",
+            provider="test",
+            model_id="test-model",
+            tokens_in=10,
+            tokens_out=20,
+            cost_usd=0.001,
+        )
 
         with patch.object(
             agent,
@@ -119,7 +133,14 @@ class TestArchitectExecute:
         agent = ArchitectAgent(router, mode="free")
 
         structure = CourseStructure(title="Test")
-        llm_response = MagicMock()
+        llm_response = LLMResponse(
+            content="{}",
+            provider="test",
+            model_id="test-model",
+            tokens_in=10,
+            tokens_out=20,
+            cost_usd=0.001,
+        )
 
         with patch.object(
             agent,

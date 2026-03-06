@@ -1,9 +1,11 @@
-"""Tests for enqueue_ingestion and enqueue_generation helpers."""
+"""Tests for enqueue_ingestion, enqueue_generation, and enqueue_step helpers."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from course_supporter.enqueue import enqueue_generation, enqueue_ingestion
+import pytest
+
+from course_supporter.enqueue import enqueue_generation, enqueue_ingestion, enqueue_step
 from course_supporter.job_priority import JobPriority
 
 
@@ -297,6 +299,159 @@ class TestEnqueueGeneration:
                 session=session,
                 tenant_id=uuid.uuid4(),
                 root_node_id=uuid.uuid4(),
+            )
+
+        assert result is mock_job
+        repo_cls.return_value.set_arq_job_id.assert_not_awaited()
+
+
+class TestEnqueueStep:
+    async def test_creates_job_with_step_type(self) -> None:
+        """enqueue_step uses step_type as job_type."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        tenant_id = uuid.uuid4()
+        root_id = uuid.uuid4()
+        target_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            result = await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=tenant_id,
+                root_node_id=root_id,
+                target_node_id=target_id,
+                mode="guided",
+                step_type="reconcile",
+            )
+
+        assert result is mock_job
+        kw = repo_cls.return_value.create.call_args.kwargs
+        assert kw["job_type"] == "reconcile"
+        assert kw["tenant_id"] == tenant_id
+        assert kw["materialnode_id"] == target_id
+        assert kw["input_params"]["step_type"] == "reconcile"
+        assert kw["input_params"]["mode"] == "guided"
+
+    async def test_enqueues_arq_with_correct_args(self) -> None:
+        """ARQ enqueue_job receives correct args for step."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        root_id = uuid.uuid4()
+        target_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                root_node_id=root_id,
+                target_node_id=target_id,
+                mode="free",
+                step_type="generate",
+            )
+
+        redis.enqueue_job.assert_awaited_once_with(
+            "arq_execute_step",
+            str(mock_job.id),
+            str(root_id),
+            str(target_id),
+            "free",
+            "generate",
+        )
+
+    async def test_validates_depends_on_uuids(self) -> None:
+        """Invalid UUID in depends_on raises ValueError."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+
+        with (
+            patch("course_supporter.enqueue.JobRepository") as repo_cls,
+            pytest.raises(ValueError, match="badly formed"),
+        ):
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
+                target_node_id=uuid.uuid4(),
+                depends_on=["not-a-uuid"],
+            )
+
+    async def test_depends_on_normalized(self) -> None:
+        """Valid UUID strings in depends_on are normalized."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        dep_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
+                target_node_id=uuid.uuid4(),
+                depends_on=[str(dep_id)],
+            )
+
+        kw = repo_cls.return_value.create.call_args.kwargs
+        assert kw["depends_on"] == [str(dep_id)]
+
+    async def test_depends_on_none(self) -> None:
+        """depends_on=None is passed through without validation."""
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
+                target_node_id=uuid.uuid4(),
+                depends_on=None,
+            )
+
+        kw = repo_cls.return_value.create.call_args.kwargs
+        assert kw["depends_on"] is None
+
+    async def test_handles_none_arq_job(self) -> None:
+        """When ARQ returns None, set_arq_job_id is not called."""
+        session = _mock_session()
+        redis = AsyncMock()
+        redis.enqueue_job = AsyncMock(return_value=None)
+        mock_job = _mock_job()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            result = await enqueue_step(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                root_node_id=uuid.uuid4(),
+                target_node_id=uuid.uuid4(),
             )
 
         assert result is mock_job

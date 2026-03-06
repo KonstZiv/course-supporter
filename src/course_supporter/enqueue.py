@@ -185,11 +185,16 @@ async def enqueue_step(
     )
     repo = JobRepository(session)
 
+    # Validate depends_on are valid UUIDs
+    validated_deps: list[str] | None = None
+    if depends_on:
+        validated_deps = [str(uuid.UUID(dep)) for dep in depends_on]
+
     job = await repo.create(
         tenant_id=tenant_id,
         materialnode_id=target_node_id,
-        job_type="generate_structure",
-        depends_on=depends_on,
+        job_type=step_type,
+        depends_on=validated_deps,
         input_params={
             "root_node_id": str(root_node_id),
             "target_node_id": str(target_node_id),

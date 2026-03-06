@@ -110,6 +110,37 @@ class SnapshotRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
+    async def get_latest_for_nodes(
+        self,
+        node_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, StructureSnapshot]:
+        """Get the most recent snapshot for each node ID.
+
+        Returns a mapping from node_id to its latest snapshot.
+        Nodes without snapshots are omitted from the result.
+        """
+        if not node_ids:
+            return {}
+
+        # Subquery: max created_at per materialnode_id
+        latest = (
+            select(
+                StructureSnapshot.materialnode_id,
+                func.max(StructureSnapshot.created_at).label("max_created"),
+            )
+            .where(StructureSnapshot.materialnode_id.in_(node_ids))
+            .group_by(StructureSnapshot.materialnode_id)
+            .subquery()
+        )
+        stmt = select(StructureSnapshot).join(
+            latest,
+            (StructureSnapshot.materialnode_id == latest.c.materialnode_id)
+            & (StructureSnapshot.created_at == latest.c.max_created),
+        )
+        result = await self._session.execute(stmt)
+        snapshots = result.scalars().all()
+        return {s.materialnode_id: s for s in snapshots}
+
     async def list_for_node(
         self,
         node_id: uuid.UUID,

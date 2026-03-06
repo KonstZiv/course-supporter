@@ -501,6 +501,83 @@ class TestCollectPendingJobIds:
         assert _collect_job_ids([]) == []
 
 
+class TestDAGEndToEnd:
+    """Comprehensive DAG scenarios."""
+
+    async def test_wide_tree_with_mixed_materials(self) -> None:
+        """Wide tree: root has 3 children, 2 with materials, 1 empty."""
+        c1 = _make_node(materials=[_make_entry(state="ready")])
+        c2 = _make_node(materials=[_make_entry(state="ready")])
+        c3_empty = _make_node(materials=[])
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[c1, c2, c3_empty],
+        )
+
+        jobs = [_make_job() for _ in range(3)]
+        deps = _Deps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        plan = await _run(deps)
+
+        # c3_empty skipped, c1 + c2 + root = 3 jobs
+        assert len(plan.generation_jobs) == 3
+        # Root depends on both children's jobs
+        root_call = deps.enqueue_step.call_args_list[2].kwargs
+        assert root_call["target_node_id"] == root.id
+        assert len(root_call["depends_on"]) == 2
+
+    async def test_stale_child_creates_ingestion_then_generation(self) -> None:
+        """Child with raw material: ingestion + gen, parent depends on child."""
+        raw = _make_entry(state="raw")
+        child = _make_node(materials=[raw])
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[child],
+        )
+
+        ing_job = _make_job()
+        gen_jobs = [_make_job(), _make_job()]
+        deps = _Deps(root_nodes=[root], enqueue_ingestion_job=ing_job)
+        deps.enqueue_step = AsyncMock(side_effect=gen_jobs)
+
+        plan = await _run(deps)
+
+        assert len(plan.ingestion_jobs) == 1
+        assert len(plan.generation_jobs) == 2
+        # Child gen depends on its ingestion
+        child_call = deps.enqueue_step.call_args_list[0].kwargs
+        assert str(ing_job.id) in child_call["depends_on"]
+        # Root gen depends on child gen
+        root_call = deps.enqueue_step.call_args_list[1].kwargs
+        assert str(gen_jobs[0].id) in root_call["depends_on"]
+
+    async def test_subtree_generation(self) -> None:
+        """Target subtree: only target node and descendants get jobs."""
+        leaf = _make_node(materials=[_make_entry(state="ready")])
+        target = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[leaf],
+        )
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[target],
+        )
+
+        jobs = [_make_job(), _make_job()]
+        deps = _Deps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        plan = await _run(deps, target_node_id=target.id)
+
+        # Only leaf + target, not root
+        assert len(plan.generation_jobs) == 2
+        target_ids = {
+            c.kwargs["target_node_id"] for c in deps.enqueue_step.call_args_list
+        }
+        assert target_ids == {leaf.id, target.id}
+
+
 # ── GenerationPlan backward compat ──
 
 

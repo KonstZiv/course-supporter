@@ -37,6 +37,7 @@ NOW = datetime.now(UTC)
 _REPO_PATH = "course_supporter.api.routes.generation.MaterialNodeRepository"
 _SNAP_PATH = "course_supporter.api.routes.generation.SnapshotRepository"
 _TRIGGER_PATH = "course_supporter.api.routes.generation.trigger_generation"
+_REFINE_PATH = "course_supporter.api.routes.generation.trigger_refine"
 _FIND_ROOT_PATH = "course_supporter.api.routes.generation._find_root_id"
 _SN_REPO_PATH = "course_supporter.api.routes.generation.StructureNodeRepository"
 
@@ -459,6 +460,96 @@ class TestGenerateStructure:
         call_kwargs = mock_trigger.call_args.kwargs
         assert call_kwargs["root_node_id"] == NODE_ID
         assert call_kwargs["target_node_id"] is None
+
+
+# -- POST /nodes/{nid}/refine --
+
+
+class TestRefineStructure:
+    """POST /nodes/{nid}/refine -- trigger selective refine."""
+
+    async def test_202_refine(self, client: AsyncClient) -> None:
+        """Refine returns 202 with refine + reconcile jobs."""
+        refine_job = _make_job(job_type="refine")
+        rec_job = _make_job(job_type="reconcile")
+        plan = GenerationPlan(
+            generation_jobs=[refine_job],
+            reconciliation_jobs=[rec_job],
+            estimated_llm_calls=2,
+        )
+
+        with (
+            patch(_REPO_PATH) as mock_repo_cls,
+            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
+            patch(_REFINE_PATH, new_callable=AsyncMock, return_value=plan),
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
+            resp = await client.post(
+                f"/api/v1/nodes/{NODE_ID}/refine",
+                json={"mode": "free"},
+            )
+
+        assert resp.status_code == 202
+        data = resp.json()
+        assert len(data["generation_jobs"]) == 1
+        assert len(data["reconciliation_jobs"]) == 1
+        assert data["estimated_llm_calls"] == 2
+        assert data["ingestion_jobs"] == []
+        assert data["mapping_warnings"] == []
+
+    async def test_404_node_not_found(self, client: AsyncClient) -> None:
+        """Non-existent node returns 404."""
+        with patch(_REPO_PATH) as mock_repo_cls:
+            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=None)
+            resp = await client.post(
+                f"/api/v1/nodes/{uuid.uuid4()}/refine",
+                json={"mode": "free"},
+            )
+
+        assert resp.status_code == 404
+
+    async def test_404_from_trigger_refine(self, client: AsyncClient) -> None:
+        """NodeNotFoundError from trigger_refine returns 404."""
+        with (
+            patch(_REPO_PATH) as mock_repo_cls,
+            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
+            patch(
+                _REFINE_PATH,
+                new_callable=AsyncMock,
+                side_effect=NodeNotFoundError("Node not found"),
+            ),
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
+            resp = await client.post(
+                f"/api/v1/nodes/{NODE_ID}/refine",
+                json={"mode": "free"},
+            )
+
+        assert resp.status_code == 404
+
+    async def test_trigger_refine_receives_target(self, client: AsyncClient) -> None:
+        """trigger_refine always receives target_node_id (never None)."""
+        plan = GenerationPlan(generation_jobs=[_make_job()])
+
+        with (
+            patch(_REPO_PATH) as mock_repo_cls,
+            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
+            patch(
+                _REFINE_PATH,
+                new_callable=AsyncMock,
+                return_value=plan,
+            ) as mock_refine,
+        ):
+            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
+            await client.post(
+                f"/api/v1/nodes/{NODE_ID}/refine",
+                json={"mode": "free"},
+            )
+
+        mock_refine.assert_called_once()
+        call_kwargs = mock_refine.call_args.kwargs
+        assert call_kwargs["target_node_id"] == NODE_ID
+        assert call_kwargs["root_node_id"] == NODE_ID
 
 
 # -- GET /nodes/{nid}/structure --

@@ -213,6 +213,67 @@ def _find_parent_reconcile(
     return None
 
 
+async def _build_reconciliation_dag(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    mode: Literal["free", "guided"],
+    target_roots: list[MaterialNode],
+    generation_jobs: list[Job],
+    node_gen_jobs: dict[uuid.UUID, Job],
+) -> list[Job]:
+    """Build top-down reconciliation DAG in pre-order.
+
+    Non-leaf nodes with generation jobs get reconcile jobs.
+    First reconcile depends on the root generate job; subsequent
+    reconcile jobs depend on their parent's reconcile job.
+
+    Returns:
+        List of reconciliation jobs in pre-order.
+    """
+    from course_supporter.enqueue import enqueue_step
+
+    reconciliation_jobs: list[Job] = []
+    node_reconcile_jobs: dict[uuid.UUID, Job] = {}
+
+    root_gen_job_id: str | None = None
+    if generation_jobs:
+        root_gen_job_id = str(generation_jobs[-1].id)
+
+    reconcile_order = _pre_order(target_roots)
+    parent_map = _build_parent_map(reconcile_order)
+
+    for node in reconcile_order:
+        if not node.children:
+            continue
+        if node.id not in node_gen_jobs:
+            continue
+
+        rec_deps: list[str] = []
+        if not reconciliation_jobs and root_gen_job_id:
+            rec_deps.append(root_gen_job_id)
+        parent_rec = _find_parent_reconcile(node, parent_map, node_reconcile_jobs)
+        if parent_rec is not None:
+            rec_deps.append(str(parent_rec.id))
+
+        rec_job = await enqueue_step(
+            redis=redis,
+            session=session,
+            tenant_id=tenant_id,
+            root_node_id=root_node_id,
+            target_node_id=node.id,
+            mode=mode,
+            step_type="reconcile",
+            depends_on=rec_deps if rec_deps else None,
+        )
+        reconciliation_jobs.append(rec_job)
+        node_reconcile_jobs[node.id] = rec_job
+
+    return reconciliation_jobs
+
+
 async def trigger_generation(
     *,
     redis: ArqRedis,
@@ -363,50 +424,17 @@ async def trigger_generation(
         generation_jobs.append(gen_job)
         node_gen_jobs[node.id] = gen_job
 
-    # 5. Build reconciliation pass in pre-order (top-down)
-    # Only nodes with children need reconciliation (leaves are skipped).
-    # reconcile_Root depends on generate_Root (last generate job).
-    # reconcile_child depends on reconcile_parent.
-    reconciliation_jobs: list[Job] = []
-    node_reconcile_jobs: dict[uuid.UUID, Job] = {}
-
-    # Find the root generate job — reconcile root depends on it
-    root_gen_job_id: str | None = None
-    if generation_jobs:
-        # The last generation job is the root (post-order → root is last)
-        root_gen_job_id = str(generation_jobs[-1].id)
-
-    reconcile_order = _pre_order(target_roots)
-    parent_map = _build_parent_map(reconcile_order)
-    for node in reconcile_order:
-        # Skip leaf nodes (no children to reconcile)
-        if not node.children:
-            continue
-        # Skip nodes that didn't get a generate job
-        if node.id not in node_gen_jobs:
-            continue
-
-        rec_deps: list[str] = []
-        # First reconcile job depends on the root generate job
-        if not reconciliation_jobs and root_gen_job_id:
-            rec_deps.append(root_gen_job_id)
-        # Subsequent reconcile jobs depend on parent's reconcile job
-        parent_rec = _find_parent_reconcile(node, parent_map, node_reconcile_jobs)
-        if parent_rec is not None:
-            rec_deps.append(str(parent_rec.id))
-
-        rec_job = await enqueue_step(
-            redis=redis,
-            session=session,
-            tenant_id=tenant_id,
-            root_node_id=root_node_id,
-            target_node_id=node.id,
-            mode=mode,
-            step_type="reconcile",
-            depends_on=rec_deps if rec_deps else None,
-        )
-        reconciliation_jobs.append(rec_job)
-        node_reconcile_jobs[node.id] = rec_job
+    # 5. Build reconciliation pass (top-down)
+    reconciliation_jobs = await _build_reconciliation_dag(
+        redis=redis,
+        session=session,
+        tenant_id=tenant_id,
+        root_node_id=root_node_id,
+        mode=mode,
+        target_roots=target_roots,
+        generation_jobs=generation_jobs,
+        node_gen_jobs=node_gen_jobs,
+    )
 
     total_llm_calls = len(generation_jobs) + len(reconciliation_jobs)
     log.info(

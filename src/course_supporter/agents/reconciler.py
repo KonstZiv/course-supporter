@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from course_supporter.models.step import NodeSummary, StepInput
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
+from course_supporter.ingestion.merge import MergeStep
 from course_supporter.llm.router import ModelRouter
 from course_supporter.models.course import CourseStructure
 from course_supporter.models.step import StepOutput
@@ -60,8 +61,6 @@ class ReconcileAgent:
         Returns:
             StepOutput with reconciled structure and LLM metadata.
         """
-        from course_supporter.ingestion.merge import MergeStep
-
         context = MergeStep().merge(
             step_input.materials,
             step_input.slide_timecode_refs or None,
@@ -118,60 +117,51 @@ class ReconcileAgent:
         )
 
 
+def _format_summary_details(summary: NodeSummary) -> list[str]:
+    """Format a single NodeSummary into detail lines."""
+    lines = [
+        f"**Summary:** {summary.summary}",
+    ]
+    if summary.core_concepts:
+        lines.append(f"**Core concepts:** {', '.join(summary.core_concepts)}")
+    if summary.mentioned_concepts:
+        lines.append(f"**Mentioned concepts:** {', '.join(summary.mentioned_concepts)}")
+    return lines
+
+
+def _format_summary_section(
+    heading: str,
+    summaries: list[NodeSummary],
+    *,
+    use_subheadings: bool = True,
+) -> str:
+    """Format a list of NodeSummary into a markdown section."""
+    if not summaries:
+        return ""
+
+    lines = [heading, ""]
+    for s in summaries:
+        if use_subheadings:
+            lines.append(f"### {s.title}")
+        else:
+            lines.append(f"**Title:** {s.title}")
+        lines.extend(_format_summary_details(s))
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _format_parent_context(parent: NodeSummary | None) -> str:
     """Format parent node summary for the reconciliation prompt."""
     if parent is None:
         return ""
-
-    lines = [
-        "## Parent Context",
-        "",
-        f"**Title:** {parent.title}",
-        f"**Summary:** {parent.summary}",
-    ]
-    if parent.core_concepts:
-        lines.append(f"**Core concepts:** {', '.join(parent.core_concepts)}")
-    if parent.mentioned_concepts:
-        lines.append(f"**Mentioned concepts:** {', '.join(parent.mentioned_concepts)}")
-    lines.append("")
-    return "\n".join(lines)
+    return _format_summary_section("## Parent Context", [parent], use_subheadings=False)
 
 
-def _format_sibling_context(
-    siblings: list[NodeSummary],
-) -> str:
+def _format_sibling_context(siblings: list[NodeSummary]) -> str:
     """Format sibling node summaries for the reconciliation prompt."""
-    if not siblings:
-        return ""
-
-    lines = ["## Sibling Summaries", ""]
-    for sib in siblings:
-        lines.append(f"### {sib.title}")
-        lines.append(f"**Summary:** {sib.summary}")
-        if sib.core_concepts:
-            lines.append(f"**Core concepts:** {', '.join(sib.core_concepts)}")
-        if sib.mentioned_concepts:
-            lines.append(f"**Mentioned concepts:** {', '.join(sib.mentioned_concepts)}")
-        lines.append("")
-    return "\n".join(lines)
+    return _format_summary_section("## Sibling Summaries", siblings)
 
 
-def _format_children_context(
-    children: list[NodeSummary],
-) -> str:
+def _format_children_context(children: list[NodeSummary]) -> str:
     """Format children node summaries for the reconciliation prompt."""
-    if not children:
-        return ""
-
-    lines = ["## Children Summaries", ""]
-    for child in children:
-        lines.append(f"### {child.title}")
-        lines.append(f"**Summary:** {child.summary}")
-        if child.core_concepts:
-            lines.append(f"**Core concepts:** {', '.join(child.core_concepts)}")
-        if child.mentioned_concepts:
-            lines.append(
-                f"**Mentioned concepts:** {', '.join(child.mentioned_concepts)}"
-            )
-        lines.append("")
-    return "\n".join(lines)
+    return _format_summary_section("## Children Summaries", children)

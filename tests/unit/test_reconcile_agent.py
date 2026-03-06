@@ -17,7 +17,7 @@ from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import CourseStructure
 from course_supporter.models.step import NodeSummary, StepInput, StepOutput, StepType
 
-_MERGE_STEP = "course_supporter.ingestion.merge.MergeStep"
+_MERGE_STEP = "course_supporter.agents.reconciler.MergeStep"
 
 
 class TestReconcileAgentExecute:

@@ -19,7 +19,13 @@ if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.models.course import MaterialNodeSummary, SlideTimecodeRef
     from course_supporter.models.source import SourceDocument
-    from course_supporter.models.step import Correction, StepInput, StepOutput, StepType
+    from course_supporter.models.step import (
+        Correction,
+        NodeSummary,
+        StepInput,
+        StepOutput,
+        StepType,
+    )
     from course_supporter.storage.orm import MaterialNode
     from course_supporter.storage.s3 import S3Client
     from course_supporter.storage.snapshot_repository import SnapshotRepository
@@ -419,7 +425,7 @@ async def arq_generate_structure(
 async def _load_children_summaries(
     session: AsyncSession,
     node: MaterialNode,
-) -> list[Any]:
+) -> list[NodeSummary]:
     """Load NodeSummary list from latest snapshots of child nodes.
 
     Args:
@@ -466,11 +472,13 @@ def _build_step_input(
     tree_summary: list[MaterialNodeSummary],
     flat_nodes: list[MaterialNode],
     mode: Literal["free", "guided"],
-    children_summaries: list[Any] | None = None,
+    children_summaries: list[NodeSummary] | None = None,
 ) -> StepInput:
     """Assemble StepInput from collected tree data.
 
     Builds existing_structure for guided mode via tree serialization.
+    Children summaries provide context from completed child generation.
+    Parent/sibling summaries will be added in S3-020c (reconciliation).
     """
     from course_supporter.models.step import StepInput as _StepInput
     from course_supporter.tree_utils import serialize_tree_for_guided
@@ -640,7 +648,8 @@ async def arq_execute_step(
 
             tree_summary = build_material_tree_summary(flat_nodes)
 
-            # Load children summaries from previous generation steps
+            # Load children summaries from previous generation steps.
+            # target is None when nid is None (whole-tree mode); root is the target.
             target_node = target if target is not None else root_nodes[0]
             children_summaries = await _load_children_summaries(session, target_node)
 

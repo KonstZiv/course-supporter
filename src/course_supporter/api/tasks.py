@@ -412,3 +412,201 @@ async def arq_generate_structure(
             if cascaded:
                 log.info("cascading_failure_propagated", failed_count=len(cascaded))
             log.error("generate_structure_failed", error=str(exc))
+
+
+async def arq_execute_step(
+    ctx: dict[str, Any],
+    job_id: str,
+    root_node_id: str,
+    target_node_id: str | None = None,
+    mode: Literal["free", "guided"] = "free",
+    step_type: str = "generate",
+) -> None:
+    """ARQ task: execute a generation step using StepInput/StepOutput contracts.
+
+    Generic Step Executor that builds StepInput, delegates to the
+    appropriate Agent, and persists StepOutput fields in the snapshot.
+
+    Currently supports step_type="generate" only; reconcile/refine
+    will be added in S3-020c/d.
+
+    Args:
+        ctx: ARQ worker context (session_factory, model_router).
+        job_id: Job UUID as string (ARQ JSON serialization).
+        root_node_id: Root MaterialNode UUID as string.
+        target_node_id: Optional target node UUID. None = whole tree.
+        mode: Generation mode ('free' or 'guided').
+        step_type: Step type ('generate', 'reconcile', 'refine').
+    """
+    from course_supporter.agents.architect import ArchitectAgent
+    from course_supporter.fingerprint import FingerprintService
+    from course_supporter.models.step import StepInput, StepType
+    from course_supporter.storage.job_repository import JobRepository
+    from course_supporter.storage.material_node_repository import (
+        MaterialNodeRepository,
+    )
+    from course_supporter.storage.snapshot_repository import SnapshotRepository
+
+    jid = uuid.UUID(job_id)
+    rid = uuid.UUID(root_node_id)
+    nid = uuid.UUID(target_node_id) if target_node_id else None
+    st = StepType(step_type)
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    router: ModelRouter = ctx["model_router"]
+
+    log = structlog.get_logger().bind(
+        job_id=job_id,
+        root_node_id=root_node_id,
+        target_node_id=target_node_id,
+        mode=mode,
+        step_type=step_type,
+    )
+    log.info("execute_step_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        try:
+            await job_repo.update_status(jid, "active")
+            await session.commit()
+
+            # Load tree → resolve target → flatten
+            node_repo = MaterialNodeRepository(session)
+            root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+                rid,
+                include_materials=True,
+            )
+            target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
+
+            # Collect data
+            documents = _collect_ready_documents(flat_nodes)
+            mappings = _collect_validated_mappings(flat_nodes)
+
+            from course_supporter.tree_utils import build_material_tree_summary
+
+            tree_summary = build_material_tree_summary(flat_nodes)
+
+            # Compute fingerprint
+            fp_service = FingerprintService(session)
+            if target is not None:
+                fingerprint = await fp_service.ensure_node_fp(target)
+            else:
+                fingerprint = await fp_service.ensure_course_fp(root_nodes)
+            await session.commit()
+
+            effective_node_id = nid or rid
+
+            # Idempotency check
+            snap_repo = SnapshotRepository(session)
+            existing = await snap_repo.find_by_identity(
+                node_id=effective_node_id,
+                node_fingerprint=fingerprint,
+                mode=mode,
+            )
+            if existing is not None:
+                log.info("execute_step_idempotent", snapshot_id=str(existing.id))
+                await job_repo.update_status(jid, "complete")
+                await session.commit()
+                return
+
+            # Build StepInput
+            from course_supporter.tree_utils import serialize_tree_for_guided
+
+            existing_structure = (
+                serialize_tree_for_guided(flat_nodes) if mode == "guided" else None
+            )
+            step_input = StepInput(
+                node_id=effective_node_id,
+                step_type=st,
+                materials=documents,
+                children_summaries=[],
+                parent_context=None,
+                sibling_summaries=[],
+                existing_structure=existing_structure,
+                mode=mode,
+                material_tree=tree_summary,
+                slide_timecode_refs=mappings,
+            )
+
+            # Execute via Agent
+            agent = ArchitectAgent(router, mode=mode)
+            step_output = await agent.execute(step_input)
+
+            # Persist LLM metadata as ExternalServiceCall
+            from course_supporter.storage.orm import ExternalServiceCall
+
+            esc = ExternalServiceCall(
+                action="course_structuring",
+                strategy=mode,
+                provider=step_output.response.provider,
+                model_id=step_output.response.model_id,
+                prompt_ref=step_output.prompt_version,
+                unit_type="tokens",
+                unit_in=step_output.response.tokens_in,
+                unit_out=step_output.response.tokens_out,
+                latency_ms=step_output.response.latency_ms,
+                cost_usd=step_output.response.cost_usd,
+                success=True,
+            )
+            session.add(esc)
+            await session.flush()
+
+            # Save snapshot with step fields
+            snapshot = await snap_repo.create(
+                node_id=effective_node_id,
+                node_fingerprint=fingerprint,
+                mode=mode,
+                structure=step_output.structure.model_dump(),
+                externalservicecall_id=esc.id,
+                step_type=step_type,
+                summary=step_output.summary,
+                core_concepts=step_output.core_concepts,
+                mentioned_concepts=step_output.mentioned_concepts,
+                corrections=(
+                    [
+                        {
+                            "target_node_id": str(c.target_node_id),
+                            "field": c.field,
+                            "action": c.action,
+                            "old_value": c.old_value,
+                            "new_value": c.new_value,
+                            "reason": c.reason,
+                        }
+                        for c in step_output.corrections
+                    ]
+                    if step_output.corrections
+                    else None
+                ),
+            )
+
+            # Convert LLM output → StructureNode tree and persist
+            from course_supporter.storage.structure_node_repository import (
+                StructureNodeRepository,
+            )
+            from course_supporter.structure_conversion import (
+                convert_to_structure_nodes,
+            )
+
+            sn_nodes = convert_to_structure_nodes(step_output.structure, snapshot.id)
+            sn_repo = StructureNodeRepository(session)
+            await sn_repo.create_tree(sn_nodes)
+
+            # Job → complete
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            log.info("execute_step_done", snapshot_id=str(snapshot.id))
+
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_repo = JobRepository(err_session)
+                await err_repo.update_status(
+                    jid,
+                    "failed",
+                    error_message=str(exc),
+                )
+                cascaded = await err_repo.propagate_failure(jid)
+                await err_session.commit()
+            if cascaded:
+                log.info("cascading_failure_propagated", failed_count=len(cascaded))
+            log.error("execute_step_failed", error=str(exc))

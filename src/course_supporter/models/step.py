@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from course_supporter.models.course import (
         CourseStructure,
         MaterialNodeSummary,
+        SlideTimecodeRef,
     )
     from course_supporter.models.source import SourceDocument
 
@@ -82,6 +83,7 @@ class StepInput:
     # Generation parameters
     mode: Literal["free", "guided"]
     material_tree: list[MaterialNodeSummary]
+    slide_timecode_refs: list[SlideTimecodeRef] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

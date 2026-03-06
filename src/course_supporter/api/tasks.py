@@ -12,14 +12,14 @@ import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.agents.architect import ArchitectAgent
+from course_supporter.agents.reconciler import ReconcileAgent
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import NodeSummary
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
-    from course_supporter.agents.architect import ArchitectAgent
-    from course_supporter.agents.reconciler import ReconcileAgent
     from course_supporter.llm.router import ModelRouter
     from course_supporter.models.course import MaterialNodeSummary, SlideTimecodeRef
     from course_supporter.models.source import SourceDocument
@@ -275,7 +275,6 @@ async def arq_generate_structure(
         target_node_id: Optional target node UUID. None = whole tree.
         mode: Generation mode ('free' or 'guided').
     """
-    from course_supporter.agents.architect import ArchitectAgent
     from course_supporter.fingerprint import FingerprintService
     from course_supporter.ingestion.merge import MergeStep
     from course_supporter.storage.job_repository import JobRepository
@@ -760,12 +759,8 @@ async def arq_execute_step(
 
             agent: ArchitectAgent | ReconcileAgent
             if st == _StepType.RECONCILE:
-                from course_supporter.agents.reconciler import ReconcileAgent
-
                 agent = ReconcileAgent(router, mode=mode)
             else:
-                from course_supporter.agents.architect import ArchitectAgent
-
                 agent = ArchitectAgent(router, mode=mode)
             step_output = await agent.execute(step_input)
 

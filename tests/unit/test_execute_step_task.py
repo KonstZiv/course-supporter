@@ -192,11 +192,11 @@ async def _run_task(
             return_value=deps.snap_repo,
         ),
         patch(
-            "course_supporter.agents.architect.ArchitectAgent",
+            "course_supporter.api.tasks.ArchitectAgent",
             return_value=deps.agent,
         ),
         patch(
-            "course_supporter.agents.reconciler.ReconcileAgent",
+            "course_supporter.api.tasks.ReconcileAgent",
             return_value=deps.agent,
         ),
         patch(

@@ -550,7 +550,7 @@ class StructureSnapshot(Base):
         nullable=True,
         comment="Concepts mentioned but not covered in depth",
     )
-    corrections: Mapped[dict[str, Any] | None] = mapped_column(
+    corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB,
         nullable=True,
         comment="Reconciliation corrections audit trail",

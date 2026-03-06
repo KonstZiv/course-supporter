@@ -1,4 +1,4 @@
-"""initial schema: 9 tables
+"""initial schema: 9 tables (squashed from previous migrations)
 
 Revision ID: f7b8d706ad9c
 Revises:
@@ -177,8 +177,18 @@ def upgrade() -> None:
             comment="FK to target MaterialNode. NULL for orphaned jobs",
         ),
         sa.Column("job_type", sa.String(length=50), nullable=False),
-        sa.Column("priority", sa.String(length=20), nullable=False),
-        sa.Column("status", sa.String(length=20), nullable=False),
+        sa.Column(
+            "priority",
+            sa.String(length=20),
+            nullable=False,
+            server_default=sa.text("'normal'"),
+        ),
+        sa.Column(
+            "status",
+            sa.String(length=20),
+            nullable=False,
+            server_default=sa.text("'queued'"),
+        ),
         sa.Column("arq_job_id", sa.String(length=100), nullable=True),
         sa.Column(
             "input_params",
@@ -238,7 +248,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.ForeignKeyConstraint(["job_id"], ["jobs.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         comment="Audit log of all external API calls (LLM, transcription, etc.)",
     )

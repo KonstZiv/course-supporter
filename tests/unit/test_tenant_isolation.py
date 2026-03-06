@@ -54,12 +54,12 @@ class TestExternalServiceCallTenant:
         )
         assert call.tenant_id == tid
 
-    def test_tenant_fk_cascade(self) -> None:
-        """ExternalServiceCall.tenant_id FK has CASCADE ondelete."""
+    def test_tenant_fk_set_null(self) -> None:
+        """ExternalServiceCall.tenant_id FK has SET NULL ondelete (audit preserved)."""
         table = ExternalServiceCall.__table__
         fks = [fk for fk in table.foreign_keys if fk.column.table.name == "tenants"]
         assert len(fks) == 1
-        assert fks[0].ondelete == "CASCADE"
+        assert fks[0].ondelete == "SET NULL"
 
     def test_tenant_id_indexed(self) -> None:
         """ExternalServiceCall.tenant_id has an index."""

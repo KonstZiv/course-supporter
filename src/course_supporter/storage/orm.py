@@ -601,7 +601,7 @@ class ExternalServiceCall(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+        ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("jobs.id", ondelete="SET NULL"), index=True

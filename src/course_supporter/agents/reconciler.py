@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 
 if TYPE_CHECKING:
-    from course_supporter.models.step import NodeSummary, StepInput, StepOutput
+    from course_supporter.models.step import NodeSummary, StepInput
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.llm.router import ModelRouter
 from course_supporter.models.course import CourseStructure
+from course_supporter.models.step import StepOutput
 
 logger = structlog.get_logger()
 
@@ -60,7 +61,6 @@ class ReconcileAgent:
             StepOutput with reconciled structure and LLM metadata.
         """
         from course_supporter.ingestion.merge import MergeStep
-        from course_supporter.models.step import StepOutput
 
         context = MergeStep().merge(
             step_input.materials,

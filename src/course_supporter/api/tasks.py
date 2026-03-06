@@ -18,6 +18,8 @@ from course_supporter.models.step import NodeSummary
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
+    from course_supporter.agents.architect import ArchitectAgent
+    from course_supporter.agents.reconciler import ReconcileAgent
     from course_supporter.llm.router import ModelRouter
     from course_supporter.models.course import MaterialNodeSummary, SlideTimecodeRef
     from course_supporter.models.source import SourceDocument
@@ -756,7 +758,7 @@ async def arq_execute_step(
                 sibling_summaries=sibling_sums,
             )
 
-            agent: Any  # ArchitectAgent | ReconcileAgent
+            agent: ArchitectAgent | ReconcileAgent
             if st == _StepType.RECONCILE:
                 from course_supporter.agents.reconciler import ReconcileAgent
 

@@ -19,7 +19,7 @@ def _make_node(
     *,
     node_id: uuid.UUID | None = None,
     parent_materialnode_id: uuid.UUID | None = None,
-    parent: Any = None,
+    parent: MagicMock | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,

@@ -254,11 +254,11 @@ async def _run_task(
             return_value=deps.fp_service,
         ),
         patch(
-            "course_supporter.storage.snapshot_repository.SnapshotRepository",
+            "course_supporter.api.tasks.SnapshotRepository",
             return_value=deps.snap_repo,
         ),
         patch(
-            "course_supporter.agents.architect.ArchitectAgent",
+            "course_supporter.api.tasks.ArchitectAgent",
             return_value=deps.agent,
         ),
         patch(

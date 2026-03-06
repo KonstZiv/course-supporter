@@ -562,6 +562,10 @@ class GenerationPlanResponse(BaseModel):
         default_factory=list,
         description="Per-node generation jobs in bottom-up DAG order.",
     )
+    reconciliation_jobs: list[JobResponse] = Field(
+        default_factory=list,
+        description="Per-node reconciliation jobs in top-down order.",
+    )
     ingestion_jobs: list[JobResponse] = Field(
         default_factory=list,
         description="Ingestion jobs enqueued for stale materials before generation.",

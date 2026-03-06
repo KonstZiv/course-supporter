@@ -1,4 +1,4 @@
-"""Tests for per-node bottom-up DAG generation orchestrator."""
+"""Tests for two-pass DAG generation orchestrator (generate + reconcile)."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from course_supporter.generation_orchestrator import (
     _collect_job_ids,
     _partition_entries,
     _post_order,
+    _pre_order,
     trigger_generation,
 )
 from course_supporter.storage.orm import MappingValidationState
@@ -211,6 +212,27 @@ class TestPostOrder:
         assert result == [gc, child, root]
 
 
+class TestPreOrder:
+    def test_single_node(self) -> None:
+        root = _make_node()
+        assert _pre_order([root]) == [root]
+
+    def test_two_levels(self) -> None:
+        """Pre-order: root before children."""
+        child = _make_node()
+        root = _make_node(children=[child])
+        result = _pre_order([root])
+        assert result == [root, child]
+
+    def test_three_levels(self) -> None:
+        """Pre-order: root → child → grandchild."""
+        gc = _make_node()
+        child = _make_node(children=[gc])
+        root = _make_node(children=[child])
+        result = _pre_order([root])
+        assert result == [root, child, gc]
+
+
 # ── trigger_generation: per-node DAG ──
 
 
@@ -232,7 +254,7 @@ class TestSingleNodeGeneration:
 
 class TestPerNodeDAG:
     async def test_two_level_tree(self) -> None:
-        """Root with two children -> 3 generation jobs, children first."""
+        """Root with two children -> 3 gen + 1 reconcile jobs."""
         c1_entry = _make_entry(state="ready")
         c2_entry = _make_entry(state="ready")
         child1 = _make_node(materials=[c1_entry])
@@ -240,64 +262,84 @@ class TestPerNodeDAG:
         root_entry = _make_entry(state="ready")
         root = _make_node(materials=[root_entry], children=[child1, child2])
 
-        # Each enqueue_step call returns a unique job
-        jobs = [_make_job() for _ in range(3)]
+        # 3 gen jobs + 1 reconcile job = 4 total
+        jobs = [_make_job() for _ in range(4)]
         deps = _Deps(root_nodes=[root])
         deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps)
 
         assert len(plan.generation_jobs) == 3
-        assert plan.estimated_llm_calls == 3
+        assert len(plan.reconciliation_jobs) == 1
+        assert plan.estimated_llm_calls == 4
 
-        # First two calls: children (order among siblings is unspecified)
+        # First two calls: children gen (order among siblings unspecified)
         child_calls = [deps.enqueue_step.call_args_list[i].kwargs for i in range(2)]
         child_ids = {c["target_node_id"] for c in child_calls}
         assert child_ids == {child1.id, child2.id}
 
-        # Third call: root depends on children's job IDs
-        root_call = deps.enqueue_step.call_args_list[2].kwargs
-        assert root_call["target_node_id"] == root.id
-        assert str(jobs[0].id) in root_call["depends_on"]
-        assert str(jobs[1].id) in root_call["depends_on"]
+        # Third call: root gen depends on children's gen job IDs
+        root_gen = deps.enqueue_step.call_args_list[2].kwargs
+        assert root_gen["target_node_id"] == root.id
+        assert root_gen["step_type"] == "generate"
+
+        # Fourth call: root reconcile depends on root gen
+        root_rec = deps.enqueue_step.call_args_list[3].kwargs
+        assert root_rec["target_node_id"] == root.id
+        assert root_rec["step_type"] == "reconcile"
+        assert str(jobs[2].id) in root_rec["depends_on"]
 
     async def test_three_level_tree(self) -> None:
-        """Root → Module → Lesson: 3 jobs in correct order."""
+        """Root → Module → Lesson: 3 gen + 2 reconcile jobs."""
         lesson_entry = _make_entry(state="ready")
         lesson = _make_node(materials=[lesson_entry])
         module_entry = _make_entry(state="ready")
         module = _make_node(materials=[module_entry], children=[lesson])
-        root = _make_node(materials=[_make_entry(state="ready")], children=[module])
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[module],
+        )
 
-        jobs = [_make_job() for _ in range(3)]
+        # 3 gen + 2 reconcile (root + module are non-leaf)
+        jobs = [_make_job() for _ in range(5)]
         deps = _Deps(root_nodes=[root])
         deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps)
 
         assert len(plan.generation_jobs) == 3
-        # Lesson first, then module (depends on lesson), then root
+        assert len(plan.reconciliation_jobs) == 2
+        assert plan.estimated_llm_calls == 5
+
+        # Gen pass: lesson → module → root
         calls = deps.enqueue_step.call_args_list
         assert calls[0].kwargs["target_node_id"] == lesson.id
         assert calls[1].kwargs["target_node_id"] == module.id
-        assert str(jobs[0].id) in calls[1].kwargs["depends_on"]
         assert calls[2].kwargs["target_node_id"] == root.id
-        assert str(jobs[1].id) in calls[2].kwargs["depends_on"]
+
+        # Reconcile pass: root first, then module
+        assert calls[3].kwargs["step_type"] == "reconcile"
+        assert calls[3].kwargs["target_node_id"] == root.id
+        assert calls[4].kwargs["step_type"] == "reconcile"
+        assert calls[4].kwargs["target_node_id"] == module.id
+        # Module reconcile depends on root reconcile
+        assert str(jobs[3].id) in calls[4].kwargs["depends_on"]
 
     async def test_empty_parent_with_children(self) -> None:
-        """Parent without own materials but with children still gets a job."""
+        """Parent without own materials but with children still gets jobs."""
         child_entry = _make_entry(state="ready")
         child = _make_node(materials=[child_entry])
         parent = _make_node(materials=[], children=[child])
 
-        jobs = [_make_job(), _make_job()]
+        # 2 gen + 1 reconcile (parent is non-leaf)
+        jobs = [_make_job() for _ in range(3)]
         deps = _Deps(root_nodes=[parent])
         deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps)
 
-        # Both child and parent get generation jobs
         assert len(plan.generation_jobs) == 2
+        assert len(plan.reconciliation_jobs) == 1
 
     async def test_skip_empty_subtree(self) -> None:
         """Node without materials and no children with materials is skipped."""
@@ -307,12 +349,17 @@ class TestPerNodeDAG:
             children=[empty_child],
         )
 
+        # 1 gen (root) + 1 reconcile (root is non-leaf)
+        jobs = [_make_job(), _make_job()]
         deps = _Deps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps)
 
-        # Only root gets a job, empty child is skipped
+        # Only root gets gen, empty child is skipped
         assert len(plan.generation_jobs) == 1
+        # Root gets reconcile (has children, even though empty)
+        assert len(plan.reconciliation_jobs) == 1
 
 
 class TestStaleWithDAG:
@@ -514,18 +561,15 @@ class TestDAGEndToEnd:
             children=[c1, c2, c3_empty],
         )
 
-        jobs = [_make_job() for _ in range(3)]
+        # 3 gen + 1 reconcile (root is non-leaf)
+        jobs = [_make_job() for _ in range(4)]
         deps = _Deps(root_nodes=[root])
         deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps)
 
-        # c3_empty skipped, c1 + c2 + root = 3 jobs
         assert len(plan.generation_jobs) == 3
-        # Root depends on both children's jobs
-        root_call = deps.enqueue_step.call_args_list[2].kwargs
-        assert root_call["target_node_id"] == root.id
-        assert len(root_call["depends_on"]) == 2
+        assert len(plan.reconciliation_jobs) == 1
 
     async def test_stale_child_creates_ingestion_then_generation(self) -> None:
         """Child with raw material: ingestion + gen, parent depends on child."""
@@ -537,23 +581,22 @@ class TestDAGEndToEnd:
         )
 
         ing_job = _make_job()
-        gen_jobs = [_make_job(), _make_job()]
+        # 2 gen + 1 reconcile (root is non-leaf)
+        step_jobs = [_make_job() for _ in range(3)]
         deps = _Deps(root_nodes=[root], enqueue_ingestion_job=ing_job)
-        deps.enqueue_step = AsyncMock(side_effect=gen_jobs)
+        deps.enqueue_step = AsyncMock(side_effect=step_jobs)
 
         plan = await _run(deps)
 
         assert len(plan.ingestion_jobs) == 1
         assert len(plan.generation_jobs) == 2
+        assert len(plan.reconciliation_jobs) == 1
         # Child gen depends on its ingestion
         child_call = deps.enqueue_step.call_args_list[0].kwargs
         assert str(ing_job.id) in child_call["depends_on"]
-        # Root gen depends on child gen
-        root_call = deps.enqueue_step.call_args_list[1].kwargs
-        assert str(gen_jobs[0].id) in root_call["depends_on"]
 
     async def test_subtree_generation(self) -> None:
-        """Target subtree: only target node and descendants get jobs."""
+        """Target subtree: only target and descendants get jobs."""
         leaf = _make_node(materials=[_make_entry(state="ready")])
         target = _make_node(
             materials=[_make_entry(state="ready")],
@@ -564,18 +607,83 @@ class TestDAGEndToEnd:
             children=[target],
         )
 
-        jobs = [_make_job(), _make_job()]
+        # 2 gen + 1 reconcile (target is non-leaf)
+        jobs = [_make_job() for _ in range(3)]
         deps = _Deps(root_nodes=[root])
         deps.enqueue_step = AsyncMock(side_effect=jobs)
 
         plan = await _run(deps, target_node_id=target.id)
 
-        # Only leaf + target, not root
         assert len(plan.generation_jobs) == 2
-        target_ids = {
-            c.kwargs["target_node_id"] for c in deps.enqueue_step.call_args_list
+        assert len(plan.reconciliation_jobs) == 1
+        gen_ids = {
+            c.kwargs["target_node_id"]
+            for c in deps.enqueue_step.call_args_list
+            if c.kwargs["step_type"] == "generate"
         }
-        assert target_ids == {leaf.id, target.id}
+        assert gen_ids == {leaf.id, target.id}
+
+
+class TestReconcilePass:
+    """Reconciliation pass: top-down, non-leaf only."""
+
+    async def test_leaf_only_no_reconcile(self) -> None:
+        """Single leaf node → no reconciliation jobs."""
+        root = _make_node(materials=[_make_entry(state="ready")])
+        deps = _Deps(root_nodes=[root])
+
+        plan = await _run(deps)
+
+        assert len(plan.reconciliation_jobs) == 0
+
+    async def test_reconcile_depends_on_root_gen(self) -> None:
+        """First reconcile job depends on root generate job."""
+        child = _make_node(materials=[_make_entry(state="ready")])
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[child],
+        )
+
+        # 2 gen + 1 reconcile
+        jobs = [_make_job() for _ in range(3)]
+        deps = _Deps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        await _run(deps)
+
+        rec_call = deps.enqueue_step.call_args_list[2].kwargs
+        assert rec_call["step_type"] == "reconcile"
+        # Root gen is jobs[1] (second gen call)
+        assert str(jobs[1].id) in rec_call["depends_on"]
+
+    async def test_reconcile_chain_top_down(self) -> None:
+        """Reconcile jobs form a top-down chain."""
+        leaf = _make_node(materials=[_make_entry(state="ready")])
+        mid = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[leaf],
+        )
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[mid],
+        )
+
+        # 3 gen + 2 reconcile (root + mid are non-leaf)
+        jobs = [_make_job() for _ in range(5)]
+        deps = _Deps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        plan = await _run(deps)
+
+        assert len(plan.reconciliation_jobs) == 2
+        calls = deps.enqueue_step.call_args_list
+        # reconcile_root = calls[3], reconcile_mid = calls[4]
+        rec_root = calls[3].kwargs
+        rec_mid = calls[4].kwargs
+        assert rec_root["step_type"] == "reconcile"
+        assert rec_mid["step_type"] == "reconcile"
+        # Mid reconcile depends on root reconcile
+        assert str(jobs[3].id) in rec_mid["depends_on"]
 
 
 # ── GenerationPlan backward compat ──

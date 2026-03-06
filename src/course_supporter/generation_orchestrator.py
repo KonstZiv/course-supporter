@@ -1,9 +1,13 @@
 """Cascade generation orchestrator.
 
-Detects stale materials, enqueues ingestion for them, then enqueues
-structure generation with ``depends_on`` linking to ingestion jobs.
-If all materials are READY, performs idempotency check before
-enqueuing generation.
+Builds a two-pass DAG of per-node jobs:
+
+1. **Generate** (bottom-up): post-order traversal creates generation jobs
+   where leaves run first, parents depend on children's completion.
+2. **Reconcile** (top-down): pre-order traversal creates reconciliation
+   jobs for non-leaf nodes, detecting cross-node inconsistencies.
+
+Stale materials are enqueued for ingestion before generation.
 """
 
 from __future__ import annotations
@@ -45,12 +49,14 @@ class GenerationPlan:
     Attributes:
         ingestion_jobs: Jobs created for stale material ingestion.
         generation_jobs: Per-node generation jobs (bottom-up DAG order).
+        reconciliation_jobs: Per-node reconciliation jobs (top-down order).
         mapping_warnings: Mappings with pending/failed validation states.
         estimated_llm_calls: Total LLM calls expected for this plan.
     """
 
     ingestion_jobs: list[Job] = field(default_factory=list)
     generation_jobs: list[Job] = field(default_factory=list)
+    reconciliation_jobs: list[Job] = field(default_factory=list)
     mapping_warnings: list[MappingWarning] = field(default_factory=list)
     estimated_llm_calls: int = 0
 
@@ -149,6 +155,21 @@ def _post_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
     return order
 
 
+def _pre_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
+    """Flatten tree nodes in pre-order (parents before children).
+
+    Uses iterative traversal to avoid recursion limits.
+    """
+    order: list[MaterialNode] = []
+    stack: list[MaterialNode] = list(reversed(nodes))
+    while stack:
+        node = stack.pop()
+        order.append(node)
+        for child in reversed(node.children):
+            stack.append(child)
+    return order
+
+
 def _node_has_content(
     node: MaterialNode,
     children_with_jobs: set[uuid.UUID],
@@ -163,6 +184,96 @@ def _node_has_content(
     )
 
 
+def _build_parent_map(
+    nodes: list[MaterialNode],
+) -> dict[uuid.UUID, MaterialNode]:
+    """Build child_id → parent mapping from a list of tree nodes."""
+    parent_map: dict[uuid.UUID, MaterialNode] = {}
+    for n in nodes:
+        for child in n.children:
+            parent_map[child.id] = n
+    return parent_map
+
+
+def _find_parent_reconcile(
+    node: MaterialNode,
+    parent_map: dict[uuid.UUID, MaterialNode],
+    node_reconcile_jobs: dict[uuid.UUID, Job],
+) -> Job | None:
+    """Find the reconcile job of the nearest ancestor that has one.
+
+    Walks up via parent_map to find a parent with a reconcile job.
+    """
+    current = node
+    while current.id in parent_map:
+        parent = parent_map[current.id]
+        if parent.id in node_reconcile_jobs:
+            return node_reconcile_jobs[parent.id]
+        current = parent
+    return None
+
+
+async def _build_reconciliation_dag(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    mode: Literal["free", "guided"],
+    target_roots: list[MaterialNode],
+    generation_jobs: list[Job],
+    node_gen_jobs: dict[uuid.UUID, Job],
+) -> list[Job]:
+    """Build top-down reconciliation DAG in pre-order.
+
+    Non-leaf nodes with generation jobs get reconcile jobs.
+    First reconcile depends on the root generate job; subsequent
+    reconcile jobs depend on their parent's reconcile job.
+
+    Returns:
+        List of reconciliation jobs in pre-order.
+    """
+    from course_supporter.enqueue import enqueue_step
+
+    reconciliation_jobs: list[Job] = []
+    node_reconcile_jobs: dict[uuid.UUID, Job] = {}
+
+    root_gen_job_id: str | None = None
+    if generation_jobs:
+        root_gen_job_id = str(generation_jobs[-1].id)
+
+    reconcile_order = _pre_order(target_roots)
+    parent_map = _build_parent_map(reconcile_order)
+
+    for node in reconcile_order:
+        if not node.children:
+            continue
+        if node.id not in node_gen_jobs:
+            continue
+
+        rec_deps: list[str] = []
+        if not reconciliation_jobs and root_gen_job_id:
+            rec_deps.append(root_gen_job_id)
+        parent_rec = _find_parent_reconcile(node, parent_map, node_reconcile_jobs)
+        if parent_rec is not None:
+            rec_deps.append(str(parent_rec.id))
+
+        rec_job = await enqueue_step(
+            redis=redis,
+            session=session,
+            tenant_id=tenant_id,
+            root_node_id=root_node_id,
+            target_node_id=node.id,
+            mode=mode,
+            step_type="reconcile",
+            depends_on=rec_deps if rec_deps else None,
+        )
+        reconciliation_jobs.append(rec_job)
+        node_reconcile_jobs[node.id] = rec_job
+
+    return reconciliation_jobs
+
+
 async def trigger_generation(
     *,
     redis: ArqRedis,
@@ -172,12 +283,13 @@ async def trigger_generation(
     target_node_id: uuid.UUID | None = None,
     mode: Literal["free", "guided"] = "free",
 ) -> GenerationPlan:
-    """Orchestrate per-node bottom-up generation DAG.
+    """Orchestrate two-pass generation DAG (generate + reconcile).
 
-    Builds a DAG of per-node generation jobs in post-order
-    (leaves first, parents wait on children). Each node's
-    generation depends on its own ingestion jobs plus its
-    children's generation jobs.
+    Pass 1 (generate): bottom-up post-order — each node depends on
+    its ingestion jobs and children's generation jobs.
+    Pass 2 (reconcile): top-down pre-order — each non-leaf node
+    depends on its parent's reconciliation job. The first reconcile
+    job depends on the root generate job.
 
     The caller is responsible for committing the session.
 
@@ -312,14 +424,29 @@ async def trigger_generation(
         generation_jobs.append(gen_job)
         node_gen_jobs[node.id] = gen_job
 
+    # 5. Build reconciliation pass (top-down)
+    reconciliation_jobs = await _build_reconciliation_dag(
+        redis=redis,
+        session=session,
+        tenant_id=tenant_id,
+        root_node_id=root_node_id,
+        mode=mode,
+        target_roots=target_roots,
+        generation_jobs=generation_jobs,
+        node_gen_jobs=node_gen_jobs,
+    )
+
+    total_llm_calls = len(generation_jobs) + len(reconciliation_jobs)
     log.info(
         "trigger_generation_dag_built",
         generation_jobs_count=len(generation_jobs),
+        reconciliation_jobs_count=len(reconciliation_jobs),
         ingestion_jobs_count=len(ingestion_jobs),
     )
     return GenerationPlan(
         ingestion_jobs=ingestion_jobs,
         generation_jobs=generation_jobs,
+        reconciliation_jobs=reconciliation_jobs,
         mapping_warnings=mapping_warnings,
-        estimated_llm_calls=len(generation_jobs),
+        estimated_llm_calls=total_llm_calls,
     )

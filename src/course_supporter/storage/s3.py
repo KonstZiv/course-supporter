@@ -359,6 +359,113 @@ class S3Client:
 
         await self._client.head_bucket(Bucket=self._bucket)
 
+    async def generate_presigned_url(
+        self,
+        key: str,
+        content_type: str,
+        *,
+        expires_in: int = 3600,
+    ) -> str:
+        """Generate a presigned PUT URL for direct client upload.
+
+        Args:
+            key: Target object key in the bucket.
+            content_type: Expected MIME type of the upload.
+            expires_in: URL validity in seconds (default 1 hour).
+
+        Returns:
+            Presigned PUT URL string.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        url: str = await self._client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self._bucket,
+                "Key": key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=expires_in,
+        )
+        logger.info("s3_presigned_url", key=key, expires_in=expires_in)
+        return url
+
+    async def head_object(self, key: str) -> dict[str, Any]:
+        """Get object metadata without downloading content.
+
+        Args:
+            key: Object key in the bucket.
+
+        Returns:
+            Dict with ContentLength, ContentType, LastModified, etc.
+
+        Raises:
+            ClientError: If the object does not exist (404).
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        result: dict[str, Any] = await self._client.head_object(
+            Bucket=self._bucket,
+            Key=key,
+        )
+        return result
+
+    async def delete_object(self, key: str) -> None:
+        """Delete a single object from the bucket.
+
+        Args:
+            key: Object key to delete.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        await self._client.delete_object(Bucket=self._bucket, Key=key)
+        logger.info("s3_delete", key=key)
+
+    async def list_objects(self, prefix: str) -> list[dict[str, Any]]:
+        """List objects with a given prefix.
+
+        Args:
+            prefix: Key prefix to filter by (e.g. ``tenants/{tid}/``).
+
+        Returns:
+            List of dicts with ``key``, ``size``, ``last_modified`` fields.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        objects: list[dict[str, Any]] = []
+        paginator = self._client.get_paginator("list_objects_v2")
+        async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                objects.append(
+                    {
+                        "key": obj["Key"],
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"],
+                    }
+                )
+        return objects
+
+    async def get_usage(self, prefix: str) -> tuple[int, int]:
+        """Calculate total storage usage for a prefix.
+
+        Args:
+            prefix: Key prefix (e.g. ``tenants/{tid}/``).
+
+        Returns:
+            Tuple of (total_bytes, file_count).
+        """
+        objects = await self.list_objects(prefix)
+        total_bytes = sum(obj["size"] for obj in objects)
+        return total_bytes, len(objects)
+
     async def ensure_bucket(self) -> None:
         """Verify that the bucket exists.
 

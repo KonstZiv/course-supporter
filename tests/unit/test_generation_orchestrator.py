@@ -223,7 +223,6 @@ class TestSingleNodeGeneration:
 
         plan = await _run(deps)
 
-        assert not plan.is_idempotent
         assert len(plan.generation_jobs) == 1
         assert len(plan.ingestion_jobs) == 0
         assert plan.estimated_llm_calls == 1

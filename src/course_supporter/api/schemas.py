@@ -570,16 +570,6 @@ class GenerationPlanResponse(BaseModel):
         default=0,
         description="Total LLM calls expected for this plan.",
     )
-    existing_snapshot_id: uuid.UUID | None = Field(
-        default=None,
-        description="Existing snapshot UUID when the request is idempotent.",
-    )
-    is_idempotent: bool = Field(
-        description=(
-            "``true`` when an identical snapshot already exists "
-            "(same fingerprint and mode). No new work enqueued."
-        ),
-    )
     mapping_warnings: list[MappingWarningResponse] = Field(
         default_factory=list,
         description=(

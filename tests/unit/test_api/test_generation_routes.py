@@ -220,34 +220,8 @@ class TestGenerateStructure:
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["is_idempotent"] is False
         assert len(data["generation_jobs"]) == 1
         assert data["generation_jobs"][0]["id"] == str(gen_job.id)
-        assert data["existing_snapshot_id"] is None
-
-    async def test_200_idempotent(self, client: AsyncClient) -> None:
-        """Idempotent hit returns 200 with existing snapshot ID."""
-        plan = GenerationPlan(
-            existing_snapshot_id=SNAPSHOT_ID,
-            is_idempotent=True,
-        )
-
-        with (
-            patch(_REPO_PATH) as mock_repo_cls,
-            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
-            patch(_TRIGGER_PATH, new_callable=AsyncMock, return_value=plan),
-        ):
-            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
-            resp = await client.post(
-                f"/api/v1/nodes/{NODE_ID}/generate",
-                json={"mode": "free"},
-            )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["is_idempotent"] is True
-        assert data["existing_snapshot_id"] == str(SNAPSHOT_ID)
-        assert data["generation_jobs"] == []
 
     async def test_202_cascade_with_ingestion(self, client: AsyncClient) -> None:
         """Cascade plan returns 202 with both ingestion and generation jobs."""

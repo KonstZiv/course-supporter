@@ -45,16 +45,12 @@ class GenerationPlan:
     Attributes:
         ingestion_jobs: Jobs created for stale material ingestion.
         generation_jobs: Per-node generation jobs (bottom-up DAG order).
-        existing_snapshot_id: Existing snapshot UUID if idempotent.
-        is_idempotent: True when no new work is needed.
         mapping_warnings: Mappings with pending/failed validation states.
         estimated_llm_calls: Total LLM calls expected for this plan.
     """
 
     ingestion_jobs: list[Job] = field(default_factory=list)
     generation_jobs: list[Job] = field(default_factory=list)
-    existing_snapshot_id: uuid.UUID | None = None
-    is_idempotent: bool = False
     mapping_warnings: list[MappingWarning] = field(default_factory=list)
     estimated_llm_calls: int = 0
 

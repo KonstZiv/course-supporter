@@ -19,7 +19,7 @@ from typing import Annotated
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
@@ -98,7 +98,6 @@ async def generate_structure(
     tenant: PrepDep,
     session: SessionDep,
     arq: ArqDep,
-    response: Response,
 ) -> GenerationPlanResponse:
     """Trigger structure generation for a node's subtree.
 
@@ -138,14 +137,10 @@ async def generate_structure(
 
     await session.commit()
 
-    if plan.is_idempotent:
-        response.status_code = 200
-
     logger.info(
         "generation_triggered",
         node_id=str(node_id),
         mode=body.mode,
-        is_idempotent=plan.is_idempotent,
         generation_jobs_count=len(plan.generation_jobs),
         ingestion_count=len(plan.ingestion_jobs),
         estimated_llm_calls=plan.estimated_llm_calls,
@@ -154,8 +149,6 @@ async def generate_structure(
     return GenerationPlanResponse(
         generation_jobs=[JobResponse.model_validate(j) for j in plan.generation_jobs],
         ingestion_jobs=[JobResponse.model_validate(j) for j in plan.ingestion_jobs],
-        existing_snapshot_id=plan.existing_snapshot_id,
-        is_idempotent=plan.is_idempotent,
         estimated_llm_calls=plan.estimated_llm_calls,
         mapping_warnings=[
             MappingWarningResponse.model_validate(w) for w in plan.mapping_warnings

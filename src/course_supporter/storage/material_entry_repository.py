@@ -77,6 +77,12 @@ class MaterialEntryRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_by_source_url(self, source_url: str) -> MaterialEntry | None:
+        """Find an entry by its source_url (exact match)."""
+        stmt = select(MaterialEntry).where(MaterialEntry.source_url == source_url)
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
     async def set_pending(
         self,
         entry_id: uuid.UUID,

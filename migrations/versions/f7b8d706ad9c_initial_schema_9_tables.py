@@ -59,15 +59,33 @@ def upgrade() -> None:
             nullable=False,
             comment="First 8 chars of the key for identification in logs",
         ),
-        sa.Column("label", sa.String(length=100), nullable=False),
+        sa.Column(
+            "label",
+            sa.String(length=100),
+            nullable=False,
+            server_default=sa.text("'default'"),
+            comment="Human-readable label to distinguish keys in UI and logs",
+        ),
         sa.Column(
             "scopes",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=False,
             comment="JSON array of granted scopes (prep, check)",
         ),
-        sa.Column("rate_limit_prep", sa.Integer(), nullable=False),
-        sa.Column("rate_limit_check", sa.Integer(), nullable=False),
+        sa.Column(
+            "rate_limit_prep",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("60"),
+            comment="Max requests per 60s window for prep scope",
+        ),
+        sa.Column(
+            "rate_limit_check",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("300"),
+            comment="Max requests per 60s window for check scope",
+        ),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -105,7 +123,12 @@ def upgrade() -> None:
         sa.Column(
             "expected_skills", postgresql.JSONB(astext_type=sa.Text()), nullable=True
         ),
-        sa.Column("order", sa.Integer(), nullable=False),
+        sa.Column(
+            "order",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column(
             "node_fingerprint",
             sa.String(length=64),
@@ -245,7 +268,12 @@ def upgrade() -> None:
             sa.Enum("video", "presentation", "text", "web", name="source_type_enum"),
             nullable=False,
         ),
-        sa.Column("order", sa.Integer(), nullable=False),
+        sa.Column(
+            "order",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column("source_url", sa.String(length=2000), nullable=False),
         sa.Column("filename", sa.String(length=500), nullable=True),
         sa.Column(
@@ -322,6 +350,7 @@ def upgrade() -> None:
                 name="mapping_validation_state_enum",
             ),
             nullable=False,
+            server_default=sa.text("'pending_validation'"),
         ),
         sa.Column(
             "blocking_factors",
@@ -445,7 +474,12 @@ def upgrade() -> None:
             nullable=False,
             comment="Enum: module, lesson, concept, exercise",
         ),
-        sa.Column("order", sa.Integer(), nullable=False),
+        sa.Column(
+            "order",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column("title", sa.String(length=500), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("learning_goal", sa.Text(), nullable=True),

@@ -24,6 +24,7 @@ Routes
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Annotated
 
@@ -31,7 +32,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_session
+from course_supporter.api.deps import get_s3_client, get_session
 from course_supporter.api.schemas import (
     NodeCreateRequest,
     NodeListResponse,
@@ -59,14 +60,20 @@ from course_supporter.storage.mapping_validation import (
     timecode_to_seconds,
 )
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import MappingValidationState, SlideVideoMapping
+from course_supporter.storage.orm import (
+    MappingValidationState,
+    MaterialNode,
+    SlideVideoMapping,
+)
 from course_supporter.storage.repositories import SlideVideoMappingRepository
+from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["nodes"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
@@ -361,19 +368,48 @@ async def delete_node(
     node_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
+    s3: S3Dep,
 ) -> None:
-    """Delete a node and all its descendants.
+    """Delete a node, all descendants, and their S3 files.
 
-    Deletion cascades to all child nodes and their attached
-    material entries. This operation cannot be undone.
+    Collects S3 keys from all material entries in the subtree,
+    deletes them from S3, then cascades DB deletion.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    node_repo = MaterialNodeRepository(session)
 
-    await repo.delete(node_id)
+    # Collect S3 keys before DB cascade removes entries
+    subtree = await node_repo.get_subtree(node_id, include_materials=True)
+    s3_keys: list[str] = []
+    for node in _flatten(subtree):
+        for entry in node.materials:
+            key = s3.extract_key(entry.source_url)
+            if key is not None:
+                s3_keys.append(key)
+
+    await node_repo.delete(node_id)
     await session.commit()
 
-    logger.info("node_deleted", node_id=str(node_id))
+    # Clean up S3 after successful DB commit
+    for key in s3_keys:
+        await s3.delete_object(key)
+
+    logger.info(
+        "node_deleted",
+        node_id=str(node_id),
+        s3_files_cleaned=len(s3_keys),
+    )
+
+
+def _flatten(nodes: Sequence[MaterialNode]) -> list[MaterialNode]:
+    """Flatten a tree of nodes into a flat list."""
+    result: list[MaterialNode] = []
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        result.append(node)
+        stack.extend(node.children)
+    return result
 
 
 # ── Slide-Video Mapping ──

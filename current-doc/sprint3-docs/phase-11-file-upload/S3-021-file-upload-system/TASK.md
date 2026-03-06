@@ -2,21 +2,32 @@
 
 **Phase:** 11 (File Upload)
 **Складність:** L
-**Статус:** PENDING
+**Статус:** IN PROGRESS
 **Залежність:** S3-013 (Course removed, new URL patterns)
 
 ## Контекст
 
 Повна специфікація в `current-doc/sprint2-docs/epic-7/S2-058/ISSUES.md` → Q-003.
 
+Зараз файли завантажуються через API сервер (multipart form) — це навантажує RAM/CPU та не масштабується для великих файлів. S3 key pattern `{node_id}/{uuid}/{filename}` не має tenant isolation.
+
 ## Два шляхи завантаження
 
-1. **URL** — зовнішнє посилання (YouTube, web page, hosted file)
-2. **File upload** — локальний файл → S3 → MaterialEntry
+1. **URL** — зовнішнє посилання (YouTube, web page, hosted file) — вже працює
+2. **File upload** — локальний файл → presigned URL → S3 → MaterialEntry — **цей таск**
 
-## Компоненти
+## Блоки роботи
 
-### 1. Presigned URL Upload Flow
+### Блок 1. S3Client — нові методи (`storage/s3.py`)
+
+| Метод | Призначення |
+|-------|-------------|
+| `generate_presigned_url(key, content_type, expires_in)` | Presigned PUT URL для прямого upload клієнтом |
+| `list_objects(prefix)` | Список файлів за prefix (для tenant listing) |
+| `get_usage(prefix)` | Сумарний розмір файлів у байтах |
+| `delete_object(key)` | Видалення одного файлу з bucket |
+
+### Блок 2. Presigned URL Upload Flow (`routes/materials.py`)
 
 ```
 Client → POST /nodes/{id}/materials/upload-url (filename, content_type, size)
@@ -27,77 +38,72 @@ Client → POST /nodes/{id}/materials/confirm-upload (key, source_type)
 ```
 
 **Переваги:** великі файли не проходять через API server, менше RAM, швидше.
+Працює з browser upload та backend upload.
 
-### 2. Storage Management
+**Schemas:**
+- `PresignedUrlRequest` — filename, content_type, size_bytes
+- `PresignedUrlResponse` — upload_url, key, expires_in
+- `ConfirmUploadRequest` — key, source_type, filename
 
-- `GET /storage/files` — список файлів tenant'а в S3
-- `GET /storage/usage` — загальний обсяг зайнятого місця
-- `DELETE /storage/files/{key}` — видалити файл (з каскадом на MaterialEntry)
+### Блок 3. Storage Management (`routes/storage.py` — НОВИЙ)
 
-### 3. Multi-tenant Isolation
+| Endpoint | Опис |
+|----------|------|
+| `GET /storage/files` | Файли тенанта в S3 |
+| `GET /storage/usage` | Зайнятий об'єм у байтах |
+| `DELETE /storage/files/{key}` | Видалення з S3 + каскад на MaterialEntry |
+
+**Schemas:**
+- `StorageFileResponse` — key, size_bytes, last_modified
+- `StorageUsageResponse` — total_bytes, file_count
+
+### Блок 4. S3 Cleanup при видаленні сутностей
+
+Синхронний cleanup S3 файлів при видаленні через існуючі endpoints:
+
+| Endpoint | Зміна |
+|----------|-------|
+| `DELETE /materials/{entry_id}` | Якщо `source_url` вказує на S3 → `s3.delete_object()` |
+| `DELETE /nodes/{node_id}` | Зібрати S3 keys з усіх MaterialEntry вузла та дітей → batch delete |
+
+Без цього DB cascade працює, але файли в S3 стають сиротами.
+
+### Multi-tenant Isolation
 
 S3 key prefix: `tenants/{tenant_id}/nodes/{node_id}/{uuid}/{filename}`
 
-Bucket policy не потрібна (presigned URLs вже scoped до конкретного key).
+- Presigned URLs scoped до конкретного key
+- Bucket: private (без підпису доступу немає)
+- API валідує tenant ownership перед генерацією URL
+
+### Робота людини (не код)
+
+- **B2 CORS** — налаштувати CORS на bucket для browser upload:
+  - `allowedOrigins`: домен(и) клієнта
+  - `allowedOperations`: `s3_put`
+  - `allowedHeaders`: `content-type`
+- Задокументувати в deployment docs (S3-017/S3-018)
 
 ## Файли для зміни
 
 | Файл | Зміни |
 |------|-------|
-| `src/course_supporter/storage/s3.py` | `generate_presigned_url()`, `list_objects()`, `get_usage()`, `delete_object()` |
-| `src/course_supporter/api/routes/materials.py` | Upload URL + confirm endpoints |
-| `src/course_supporter/api/routes/storage.py` | НОВИЙ — storage management endpoints |
+| `src/course_supporter/storage/s3.py` | 4 нових методи |
+| `src/course_supporter/api/routes/materials.py` | Upload URL + confirm endpoints + S3 cleanup |
+| `src/course_supporter/api/routes/storage.py` | **НОВИЙ** — storage management endpoints |
+| `src/course_supporter/api/routes/nodes.py` | S3 cleanup при видаленні вузлів |
 | `src/course_supporter/api/schemas.py` | Upload/storage schemas |
 | `src/course_supporter/api/app.py` | Mount storage router |
-| `tests/` | Тести для presigned URLs, storage endpoints |
-
-## Деталі реалізації
-
-### S3Client.generate_presigned_url()
-
-```python
-async def generate_presigned_url(
-    self, key: str, content_type: str, expires_in: int = 3600
-) -> str:
-    """Generate presigned PUT URL for direct upload."""
-    url = await self._client.generate_presigned_url(
-        "put_object",
-        Params={"Bucket": self._bucket, "Key": key, "ContentType": content_type},
-        ExpiresIn=expires_in,
-    )
-    return url
-```
-
-### S3Client.list_objects()
-
-```python
-async def list_objects(self, prefix: str) -> list[dict]:
-    """List objects with given prefix."""
-    paginator = self._client.get_paginator("list_objects_v2")
-    objects = []
-    async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            objects.append({
-                "key": obj["Key"],
-                "size": obj["Size"],
-                "last_modified": obj["LastModified"],
-            })
-    return objects
-```
-
-### Security
-
-- Presigned URLs expiry: 1 hour default
-- Tenant isolation через key prefix (API validates tenant before generating URL)
-- Private bucket — no public access
-- Confirm endpoint validates that file exists in S3 before creating MaterialEntry
+| `tests/` | Тести для всіх нових endpoints та S3 методів |
 
 ## Acceptance Criteria
 
-- [ ] Presigned URL generation працює з B2
+- [ ] Presigned URL generation працює з B2/MinIO
 - [ ] Direct upload flow: request URL → upload → confirm
 - [ ] Storage file listing для tenant
 - [ ] Usage tracking (total bytes)
-- [ ] File deletion з каскадом
+- [ ] File deletion з каскадом на MaterialEntry
+- [ ] S3 cleanup при видаленні MaterialEntry та MaterialNode
 - [ ] Tenant isolation через S3 prefix
-- [ ] Тести покривають всі endpoints
+- [ ] CORS задокументовано для B2 deployment
+- [ ] Тести покривають всі endpoints та S3 методи

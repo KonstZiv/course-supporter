@@ -28,7 +28,7 @@
 | 8 | Documentation | M | Phase 7 | S3-017, S3-018 |
 | 9 | Cascading Job Failure | M | Phase 1 | S3-019 |
 | 10 | Recursive Generation | XL | Phase 6, 9 | S3-020a, S3-020b, S3-020c, S3-020d |
-| 11 | Full File Upload | L | Phase 4 | S3-021 |
+| 11 | Full File Upload + S3 Cleanup | L | Phase 4 | S3-021 |
 
 ---
 

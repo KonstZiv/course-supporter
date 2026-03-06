@@ -668,3 +668,73 @@ class SnapshotListResponse(BaseModel):
     total: int = Field(description="Total number of snapshots for this node.")
     limit: int = Field(description="Maximum items per page (as requested).")
     offset: int = Field(description="Number of items skipped (as requested).")
+
+
+# --- Presigned Upload ---
+
+
+class PresignedUrlRequest(BaseModel):
+    """Request body for POST /nodes/{node_id}/materials/upload-url."""
+
+    filename: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Original filename (used for S3 key and extension validation).",
+    )
+    content_type: str = Field(
+        min_length=1,
+        max_length=200,
+        description="MIME type of the file to upload.",
+    )
+    source_type: SourceType = Field(
+        description="Material type (video, presentation, text).",
+    )
+    size_bytes: int | None = Field(
+        default=None,
+        ge=1,
+        description="File size in bytes (optional, for pre-validation).",
+    )
+
+
+class PresignedUrlResponse(BaseModel):
+    """Response for POST /nodes/{node_id}/materials/upload-url."""
+
+    upload_url: str = Field(description="Presigned PUT URL for direct S3 upload.")
+    key: str = Field(description="S3 object key to use in confirm-upload.")
+    expires_in: int = Field(description="URL validity in seconds.")
+
+
+class ConfirmUploadRequest(BaseModel):
+    """Request body for POST /nodes/{node_id}/materials/confirm-upload."""
+
+    key: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="S3 object key returned by upload-url endpoint.",
+    )
+    source_type: SourceType = Field(
+        description="Material type (video, presentation, text).",
+    )
+    filename: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Override filename (defaults to key basename).",
+    )
+
+
+# --- Storage Management ---
+
+
+class StorageFileResponse(BaseModel):
+    """Single file in tenant's S3 storage."""
+
+    key: str = Field(description="Full S3 object key.")
+    size_bytes: int = Field(description="File size in bytes.")
+    last_modified: datetime = Field(description="Last modification timestamp.")
+
+
+class StorageUsageResponse(BaseModel):
+    """Tenant storage usage summary."""
+
+    total_bytes: int = Field(description="Total storage used in bytes.")
+    file_count: int = Field(description="Number of files in storage.")

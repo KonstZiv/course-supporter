@@ -46,13 +46,22 @@ class NodeSummary:
     structure_snapshot_id: uuid.UUID | None
 
 
+class CorrectionAction(StrEnum):
+    """Allowed correction actions for reconciliation."""
+
+    RENAME = "rename"
+    ADD = "add"
+    REMOVE = "remove"
+    MOVE = "move"
+
+
 @dataclass(frozen=True)
 class Correction:
     """A single correction suggested by reconciliation."""
 
     target_node_id: uuid.UUID
     field: str
-    action: str  # "rename" | "add" | "remove" | "move"
+    action: CorrectionAction
     old_value: str | None
     new_value: str | None
     reason: str

@@ -269,8 +269,8 @@ class ArchitectAgent:
         return StepOutput(
             structure=gen_result.structure,
             summary=gen_result.structure.summary,
-            core_concepts=list(gen_result.structure.core_concepts),
-            mentioned_concepts=list(gen_result.structure.mentioned_concepts),
+            core_concepts=gen_result.structure.core_concepts,
+            mentioned_concepts=gen_result.structure.mentioned_concepts,
             prompt_version=gen_result.prompt_version,
             response=gen_result.response,
         )

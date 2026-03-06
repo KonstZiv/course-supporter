@@ -9,6 +9,7 @@ import pytest
 from course_supporter.models.course import CourseStructure
 from course_supporter.models.step import (
     Correction,
+    CorrectionAction,
     NodeSummary,
     StepInput,
     StepOutput,
@@ -63,12 +64,12 @@ class TestCorrection:
         c = Correction(
             target_node_id=uuid.uuid4(),
             field="title",
-            action="rename",
+            action=CorrectionAction.RENAME,
             old_value="old",
             new_value="new",
             reason="consistency",
         )
-        assert c.action == "rename"
+        assert c.action == CorrectionAction.RENAME
 
 
 class TestStepInput:
@@ -140,7 +141,7 @@ class TestStepOutput:
                 Correction(
                     target_node_id=uuid.uuid4(),
                     field="title",
-                    action="rename",
+                    action=CorrectionAction.RENAME,
                     old_value="a",
                     new_value="b",
                     reason="consistency",

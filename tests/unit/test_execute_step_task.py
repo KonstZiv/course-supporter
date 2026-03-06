@@ -364,7 +364,7 @@ class TestCorrectionsSerialize:
     async def test_corrections_serialized(self, job_id: str, root_node_id: str) -> None:
         """StepOutput corrections become list-of-dicts in snapshot."""
         from course_supporter.llm.schemas import LLMResponse
-        from course_supporter.models.step import Correction
+        from course_supporter.models.step import Correction, CorrectionAction
 
         target_nid = uuid.uuid4()
         output = StepOutput(
@@ -385,7 +385,7 @@ class TestCorrectionsSerialize:
                 Correction(
                     target_node_id=target_nid,
                     field="title",
-                    action="rename",
+                    action=CorrectionAction.RENAME,
                     old_value="old",
                     new_value="new",
                     reason="consistency",

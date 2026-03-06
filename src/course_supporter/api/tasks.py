@@ -401,10 +401,14 @@ async def arq_generate_structure(
         except Exception as exc:
             await session.rollback()
             async with session_factory() as err_session:
-                await JobRepository(err_session).update_status(
+                err_repo = JobRepository(err_session)
+                await err_repo.update_status(
                     jid,
                     "failed",
                     error_message=str(exc),
                 )
+                cascaded = await err_repo.propagate_failure(jid)
                 await err_session.commit()
+            if cascaded:
+                log.info("cascading_failure_propagated", failed_count=len(cascaded))
             log.error("generate_structure_failed", error=str(exc))

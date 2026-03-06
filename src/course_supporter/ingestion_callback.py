@@ -105,6 +105,9 @@ class IngestionCallback:
             job_repo = JobRepository(session)
 
             await job_repo.update_status(job_id, "failed", error_message=error_message)
+            cascaded = await job_repo.propagate_failure(job_id)
+            if cascaded:
+                log.info("cascading_failure_propagated", failed_count=len(cascaded))
 
             from course_supporter.storage.material_entry_repository import (
                 MaterialEntryRepository,

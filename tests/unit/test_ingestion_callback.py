@@ -39,6 +39,14 @@ def _make_callback(
     return callback, factory
 
 
+def _setup_job_mock(job_cls: MagicMock) -> MagicMock:
+    """Configure a mocked JobRepository with all async methods."""
+    repo = job_cls.return_value
+    repo.update_status = AsyncMock()
+    repo.propagate_failure = AsyncMock(return_value=[])
+    return repo
+
+
 class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
 
@@ -203,8 +211,7 @@ class TestOnFailure:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_repo = job_cls.return_value
-            job_repo.update_status = AsyncMock()
+            job_repo = _setup_job_mock(job_cls)
 
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
@@ -224,7 +231,7 @@ class TestOnFailure:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
+            _setup_job_mock(job_cls)
 
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
@@ -242,7 +249,7 @@ class TestOnFailure:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
+            _setup_job_mock(job_cls)
 
             await callback.on_failure(
                 job_id=uuid.uuid4(),
@@ -267,7 +274,7 @@ class TestOnFailure:
             ) as mock_rv,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
+            _setup_job_mock(job_cls)
 
             await callback.on_failure(
                 job_id=uuid.uuid4(),
@@ -289,7 +296,7 @@ class TestOnFailure:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
+            _setup_job_mock(job_cls)
 
             await callback.on_failure(
                 job_id=uuid.uuid4(),
@@ -369,9 +376,8 @@ class TestOnFailureErrors:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock(
-                side_effect=ValueError("Job not found")
-            )
+            repo = _setup_job_mock(job_cls)
+            repo.update_status = AsyncMock(side_effect=ValueError("Job not found"))
 
             with pytest.raises(ValueError, match="Job not found"):
                 await callback.on_failure(
@@ -425,7 +431,7 @@ class TestRevalidateBlockedMappingsCallback:
             patch(_VALIDATION_SVC) as svc_cls,
         ):
             entry_cls.return_value.fail_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
+            _setup_job_mock(job_cls)
             svc_cls.return_value.revalidate_blocked = AsyncMock(return_value=0)
 
             await callback.on_failure(

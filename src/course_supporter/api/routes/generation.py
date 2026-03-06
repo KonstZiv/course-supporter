@@ -142,12 +142,16 @@ async def generate_structure(
         node_id=str(node_id),
         mode=body.mode,
         generation_jobs_count=len(plan.generation_jobs),
+        reconciliation_jobs_count=len(plan.reconciliation_jobs),
         ingestion_count=len(plan.ingestion_jobs),
         estimated_llm_calls=plan.estimated_llm_calls,
     )
 
     return GenerationPlanResponse(
         generation_jobs=[JobResponse.model_validate(j) for j in plan.generation_jobs],
+        reconciliation_jobs=[
+            JobResponse.model_validate(j) for j in plan.reconciliation_jobs
+        ],
         ingestion_jobs=[JobResponse.model_validate(j) for j in plan.ingestion_jobs],
         estimated_llm_calls=plan.estimated_llm_calls,
         mapping_warnings=[

@@ -530,6 +530,31 @@ class StructureSnapshot(Base):
     structure: Mapped[dict[str, Any]] = mapped_column(
         JSONB, comment="JSONB of generated course structure"
     )
+    step_type: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Step type: generate, reconcile, refine",
+    )
+    summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="LLM-generated summary for cross-node context",
+    )
+    core_concepts: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Concepts covered in depth at this node",
+    )
+    mentioned_concepts: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Concepts mentioned but not covered in depth",
+    )
+    corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Reconciliation corrections audit trail",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

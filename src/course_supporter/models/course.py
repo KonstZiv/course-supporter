@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from course_supporter.models.source import SourceDocument
 
@@ -171,3 +171,20 @@ class CourseStructure(BaseModel):
     expected_knowledge: list[str] = Field(default_factory=list)
     expected_skills: list[str] = Field(default_factory=list)
     modules: list[ModuleOutput] = Field(default_factory=list)
+
+    # Node-level summary and concepts for cross-node context
+    summary: str = ""
+    core_concepts: list[str] = Field(default_factory=list)
+    mentioned_concepts: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_concepts_disjoint(self) -> CourseStructure:
+        """Ensure core_concepts and mentioned_concepts do not overlap."""
+        overlap = set(self.core_concepts) & set(self.mentioned_concepts)
+        if overlap:
+            msg = (
+                f"core_concepts and mentioned_concepts must not overlap, "
+                f"found: {overlap}"
+            )
+            raise ValueError(msg)
+        return self

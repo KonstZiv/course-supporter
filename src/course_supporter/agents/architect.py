@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import structlog
+
+if TYPE_CHECKING:
+    from course_supporter.models.step import StepInput, StepOutput
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.llm.router import ModelRouter
@@ -237,3 +240,37 @@ class ArchitectAgent:
         )
 
         return structure, response
+
+    async def execute(self, step_input: StepInput) -> StepOutput:
+        """Execute a generation step from StepInput contract.
+
+        Bridges the StepInput/StepOutput contract with the existing
+        run_with_metadata pipeline. Builds CourseContext from StepInput,
+        delegates to run_with_metadata, extracts summary and concepts.
+
+        Args:
+            step_input: Immutable input assembled by Step Executor.
+
+        Returns:
+            StepOutput with structure, summary, concepts, and LLM metadata.
+        """
+        from course_supporter.ingestion.merge import MergeStep
+        from course_supporter.models.step import StepOutput
+
+        context = MergeStep().merge(
+            step_input.materials,
+            step_input.slide_timecode_refs or None,
+            material_tree=step_input.material_tree or None,
+        )
+        gen_result = await self.run_with_metadata(
+            context,
+            existing_structure=step_input.existing_structure,
+        )
+        return StepOutput(
+            structure=gen_result.structure,
+            summary=gen_result.structure.summary,
+            core_concepts=gen_result.structure.core_concepts,
+            mentioned_concepts=gen_result.structure.mentioned_concepts,
+            prompt_version=gen_result.prompt_version,
+            response=gen_result.response,
+        )

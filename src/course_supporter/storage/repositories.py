@@ -59,7 +59,6 @@ class SlideVideoMappingRepository:
                 slide_number=m.slide_number,
                 video_timecode_start=m.video_timecode_start,
                 video_timecode_end=m.video_timecode_end,
-                order=idx,
             )
             vr = results_by_idx.get(idx)
             if vr is not None:
@@ -151,12 +150,12 @@ class SlideVideoMappingRepository:
             node_id: UUID of the parent material node.
 
         Returns:
-            List of SlideVideoMapping instances ordered by order.
+            List of SlideVideoMapping instances ordered by slide number.
         """
         stmt = (
             select(SlideVideoMapping)
             .where(SlideVideoMapping.materialnode_id == node_id)
-            .order_by(SlideVideoMapping.order)
+            .order_by(SlideVideoMapping.slide_number)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

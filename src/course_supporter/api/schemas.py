@@ -101,7 +101,6 @@ class SlideVideoMapItemResponse(BaseModel):
             "``null`` if the slide extends to the next mapping or end of video."
         ),
     )
-    order: int = Field(description="0-based position within this node's mapping list.")
     validation_state: ValidationState = Field(
         description="Current validation status of this mapping.",
     )
@@ -130,7 +129,7 @@ class SlideVideoMapListResponse(BaseModel):
     """List of slide-video mappings for a material tree node."""
 
     items: list[SlideVideoMapItemResponse] = Field(
-        description="Mappings ordered by ``order`` (0-based)."
+        description="Mappings ordered by slide number."
     )
     total: int = Field(description="Total number of mappings for this node.")
 

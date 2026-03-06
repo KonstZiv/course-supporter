@@ -1124,7 +1124,6 @@ class TestRouteReturns422OnValidationError:
         svm_record.slide_number = 1
         svm_record.video_timecode_start = "00:05:00"
         svm_record.video_timecode_end = None
-        svm_record.order = 0
         svm_record.validation_state = "validated"
         svm_record.blocking_factors = None
         svm_record.validation_errors = None

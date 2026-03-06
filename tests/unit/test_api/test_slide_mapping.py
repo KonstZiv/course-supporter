@@ -47,7 +47,6 @@ def _make_svm_mock(
     svm.slide_number = slide_number
     svm.video_timecode_start = "00:05:00"
     svm.video_timecode_end = "00:08:00"
-    svm.order = 0
     svm.validation_state = "pending_validation"
     svm.blocking_factors = None
     svm.validation_errors = None
@@ -587,24 +586,6 @@ class TestSlideVideoMappingRepository:
         assert len(records) == 2
         assert mock_session.add.call_count == 2
         mock_session.flush.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_batch_create_sets_order(self, mock_session: AsyncMock) -> None:
-        """batch_create() assigns sequential order values."""
-        pres_id = uuid.uuid4()
-        vid_id = uuid.uuid4()
-        mappings = [
-            SlideVideoMapEntry(
-                presentation_materialentry_id=str(pres_id),
-                video_materialentry_id=str(vid_id),
-                slide_number=i + 1,
-                video_timecode_start=f"00:0{i}:00",
-            )
-            for i in range(3)
-        ]
-        repo = SlideVideoMappingRepository(mock_session)
-        records = await repo.batch_create(uuid.uuid4(), mappings)
-        assert [r.order for r in records] == [0, 1, 2]
 
     @pytest.mark.asyncio
     async def test_get_by_id_returns_mapping(self, mock_session: AsyncMock) -> None:

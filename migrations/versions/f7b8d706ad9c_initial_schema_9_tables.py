@@ -313,7 +313,6 @@ def upgrade() -> None:
         sa.Column("slide_number", sa.Integer(), nullable=False),
         sa.Column("video_timecode_start", sa.String(length=20), nullable=False),
         sa.Column("video_timecode_end", sa.String(length=20), nullable=True),
-        sa.Column("order", sa.Integer(), nullable=False),
         sa.Column(
             "validation_state",
             sa.Enum(

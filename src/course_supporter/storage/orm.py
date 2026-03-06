@@ -76,14 +76,27 @@ class APIKey(Base):
         String(16),
         comment="First 8 chars of the key for identification in logs",
     )
-    label: Mapped[str] = mapped_column(String(100), default="default")
+    label: Mapped[str] = mapped_column(
+        String(100),
+        default="default",
+        comment="Human-readable label to distinguish keys in UI and logs",
+    )
     scopes: Mapped[list[Any]] = mapped_column(
         JSONB,
         default=list,
-        comment="JSON array of granted scopes (prep, check)",
+        comment="JSON array of granted scopes. "
+        "Defined in config/auth.yaml, validated by AuthScope enum",
     )
-    rate_limit_prep: Mapped[int] = mapped_column(Integer, default=60)
-    rate_limit_check: Mapped[int] = mapped_column(Integer, default=300)
+    rate_limit_prep: Mapped[int] = mapped_column(
+        Integer,
+        default=60,
+        comment="Max requests per 60s window for prep scope",
+    )
+    rate_limit_check: Mapped[int] = mapped_column(
+        Integer,
+        default=300,
+        comment="Max requests per 60s window for check scope",
+    )
     is_active: Mapped[bool] = mapped_column(default=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
@@ -110,7 +123,8 @@ class MaterialNode(Base):
     __tablename__ = "material_nodes"
     __table_args__ = {
         "comment": (
-            "Hierarchical tree of course materials. Root node (parent IS NULL) = course"
+            "Hierarchical tree of raw and unprocessed course materials. "
+            "Root node (parent IS NULL) = course"
         ),
     }
 
@@ -133,7 +147,10 @@ class MaterialNode(Base):
     order: Mapped[int] = mapped_column(Integer, default=0)
     node_fingerprint: Mapped[str | None] = mapped_column(
         String(64),
-        comment="Merkle hash of content subtree. NULL = stale",
+        comment="Merkle SHA-256 of content subtree. NULL = stale. "
+        "Computed bottom-up from processed materials and child nodes. "
+        "Invalidated up to root on any material change. "
+        "Unprocessed materials are skipped during computation",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -186,7 +203,8 @@ class MaterialEntry(Base):
 
     __tablename__ = "material_entries"
     __table_args__ = {
-        "comment": "Individual learning materials (video, presentation, text, web)",
+        "comment": "Raw and processed learning materials "
+        "(video, presentation, text, web)",
     }
 
     def __repr__(self) -> str:
@@ -215,7 +233,10 @@ class MaterialEntry(Base):
     order: Mapped[int] = mapped_column(Integer, default=0)
 
     # ── Raw layer ──
-    source_url: Mapped[str] = mapped_column(String(2000))
+    source_url: Mapped[str] = mapped_column(
+        String(2000),
+        comment="External URL or S3 object path for the raw material",
+    )
     filename: Mapped[str | None] = mapped_column(String(500))
     raw_hash: Mapped[str | None] = mapped_column(
         String(64),
@@ -309,8 +330,6 @@ class SlideVideoMapping(Base):
     slide_number: Mapped[int] = mapped_column(Integer)
     video_timecode_start: Mapped[str] = mapped_column(String(20))
     video_timecode_end: Mapped[str | None] = mapped_column(String(20))
-    order: Mapped[int] = mapped_column(Integer, default=0)
-
     # ── Validation tracking ──
     validation_state: Mapped[str] = mapped_column(
         Enum(
@@ -380,7 +399,10 @@ class StructureNode(Base):
 
     __tablename__ = "structure_nodes"
     __table_args__ = {
-        "comment": "Recursive tree of generated course structure elements",
+        "comment": (
+            "Recursive tree of generated course structure elements. "
+            "Editable by course author for corrections and additions"
+        ),
     }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
@@ -482,7 +504,13 @@ class StructureSnapshot(Base):
             "mode",
             unique=True,
         ),
-        {"comment": "LLM-generated course structure versions"},
+        {
+            "comment": (
+                "Immutable LLM response built from MaterialEntries.processed_content "
+                "for a node or subtree. Used to populate StructureNodes which the "
+                "course author can then edit"
+            ),
+        },
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)

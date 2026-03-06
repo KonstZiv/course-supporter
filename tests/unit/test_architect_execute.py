@@ -232,8 +232,8 @@ class TestArchitectExecute:
 class TestFormatChildrenContext:
     """_format_children_context formats NodeSummary list for prompts."""
 
-    def test_empty_returns_none(self) -> None:
-        assert _format_children_context([]) is None
+    def test_empty_returns_empty_string(self) -> None:
+        assert _format_children_context([]) == ""
 
     def test_single_child(self) -> None:
         cs = NodeSummary(

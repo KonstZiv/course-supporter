@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import structlog
 
 if TYPE_CHECKING:
-    from course_supporter.models.step import StepInput, StepOutput
+    from course_supporter.models.step import NodeSummary, StepInput, StepOutput
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.llm.router import ModelRouter
@@ -119,7 +119,7 @@ class ArchitectAgent:
         context: CourseContext,
         *,
         existing_structure: str | None = None,
-        children_context: str | None = None,
+        children_context: str = "",
     ) -> GenerationResult:
         """Generate course structure with full LLM metadata.
 
@@ -157,7 +157,7 @@ class ArchitectAgent:
         context: CourseContext,
         *,
         existing_structure: str | None = None,
-        children_context: str | None = None,
+        children_context: str = "",
     ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
@@ -185,7 +185,7 @@ class ArchitectAgent:
             kwargs["existing_structure"] = (
                 existing_structure or "No existing structure provided."
             )
-        kwargs["children_context"] = children_context or ""
+        kwargs["children_context"] = children_context
 
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
@@ -288,14 +288,14 @@ class ArchitectAgent:
 
 
 def _format_children_context(
-    children_summaries: list[Any],
-) -> str | None:
+    children_summaries: list[NodeSummary],
+) -> str:
     """Format children summaries as text for the LLM prompt.
 
-    Returns None when there are no children summaries (leaf node).
+    Returns an empty string when there are no children summaries (leaf node).
     """
     if not children_summaries:
-        return None
+        return ""
 
     lines = ["## Children Summaries", ""]
     for cs in children_summaries:

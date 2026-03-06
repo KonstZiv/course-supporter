@@ -16,11 +16,13 @@ from course_supporter.errors import (
 from course_supporter.generation_orchestrator import (
     GenerationPlan,
     MappingWarning,
+    _ancestor_chain,
     _collect_job_ids,
     _partition_entries,
     _post_order,
     _pre_order,
     trigger_generation,
+    trigger_refine,
 )
 from course_supporter.storage.orm import MappingValidationState
 
@@ -700,3 +702,200 @@ class TestGenerationPlanCompat:
         """generation_job returns None for empty list."""
         plan = GenerationPlan()
         assert plan.generation_job is None
+
+
+# ── _ancestor_chain ──
+
+
+class TestAncestorChain:
+    def test_leaf_in_three_level_tree(self) -> None:
+        """Leaf returns [parent, root] (bottom-up)."""
+        leaf = _make_node()
+        mid = _make_node(children=[leaf])
+        root = _make_node(children=[mid])
+        all_nodes = [root, mid, leaf]
+
+        chain = _ancestor_chain(leaf, all_nodes)
+
+        assert chain == [mid, root]
+
+    def test_root_has_no_ancestors(self) -> None:
+        """Root node returns empty chain."""
+        root = _make_node()
+        assert _ancestor_chain(root, [root]) == []
+
+    def test_mid_node_returns_root_only(self) -> None:
+        """Middle node returns [root]."""
+        leaf = _make_node()
+        mid = _make_node(children=[leaf])
+        root = _make_node(children=[mid])
+        all_nodes = [root, mid, leaf]
+
+        chain = _ancestor_chain(mid, all_nodes)
+
+        assert chain == [root]
+
+    def test_wide_tree_correct_path(self) -> None:
+        """In a wide tree, chain follows the correct parent path."""
+        c1 = _make_node()
+        c2 = _make_node()
+        root = _make_node(children=[c1, c2])
+        all_nodes = [root, c1, c2]
+
+        assert _ancestor_chain(c1, all_nodes) == [root]
+        assert _ancestor_chain(c2, all_nodes) == [root]
+
+
+# ── trigger_refine ──
+
+
+class _RefineDeps:
+    """Bundles mock dependencies for trigger_refine."""
+
+    def __init__(
+        self,
+        *,
+        root_nodes: list[Any],
+    ) -> None:
+        self.node_repo = AsyncMock()
+        self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
+        self.enqueue_step = AsyncMock(side_effect=lambda **kw: _make_job())
+
+
+async def _run_refine(
+    deps: _RefineDeps,
+    *,
+    tenant_id: uuid.UUID | None = None,
+    root_node_id: uuid.UUID | None = None,
+    target_node_id: uuid.UUID,
+    mode: str = "free",
+) -> GenerationPlan:
+    """Run trigger_refine with all dependencies patched."""
+    tid = tenant_id or uuid.uuid4()
+    rid = root_node_id or uuid.uuid4()
+    session = AsyncMock()
+    redis = AsyncMock()
+
+    with (
+        patch(
+            "course_supporter.storage.material_node_repository.MaterialNodeRepository",
+            return_value=deps.node_repo,
+        ),
+        patch(
+            "course_supporter.enqueue.enqueue_step",
+            deps.enqueue_step,
+        ),
+    ):
+        return await trigger_refine(
+            redis=redis,
+            session=session,
+            tenant_id=tid,
+            root_node_id=rid,
+            target_node_id=target_node_id,
+            mode=mode,
+        )
+
+
+class TestTriggerRefine:
+    async def test_leaf_refine_no_ancestors(self) -> None:
+        """Refine a root node: 1 refine job, 0 reconcile jobs."""
+        root = _make_node(materials=[_make_entry(state="ready")])
+
+        deps = _RefineDeps(root_nodes=[root])
+        plan = await _run_refine(deps, target_node_id=root.id)
+
+        assert len(plan.generation_jobs) == 1
+        assert len(plan.reconciliation_jobs) == 0
+        assert plan.estimated_llm_calls == 1
+
+        call_kwargs = deps.enqueue_step.call_args_list[0].kwargs
+        assert call_kwargs["step_type"] == "refine"
+        assert call_kwargs["target_node_id"] == root.id
+
+    async def test_mid_node_refine_with_ancestors(self) -> None:
+        """Refine mid node: 1 refine + 1 reconcile (root)."""
+        leaf = _make_node(materials=[_make_entry(state="ready")])
+        mid = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[leaf],
+        )
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[mid],
+        )
+
+        jobs = [_make_job() for _ in range(2)]
+        deps = _RefineDeps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        plan = await _run_refine(deps, target_node_id=mid.id)
+
+        assert len(plan.generation_jobs) == 1  # refine job
+        assert len(plan.reconciliation_jobs) == 1  # root reconcile
+        assert plan.estimated_llm_calls == 2
+
+        calls = deps.enqueue_step.call_args_list
+        # First call: refine the target
+        assert calls[0].kwargs["step_type"] == "refine"
+        assert calls[0].kwargs["target_node_id"] == mid.id
+        # Second call: reconcile root, depends on refine
+        assert calls[1].kwargs["step_type"] == "reconcile"
+        assert calls[1].kwargs["target_node_id"] == root.id
+        assert str(jobs[0].id) in calls[1].kwargs["depends_on"]
+
+    async def test_leaf_refine_two_ancestors(self) -> None:
+        """Refine leaf: 1 refine + 2 reconcile (mid, root) chained."""
+        leaf = _make_node(materials=[_make_entry(state="ready")])
+        mid = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[leaf],
+        )
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[mid],
+        )
+
+        jobs = [_make_job() for _ in range(3)]
+        deps = _RefineDeps(root_nodes=[root])
+        deps.enqueue_step = AsyncMock(side_effect=jobs)
+
+        plan = await _run_refine(deps, target_node_id=leaf.id)
+
+        assert len(plan.generation_jobs) == 1
+        assert len(plan.reconciliation_jobs) == 2
+        assert plan.estimated_llm_calls == 3
+
+        calls = deps.enqueue_step.call_args_list
+        # refine leaf
+        assert calls[0].kwargs["step_type"] == "refine"
+        assert calls[0].kwargs["target_node_id"] == leaf.id
+        # reconcile mid, depends on refine
+        assert calls[1].kwargs["step_type"] == "reconcile"
+        assert calls[1].kwargs["target_node_id"] == mid.id
+        assert str(jobs[0].id) in calls[1].kwargs["depends_on"]
+        # reconcile root, depends on mid reconcile
+        assert calls[2].kwargs["step_type"] == "reconcile"
+        assert calls[2].kwargs["target_node_id"] == root.id
+        assert str(jobs[1].id) in calls[2].kwargs["depends_on"]
+
+    async def test_target_not_found_raises(self) -> None:
+        """Non-existent target_node_id raises NodeNotFoundError."""
+        root = _make_node(materials=[_make_entry(state="ready")])
+        deps = _RefineDeps(root_nodes=[root])
+
+        with pytest.raises(NodeNotFoundError):
+            await _run_refine(deps, target_node_id=uuid.uuid4())
+
+    async def test_no_ingestion_jobs(self) -> None:
+        """Refine never creates ingestion jobs."""
+        leaf = _make_node(materials=[_make_entry(state="ready")])
+        root = _make_node(
+            materials=[_make_entry(state="ready")],
+            children=[leaf],
+        )
+
+        deps = _RefineDeps(root_nodes=[root])
+        plan = await _run_refine(deps, target_node_id=leaf.id)
+
+        assert plan.ingestion_jobs == []
+        assert plan.mapping_warnings == []

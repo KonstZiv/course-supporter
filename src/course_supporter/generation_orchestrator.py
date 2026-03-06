@@ -450,3 +450,129 @@ async def trigger_generation(
         mapping_warnings=mapping_warnings,
         estimated_llm_calls=total_llm_calls,
     )
+
+
+def _ancestor_chain(
+    node: MaterialNode,
+    all_nodes: list[MaterialNode],
+) -> list[MaterialNode]:
+    """Walk from node up to root, returning ancestors bottom-up.
+
+    Uses a child→parent map built from all_nodes. The result excludes
+    the starting node itself.
+    """
+    parent_map = _build_parent_map(all_nodes)
+    chain: list[MaterialNode] = []
+    current = node
+    while current.id in parent_map:
+        parent = parent_map[current.id]
+        chain.append(parent)
+        current = parent
+    return chain
+
+
+async def trigger_refine(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    root_node_id: uuid.UUID,
+    target_node_id: uuid.UUID,
+    mode: Literal["free", "guided"] = "free",
+) -> GenerationPlan:
+    """Orchestrate selective refine after manual edits.
+
+    Creates a refine job for the target node, then reconcile jobs
+    for each ancestor up to the root. Siblings are not regenerated —
+    they serve only as context during reconciliation.
+
+    The caller is responsible for committing the session.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: Active DB session (caller controls transaction).
+        tenant_id: Owning tenant UUID.
+        root_node_id: Root MaterialNode UUID of the tree.
+        target_node_id: The edited node UUID.
+        mode: Generation mode ('free' or 'guided').
+
+    Returns:
+        GenerationPlan with refine + reconciliation jobs.
+
+    Raises:
+        NodeNotFoundError: If target_node_id is not found in tree.
+    """
+    from course_supporter.enqueue import enqueue_step
+    from course_supporter.errors import NodeNotFoundError
+    from course_supporter.storage.material_node_repository import (
+        MaterialNodeRepository,
+    )
+    from course_supporter.tree_utils import flatten_subtree
+
+    log = structlog.get_logger().bind(
+        root_node_id=str(root_node_id),
+        target_node_id=str(target_node_id),
+        mode=mode,
+    )
+    log.info("trigger_refine_started")
+
+    # 1. Load tree and find target
+    node_repo = MaterialNodeRepository(session)
+    root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+        root_node_id,
+        include_materials=True,
+    )
+
+    all_flat: list[MaterialNode] = []
+    for rn in root_nodes:
+        all_flat.extend(flatten_subtree(rn))
+
+    target: MaterialNode | None = None
+    for n in all_flat:
+        if n.id == target_node_id:
+            target = n
+            break
+    if target is None:
+        msg = f"Node {target_node_id} not found in tree"
+        raise NodeNotFoundError(msg)
+
+    # 2. Create refine job for the target node
+    refine_job = await enqueue_step(
+        redis=redis,
+        session=session,
+        tenant_id=tenant_id,
+        root_node_id=root_node_id,
+        target_node_id=target_node_id,
+        mode=mode,
+        step_type="refine",
+    )
+
+    # 3. Reconcile ancestors bottom-up (target→root)
+    ancestors = _ancestor_chain(target, all_flat)
+    reconciliation_jobs: list[Job] = []
+    prev_job_id = str(refine_job.id)
+
+    for ancestor in ancestors:
+        rec_job = await enqueue_step(
+            redis=redis,
+            session=session,
+            tenant_id=tenant_id,
+            root_node_id=root_node_id,
+            target_node_id=ancestor.id,
+            mode=mode,
+            step_type="reconcile",
+            depends_on=[prev_job_id],
+        )
+        reconciliation_jobs.append(rec_job)
+        prev_job_id = str(rec_job.id)
+
+    total_llm_calls = 1 + len(reconciliation_jobs)
+    log.info(
+        "trigger_refine_dag_built",
+        reconciliation_jobs_count=len(reconciliation_jobs),
+    )
+    return GenerationPlan(
+        generation_jobs=[refine_job],
+        reconciliation_jobs=reconciliation_jobs,
+        estimated_llm_calls=total_llm_calls,
+    )

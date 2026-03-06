@@ -104,7 +104,7 @@ async def seed_material_entry(
 ) -> MaterialEntry:
     """Create a MaterialEntry in RAW state."""
     entry = MaterialEntry(
-        node_id=seed_root_node.id,
+        materialnode_id=seed_root_node.id,
         source_type="web",
         source_url="https://example.com/test",
     )
@@ -122,7 +122,7 @@ async def committed_seeds(
 ) -> AsyncGenerator[dict[str, uuid.UUID]]:
     """Create Tenant + root MaterialNode + MaterialEntry with real commits.
 
-    Returns dict with ``tenant_id``, ``node_id``, ``material_id``.
+    Returns dict with ``tenant_id``, ``materialnode_id``, ``material_id``.
     Cleans up after the test via DELETE in reverse FK order.
     """
     async with session_factory() as session:
@@ -139,7 +139,7 @@ async def committed_seeds(
         await session.flush()
 
         entry = MaterialEntry(
-            node_id=node.id,
+            materialnode_id=node.id,
             source_type="web",
             source_url="https://example.com/e2e",
         )
@@ -149,7 +149,7 @@ async def committed_seeds(
 
         ids: dict[str, uuid.UUID] = {
             "tenant_id": tenant.id,
-            "node_id": node.id,
+            "materialnode_id": node.id,
             "material_id": entry.id,
         }
 
@@ -158,15 +158,17 @@ async def committed_seeds(
     # Cleanup: delete in reverse FK order
     async with session_factory() as session:
         await session.execute(
-            Job.__table__.delete().where(Job.node_id == ids["node_id"])
+            Job.__table__.delete().where(Job.materialnode_id == ids["materialnode_id"])
         )
         await session.execute(
             MaterialEntry.__table__.delete().where(
-                MaterialEntry.node_id == ids["node_id"]
+                MaterialEntry.materialnode_id == ids["materialnode_id"]
             )
         )
         await session.execute(
-            MaterialNode.__table__.delete().where(MaterialNode.id == ids["node_id"])
+            MaterialNode.__table__.delete().where(
+                MaterialNode.id == ids["materialnode_id"]
+            )
         )
         await session.execute(
             Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
@@ -184,7 +186,7 @@ async def committed_job_and_material(
     Pre-transitions the records to the state expected before
     ``IngestionCallback.on_success`` / ``on_failure``.
 
-    Returns dict with ``job_id``, ``material_id``, ``node_id``, ``tenant_id``.
+    Returns dict with ``job_id``, ``material_id``, ``materialnode_id``, ``tenant_id``.
     """
     from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.material_entry_repository import (
@@ -197,7 +199,7 @@ async def committed_job_and_material(
 
         job = await job_repo.create(
             tenant_id=committed_seeds["tenant_id"],
-            node_id=committed_seeds["node_id"],
+            node_id=committed_seeds["materialnode_id"],
             job_type="ingest",
         )
         await job_repo.update_status(job.id, "active")
@@ -207,7 +209,7 @@ async def committed_job_and_material(
     yield {
         "job_id": job.id,
         "material_id": committed_seeds["material_id"],
-        "node_id": committed_seeds["node_id"],
+        "materialnode_id": committed_seeds["materialnode_id"],
         "tenant_id": committed_seeds["tenant_id"],
     }
 

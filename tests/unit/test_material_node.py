@@ -11,28 +11,28 @@ class TestMaterialNodeModel:
     """MaterialNode ORM column/default tests."""
 
     def test_create_root_node(self) -> None:
-        """Root node has parent_id=None."""
+        """Root node has parent_materialnode_id=None."""
         node = MaterialNode(
             tenant_id=_uuid7(),
             title="Module 1",
         )
 
         assert node.title == "Module 1"
-        assert node.parent_id is None
+        assert node.parent_materialnode_id is None
         assert node.description is None
         assert node.node_fingerprint is None
 
     def test_create_child_node(self) -> None:
-        """Child node has explicit parent_id."""
-        parent_id = _uuid7()
+        """Child node has explicit parent_materialnode_id."""
+        parent_materialnode_id = _uuid7()
         node = MaterialNode(
             tenant_id=_uuid7(),
-            parent_id=parent_id,
+            parent_materialnode_id=parent_materialnode_id,
             title="Subtopic A",
             description="Details about subtopic A",
         )
 
-        assert node.parent_id == parent_id
+        assert node.parent_materialnode_id == parent_materialnode_id
         assert node.description == "Details about subtopic A"
 
     def test_order_default(self) -> None:
@@ -61,8 +61,8 @@ class TestMaterialNodeRelationships:
     """MaterialNode relationship configuration tests."""
 
     def test_self_referential_fk(self) -> None:
-        """parent_id FK points to material_nodes.id."""
-        col = MaterialNode.__table__.c.parent_id
+        """parent_materialnode_id FK points to material_nodes.id."""
+        col = MaterialNode.__table__.c.parent_materialnode_id
         fks = list(col.foreign_keys)
         assert len(fks) == 1
         assert fks[0].target_fullname == "material_nodes.id"
@@ -76,7 +76,7 @@ class TestMaterialNodeRelationships:
 
     def test_cascade_delete_on_parent(self) -> None:
         """Parent FK uses CASCADE ondelete."""
-        col = MaterialNode.__table__.c.parent_id
+        col = MaterialNode.__table__.c.parent_materialnode_id
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
@@ -105,7 +105,7 @@ class TestMaterialNodeIndexes:
         col = MaterialNode.__table__.c.tenant_id
         assert col.index is True
 
-    def test_parent_id_indexed(self) -> None:
-        """parent_id column is indexed."""
-        col = MaterialNode.__table__.c.parent_id
+    def test_parent_materialnode_id_indexed(self) -> None:
+        """parent_materialnode_id column is indexed."""
+        col = MaterialNode.__table__.c.parent_materialnode_id
         assert col.index is True

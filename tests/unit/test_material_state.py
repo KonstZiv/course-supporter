@@ -8,7 +8,7 @@ from course_supporter.storage.orm import MaterialEntry, MaterialState, _uuid7
 def _entry(**kwargs: object) -> MaterialEntry:
     """Create a MaterialEntry with sensible defaults, overriding with kwargs."""
     defaults: dict[str, object] = {
-        "node_id": _uuid7(),
+        "materialnode_id": _uuid7(),
         "source_type": "web",
         "source_url": "https://example.com",
     }
@@ -50,14 +50,14 @@ class TestStatePending:
     """PENDING state: ingestion job in flight."""
 
     def test_pending_with_job_id(self) -> None:
-        """Entry with pending_job_id is PENDING."""
-        entry = _entry(pending_job_id=_uuid7())
+        """Entry with job_id is PENDING."""
+        entry = _entry(job_id=_uuid7())
         assert entry.state == MaterialState.PENDING
 
     def test_pending_even_with_processed_content(self) -> None:
-        """Re-processing: pending_job_id takes priority over existing content."""
+        """Re-processing: job_id takes priority over existing content."""
         entry = _entry(
-            pending_job_id=_uuid7(),
+            job_id=_uuid7(),
             processed_content='{"sections": []}',
             processed_hash="b" * 64,
         )
@@ -122,10 +122,10 @@ class TestStateError:
         assert entry.state == MaterialState.ERROR
 
     def test_error_takes_priority_over_pending(self) -> None:
-        """ERROR > PENDING: error_message checked before pending_job_id."""
+        """ERROR > PENDING: error_message checked before job_id."""
         entry = _entry(
             error_message="Processing crashed",
-            pending_job_id=_uuid7(),
+            job_id=_uuid7(),
         )
         assert entry.state == MaterialState.ERROR
 
@@ -143,15 +143,15 @@ class TestStatePriorityEdgeCases:
     """Priority edge cases between states."""
 
     def test_pending_takes_priority_over_raw(self) -> None:
-        """PENDING > RAW: pending_job_id checked before processed_content."""
-        entry = _entry(pending_job_id=_uuid7())
+        """PENDING > RAW: job_id checked before processed_content."""
+        entry = _entry(job_id=_uuid7())
         assert entry.processed_content is None  # would be RAW without pending
         assert entry.state == MaterialState.PENDING
 
     def test_pending_takes_priority_over_integrity_broken(self) -> None:
         """PENDING > INTEGRITY_BROKEN: re-processing with hash mismatch."""
         entry = _entry(
-            pending_job_id=_uuid7(),
+            job_id=_uuid7(),
             raw_hash="a" * 64,
             processed_hash="b" * 64,
             processed_content='{"sections": []}',

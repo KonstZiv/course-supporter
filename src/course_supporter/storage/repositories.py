@@ -51,13 +51,14 @@ class SlideVideoMappingRepository:
         records = []
         for idx, m in enumerate(mappings):
             record = SlideVideoMapping(
-                node_id=node_id,
-                presentation_entry_id=uuid.UUID(m.presentation_entry_id),
-                video_entry_id=uuid.UUID(m.video_entry_id),
+                materialnode_id=node_id,
+                presentation_materialentry_id=uuid.UUID(
+                    m.presentation_materialentry_id
+                ),
+                video_materialentry_id=uuid.UUID(m.video_materialentry_id),
                 slide_number=m.slide_number,
                 video_timecode_start=m.video_timecode_start,
                 video_timecode_end=m.video_timecode_end,
-                order=idx,
             )
             vr = results_by_idx.get(idx)
             if vr is not None:
@@ -129,7 +130,7 @@ class SlideVideoMappingRepository:
         stmt = (
             select(SlideVideoMapping)
             .where(
-                SlideVideoMapping.node_id.in_(node_ids),
+                SlideVideoMapping.materialnode_id.in_(node_ids),
                 SlideVideoMapping.validation_state.in_(
                     [
                         MappingValidationState.PENDING_VALIDATION,
@@ -137,7 +138,7 @@ class SlideVideoMappingRepository:
                     ]
                 ),
             )
-            .order_by(SlideVideoMapping.node_id, SlideVideoMapping.slide_number)
+            .order_by(SlideVideoMapping.materialnode_id, SlideVideoMapping.slide_number)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -149,12 +150,12 @@ class SlideVideoMappingRepository:
             node_id: UUID of the parent material node.
 
         Returns:
-            List of SlideVideoMapping instances ordered by order.
+            List of SlideVideoMapping instances ordered by slide number.
         """
         stmt = (
             select(SlideVideoMapping)
-            .where(SlideVideoMapping.node_id == node_id)
-            .order_by(SlideVideoMapping.order)
+            .where(SlideVideoMapping.materialnode_id == node_id)
+            .order_by(SlideVideoMapping.slide_number)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

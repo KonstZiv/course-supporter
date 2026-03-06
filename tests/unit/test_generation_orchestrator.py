@@ -16,7 +16,7 @@ from course_supporter.errors import (
 from course_supporter.generation_orchestrator import (
     GenerationPlan,
     MappingWarning,
-    _collect_pending_job_ids,
+    _collect_job_ids,
     _partition_entries,
     trigger_generation,
 )
@@ -46,14 +46,14 @@ def _make_entry(
     entry_id: uuid.UUID | None = None,
     source_type: str = "text",
     source_url: str = "https://example.com/doc",
-    pending_job_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> MagicMock:
     entry = MagicMock()
     entry.id = entry_id or uuid.uuid4()
     entry.state = state
     entry.source_type = source_type
     entry.source_url = source_url
-    entry.pending_job_id = pending_job_id
+    entry.job_id = job_id
     return entry
 
 
@@ -197,7 +197,7 @@ class TestPartitionEntries:
 
     def test_pending_is_stale(self) -> None:
         """PENDING entries are counted as stale."""
-        pending = _make_entry(state="pending", pending_job_id=uuid.uuid4())
+        pending = _make_entry(state="pending", job_id=uuid.uuid4())
         node = _make_node(materials=[pending])
         stale, ready = _partition_entries([node])
         assert len(stale) == 1
@@ -274,7 +274,7 @@ class TestPendingEntries:
         pending_jid = uuid.uuid4()
         pending = _make_entry(
             state="pending",
-            pending_job_id=pending_jid,
+            job_id=pending_jid,
         )
         root = _make_node(materials=[pending])
         deps = _Deps(root_nodes=[root])
@@ -365,7 +365,7 @@ def _make_mapping_orm(
     """Create a mock SlideVideoMapping."""
     m = MagicMock()
     m.id = mapping_id or uuid.uuid4()
-    m.node_id = node_id or uuid.uuid4()
+    m.materialnode_id = node_id or uuid.uuid4()
     m.slide_number = slide_number
     m.validation_state = validation_state
     return m
@@ -402,7 +402,7 @@ class TestMappingWarnings:
         w = plan.mapping_warnings[0]
         assert isinstance(w, MappingWarning)
         assert w.mapping_id == pending.id
-        assert w.node_id == node_id
+        assert w.materialnode_id == node_id
         assert w.slide_number == 3
         assert w.validation_state == MappingValidationState.PENDING_VALIDATION
 
@@ -452,31 +452,31 @@ class TestMappingWarnings:
         assert len(plan.mapping_warnings) == 1
 
 
-# ── _collect_pending_job_ids ──
+# ── _collect_job_ids ──
 
 
 class TestCollectPendingJobIds:
     def test_mixed_entries(self) -> None:
-        """Returns only IDs from entries with pending_job_id."""
+        """Returns only IDs from entries with job_id."""
         jid1 = uuid.uuid4()
         jid2 = uuid.uuid4()
-        e1 = _make_entry(state="pending", pending_job_id=jid1)
-        e2 = _make_entry(state="raw")  # no pending_job_id
-        e3 = _make_entry(state="pending", pending_job_id=jid2)
+        e1 = _make_entry(state="pending", job_id=jid1)
+        e2 = _make_entry(state="raw")  # no job_id
+        e3 = _make_entry(state="pending", job_id=jid2)
 
-        result = _collect_pending_job_ids([e1, e2, e3])
+        result = _collect_job_ids([e1, e2, e3])
 
         assert result == [str(jid1), str(jid2)]
 
-    def test_no_pending_job_ids(self) -> None:
-        """All entries without pending_job_id returns empty list."""
+    def test_no_job_ids(self) -> None:
+        """All entries without job_id returns empty list."""
         e1 = _make_entry(state="raw")
         e2 = _make_entry(state="error")
 
-        result = _collect_pending_job_ids([e1, e2])
+        result = _collect_job_ids([e1, e2])
 
         assert result == []
 
     def test_empty_input(self) -> None:
         """Empty input returns empty list."""
-        assert _collect_pending_job_ids([]) == []
+        assert _collect_job_ids([]) == []

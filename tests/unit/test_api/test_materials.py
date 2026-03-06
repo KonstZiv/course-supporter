@@ -54,14 +54,14 @@ def _mock_entry(
     """Create a mock MaterialEntry."""
     entry = MagicMock()
     entry.id = uuid.uuid4()
-    entry.node_id = node_id or uuid.uuid4()
+    entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
     entry.source_url = source_url
     entry.filename = filename
     entry.order = 0
     entry.state = state
     entry.error_message = None
-    entry.pending_job_id = None
+    entry.job_id = None
     entry.job_id = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)

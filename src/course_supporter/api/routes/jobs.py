@@ -31,7 +31,7 @@ async def get_job(
 ) -> JobResponse:
     """Get job status by ID.
 
-    Tenant isolation enforced via job.node_id → node.tenant_id,
+    Tenant isolation enforced via job.materialnode_id → node.tenant_id,
     with fallback to job.tenant_id. Returns 404 if the job does
     not exist or does not belong to the current tenant.
     """

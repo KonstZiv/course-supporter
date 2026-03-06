@@ -86,7 +86,7 @@ async def _require_material_for_tenant(
     if entry is None:
         raise HTTPException(status_code=404, detail="Material not found")
 
-    node = await node_repo.get_by_id(entry.node_id)
+    node = await node_repo.get_by_id(entry.materialnode_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Material not found")
     return entry
@@ -303,7 +303,7 @@ async def retry_material(
         redis=arq,
         session=session,
         tenant_id=tenant.tenant_id,
-        node_id=entry.node_id,
+        node_id=entry.materialnode_id,
         material_id=entry.id,
         source_type=entry.source_type,
         source_url=entry.source_url,

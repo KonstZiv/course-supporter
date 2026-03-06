@@ -25,7 +25,7 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
     title: str = "Test Node",
     order: int = 0,
 ) -> MagicMock:
@@ -33,7 +33,7 @@ def _mock_node(
     node = MagicMock(spec=MaterialNode)
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or uuid.uuid4()
-    node.parent_id = parent_id
+    node.parent_materialnode_id = parent_materialnode_id
     node.title = title
     node.description = None
     node.order = order
@@ -65,7 +65,7 @@ class TestCreate:
         assert isinstance(added_node, MaterialNode)
         assert added_node.title == "Module 1"
         assert added_node.tenant_id == tenant_id
-        assert added_node.parent_id is None
+        assert added_node.parent_materialnode_id is None
         assert added_node.order == 0
         assert result is added_node
 
@@ -76,19 +76,19 @@ class TestCreate:
         repo = MaterialNodeRepository(session)
 
         tenant_id = uuid.uuid4()
-        parent_id = uuid.uuid4()
+        parent_materialnode_id = uuid.uuid4()
 
         with patch.object(repo, "_next_sibling_order", return_value=3):
             result = await repo.create(
                 tenant_id=tenant_id,
-                parent_id=parent_id,
+                parent_materialnode_id=parent_materialnode_id,
                 title="Subtopic",
                 description="Details",
             )
 
         added_node = session.add.call_args[0][0]
         assert isinstance(added_node, MaterialNode)
-        assert added_node.parent_id == parent_id
+        assert added_node.parent_materialnode_id == parent_materialnode_id
         assert added_node.order == 3
         assert added_node.description == "Details"
         assert result is added_node
@@ -170,9 +170,11 @@ class TestGetTree:
         """Three-level tree assembled correctly."""
         cid = uuid.uuid4()
         root = _mock_node(tenant_id=cid, title="Root", order=0)
-        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
+        child = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="Child", order=0
+        )
         grandchild = _mock_node(
-            tenant_id=cid, parent_id=child.id, title="Grandchild", order=0
+            tenant_id=cid, parent_materialnode_id=child.id, title="Grandchild", order=0
         )
 
         session = AsyncMock()
@@ -198,8 +200,12 @@ class TestGetTree:
         """Node with multiple children ordered."""
         cid = uuid.uuid4()
         root = _mock_node(tenant_id=cid, title="Root", order=0)
-        c1 = _mock_node(tenant_id=cid, parent_id=root.id, title="C1", order=0)
-        c2 = _mock_node(tenant_id=cid, parent_id=root.id, title="C2", order=1)
+        c1 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="C1", order=0
+        )
+        c2 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="C2", order=1
+        )
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -261,9 +267,15 @@ class TestGetTreeDeepNesting:
         """Four-level deep tree assembled correctly."""
         cid = uuid.uuid4()
         root = _mock_node(tenant_id=cid, title="L1", order=0)
-        l2 = _mock_node(tenant_id=cid, parent_id=root.id, title="L2", order=0)
-        l3 = _mock_node(tenant_id=cid, parent_id=l2.id, title="L3", order=0)
-        l4 = _mock_node(tenant_id=cid, parent_id=l3.id, title="L4", order=0)
+        l2 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="L2", order=0
+        )
+        l3 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=l2.id, title="L3", order=0
+        )
+        l4 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=l3.id, title="L4", order=0
+        )
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -287,12 +299,24 @@ class TestGetTreeDeepNesting:
         """Five-level deep tree with siblings at each level."""
         cid = uuid.uuid4()
         root = _mock_node(tenant_id=cid, title="Root", order=0)
-        c1 = _mock_node(tenant_id=cid, parent_id=root.id, title="C1", order=0)
-        c2 = _mock_node(tenant_id=cid, parent_id=root.id, title="C2", order=1)
-        gc1 = _mock_node(tenant_id=cid, parent_id=c1.id, title="GC1", order=0)
-        gc2 = _mock_node(tenant_id=cid, parent_id=c1.id, title="GC2", order=1)
-        ggc = _mock_node(tenant_id=cid, parent_id=gc1.id, title="GGC", order=0)
-        gggc = _mock_node(tenant_id=cid, parent_id=ggc.id, title="GGGC", order=0)
+        c1 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="C1", order=0
+        )
+        c2 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="C2", order=1
+        )
+        gc1 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=c1.id, title="GC1", order=0
+        )
+        gc2 = _mock_node(
+            tenant_id=cid, parent_materialnode_id=c1.id, title="GC2", order=1
+        )
+        ggc = _mock_node(
+            tenant_id=cid, parent_materialnode_id=gc1.id, title="GGC", order=0
+        )
+        gggc = _mock_node(
+            tenant_id=cid, parent_materialnode_id=ggc.id, title="GGGC", order=0
+        )
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -335,7 +359,9 @@ class TestGetTreeSetCommittedValue:
         root = _mock_node(tenant_id=cid, title="Root", order=0)
         # Simulate real ORM object by adding _sa_instance_state
         root._sa_instance_state = MagicMock()
-        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
+        child = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="Child", order=0
+        )
         child._sa_instance_state = MagicMock()
 
         session = AsyncMock()
@@ -359,7 +385,9 @@ class TestGetTreeSetCommittedValue:
         """get_subtree uses direct assignment for non-ORM objects (tests)."""
         cid = uuid.uuid4()
         root = _mock_node(tenant_id=cid, title="Root", order=0)
-        child = _mock_node(tenant_id=cid, parent_id=root.id, title="Child", order=0)
+        child = _mock_node(
+            tenant_id=cid, parent_materialnode_id=root.id, title="Child", order=0
+        )
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -380,16 +408,16 @@ class TestGetTreeOrphanNodes:
     """get_subtree with orphan nodes (parent not in loaded set)."""
 
     async def test_orphan_node_treated_as_root(self) -> None:
-        """Node whose parent_id is set but parent not loaded becomes a root.
+        """Node with parent_materialnode_id set but parent not loaded becomes root.
 
         In get_subtree, if a node's parent is not in the loaded set,
         it is treated as a root (included in the result).
         """
         cid = uuid.uuid4()
-        missing_parent_id = uuid.uuid4()
+        missing_parent_materialnode_id = uuid.uuid4()
         orphan = _mock_node(
             tenant_id=cid,
-            parent_id=missing_parent_id,
+            parent_materialnode_id=missing_parent_materialnode_id,
             title="Orphan",
             order=0,
         )
@@ -412,7 +440,7 @@ class TestGetTreeOrphanNodes:
         root = _mock_node(tenant_id=cid, title="Root", order=0)
         orphan = _mock_node(
             tenant_id=cid,
-            parent_id=uuid.uuid4(),
+            parent_materialnode_id=uuid.uuid4(),
             title="Orphan",
             order=0,
         )
@@ -456,7 +484,7 @@ class TestMove:
         """Cannot move ancestor under descendant."""
         # root -> child: moving root under child would cycle
         root = _mock_node(title="Root")
-        child = _mock_node(parent_id=root.id, title="Child")
+        child = _mock_node(parent_materialnode_id=root.id, title="Child")
 
         session = AsyncMock()
 
@@ -472,8 +500,8 @@ class TestMove:
             await repo.move(root.id, child.id)
 
     async def test_move_to_root(self) -> None:
-        """Move node to root (parent_id=None)."""
-        node = _mock_node(parent_id=uuid.uuid4())
+        """Move node to root (parent_materialnode_id=None)."""
+        node = _mock_node(parent_materialnode_id=uuid.uuid4())
         session = AsyncMock()
         session.get.return_value = node
 
@@ -485,7 +513,7 @@ class TestMove:
         repo = MaterialNodeRepository(session)
         result = await repo.move(node.id, None)
 
-        assert result.parent_id is None
+        assert result.parent_materialnode_id is None
         assert result.order == 2
         session.flush.assert_awaited()
 
@@ -503,7 +531,7 @@ class TestMove:
 
         session.get.side_effect = fake_get
 
-        # _is_descendant walks up from B, B.parent_id is None -> not descendant
+        # _is_descendant: B.parent_materialnode_id is None -> not descendant
         # _next_sibling_order mock
         scalar_result = MagicMock()
         scalar_result.scalar_one.return_value = 0
@@ -512,7 +540,7 @@ class TestMove:
         repo = MaterialNodeRepository(session)
         result = await repo.move(node_a.id, node_b.id)
 
-        assert result.parent_id == node_b.id
+        assert result.parent_materialnode_id == node_b.id
 
 
 class TestReorder:

@@ -33,7 +33,7 @@ class MappingWarning:
     """
 
     mapping_id: uuid.UUID
-    node_id: uuid.UUID
+    materialnode_id: uuid.UUID
     slide_number: int
     validation_state: MappingValidationState
 
@@ -83,7 +83,7 @@ def _partition_entries(
     return stale, ready
 
 
-def _collect_pending_job_ids(
+def _collect_job_ids(
     stale: list[MaterialEntry],
 ) -> list[str]:
     """Collect Job UUIDs (as str) for PENDING entries.
@@ -95,11 +95,9 @@ def _collect_pending_job_ids(
         stale: Stale entries (may include PENDING ones).
 
     Returns:
-        List of Job UUID strings for entries with pending_job_id.
+        List of Job UUID strings for entries with job_id.
     """
-    return [
-        str(entry.pending_job_id) for entry in stale if entry.pending_job_id is not None
-    ]
+    return [str(entry.job_id) for entry in stale if entry.job_id is not None]
 
 
 async def _collect_mapping_warnings(
@@ -124,7 +122,7 @@ async def _collect_mapping_warnings(
     return [
         MappingWarning(
             mapping_id=m.id,
-            node_id=m.node_id,
+            materialnode_id=m.materialnode_id,
             slide_number=m.slide_number,
             validation_state=MappingValidationState(m.validation_state),
         )
@@ -234,18 +232,18 @@ async def trigger_generation(
         depends_on_ids: list[str] = []
 
         # Collect existing pending job IDs (skip re-enqueue)
-        pending_ids = _collect_pending_job_ids(stale)
+        pending_ids = _collect_job_ids(stale)
         depends_on_ids.extend(pending_ids)
 
         # Enqueue ingestion for non-PENDING stale entries
         for entry in stale:
-            if entry.pending_job_id is not None:
+            if entry.job_id is not None:
                 continue  # already has an in-flight job
             job = await enqueue_ingestion(
                 redis=redis,
                 session=session,
                 tenant_id=tenant_id,
-                node_id=entry.node_id,
+                node_id=entry.materialnode_id,
                 material_id=entry.id,
                 source_type=entry.source_type,
                 source_url=entry.source_url,

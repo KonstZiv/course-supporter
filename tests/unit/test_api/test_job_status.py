@@ -46,7 +46,7 @@ def _make_job_mock(
     job.status = status
     job.tenant_id = uuid.uuid4()
     job.course_id = None  # removed field
-    job.node_id = node_id
+    job.materialnode_id = node_id
     job.arq_job_id = arq_job_id
     job.error_message = error_message
     job.queued_at = queued_at or datetime.now(UTC)

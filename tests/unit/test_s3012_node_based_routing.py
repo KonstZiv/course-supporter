@@ -39,13 +39,13 @@ class TestFindRootId:
     """_find_root_id walks up the parent chain to the root."""
 
     async def test_root_returns_itself(self) -> None:
-        """Root node (parent_id=None) returns its own id."""
+        """Root node (parent_materialnode_id=None) returns its own id."""
         from course_supporter.api.routes.generation import _find_root_id
 
         root_id = uuid.uuid4()
         root = MagicMock()
         root.id = root_id
-        root.parent_id = None
+        root.parent_materialnode_id = None
 
         session = AsyncMock()
         with patch(
@@ -65,11 +65,11 @@ class TestFindRootId:
 
         root = MagicMock()
         root.id = root_id
-        root.parent_id = None
+        root.parent_materialnode_id = None
 
         child = MagicMock()
         child.id = child_id
-        child.parent_id = root_id
+        child.parent_materialnode_id = root_id
 
         lookup = {child_id: child, root_id: root}
 
@@ -92,9 +92,9 @@ class TestFindRootId:
         child_id = uuid.uuid4()
         grandchild_id = uuid.uuid4()
 
-        root = MagicMock(id=root_id, parent_id=None)
-        child = MagicMock(id=child_id, parent_id=root_id)
-        grandchild = MagicMock(id=grandchild_id, parent_id=child_id)
+        root = MagicMock(id=root_id, parent_materialnode_id=None)
+        child = MagicMock(id=child_id, parent_materialnode_id=root_id)
+        grandchild = MagicMock(id=grandchild_id, parent_materialnode_id=child_id)
 
         lookup = {grandchild_id: grandchild, child_id: child, root_id: root}
 
@@ -249,7 +249,7 @@ def _mock_root_node(
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_id = None
+    node.parent_materialnode_id = None
     node.title = title
     node.description = None
     node.order = 0
@@ -270,7 +270,7 @@ class TestRootNodeAsCourse:
         self,
         client: AsyncClient,
     ) -> None:
-        """POST /api/v1/nodes creates a root node (parent_id=None)."""
+        """POST /api/v1/nodes creates a root node (parent_materialnode_id=None)."""
         from course_supporter.storage.material_node_repository import (
             MaterialNodeRepository,
         )
@@ -288,7 +288,7 @@ class TestRootNodeAsCourse:
 
         assert resp.status_code == 201
         data = resp.json()
-        assert data["parent_id"] is None
+        assert data["parent_materialnode_id"] is None
         assert data["title"] == "Python Basics"
         assert data["tenant_id"] == str(STUB_TENANT.tenant_id)
 
@@ -321,7 +321,7 @@ class TestRootNodeAsCourse:
         data = resp.json()
         assert data["total"] == 2
         assert len(data["items"]) == 2
-        assert all(item["parent_id"] is None for item in data["items"])
+        assert all(item["parent_materialnode_id"] is None for item in data["items"])
 
     async def test_other_tenant_roots_not_visible(
         self,
@@ -391,7 +391,7 @@ class TestEnqueueGenerationEffectiveNodeId:
             )
 
         create_kw = repo_cls.return_value.create.call_args.kwargs
-        assert create_kw["node_id"] == target_id
+        assert create_kw["materialnode_id"] == target_id
 
     async def test_none_target_uses_root(self) -> None:
         """When target_node_id=None, Job.node_id = root_node_id."""
@@ -426,7 +426,7 @@ class TestEnqueueGenerationEffectiveNodeId:
             )
 
         create_kw = repo_cls.return_value.create.call_args.kwargs
-        assert create_kw["node_id"] == root_id
+        assert create_kw["materialnode_id"] == root_id
 
     async def test_input_params_store_both_ids(self) -> None:
         """input_params stores root_node_id and target_node_id separately."""
@@ -477,7 +477,7 @@ def _mock_session_with_tree(
     for nid, pid in nodes.items():
         row = MagicMock()
         row.id = nid
-        row.parent_id = pid
+        row.parent_materialnode_id = pid
         rows.append(row)
 
     exec_result = MagicMock()
@@ -492,7 +492,7 @@ def _mock_job(
 ) -> MagicMock:
     job = MagicMock()
     job.id = uuid.uuid4()
-    job.node_id = node_id
+    job.materialnode_id = node_id
     return job
 
 
@@ -572,15 +572,15 @@ class TestDetectConflictWithRootNodeId:
     async def test_ancestor_descendant_conflict(self) -> None:
         """Active job on parent conflicts with grandchild target."""
         root_id = uuid.uuid4()
-        parent_id = uuid.uuid4()
+        parent_materialnode_id = uuid.uuid4()
         grandchild_id = uuid.uuid4()
         nodes = {
             root_id: None,
-            parent_id: root_id,
-            grandchild_id: parent_id,
+            parent_materialnode_id: root_id,
+            grandchild_id: parent_materialnode_id,
         }
         session = _mock_session_with_tree(nodes)
-        job = _mock_job(node_id=parent_id)
+        job = _mock_job(node_id=parent_materialnode_id)
 
         result = await detect_conflict(
             session,

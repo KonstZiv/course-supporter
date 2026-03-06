@@ -20,8 +20,8 @@ class SlideVideoMapEntry(BaseModel):
     mapping a slide number to a timecode range in the video.
     """
 
-    presentation_entry_id: str
-    video_entry_id: str
+    presentation_materialentry_id: str
+    video_materialentry_id: str
     slide_number: int = Field(ge=1)
     video_timecode_start: str = Field(pattern=TIMECODE_RE)
     video_timecode_end: str | None = Field(default=None, pattern=TIMECODE_RE)

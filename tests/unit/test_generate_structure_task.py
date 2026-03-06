@@ -20,7 +20,7 @@ from course_supporter.tree_utils import find_node_bfs, flatten_subtree
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_id: uuid.UUID | None = None,
+    parent_materialnode_id: uuid.UUID | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
@@ -32,7 +32,7 @@ def _make_node(
     """Create a mock MaterialNode with required attributes."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_id = parent_id
+    node.parent_materialnode_id = parent_materialnode_id
     node.title = title
     node.description = description
     node.order = order
@@ -544,13 +544,13 @@ class TestGuidedModeAgent:
 
         entry = _make_entry(state="ready")
         child = _make_node(title="Lesson 1", description="First lesson")
-        child.parent_id = uuid.uuid4()  # has parent
+        child.parent_materialnode_id = uuid.uuid4()  # has parent
         root = _make_node(
             materials=[entry],
             title="Module A",
             children=[child],
         )
-        root.parent_id = None  # root node
+        root.parent_materialnode_id = None  # root node
 
         deps = _MockDeps(root_nodes=[root])
 

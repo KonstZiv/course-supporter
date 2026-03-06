@@ -19,6 +19,7 @@ def _make_node(
     *,
     node_id: uuid.UUID | None = None,
     parent_materialnode_id: uuid.UUID | None = None,
+    parent: Any = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
@@ -31,6 +32,7 @@ def _make_node(
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.parent_materialnode_id = parent_materialnode_id
+    node.parent = parent
     node.title = title
     node.description = description
     node.order = order
@@ -131,6 +133,7 @@ class _MockDeps:
             return_value=created_snapshot or _make_snapshot(),
         )
         self.snap_repo.get_latest_for_nodes = AsyncMock(return_value={})
+        self.snap_repo.get_latest_for_node = AsyncMock(return_value=None)
 
         self.agent = AsyncMock()
         self.agent.execute = AsyncMock(
@@ -459,3 +462,181 @@ class TestCorrectionsSerialize:
         assert len(corrections) == 1
         assert corrections[0]["target_node_id"] == str(target_nid)
         assert corrections[0]["action"] == "rename"
+
+
+def _make_snap_with_summary(
+    *,
+    node_id: uuid.UUID,
+    summary: str = "Summary",
+    core_concepts: list[str] | None = None,
+    mentioned_concepts: list[str] | None = None,
+) -> MagicMock:
+    """Create a mock StructureSnapshot with summary fields."""
+    snap = MagicMock()
+    snap.id = uuid.uuid4()
+    snap.materialnode_id = node_id
+    snap.summary = summary
+    snap.core_concepts = core_concepts or []
+    snap.mentioned_concepts = mentioned_concepts or []
+    return snap
+
+
+class TestReconcileSlidingWindow:
+    """Reconcile steps load parent context and sibling summaries."""
+
+    async def test_parent_context_loaded_for_reconcile(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Reconcile step receives parent_context in StepInput."""
+        from course_supporter.models.step import StepInput
+
+        parent_id = uuid.UUID(root_node_id)
+        entry = _make_entry(state="ready")
+        child = _make_node(
+            title="Child",
+            materials=[entry],
+            parent_materialnode_id=parent_id,
+        )
+        parent = _make_node(
+            node_id=parent_id,
+            title="Parent",
+            children=[child],
+        )
+        child.parent = parent
+
+        parent_snap = _make_snap_with_summary(
+            node_id=parent_id,
+            summary="Parent summary",
+            core_concepts=["overview"],
+        )
+
+        deps = _MockDeps(root_nodes=[parent])
+        # get_latest_for_node returns parent snap
+        deps.snap_repo.get_latest_for_node = AsyncMock(return_value=parent_snap)
+
+        await _run_task(
+            job_id,
+            root_node_id,
+            deps,
+            target_node_id=str(child.id),
+            step_type="reconcile",
+        )
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert isinstance(step_input, StepInput)
+        assert step_input.parent_context is not None
+        assert step_input.parent_context.node_id == parent_id
+        assert step_input.parent_context.summary == "Parent summary"
+        assert step_input.parent_context.core_concepts == ["overview"]
+
+    async def test_sibling_summaries_loaded_for_reconcile(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Reconcile step receives sibling_summaries in StepInput."""
+        from course_supporter.models.step import StepInput
+
+        parent_id = uuid.UUID(root_node_id)
+        entry = _make_entry(state="ready")
+        target_child = _make_node(
+            title="Target",
+            materials=[entry],
+            parent_materialnode_id=parent_id,
+        )
+        sibling = _make_node(
+            title="Sibling",
+            parent_materialnode_id=parent_id,
+        )
+        parent = _make_node(
+            node_id=parent_id,
+            title="Parent",
+            children=[target_child, sibling],
+        )
+        target_child.parent = parent
+        sibling.parent = parent
+
+        sibling_snap = _make_snap_with_summary(
+            node_id=sibling.id,
+            summary="Sibling covers arrays",
+            core_concepts=["arrays"],
+        )
+
+        deps = _MockDeps(root_nodes=[parent])
+        # get_latest_for_nodes returns sibling snap
+        deps.snap_repo.get_latest_for_nodes = AsyncMock(
+            return_value={sibling.id: sibling_snap},
+        )
+
+        await _run_task(
+            job_id,
+            root_node_id,
+            deps,
+            target_node_id=str(target_child.id),
+            step_type="reconcile",
+        )
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert isinstance(step_input, StepInput)
+        assert len(step_input.sibling_summaries) == 1
+        assert step_input.sibling_summaries[0].node_id == sibling.id
+        assert step_input.sibling_summaries[0].summary == "Sibling covers arrays"
+
+    async def test_generate_step_skips_parent_and_siblings(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Generate steps do NOT load parent/sibling context."""
+        parent_id = uuid.UUID(root_node_id)
+        entry = _make_entry(state="ready")
+        child = _make_node(
+            title="Child",
+            materials=[entry],
+            parent_materialnode_id=parent_id,
+        )
+        parent = _make_node(
+            node_id=parent_id,
+            title="Parent",
+            children=[child],
+        )
+        child.parent = parent
+
+        deps = _MockDeps(root_nodes=[parent])
+
+        await _run_task(
+            job_id,
+            root_node_id,
+            deps,
+            target_node_id=str(child.id),
+            step_type="generate",
+        )
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.parent_context is None
+        assert step_input.sibling_summaries == []
+        # get_latest_for_node should NOT have been called for parent
+        deps.snap_repo.get_latest_for_node.assert_not_called()
+
+    async def test_root_reconcile_no_parent_context(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Root node reconcile: parent_context is None, siblings empty."""
+        entry = _make_entry(state="ready")
+        child = _make_node(title="Child")
+        root = _make_node(
+            materials=[entry],
+            children=[child],
+        )
+        # Root has no parent
+        root.parent = None
+        root.parent_materialnode_id = None
+
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(
+            job_id,
+            root_node_id,
+            deps,
+            step_type="reconcile",
+        )
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.parent_context is None
+        assert step_input.sibling_summaries == []

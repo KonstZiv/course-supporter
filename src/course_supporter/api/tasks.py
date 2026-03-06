@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         StepOutput,
         StepType,
     )
-    from course_supporter.storage.orm import MaterialNode
+    from course_supporter.storage.orm import MaterialNode, StructureSnapshot
     from course_supporter.storage.s3 import S3Client
     from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -422,6 +422,23 @@ async def arq_generate_structure(
             log.error("generate_structure_failed", error=str(exc))
 
 
+def _snapshot_to_summary(
+    node: MaterialNode,
+    snap: StructureSnapshot,
+) -> NodeSummary:
+    """Convert a MaterialNode + its latest snapshot into NodeSummary."""
+    from course_supporter.models.step import NodeSummary as _NodeSummary
+
+    return _NodeSummary(
+        node_id=node.id,
+        title=node.title,
+        summary=snap.summary or "",
+        core_concepts=snap.core_concepts or [],
+        mentioned_concepts=snap.mentioned_concepts or [],
+        structure_snapshot_id=snap.id,
+    )
+
+
 async def _load_children_summaries(
     session: AsyncSession,
     node: MaterialNode,
@@ -435,7 +452,6 @@ async def _load_children_summaries(
     Returns:
         List of NodeSummary for children that have snapshots.
     """
-    from course_supporter.models.step import NodeSummary
     from course_supporter.storage.snapshot_repository import SnapshotRepository
 
     if not node.children:
@@ -450,16 +466,68 @@ async def _load_children_summaries(
         snap = latest.get(child.id)
         if snap is None or snap.summary is None:
             continue
-        summaries.append(
-            NodeSummary(
-                node_id=child.id,
-                title=child.title,
-                summary=snap.summary,
-                core_concepts=snap.core_concepts or [],
-                mentioned_concepts=snap.mentioned_concepts or [],
-                structure_snapshot_id=snap.id,
-            )
-        )
+        summaries.append(_snapshot_to_summary(child, snap))
+    return summaries
+
+
+async def _load_parent_context(
+    session: AsyncSession,
+    node: MaterialNode,
+) -> NodeSummary | None:
+    """Load NodeSummary for the parent node from its latest snapshot.
+
+    Args:
+        session: Active DB session.
+        node: Current MaterialNode (parent relationship loaded).
+
+    Returns:
+        NodeSummary of the parent, or None if root or no snapshot.
+    """
+    from course_supporter.storage.snapshot_repository import SnapshotRepository
+
+    if node.parent_materialnode_id is None or node.parent is None:
+        return None
+
+    snap_repo = SnapshotRepository(session)
+    snap = await snap_repo.get_latest_for_node(node.parent_materialnode_id)
+    if snap is None or snap.summary is None:
+        return None
+
+    return _snapshot_to_summary(node.parent, snap)
+
+
+async def _load_sibling_summaries(
+    session: AsyncSession,
+    node: MaterialNode,
+) -> list[NodeSummary]:
+    """Load NodeSummary list for sibling nodes (same parent, excluding self).
+
+    Args:
+        session: Active DB session.
+        node: Current MaterialNode (parent relationship loaded).
+
+    Returns:
+        List of NodeSummary for siblings that have snapshots.
+    """
+    from course_supporter.storage.snapshot_repository import SnapshotRepository
+
+    if node.parent is None:
+        return []
+
+    siblings = [c for c in node.parent.children if c.id != node.id]
+    if not siblings:
+        return []
+
+    sibling_ids = [s.id for s in siblings]
+    snap_repo = SnapshotRepository(session)
+    latest = await snap_repo.get_latest_for_nodes(sibling_ids)
+
+    summaries: list[NodeSummary] = []
+    for sib in siblings:
+        snap = latest.get(sib.id)
+        if snap is None or snap.summary is None:
+            continue
+        summaries.append(_snapshot_to_summary(sib, snap))
     return summaries
 
 
@@ -473,12 +541,14 @@ def _build_step_input(
     flat_nodes: list[MaterialNode],
     mode: Literal["free", "guided"],
     children_summaries: list[NodeSummary] | None = None,
+    parent_context: NodeSummary | None = None,
+    sibling_summaries: list[NodeSummary] | None = None,
 ) -> StepInput:
     """Assemble StepInput from collected tree data.
 
     Builds existing_structure for guided mode via tree serialization.
-    Children summaries provide context from completed child generation.
-    Parent/sibling summaries will be added in S3-020c (reconciliation).
+    Sliding window context: children summaries (bottom-up), parent
+    context and sibling summaries (top-down reconciliation).
     """
     from course_supporter.models.step import StepInput as _StepInput
     from course_supporter.tree_utils import serialize_tree_for_guided
@@ -491,8 +561,8 @@ def _build_step_input(
         step_type=step_type,
         materials=documents,
         children_summaries=children_summaries or [],
-        parent_context=None,
-        sibling_summaries=[],
+        parent_context=parent_context,
+        sibling_summaries=sibling_summaries or [],
         existing_structure=existing_structure,
         mode=mode,
         material_tree=tree_summary,
@@ -648,10 +718,17 @@ async def arq_execute_step(
 
             tree_summary = build_material_tree_summary(flat_nodes)
 
-            # Load children summaries from previous generation steps.
+            # Load sliding window context from previous steps.
             # target is None when nid is None (whole-tree mode); root is the target.
             target_node = target if target is not None else root_nodes[0]
             children_summaries = await _load_children_summaries(session, target_node)
+
+            # Parent + sibling context for reconcile/refine steps
+            parent_context: NodeSummary | None = None
+            sibling_sums: list[NodeSummary] = []
+            if st in (_StepType.RECONCILE, _StepType.REFINE):
+                parent_context = await _load_parent_context(session, target_node)
+                sibling_sums = await _load_sibling_summaries(session, target_node)
 
             # Compute fingerprint
             fp_service = FingerprintService(session)
@@ -686,6 +763,8 @@ async def arq_execute_step(
                 flat_nodes=flat_nodes,
                 mode=mode,
                 children_summaries=children_summaries,
+                parent_context=parent_context,
+                sibling_summaries=sibling_sums,
             )
 
             agent = ArchitectAgent(router, mode=mode)

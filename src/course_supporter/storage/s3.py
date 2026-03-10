@@ -332,8 +332,21 @@ class S3Client:
                 response["Body"] as stream,
                 await anyio.Path(dest).open("wb") as fh,
             ):
-                async for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
-                    await fh.write(chunk)
+                # aiobotocore StreamingBody has iter_chunks();
+                # raw aiohttp ClientResponse (some S3 providers) has
+                # content.iter_chunked().  Support both.
+                if hasattr(stream, "iter_chunks"):
+                    chunks = stream.iter_chunks(DOWNLOAD_CHUNK_SIZE)
+                elif hasattr(stream, "content"):
+                    chunks = stream.content.iter_chunked(DOWNLOAD_CHUNK_SIZE)
+                else:
+                    # Last resort: read everything at once.
+                    await fh.write(await stream.read())
+                    chunks = None
+
+                if chunks is not None:
+                    async for chunk in chunks:
+                        await fh.write(chunk)
         except Exception:
             # Clean up only self-created temp files on download failure.
             # Caller-provided dest is left for the caller to manage.

@@ -332,8 +332,23 @@ class S3Client:
                 response["Body"] as stream,
                 await anyio.Path(dest).open("wb") as fh,
             ):
-                async for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
-                    await fh.write(chunk)
+                # aiobotocore StreamingBody has iter_chunks();
+                # raw aiohttp ClientResponse (some S3 providers) has
+                # content.iter_chunked().  Support both.
+                if hasattr(stream, "iter_chunks"):
+                    async for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
+                        await fh.write(chunk)
+                elif hasattr(stream, "content"):
+                    async for chunk in stream.content.iter_chunked(
+                        DOWNLOAD_CHUNK_SIZE,
+                    ):
+                        await fh.write(chunk)
+                else:
+                    msg = (
+                        f"Unsupported S3 stream type: {type(stream).__name__}. "
+                        "Expected StreamingBody or aiohttp ClientResponse."
+                    )
+                    raise TypeError(msg)
         except Exception:
             # Clean up only self-created temp files on download failure.
             # Caller-provided dest is left for the caller to manage.

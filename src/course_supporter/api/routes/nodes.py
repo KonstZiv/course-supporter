@@ -85,6 +85,14 @@ def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
     return asdict(err)
 
 
+def _node_response(node: MaterialNode) -> NodeResponse:
+    """Build NodeResponse with computed children_count and materials_count."""
+    resp = NodeResponse.model_validate(node)
+    resp.children_count = len(node.children) if node.children else 0
+    resp.materials_count = len(node.materials) if node.materials else 0
+    return resp
+
+
 async def _require_node_for_tenant(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -170,7 +178,7 @@ async def list_root_nodes(
     roots = await repo.list_roots(tenant.tenant_id, limit=limit, offset=offset)
     total = await repo.count_roots(tenant.tenant_id)
     return NodeListResponse(
-        items=[NodeResponse.model_validate(r) for r in roots],
+        items=[_node_response(r) for r in roots],
         total=total,
         limit=limit,
         offset=offset,
@@ -237,7 +245,7 @@ async def get_node_detail(
     node_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
-) -> list[NodeWithMaterialsResponse]:
+) -> NodeWithMaterialsResponse:
     """Get the full subtree with materials attached to each node.
 
     Returns the hierarchical view including materials at each level
@@ -247,7 +255,9 @@ async def get_node_detail(
 
     repo = MaterialNodeRepository(session)
     tree_roots = await repo.get_subtree(node_id, include_materials=True)
-    return [NodeWithMaterialsResponse.model_validate(r) for r in tree_roots]
+    if not tree_roots:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return NodeWithMaterialsResponse.model_validate(tree_roots[0])
 
 
 # ── Single node operations ──

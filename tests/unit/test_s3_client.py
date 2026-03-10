@@ -1,5 +1,6 @@
 """Tests for S3Client."""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -173,7 +174,12 @@ class TestDownloadFile:
     def _mock_stream(data: bytes) -> MagicMock:
         """Create a mock S3 Body stream returning data then empty bytes."""
         stream = AsyncMock()
-        stream.read = AsyncMock(side_effect=[data, b""])
+
+        async def _iter_chunks(chunk_size: int = 1024) -> AsyncIterator[bytes]:
+            for i in range(0, len(data), chunk_size):
+                yield data[i : i + chunk_size]
+
+        stream.iter_chunks = _iter_chunks
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=stream)
         ctx.__aexit__ = AsyncMock(return_value=None)
@@ -278,7 +284,12 @@ class TestDownloadFile:
     async def test_download_file_cleans_temp_on_stream_error(self) -> None:
         """download_file() removes temp file if streaming fails."""
         stream = AsyncMock()
-        stream.read = AsyncMock(side_effect=OSError("network error"))
+
+        async def _failing_iter(chunk_size: int = 1024) -> AsyncIterator[bytes]:
+            raise OSError("network error")
+            yield b""  # make it a generator  # pragma: no cover
+
+        stream.iter_chunks = _failing_iter
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=stream)
         ctx.__aexit__ = AsyncMock(return_value=None)

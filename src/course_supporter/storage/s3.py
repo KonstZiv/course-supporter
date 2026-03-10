@@ -332,10 +332,7 @@ class S3Client:
                 response["Body"] as stream,
                 await anyio.Path(dest).open("wb") as fh,
             ):
-                while True:
-                    chunk = await stream.read(DOWNLOAD_CHUNK_SIZE)
-                    if not chunk:
-                        break
+                async for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
                     await fh.write(chunk)
         except Exception:
             # Clean up only self-created temp files on download failure.

@@ -98,7 +98,7 @@ class TestCreateRootNode:
         data = resp.json()
         assert data["id"] == str(node.id)
         assert data["title"] == "Module 1"
-        assert data["parent_materialnode_id"] is None
+        assert data["parent_id"] is None
         assert data["tenant_id"] == str(STUB_TENANT.tenant_id)
         assert "created_at" in data
         assert "updated_at" in data
@@ -139,7 +139,7 @@ class TestCreateChildNode:
                 f"/api/v1/nodes/{parent.id}/children", json={"title": "Child"}
             )
         assert resp.status_code == 201
-        assert resp.json()["parent_materialnode_id"] == str(parent.id)
+        assert resp.json()["parent_id"] == str(parent.id)
 
     async def test_parent_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent parent returns 404."""
@@ -290,7 +290,7 @@ class TestMoveNode:
                 json={"parent_materialnode_id": str(target.id)},
             )
         assert resp.status_code == 200
-        assert resp.json()["parent_materialnode_id"] == str(target.id)
+        assert resp.json()["parent_id"] == str(target.id)
 
     async def test_move_to_root(self, client: AsyncClient) -> None:
         """Node moved to root (parent_materialnode_id=null)."""
@@ -304,7 +304,7 @@ class TestMoveNode:
                 f"/api/v1/nodes/{node.id}/move", json={"parent_materialnode_id": None}
             )
         assert resp.status_code == 200
-        assert resp.json()["parent_materialnode_id"] is None
+        assert resp.json()["parent_id"] is None
 
     async def test_cycle_returns_422(self, client: AsyncClient) -> None:
         """Cycle detection error returns 422."""

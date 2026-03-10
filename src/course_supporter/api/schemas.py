@@ -273,8 +273,10 @@ class NodeResponse(BaseModel):
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
-    parent_materialnode_id: uuid.UUID | None = Field(
-        description="Parent node ID, or ``null`` for root nodes."
+    parent_id: uuid.UUID | None = Field(
+        default=None,
+        description="Parent node ID, or ``null`` for root nodes.",
+        validation_alias="parent_materialnode_id",
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
@@ -290,6 +292,14 @@ class NodeResponse(BaseModel):
     order: int = Field(description="0-based position among siblings.")
     node_fingerprint: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
+    )
+    children_count: int = Field(
+        default=0,
+        description="Number of direct child nodes.",
+    )
+    materials_count: int = Field(
+        default=0,
+        description="Number of material entries attached to this node.",
     )
     created_at: datetime = Field(description="When this node was created.")
     updated_at: datetime = Field(description="When this node was last modified.")

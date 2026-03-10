@@ -43,12 +43,19 @@ class MaterialNodeRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> list[MaterialNode]:
-        """List root nodes for a tenant, ordered newest first."""
+        """List root nodes for a tenant, ordered newest first.
+
+        Eagerly loads direct children and materials for count computation.
+        """
         stmt = (
             select(MaterialNode)
             .where(
                 MaterialNode.tenant_id == tenant_id,
                 MaterialNode.parent_materialnode_id.is_(None),
+            )
+            .options(
+                selectinload(MaterialNode.children),
+                selectinload(MaterialNode.materials),
             )
             .order_by(MaterialNode.created_at.desc())
             .limit(limit)

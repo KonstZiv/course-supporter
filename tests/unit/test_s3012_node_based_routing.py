@@ -288,7 +288,7 @@ class TestRootNodeAsCourse:
 
         assert resp.status_code == 201
         data = resp.json()
-        assert data["parent_materialnode_id"] is None
+        assert data["parent_id"] is None
         assert data["title"] == "Python Basics"
         assert data["tenant_id"] == str(STUB_TENANT.tenant_id)
 
@@ -321,7 +321,7 @@ class TestRootNodeAsCourse:
         data = resp.json()
         assert data["total"] == 2
         assert len(data["items"]) == 2
-        assert all(item["parent_materialnode_id"] is None for item in data["items"])
+        assert all(item["parent_id"] is None for item in data["items"])
 
     async def test_other_tenant_roots_not_visible(
         self,

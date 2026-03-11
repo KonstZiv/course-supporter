@@ -630,6 +630,7 @@ async def _persist_step_result(
         core_concepts=step_output.core_concepts,
         mentioned_concepts=step_output.mentioned_concepts,
         corrections=_serialize_corrections(step_output.corrections),
+        summary_nested_nodes=step_output.summary_nested_nodes or None,
     )
 
     sn_nodes = convert_to_structure_nodes(step_output.structure, snapshot.id)

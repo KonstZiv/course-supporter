@@ -38,6 +38,7 @@ class SnapshotRepository:
         core_concepts: list[str] | None = None,
         mentioned_concepts: list[str] | None = None,
         corrections: list[dict[str, Any]] | dict[str, Any] | None = None,
+        summary_nested_nodes: str | None = None,
     ) -> StructureSnapshot:
         """Create a new snapshot record."""
         snapshot = StructureSnapshot(
@@ -51,6 +52,7 @@ class SnapshotRepository:
             core_concepts=core_concepts,
             mentioned_concepts=mentioned_concepts,
             corrections=corrections,
+            summary_nested_nodes=summary_nested_nodes,
         )
         self._session.add(snapshot)
         await self._session.flush()

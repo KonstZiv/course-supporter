@@ -286,6 +286,7 @@ class ArchitectAgent:
             summary=gen_result.structure.summary,
             core_concepts=gen_result.structure.core_concepts,
             mentioned_concepts=gen_result.structure.mentioned_concepts,
+            summary_nested_nodes=gen_result.structure.summary_nested_nodes,
             prompt_version=gen_result.prompt_version,
             response=gen_result.response,
         )

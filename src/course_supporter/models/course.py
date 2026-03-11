@@ -177,6 +177,11 @@ class CourseStructure(BaseModel):
     core_concepts: list[str] = Field(default_factory=list)
     mentioned_concepts: list[str] = Field(default_factory=list)
 
+    # Recursive context compression: condensed summary of all child
+    # node snapshots received during generation. Used by grandparent
+    # nodes to see nested context without full snapshot data.
+    summary_nested_nodes: str = ""
+
     @model_validator(mode="after")
     def _check_concepts_disjoint(self) -> CourseStructure:
         """Ensure core_concepts and mentioned_concepts do not overlap."""

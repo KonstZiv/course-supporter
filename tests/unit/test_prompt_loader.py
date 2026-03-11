@@ -10,6 +10,7 @@ from course_supporter.agents.prompt_loader import (
     PromptData,
     format_user_prompt,
     load_prompt,
+    load_split_prompt,
 )
 
 
@@ -158,3 +159,84 @@ class TestPromptFileContent:
         data = load_prompt("prompts/architect/v1_guided.yaml")
         assert "existing" in data.system_prompt.lower()
         assert "preserve" in data.system_prompt.lower()
+
+
+class TestLoadSplitPrompt:
+    def test_load_combines_system_and_user(self, tmp_path: Path) -> None:
+        """Loads system_prompt from one file and user_prompt_template from another."""
+        sys_path = tmp_path / "system.yaml"
+        sys_path.write_text(yaml.dump({"system_prompt": "You are an expert."}))
+        usr_path = tmp_path / "user.yaml"
+        usr_path.write_text(
+            yaml.dump(
+                {"version": "v2_leaf", "user_prompt_template": "Data:\n{context}"}
+            )
+        )
+
+        data = load_split_prompt(sys_path, usr_path)
+        assert data.system_prompt == "You are an expert."
+        assert "{context}" in data.user_prompt_template
+        assert data.version == "v2_leaf"
+
+    def test_load_missing_system_file(self, tmp_path: Path) -> None:
+        """Raises FileNotFoundError if system file missing."""
+        usr_path = tmp_path / "user.yaml"
+        usr_path.write_text(yaml.dump({"version": "v2", "user_prompt_template": "t"}))
+        with pytest.raises(FileNotFoundError):
+            load_split_prompt(tmp_path / "missing.yaml", usr_path)
+
+    def test_load_missing_user_file(self, tmp_path: Path) -> None:
+        """Raises FileNotFoundError if user file missing."""
+        sys_path = tmp_path / "system.yaml"
+        sys_path.write_text(yaml.dump({"system_prompt": "s"}))
+        with pytest.raises(FileNotFoundError):
+            load_split_prompt(sys_path, tmp_path / "missing.yaml")
+
+
+class TestV2PromptFiles:
+    def test_v2_system_loads(self) -> None:
+        """The actual v2_system.yaml loads and has system_prompt."""
+        path = Path("prompts/architect/v2_system.yaml")
+        with path.open() as f:
+            data = yaml.safe_load(f)
+        assert "system_prompt" in data
+        assert "methodologist" in data["system_prompt"].lower()
+
+    @pytest.mark.parametrize(
+        "user_file",
+        ["v2_leaf.yaml", "v2_intermediate.yaml", "v2_root.yaml"],
+    )
+    def test_v2_user_prompts_load(self, user_file: str) -> None:
+        """Each v2 user prompt file loads and has required fields."""
+        data = load_split_prompt(
+            "prompts/architect/v2_system.yaml",
+            f"prompts/architect/{user_file}",
+        )
+        assert isinstance(data, PromptData)
+        assert data.version.startswith("v2_")
+        assert "{context}" in data.user_prompt_template
+        assert "methodologist" in data.system_prompt.lower()
+
+    def test_v2_leaf_no_children_snapshots_placeholder(self) -> None:
+        """Leaf prompt does not have {children_snapshots} placeholder."""
+        data = load_split_prompt(
+            "prompts/architect/v2_system.yaml",
+            "prompts/architect/v2_leaf.yaml",
+        )
+        assert "{children_snapshots}" not in data.user_prompt_template
+
+    def test_v2_intermediate_has_children_snapshots(self) -> None:
+        """Intermediate prompt has {children_snapshots} placeholder."""
+        data = load_split_prompt(
+            "prompts/architect/v2_system.yaml",
+            "prompts/architect/v2_intermediate.yaml",
+        )
+        assert "{children_snapshots}" in data.user_prompt_template
+
+    def test_v2_root_has_children_snapshots(self) -> None:
+        """Root prompt has {children_snapshots} placeholder."""
+        data = load_split_prompt(
+            "prompts/architect/v2_system.yaml",
+            "prompts/architect/v2_root.yaml",
+        )
+        assert "{children_snapshots}" in data.user_prompt_template

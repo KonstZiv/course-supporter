@@ -38,10 +38,48 @@ def load_prompt(path: str | Path) -> PromptData:
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
-    with prompt_path.open() as f:
+    with prompt_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     return PromptData.model_validate(data)
+
+
+def load_split_prompt(
+    system_path: str | Path,
+    user_path: str | Path,
+) -> PromptData:
+    """Load prompt from separate system and user YAML files.
+
+    The system file must contain ``system_prompt``.
+    The user file must contain ``version`` and ``user_prompt_template``.
+
+    Args:
+        system_path: Path to YAML with system_prompt.
+        user_path: Path to YAML with user_prompt_template.
+
+    Returns:
+        Combined PromptData.
+
+    Raises:
+        FileNotFoundError: If either file does not exist.
+    """
+    sys_path = Path(system_path)
+    usr_path = Path(user_path)
+    for p in (sys_path, usr_path):
+        if not p.exists():
+            raise FileNotFoundError(f"Prompt file not found: {p}")
+
+    with sys_path.open(encoding="utf-8") as f:
+        sys_data: dict[str, str] = yaml.safe_load(f)
+
+    with usr_path.open(encoding="utf-8") as f:
+        usr_data: dict[str, str] = yaml.safe_load(f)
+
+    return PromptData(
+        version=usr_data.get("version", "unknown"),
+        system_prompt=sys_data["system_prompt"],
+        user_prompt_template=usr_data["user_prompt_template"],
+    )
 
 
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")

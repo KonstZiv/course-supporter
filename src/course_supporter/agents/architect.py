@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import structlog
@@ -15,16 +16,38 @@ if TYPE_CHECKING:
         StepOutput,
     )
 
-from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
+from course_supporter.agents.prompt_loader import (
+    format_user_prompt,
+    load_prompt,
+    load_split_prompt,
+)
 from course_supporter.llm.router import ModelRouter
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.course import CourseContext, CourseStructure
 
 logger = structlog.get_logger()
 
-PROMPT_PATHS: dict[str, str] = {
+
+class NodePosition(StrEnum):
+    """Position of a node in the material tree hierarchy."""
+
+    LEAF = "leaf"
+    INTERMEDIATE = "intermediate"
+    ROOT = "root"
+
+
+# Legacy v1 prompt paths (single-file system+user).
+V1_PROMPT_PATHS: dict[str, str] = {
     "free": "prompts/architect/v1.yaml",
     "guided": "prompts/architect/v1_guided.yaml",
+}
+
+# v2 prompt paths (split system + per-position user).
+V2_SYSTEM_PATH = "prompts/architect/v2_system.yaml"
+V2_USER_PATHS: dict[NodePosition, str] = {
+    NodePosition.LEAF: "prompts/architect/v2_leaf.yaml",
+    NodePosition.INTERMEDIATE: "prompts/architect/v2_intermediate.yaml",
+    NodePosition.ROOT: "prompts/architect/v2_root.yaml",
 }
 
 
@@ -59,18 +82,16 @@ class ArchitectAgent:
     Uses ModelRouter with action='course_structuring' to call LLM
     with structured output (CourseStructure Pydantic schema).
 
-    Architecture: step-based design for future chain/graph migration.
-    Each step is a separate method that can become a node in a
-    LangGraph or custom DAG pipeline.
-
-    Steps:
-        1. _prepare_prompts: load YAML template, serialize context, format prompt
-        2. _generate: call LLM via ModelRouter, return validated structure
+    Supports two prompt versions:
+    - **v1** (legacy): single YAML file selected by mode (free/guided).
+    - **v2**: split system prompt + per-position user prompt
+      (leaf/intermediate/root).
 
     Args:
         router: ModelRouter instance for LLM calls.
-        mode: Generation mode ('free' or 'guided').
-        prompt_path: Override path to YAML prompt template (ignores mode).
+        mode: Generation mode ('free' or 'guided'). Used by v1 prompts.
+        node_position: Position in material tree. If provided, uses v2 prompts.
+        prompt_path: Override path to YAML prompt template (ignores mode/position).
         strategy: Routing strategy ('default', 'quality', 'budget').
         temperature: LLM temperature (0.0 = deterministic).
         max_tokens: Maximum output tokens.
@@ -81,6 +102,7 @@ class ArchitectAgent:
         router: ModelRouter,
         *,
         mode: Literal["free", "guided"] = "free",
+        node_position: NodePosition | None = None,
         prompt_path: str | None = None,
         strategy: str = "default",
         temperature: float = 0.0,
@@ -88,7 +110,8 @@ class ArchitectAgent:
     ) -> None:
         self._router = router
         self._mode = mode
-        self._prompt_path = prompt_path or PROMPT_PATHS[mode]
+        self._node_position = node_position
+        self._prompt_path = prompt_path
         self._strategy = strategy
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -171,9 +194,10 @@ class ArchitectAgent:
     ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
-        Loads YAML prompt file, serializes CourseContext to JSON,
-        and injects it into the user prompt template. For guided mode,
-        also injects the existing structure.
+        Selects prompt source based on configuration:
+        - If ``prompt_path`` is set, uses that single file (override).
+        - If ``node_position`` is set, uses v2 split prompts.
+        - Otherwise falls back to v1 single-file prompts by mode.
 
         Args:
             context: Course context to serialize into the prompt.
@@ -189,7 +213,15 @@ class ArchitectAgent:
             FileNotFoundError: If prompt YAML file not found.
             ValidationError: If YAML missing required keys.
         """
-        prompt_data = load_prompt(self._prompt_path)
+        if self._prompt_path:
+            prompt_data = load_prompt(self._prompt_path)
+        elif self._node_position is not None:
+            prompt_data = load_split_prompt(
+                V2_SYSTEM_PATH,
+                V2_USER_PATHS[self._node_position],
+            )
+        else:
+            prompt_data = load_prompt(V1_PROMPT_PATHS[self._mode])
 
         kwargs: dict[str, str] = {}
         if self._mode == "guided":
@@ -242,6 +274,7 @@ class ArchitectAgent:
             context_chars=len(prepared.user_prompt),
             estimated_tokens=estimated,
             mode=self._mode,
+            node_position=str(self._node_position) if self._node_position else None,
         )
 
         result, response = await self._router.complete_structured(

@@ -376,7 +376,8 @@ class TestGetTreeSetCommittedValue:
             await repo.get_subtree(cid)
 
         # set_committed_value called for: children + parent init (2 nodes)
-        # + parent assignment for child node during tree assembly
+        # + parent assignment for child node during tree assembly.
+        # See material_node_repository.py:get_subtree() lines 189-206.
         assert mock_scv.call_count == 5
         attrs_set = [call[0][1] for call in mock_scv.call_args_list]
         assert attrs_set.count("children") == 2

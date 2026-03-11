@@ -346,7 +346,8 @@ def _format_children_snapshots(
     lines = ["## Child Node Snapshots", ""]
     for cs in children_snapshots:
         lines.append(f"### {cs.title}")
-        lines.append(f"**Summary:** {cs.summary}")
+        if cs.summary:
+            lines.append(f"**Summary:** {cs.summary}")
         if cs.core_concepts:
             lines.append(f"**Core concepts:** {', '.join(cs.core_concepts)}")
         if cs.mentioned_concepts:

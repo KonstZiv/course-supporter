@@ -96,10 +96,10 @@ system_prompt: |
   - **summary**: 3-5 sentence summary of the entire course content
   - **core_concepts**: list of primary concepts that are central to this course
   - **mentioned_concepts**: list of concepts that are referenced but not the main focus
-  - **summary_nested_nodes**: compressed summary of ALL child node snapshots
-    received in the "Child Node Snapshots" section. Should capture key topics,
-    learning goals, and concept coverage across all nested materials.
-    Empty string if no child snapshots were provided.
+  - **summary_nested_nodes**: a compressed summary of all nested node snapshots.
+    Captures key topics, learning goals, and concept coverage across all
+    nested materials. Used by parent nodes as compressed context.
+    See Rule 11 for generation details.
 
   ## Rules
 

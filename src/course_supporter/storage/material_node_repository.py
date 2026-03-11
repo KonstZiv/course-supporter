@@ -188,8 +188,10 @@ class MaterialNodeRepository:
         for node in all_nodes:
             if hasattr(node, "_sa_instance_state"):
                 set_committed_value(node, "children", [])
+                set_committed_value(node, "parent", None)
             else:
                 node.children = []
+                node.parent = None
 
         for node in all_nodes:
             if (
@@ -201,6 +203,10 @@ class MaterialNodeRepository:
                 parent = by_id.get(node.parent_materialnode_id)
                 if parent is not None:
                     parent.children.append(node)
+                    if hasattr(node, "_sa_instance_state"):
+                        set_committed_value(node, "parent", parent)
+                    else:
+                        node.parent = parent
 
         return roots
 

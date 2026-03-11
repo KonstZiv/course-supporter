@@ -660,7 +660,8 @@ class TestContextCompression:
         from course_supporter.models.step import StepInput
 
         parent_entry = _make_entry(state="ready")
-        child = _make_node(title="Child Topic")
+        child_entry = _make_entry(state="ready")
+        child = _make_node(title="Child Topic", materials=[child_entry])
         root = _make_node(materials=[parent_entry], children=[child])
 
         child_snap = MagicMock()
@@ -685,6 +686,8 @@ class TestContextCompression:
         assert len(step_input.children_snapshots) == 1
         assert step_input.children_snapshots[0].title == "Child Topic"
         assert step_input.children_snapshots[0].summary_nested_nodes == "Nested info"
+        # Only parent's own materials, not child's
+        assert len(step_input.materials) == 1
 
     async def test_parent_without_own_materials_still_works(
         self, job_id: str, root_node_id: str

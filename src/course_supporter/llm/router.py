@@ -216,8 +216,13 @@ class ModelRouter:
             if provider is None:
                 continue
 
-            # Resolve effective max_tokens: request override > model config > None
-            effective_max_tokens = request.max_tokens or model_cfg.max_output_tokens
+            # Resolve effective max_tokens:
+            # request override > model config > provider default > None
+            effective_max_tokens = (
+                request.max_tokens
+                or model_cfg.max_output_tokens
+                or provider.default_max_output_tokens
+            )
 
             if not self._check_context_fits(
                 model_cfg, estimated_tokens, effective_max_tokens, errors

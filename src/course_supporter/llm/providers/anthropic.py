@@ -19,6 +19,7 @@ class AnthropicProvider(LLMProvider):
     # Anthropic API requires max_tokens; used when neither request
     # nor model config specifies a value.
     DEFAULT_MAX_TOKENS = 8192
+    default_max_output_tokens: int = DEFAULT_MAX_TOKENS
 
     def __init__(self, api_key: str, default_model: str) -> None:
         super().__init__()

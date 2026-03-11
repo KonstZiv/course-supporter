@@ -247,10 +247,10 @@ class ModelRouter:
         """Check if estimated tokens fit within model's context window.
 
         Compares estimated input + requested output tokens against
-        the model's max_context. Skips check if max_context is 0
+        the model's max_context. Skips check if max_context is None
         (unknown/unlimited).
         """
-        if model_cfg.max_context <= 0:
+        if model_cfg.max_context is None:
             return True
 
         total_needed = estimated_input_tokens + max_output_tokens

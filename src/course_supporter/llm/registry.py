@@ -27,7 +27,7 @@ class ProviderModelConfig(BaseModel):
 
     id: str
     capabilities: list[Capability] = []
-    max_context: int = 0
+    max_context: int | None = None
     unit_type: str = "tokens"
     cost_per_1k_in: float = 0.0
     cost_per_1k_out: float = 0.0
@@ -76,7 +76,7 @@ class ModelConfig(BaseModel):
     model_id: str = ""
     provider: str = ""
     capabilities: list[Capability] = []
-    max_context: int = 0
+    max_context: int | None = None
     unit_type: str = "tokens"
     cost_per_1k: CostPer1K = CostPer1K(input=0.0, output=0.0)
     local: bool = False

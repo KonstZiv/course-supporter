@@ -174,7 +174,10 @@ class MaterialNodeRepository:
             .order_by(MaterialNode.order)
         )
         if include_materials:
-            stmt = stmt.options(selectinload(MaterialNode.materials))
+            stmt = stmt.options(
+                selectinload(MaterialNode.materials),
+                selectinload(MaterialNode.slide_video_mappings),
+            )
         result = await self._session.execute(stmt)
         all_nodes = list(result.scalars().all())
 

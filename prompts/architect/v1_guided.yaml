@@ -107,6 +107,8 @@ system_prompt: |
   - **web_references**: relevant web URLs with title and description
 
   ### Exercise level
+  - **title**: short, descriptive exercise title (e.g., "Build a Calculator",
+    "Fix the Bug in sort_list")
   - **description**: what the student must do
   - **reference_solution**: model answer or approach (optional)
   - **grading_criteria**: how to evaluate the student's work (optional)

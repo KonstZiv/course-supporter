@@ -244,6 +244,54 @@ class TestConvertToStructureNodes:
         assert concept.slide_references is None
         assert concept.web_references is None
 
+    def test_exercise_with_title(self, snapshot_id: uuid.UUID) -> None:
+        """Exercise with LLM-generated title uses it instead of fallback."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            exercises=[
+                                ExerciseOutput(
+                                    title="Build a Calculator",
+                                    description="Create a CLI calculator",
+                                    difficulty_level=3,
+                                ),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        exercise = next(n for n in nodes if n.node_type == StructureNodeType.EXERCISE)
+        assert exercise.title == "Build a Calculator"
+
+    def test_exercise_without_title_fallback(self, snapshot_id: uuid.UUID) -> None:
+        """Exercise without title falls back to 'Exercise N'."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            exercises=[
+                                ExerciseOutput(description="Do something"),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        exercise = next(n for n in nodes if n.node_type == StructureNodeType.EXERCISE)
+        assert exercise.title == "Exercise 1"
+
     def test_unique_ids(self, snapshot_id: uuid.UUID) -> None:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
         ids = [n.id for n in nodes]

@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import structlog
 
 if TYPE_CHECKING:
-    from course_supporter.models.step import NodeSummary, StepInput, StepOutput
+    from course_supporter.models.step import (
+        ChildSnapshotContext,
+        NodeSummary,
+        StepInput,
+        StepOutput,
+    )
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.llm.router import ModelRouter
@@ -120,6 +126,7 @@ class ArchitectAgent:
         *,
         existing_structure: str | None = None,
         children_context: str = "",
+        children_snapshots: str = "",
     ) -> GenerationResult:
         """Generate course structure with full LLM metadata.
 
@@ -130,6 +137,7 @@ class ArchitectAgent:
             context: Unified course context from ingestion pipeline.
             existing_structure: Serialized existing tree for guided mode.
             children_context: Formatted children summaries for per-node DAG.
+            children_snapshots: Formatted child snapshots for context compression.
 
         Returns:
             GenerationResult with structure, prompt_version, and LLMResponse.
@@ -142,6 +150,7 @@ class ArchitectAgent:
             context,
             existing_structure=existing_structure,
             children_context=children_context,
+            children_snapshots=children_snapshots,
         )
         structure, response = await self._generate(
             prepared, documents_count=len(context.documents)
@@ -158,6 +167,7 @@ class ArchitectAgent:
         *,
         existing_structure: str | None = None,
         children_context: str = "",
+        children_snapshots: str = "",
     ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
@@ -169,6 +179,7 @@ class ArchitectAgent:
             context: Course context to serialize into the prompt.
             existing_structure: Serialized existing tree for guided mode.
             children_context: Formatted children summaries for per-node DAG.
+            children_snapshots: Formatted child snapshots for context compression.
 
         Returns:
             PreparedPrompt with system prompt, formatted user prompt,
@@ -186,6 +197,7 @@ class ArchitectAgent:
                 existing_structure or "No existing structure provided."
             )
         kwargs["children_context"] = children_context
+        kwargs["children_snapshots"] = children_snapshots
 
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
@@ -276,10 +288,12 @@ class ArchitectAgent:
             material_tree=step_input.material_tree or None,
         )
         children_context = _format_children_context(step_input.children_summaries)
+        children_snapshots = _format_children_snapshots(step_input.children_snapshots)
         gen_result = await self.run_with_metadata(
             context,
             existing_structure=step_input.existing_structure,
             children_context=children_context,
+            children_snapshots=children_snapshots,
         )
         return StepOutput(
             structure=gen_result.structure,
@@ -310,5 +324,36 @@ def _format_children_context(
             lines.append(f"**Core concepts:** {', '.join(cs.core_concepts)}")
         if cs.mentioned_concepts:
             lines.append(f"**Mentioned concepts:** {', '.join(cs.mentioned_concepts)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_children_snapshots(
+    children_snapshots: list[ChildSnapshotContext],
+) -> str:
+    """Format full child snapshots as structured context for the LLM prompt.
+
+    Includes the complete CourseStructure JSON from each child node,
+    providing richer context than _format_children_context (which only
+    includes summary + concepts). Used for context compression: parent
+    nodes receive child snapshots instead of raw descendant materials.
+
+    Returns an empty string when there are no child snapshots (leaf node).
+    """
+    if not children_snapshots:
+        return ""
+
+    lines = ["## Child Node Snapshots", ""]
+    for cs in children_snapshots:
+        lines.append(f"### {cs.title}")
+        lines.append(f"**Summary:** {cs.summary}")
+        if cs.core_concepts:
+            lines.append(f"**Core concepts:** {', '.join(cs.core_concepts)}")
+        if cs.mentioned_concepts:
+            lines.append(f"**Mentioned concepts:** {', '.join(cs.mentioned_concepts)}")
+        if cs.summary_nested_nodes:
+            lines.append(f"**Nested nodes summary:** {cs.summary_nested_nodes}")
+        lines.append("**Structure:**")
+        lines.append(json.dumps(cs.structure, ensure_ascii=False, indent=2))
         lines.append("")
     return "\n".join(lines)

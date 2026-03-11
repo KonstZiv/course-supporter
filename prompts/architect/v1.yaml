@@ -84,6 +84,15 @@ system_prompt: |
   - **grading_criteria**: how to evaluate the student's work (optional)
   - **difficulty_level**: 1 (trivial) to 5 (advanced)
 
+  ### Course level (additional fields)
+  - **summary**: 3-5 sentence summary of the entire course content
+  - **core_concepts**: list of primary concepts that are central to this course
+  - **mentioned_concepts**: list of concepts that are referenced but not the main focus
+  - **summary_nested_nodes**: compressed summary of ALL child node snapshots
+    received in the "Child Node Snapshots" section. Should capture key topics,
+    learning goals, and concept coverage across all nested materials.
+    Empty string if no child snapshots were provided.
+
   ## Rules
 
   1. Every lesson MUST have at least one concept.
@@ -104,6 +113,10 @@ system_prompt: |
   9. If the source materials cover the same topic from different angles
      (e.g., video + slides), merge them into a single concept card with
      multiple cross-references rather than creating duplicate concepts.
+  10. If "Child Node Snapshots" are provided, generate **summary_nested_nodes**
+      as a concise (200-500 word) summary that captures the key topics,
+      learning goals, and concepts from ALL nested node structures.
+      This summary will be used by parent nodes as compressed context.
 
 user_prompt_template: |
   Analyze the following course materials and generate a structured course program.
@@ -113,6 +126,8 @@ user_prompt_template: |
   {context}
 
   {children_context}
+
+  {children_snapshots}
 
   ## Task
 

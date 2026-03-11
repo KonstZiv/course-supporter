@@ -197,17 +197,22 @@ def _resolve_target_nodes(
 
 def _collect_ready_documents(
     flat_nodes: list[MaterialNode],
+    *,
+    allow_empty: bool = False,
 ) -> list[SourceDocument]:
     """Extract SourceDocuments from READY MaterialEntries.
 
     Args:
         flat_nodes: Flat list of nodes with materials loaded.
+        allow_empty: If True, return empty list instead of raising
+            when no READY entries found. Used for parent nodes that
+            rely on children snapshots for context.
 
     Returns:
         Deserialized SourceDocument list.
 
     Raises:
-        NoReadyMaterialsError: If no READY entries found.
+        NoReadyMaterialsError: If no READY entries found and allow_empty is False.
     """
     from course_supporter.errors import NoReadyMaterialsError
     from course_supporter.models.source import SourceDocument
@@ -223,7 +228,7 @@ def _collect_ready_documents(
                     )
                 )
 
-    if not documents:
+    if not documents and not allow_empty:
         msg = "No READY materials found for generation"
         raise NoReadyMaterialsError(msg)
     return documents
@@ -760,12 +765,7 @@ async def arq_execute_step(
                 # Parent node: only its own materials (not subtree).
                 # Parent may have no own materials — that's OK when
                 # children snapshots provide the context.
-                from course_supporter.errors import NoReadyMaterialsError
-
-                try:
-                    documents = _collect_ready_documents([target_node])
-                except NoReadyMaterialsError:
-                    documents = []
+                documents = _collect_ready_documents([target_node], allow_empty=True)
             else:
                 # Leaf node (or children without snapshots): all subtree materials
                 documents = _collect_ready_documents(flat_nodes)

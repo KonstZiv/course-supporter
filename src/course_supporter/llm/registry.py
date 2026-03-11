@@ -28,6 +28,7 @@ class ProviderModelConfig(BaseModel):
     id: str
     capabilities: list[Capability] = []
     max_context: int | None = None
+    max_output_tokens: int | None = None
     unit_type: str = "tokens"
     cost_per_1k_in: float = 0.0
     cost_per_1k_out: float = 0.0
@@ -77,6 +78,7 @@ class ModelConfig(BaseModel):
     provider: str = ""
     capabilities: list[Capability] = []
     max_context: int | None = None
+    max_output_tokens: int | None = None
     unit_type: str = "tokens"
     cost_per_1k: CostPer1K = CostPer1K(input=0.0, output=0.0)
     local: bool = False
@@ -125,6 +127,7 @@ class ModelRegistryConfig(BaseModel):
                     provider=provider_name,
                     capabilities=pm.capabilities,
                     max_context=pm.max_context,
+                    max_output_tokens=pm.max_output_tokens,
                     unit_type=pm.unit_type,
                     cost_per_1k=CostPer1K(
                         input=pm.cost_per_1k_in,

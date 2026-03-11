@@ -92,7 +92,7 @@ class ModelRouter:
         *,
         system_prompt: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         strategy: str = "default",
         contents: list[Any] | None = None,
     ) -> LLMResponse:
@@ -125,7 +125,7 @@ class ModelRouter:
         *,
         system_prompt: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         strategy: str = "default",
     ) -> tuple[Any, LLMResponse]:
         """Generate structured output with strategy-based fallback."""
@@ -216,13 +216,19 @@ class ModelRouter:
             if provider is None:
                 continue
 
+            # Resolve effective max_tokens: request override > model config > None
+            effective_max_tokens = request.max_tokens or model_cfg.max_output_tokens
+
             if not self._check_context_fits(
-                model_cfg, estimated_tokens, request.max_tokens, errors
+                model_cfg, estimated_tokens, effective_max_tokens, errors
             ):
                 continue
 
             request_for_model = request.model_copy(
-                update={"model": model_cfg.model_id},
+                update={
+                    "model": model_cfg.model_id,
+                    "max_tokens": effective_max_tokens,
+                },
             )
             result = await self._try_with_retries(
                 provider,
@@ -241,7 +247,7 @@ class ModelRouter:
         self,
         model_cfg: ModelConfig,
         estimated_input_tokens: int,
-        max_output_tokens: int,
+        max_output_tokens: int | None,
         errors: list[tuple[str, str]],
     ) -> bool:
         """Check if estimated tokens fit within model's context window.
@@ -253,7 +259,8 @@ class ModelRouter:
         if model_cfg.max_context is None:
             return True
 
-        total_needed = estimated_input_tokens + max_output_tokens
+        output_budget = max_output_tokens or 0
+        total_needed = estimated_input_tokens + output_budget
         if total_needed > model_cfg.max_context:
             msg = (
                 f"context overflow: ~{estimated_input_tokens:,} input + "

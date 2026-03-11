@@ -13,7 +13,7 @@ class LLMRequest(BaseModel):
     system_prompt: str | None = None
     model: str = ""  # set by ModelRouter; providers fall back to default_model
     temperature: float = 0.0
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     action: str = ""  # video_analysis, course_structuring, ...
     strategy: str = "default"  # default, quality, budget
     contents: list[Any] | None = None  # multimodal: [url, text, Part, ...]

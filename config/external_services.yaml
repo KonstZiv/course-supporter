@@ -11,12 +11,14 @@ providers:
       - id: gemini-2.5-flash
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
+        max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
       - id: gemini-2.5-pro
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
+        max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.00125
         cost_per_1k_out: 0.005
@@ -27,6 +29,7 @@ providers:
       - id: claude-sonnet
         capabilities: [structured_output, long_context]
         max_context: 200000
+        max_output_tokens: 16384
         unit_type: tokens
         cost_per_1k_in: 0.003
         cost_per_1k_out: 0.015
@@ -37,6 +40,7 @@ providers:
       - id: gpt-4o-mini
         capabilities: [vision, structured_output]
         max_context: 128000
+        max_output_tokens: 16384
         unit_type: tokens
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
@@ -47,6 +51,7 @@ providers:
       - id: deepseek-chat
         capabilities: [structured_output]
         max_context: 131072
+        max_output_tokens: 8192
         unit_type: tokens
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028

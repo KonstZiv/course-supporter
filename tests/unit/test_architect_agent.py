@@ -66,7 +66,7 @@ class TestArchitectAgentInit:
         assert agent._mode == "free"
         assert agent._strategy == "default"
         assert agent._temperature == 0.0
-        assert agent._max_tokens == 8192
+        assert agent._max_tokens == 16384
 
     def test_custom_params(self, mock_router: AsyncMock) -> None:
         """ArchitectAgent accepts custom parameters."""

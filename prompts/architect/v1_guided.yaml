@@ -121,9 +121,11 @@ system_prompt: |
   10. **Do NOT remove existing modules or lessons** from the constraint
       structure. You may reorder only if the materials clearly indicate
       a different prerequisite chain.
-  11. If "Child Node Snapshots" are provided, generate **summary_nested_nodes**
-      as a concise (200-500 word) summary that captures the key topics,
-      learning goals, and concepts from ALL nested node structures.
+  11. If "Child Node Snapshots" are provided (i.e., for parent/root nodes),
+      generate **summary_nested_nodes** as a concise (200-500 word) summary
+      that captures the key topics, learning goals, and concepts from ALL
+      nested node structures. For leaf nodes, or if no child snapshots are
+      provided, return an empty string.
       This summary will be used by parent nodes as compressed context.
 
 user_prompt_template: |

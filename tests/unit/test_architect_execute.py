@@ -29,7 +29,7 @@ class TestArchitectExecute:
     """ArchitectAgent.execute() bridges StepInput to run_with_metadata."""
 
     @pytest.fixture(autouse=True)
-    def _mock_merge(self) -> None:  # type: ignore[misc]
+    def _mock_merge(self) -> None:  # type: ignore[misc]  # pytest fixture + yield
         ctx = MagicMock(spec=CourseContext)
         ctx.documents = []
         with patch(_MERGE_STEP) as merge_cls:
@@ -350,7 +350,7 @@ class TestChildrenSnapshotsForwarding:
     """execute() forwards children_snapshots to run_with_metadata."""
 
     @pytest.fixture(autouse=True)
-    def _mock_merge(self) -> None:  # type: ignore[misc]
+    def _mock_merge(self) -> None:  # type: ignore[misc]  # pytest fixture + yield
         ctx = MagicMock(spec=CourseContext)
         ctx.documents = []
         with patch(_MERGE_STEP) as merge_cls:

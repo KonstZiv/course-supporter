@@ -62,6 +62,9 @@ def convert_to_structure_nodes(
                     node_type=StructureNodeType.LESSON,
                     order=les_idx,
                     title=lesson.title,
+                    description=lesson.description or None,
+                    learning_goal=lesson.learning_goal or None,
+                    estimated_duration=lesson.estimated_duration,
                     timecodes=_build_timecodes(lesson),
                     slide_references=_build_slide_refs(lesson),
                 )

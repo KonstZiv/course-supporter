@@ -129,6 +129,9 @@ class LessonOutput(BaseModel):
     """
 
     title: str
+    description: str = ""
+    learning_goal: str = ""
+    estimated_duration: int | None = None
     video_start_timecode: str | None = None
     video_end_timecode: str | None = None
     slide_range: SlideRange | None = None

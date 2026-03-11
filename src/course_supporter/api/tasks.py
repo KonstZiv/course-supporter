@@ -17,7 +17,7 @@ from course_supporter.agents.reconciler import ReconcileAgent
 from course_supporter.agents.refine import RefineAgent
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
-from course_supporter.models.step import NodeSummary
+from course_supporter.models.step import ChildSnapshotContext, NodeSummary
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
@@ -197,17 +197,22 @@ def _resolve_target_nodes(
 
 def _collect_ready_documents(
     flat_nodes: list[MaterialNode],
+    *,
+    allow_empty: bool = False,
 ) -> list[SourceDocument]:
     """Extract SourceDocuments from READY MaterialEntries.
 
     Args:
         flat_nodes: Flat list of nodes with materials loaded.
+        allow_empty: If True, return empty list instead of raising
+            when no READY entries found. Used for parent nodes that
+            rely on children snapshots for context.
 
     Returns:
         Deserialized SourceDocument list.
 
     Raises:
-        NoReadyMaterialsError: If no READY entries found.
+        NoReadyMaterialsError: If no READY entries found and allow_empty is False.
     """
     from course_supporter.errors import NoReadyMaterialsError
     from course_supporter.models.source import SourceDocument
@@ -223,7 +228,7 @@ def _collect_ready_documents(
                     )
                 )
 
-    if not documents:
+    if not documents and not allow_empty:
         msg = "No READY materials found for generation"
         raise NoReadyMaterialsError(msg)
     return documents
@@ -467,6 +472,49 @@ async def _load_children_summaries(
     return summaries
 
 
+async def _load_children_snapshots(
+    session: AsyncSession,
+    node: MaterialNode,
+) -> list[ChildSnapshotContext]:
+    """Load full snapshot data from child nodes for parent context.
+
+    Used for context compression: parent nodes receive child snapshots
+    (structure + summary + concepts + summary_nested_nodes) instead of
+    raw descendant materials.
+
+    Args:
+        session: Active DB session.
+        node: Parent MaterialNode (children relationship loaded).
+
+    Returns:
+        List of ChildSnapshotContext for children that have snapshots.
+    """
+    if not node.children:
+        return []
+
+    child_ids = [c.id for c in node.children]
+    snap_repo = SnapshotRepository(session)
+    latest = await snap_repo.get_latest_for_nodes(child_ids)
+
+    snapshots: list[ChildSnapshotContext] = []
+    for child in node.children:
+        snap = latest.get(child.id)
+        if snap is None or snap.structure is None:
+            continue
+        snapshots.append(
+            ChildSnapshotContext(
+                node_id=child.id,
+                title=child.title,
+                structure=snap.structure,
+                summary=snap.summary or "",
+                core_concepts=snap.core_concepts or [],
+                mentioned_concepts=snap.mentioned_concepts or [],
+                summary_nested_nodes=snap.summary_nested_nodes or "",
+            )
+        )
+    return snapshots
+
+
 async def _load_parent_context(
     session: AsyncSession,
     node: MaterialNode,
@@ -536,12 +584,14 @@ def _build_step_input(
     children_summaries: list[NodeSummary] | None = None,
     parent_context: NodeSummary | None = None,
     sibling_summaries: list[NodeSummary] | None = None,
+    children_snapshots: list[ChildSnapshotContext] | None = None,
 ) -> StepInput:
     """Assemble StepInput from collected tree data.
 
     Builds existing_structure for guided mode via tree serialization.
     Sliding window context: children summaries (bottom-up), parent
     context and sibling summaries (top-down reconciliation).
+    Children snapshots provide full snapshot data for context compression.
     """
     from course_supporter.models.step import StepInput as _StepInput
     from course_supporter.tree_utils import serialize_tree_for_guided
@@ -560,6 +610,7 @@ def _build_step_input(
         mode=mode,
         material_tree=tree_summary,
         slide_timecode_refs=mappings,
+        children_snapshots=children_snapshots or [],
     )
 
 
@@ -630,6 +681,7 @@ async def _persist_step_result(
         core_concepts=step_output.core_concepts,
         mentioned_concepts=step_output.mentioned_concepts,
         corrections=_serialize_corrections(step_output.corrections),
+        summary_nested_nodes=step_output.summary_nested_nodes or None,
     )
 
     sn_nodes = convert_to_structure_nodes(step_output.structure, snapshot.id)
@@ -701,8 +753,23 @@ async def arq_execute_step(
             )
             target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
 
-            # Collect data from target subtree
-            documents = _collect_ready_documents(flat_nodes)
+            # Resolve target node for context loading.
+            # target is None when nid is None (whole-tree mode); root is the target.
+            target_node = target if target is not None else root_nodes[0]
+
+            # Context compression: load child snapshots for parent nodes.
+            # If children have snapshots, parent uses own materials only.
+            children_snap = await _load_children_snapshots(session, target_node)
+
+            if children_snap:
+                # Parent node: only its own materials (not subtree).
+                # Parent may have no own materials — that's OK when
+                # children snapshots provide the context.
+                documents = _collect_ready_documents([target_node], allow_empty=True)
+            else:
+                # Leaf node (or children without snapshots): all subtree materials
+                documents = _collect_ready_documents(flat_nodes)
+
             mappings = _collect_validated_mappings(flat_nodes)
 
             from course_supporter.tree_utils import build_material_tree_summary
@@ -710,9 +777,13 @@ async def arq_execute_step(
             tree_summary = build_material_tree_summary(flat_nodes)
 
             # Load sliding window context from previous steps.
-            # target is None when nid is None (whole-tree mode); root is the target.
-            target_node = target if target is not None else root_nodes[0]
-            children_summaries = await _load_children_summaries(session, target_node)
+            # Skip children_summaries when full snapshots are available —
+            # they would be redundant and inflate the prompt.
+            children_summaries: list[NodeSummary] = []
+            if not children_snap:
+                children_summaries = await _load_children_summaries(
+                    session, target_node
+                )
 
             # Parent + sibling context for reconcile/refine steps
             parent_context: NodeSummary | None = None
@@ -756,6 +827,7 @@ async def arq_execute_step(
                 children_summaries=children_summaries,
                 parent_context=parent_context,
                 sibling_summaries=sibling_sums,
+                children_snapshots=children_snap,
             )
 
             agent: ArchitectAgent | ReconcileAgent | RefineAgent

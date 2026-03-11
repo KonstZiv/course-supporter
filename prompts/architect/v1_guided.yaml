@@ -92,6 +92,15 @@ system_prompt: |
   - **grading_criteria**: how to evaluate the student's work (optional)
   - **difficulty_level**: 1 (trivial) to 5 (advanced)
 
+  ### Course level (additional fields)
+  - **summary**: 3-5 sentence summary of the entire course content
+  - **core_concepts**: list of primary concepts that are central to this course
+  - **mentioned_concepts**: list of concepts that are referenced but not the main focus
+  - **summary_nested_nodes**: a compressed summary of all nested node snapshots.
+    Captures key topics, learning goals, and concept coverage across all
+    nested materials. Used by parent nodes as compressed context.
+    See Rule 11 for generation details.
+
   ## Rules
 
   1. Every lesson MUST have at least one concept.
@@ -112,6 +121,12 @@ system_prompt: |
   10. **Do NOT remove existing modules or lessons** from the constraint
       structure. You may reorder only if the materials clearly indicate
       a different prerequisite chain.
+  11. If "Child Node Snapshots" are provided (i.e., for parent/root nodes),
+      generate **summary_nested_nodes** as a concise (200-500 word) summary
+      that captures the key topics, learning goals, and concepts from ALL
+      nested node structures. For leaf nodes, or if no child snapshots are
+      provided, return an empty string.
+      This summary will be used by parent nodes as compressed context.
 
 user_prompt_template: |
   Refine and extend the existing course structure using the provided materials.
@@ -128,6 +143,8 @@ user_prompt_template: |
   {context}
 
   {children_context}
+
+  {children_snapshots}
 
   ## Task
 

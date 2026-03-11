@@ -332,19 +332,22 @@ class TestChildrenSummaries:
     async def test_children_summaries_passed_to_agent(
         self, job_id: str, root_node_id: str
     ) -> None:
-        """Parent node receives children summaries in StepInput."""
+        """Parent node receives children summaries when no full snapshots exist."""
         from course_supporter.models.step import StepInput
 
         child = _make_node(title="Child Topic")
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry], children=[child])
 
+        # Snapshot with summary but NO structure → not a full snapshot,
+        # so children_summaries path is used instead of children_snapshots.
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
         child_snap.materialnode_id = child.id
         child_snap.summary = "Child covers basics"
         child_snap.core_concepts = ["variables"]
         child_snap.mentioned_concepts = ["functions"]
+        child_snap.structure = None  # no full structure → not a snapshot
 
         deps = _MockDeps(root_nodes=[root])
         deps.snap_repo.get_latest_for_nodes = AsyncMock(
@@ -648,6 +651,118 @@ class TestReconcileSlidingWindow:
         step_input = deps.agent.execute.call_args[0][0]
         assert step_input.parent_context is None
         assert step_input.sibling_summaries == []
+
+
+class TestContextCompression:
+    """Parent nodes with child snapshots use only own materials."""
+
+    async def test_parent_with_child_snapshots_uses_own_materials(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Parent node collects only its own materials when children have snapshots."""
+        from course_supporter.models.step import StepInput
+
+        parent_entry = _make_entry(
+            state="ready",
+            processed_content='{"source_type": "text", "source_url": "file:///parent.md"}',
+        )
+        child_entry = _make_entry(
+            state="ready",
+            processed_content='{"source_type": "text", "source_url": "file:///child.md"}',
+        )
+        child = _make_node(title="Child Topic", materials=[child_entry])
+        root = _make_node(materials=[parent_entry], children=[child])
+
+        child_snap = MagicMock()
+        child_snap.id = uuid.uuid4()
+        child_snap.materialnode_id = child.id
+        child_snap.structure = {"modules": [{"title": "Sub"}]}
+        child_snap.summary = "Child covers basics"
+        child_snap.core_concepts = ["variables"]
+        child_snap.mentioned_concepts = ["functions"]
+        child_snap.summary_nested_nodes = "Nested info"
+
+        deps = _MockDeps(root_nodes=[root])
+        deps.snap_repo.get_latest_for_nodes = AsyncMock(
+            return_value={child.id: child_snap},
+        )
+
+        await _run_task(job_id, root_node_id, deps)
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert isinstance(step_input, StepInput)
+        # Should have children_snapshots
+        assert len(step_input.children_snapshots) == 1
+        assert step_input.children_snapshots[0].title == "Child Topic"
+        assert step_input.children_snapshots[0].summary_nested_nodes == "Nested info"
+        # Only parent's own materials, not child's
+        assert len(step_input.materials) == 1
+        assert step_input.materials[0].source_url == "file:///parent.md"
+        # children_summaries skipped when full snapshots are available
+        assert step_input.children_summaries == []
+
+    async def test_parent_without_own_materials_still_works(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Parent with no own materials but children with snapshots → no error."""
+        child_entry = _make_entry(state="ready")
+        child = _make_node(title="Child", materials=[child_entry])
+        # Parent has no materials
+        root = _make_node(materials=[], children=[child])
+
+        child_snap = MagicMock()
+        child_snap.id = uuid.uuid4()
+        child_snap.materialnode_id = child.id
+        child_snap.structure = {"modules": []}
+        child_snap.summary = "Child summary"
+        child_snap.core_concepts = []
+        child_snap.mentioned_concepts = []
+        child_snap.summary_nested_nodes = ""
+
+        deps = _MockDeps(root_nodes=[root])
+        deps.snap_repo.get_latest_for_nodes = AsyncMock(
+            return_value={child.id: child_snap},
+        )
+
+        await _run_task(job_id, root_node_id, deps)
+
+        # Agent was called (no NoReadyMaterialsError)
+        deps.agent.execute.assert_called_once()
+        step_input = deps.agent.execute.call_args[0][0]
+        assert step_input.materials == []
+
+    async def test_leaf_node_uses_all_materials(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Leaf node without children uses all subtree materials (unchanged)."""
+        entry = _make_entry(state="ready")
+        root = _make_node(materials=[entry])
+
+        deps = _MockDeps(root_nodes=[root])
+
+        await _run_task(job_id, root_node_id, deps)
+
+        step_input = deps.agent.execute.call_args[0][0]
+        assert len(step_input.materials) == 1
+        assert step_input.children_snapshots == []
+
+    async def test_children_without_snapshots_uses_subtree(
+        self, job_id: str, root_node_id: str
+    ) -> None:
+        """Children without snapshots → fallback to subtree materials."""
+        child_entry = _make_entry(state="ready")
+        child = _make_node(title="Child", materials=[child_entry])
+        root = _make_node(materials=[], children=[child])
+
+        deps = _MockDeps(root_nodes=[root])
+        # get_latest_for_nodes returns empty dict (no snapshots)
+
+        await _run_task(job_id, root_node_id, deps)
+
+        step_input = deps.agent.execute.call_args[0][0]
+        # Should have used full subtree (child's materials)
+        assert len(step_input.materials) == 1
+        assert step_input.children_snapshots == []
 
 
 class TestAgentDispatch:

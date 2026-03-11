@@ -13,6 +13,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from course_supporter.llm.schemas import LLMResponse
     from course_supporter.models.course import (
         CourseStructure,
@@ -44,6 +46,24 @@ class NodeSummary:
     core_concepts: list[str]
     mentioned_concepts: list[str]
     structure_snapshot_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
+class ChildSnapshotContext:
+    """Full snapshot of a child node for parent context.
+
+    Provides the complete generated structure from a child node,
+    used by parent nodes instead of raw materials to reduce token count.
+    Includes summary_nested_nodes for recursive compression of deeper levels.
+    """
+
+    node_id: uuid.UUID
+    title: str
+    structure: dict[str, Any]
+    summary: str
+    core_concepts: list[str]
+    mentioned_concepts: list[str]
+    summary_nested_nodes: str
 
 
 class CorrectionAction(StrEnum):
@@ -92,6 +112,9 @@ class StepInput:
     # Generation parameters
     mode: Literal["free", "guided"]
     material_tree: list[MaterialNodeSummary]
+
+    # Full child snapshots for parent context (replaces raw child materials)
+    children_snapshots: list[ChildSnapshotContext] = field(default_factory=list)
     slide_timecode_refs: list[SlideTimecodeRef] = field(default_factory=list)
 
 
@@ -110,6 +133,9 @@ class StepOutput:
     # LLM metadata
     prompt_version: str
     response: LLMResponse
+
+    # Compressed summary of child snapshots for recursive context
+    summary_nested_nodes: str = ""
 
     # Reconciliation-specific (None for generate steps)
     corrections: list[Correction] | None = field(default=None)

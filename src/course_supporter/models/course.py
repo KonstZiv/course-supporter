@@ -116,6 +116,7 @@ class ConceptOutput(BaseModel):
     title: str
     definition: str
     examples: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
     timecodes: list[str] = Field(default_factory=list)
     slide_references: list[int] = Field(default_factory=list)
     web_references: list[WebReference] = Field(default_factory=list)

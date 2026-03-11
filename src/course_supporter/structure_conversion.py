@@ -88,6 +88,7 @@ def convert_to_structure_nodes(
                         key_concepts=(
                             [{"summary": concept.title, "details": concept.definition}]
                         ),
+                        common_mistakes=(concept.common_mistakes or None),
                         timecodes=(
                             [{"timecode": t} for t in concept.timecodes]
                             if concept.timecodes

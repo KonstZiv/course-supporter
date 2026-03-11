@@ -243,6 +243,39 @@ class TestConvertToStructureNodes:
         assert concept.timecodes is None
         assert concept.slide_references is None
         assert concept.web_references is None
+        assert concept.common_mistakes is None
+
+    def test_concept_common_mistakes(self, snapshot_id: uuid.UUID) -> None:
+        """Concept common_mistakes are mapped to StructureNode."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            concepts=[
+                                ConceptOutput(
+                                    title="C",
+                                    definition="D",
+                                    common_mistakes=[
+                                        "Confusing = with ==",
+                                        "Forgetting return statement",
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        concept = next(n for n in nodes if n.node_type == StructureNodeType.CONCEPT)
+        assert concept.common_mistakes == [
+            "Confusing = with ==",
+            "Forgetting return statement",
+        ]
 
     def test_unique_ids(self, snapshot_id: uuid.UUID) -> None:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)

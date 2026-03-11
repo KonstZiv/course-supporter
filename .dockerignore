@@ -15,6 +15,7 @@ Makefile
 .pre-commit-config.yaml
 current-doc/
 past-sprints-doc/
+assets/
 .DS_Store
 htmlcov/
 .coverage

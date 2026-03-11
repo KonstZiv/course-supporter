@@ -58,6 +58,11 @@ markdown_extensions:
 
 nav:
   - Overview: index.md
+  - Guide:
+      - "Що таке Course Supporter": guide/overview.md
+      - "Реєстрація та автентифікація": guide/auth.md
+      - "Підготовка матеріалів": guide/materials.md
+  - API Reference: api/reference.md
   - Architecture:
       - ERD: architecture/erd.md
       - Decisions: architecture/decisions.md
@@ -67,11 +72,6 @@ nav:
       - Sprint 0 — MVP: sprints/sprint-0/index.md
       - Sprint 1 — Prod Deploy: sprints/sprint-1/index.md
       - Sprint 2 — Material Tree: sprints/sprint-2/index.md
-  - API:
-      - "Огляд flow": api/flow-guide.md
-      - "Швидкий старт": api/quick-start.md
-      - Reference: api/reference.md
-      - "Автентифікація": api/auth.md
   - Development:
       - Setup: development/setup.md
       - Testing: development/testing.md

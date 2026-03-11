@@ -46,7 +46,7 @@ providers:
     models:
       - id: deepseek-chat
         capabilities: [structured_output]
-        max_context: 65536
+        max_context: 131072
         unit_type: tokens
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028

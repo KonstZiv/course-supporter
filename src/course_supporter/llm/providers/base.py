@@ -31,7 +31,13 @@ class StructuredOutputError(Exception):
         self.provider = provider
         self.raw_content = raw_content
         self.schema_name = schema_name
-        super().__init__(f"{provider}: failed to parse response as {schema_name}")
+        error_summary = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+            for e in cause.errors()[:5]
+        )
+        super().__init__(
+            f"{provider}: failed to parse response as {schema_name}: {error_summary}"
+        )
         self.__cause__ = cause
 
 
@@ -98,11 +104,19 @@ class LLMProvider(abc.ABC):
         try:
             return response_schema.model_validate_json(raw_json)
         except ValidationError as exc:
+            # Log enough context to diagnose: first/last 2K chars of
+            # raw response + full validation error details.
+            raw_len = len(raw_json)
+            preview = raw_json[:2000]
+            tail = raw_json[-1000:] if raw_len > 3000 else ""
             logger.error(
                 "structured_output_parse_failed",
                 provider=self.provider_name,
                 schema=response_schema.__name__,
-                raw_content=raw_json[:500],
+                raw_length=raw_len,
+                raw_head=preview,
+                raw_tail=tail,
+                validation_errors=exc.errors(),
             )
             raise StructuredOutputError(
                 provider=self.provider_name,

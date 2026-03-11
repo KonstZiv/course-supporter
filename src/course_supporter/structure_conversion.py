@@ -49,6 +49,14 @@ def convert_to_structure_nodes(
                     else None
                 ),
                 difficulty=module.difficulty,
+                prerequisites=module.prerequisites or None,
+                estimated_duration=module.estimated_duration,
+                success_criteria=module.success_criteria or None,
+                assessment_method=module.assessment_method,
+                competencies=module.competencies or None,
+                common_mistakes=module.common_mistakes or None,
+                teaching_strategy=module.teaching_strategy,
+                activities=module.activities or None,
             )
         )
 

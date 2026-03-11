@@ -60,6 +60,26 @@ system_prompt: |
   - **expected_skills**: detailed skill outcomes for this module
   - **difficulty**: relative difficulty compared to other modules in this course
     ("easy", "medium", "hard")
+  - **prerequisites**: list of prerequisites (concepts or skills the student
+    must already know before starting this module). Empty list if first module
+    or no prerequisites.
+  - **estimated_duration**: estimated time in minutes to complete the module
+    (including watching videos, reading materials, doing exercises)
+  - **success_criteria**: 1-2 sentence description of how to verify the student
+    has successfully completed this module
+  - **assessment_method**: primary method for evaluating student progress in
+    this module. One of: "quiz", "project", "code_review", "peer_review",
+    "self_assessment", "exercise"
+  - **competencies**: list of professional competencies the student develops
+    (e.g., "algorithmic thinking", "debugging", "code reading")
+  - **common_mistakes**: list of typical mistakes students make when learning
+    this module's topics (3-5 items, specific and actionable)
+  - **teaching_strategy**: recommended teaching approach for this module.
+    One of: "lecture", "hands_on", "project_based", "flipped", "blended",
+    "discussion"
+  - **activities**: list of concrete learning activities for the student
+    (e.g., "implement a calculator", "solve 5 exercises on loops",
+    "review a peer's code")
   - **lessons**: list of lessons
 
   ### Lesson level

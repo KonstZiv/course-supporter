@@ -137,6 +137,12 @@ class LessonOutput(BaseModel):
 
 
 ModuleDifficulty = Literal["easy", "medium", "hard"]
+AssessmentMethod = Literal[
+    "quiz", "project", "code_review", "peer_review", "self_assessment", "exercise"
+]
+TeachingStrategy = Literal[
+    "lecture", "hands_on", "project_based", "flipped", "blended", "discussion"
+]
 
 
 class ModuleOutput(BaseModel):
@@ -152,6 +158,14 @@ class ModuleOutput(BaseModel):
     expected_knowledge: list[str] = Field(default_factory=list)
     expected_skills: list[str] = Field(default_factory=list)
     difficulty: ModuleDifficulty = "medium"
+    prerequisites: list[str] = Field(default_factory=list)
+    estimated_duration: int | None = None
+    success_criteria: str = ""
+    assessment_method: AssessmentMethod = "exercise"
+    competencies: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
+    teaching_strategy: TeachingStrategy = "hands_on"
+    activities: list[str] = Field(default_factory=list)
     lessons: list[LessonOutput] = Field(default_factory=list)
 
 

@@ -219,12 +219,16 @@ class ArchitectAgent:
         Raises:
             AllModelsFailedError: If all models in all strategies fail.
         """
+        from course_supporter.llm.router import estimate_tokens
+
+        estimated = estimate_tokens(prepared.user_prompt, prepared.system_prompt)
         logger.info(
             "architect_agent_generating",
             strategy=self._strategy,
             prompt_version=prepared.prompt_version,
             documents_count=documents_count,
             context_chars=len(prepared.user_prompt),
+            estimated_tokens=estimated,
             mode=self._mode,
         )
 

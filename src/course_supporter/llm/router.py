@@ -17,7 +17,25 @@ from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 logger = structlog.get_logger()
 
+# Average chars per token across common LLM tokenizers.
+# Conservative estimate (lower ratio = higher token count = safer guard).
+_CHARS_PER_TOKEN = 3.5
+
 LogCallback = Callable[[LLMResponse, bool, str | None], Awaitable[None]]
+
+
+def estimate_tokens(prompt: str, system_prompt: str | None = None) -> int:
+    """Estimate token count from text length.
+
+    Uses a conservative chars-per-token ratio (~3.5) to avoid
+    underestimating. Accuracy is ±15-20%, sufficient for pre-flight
+    context window guards.
+    """
+    total_chars = len(prompt)
+    if system_prompt:
+        total_chars += len(system_prompt)
+    return int(total_chars / _CHARS_PER_TOKEN)
+
 
 # Return type for helper methods that inspect result via isinstance.
 _RouterResult = LLMResponse | tuple[Any, LLMResponse]
@@ -191,9 +209,16 @@ class ModelRouter:
     ) -> _CallResult | None:
         """Walk the model chain, calling call_fn for each active provider."""
         chain = self._registry.get_chain(action, strategy)
+        estimated_tokens = estimate_tokens(request.prompt, request.system_prompt)
+
         for model_cfg in chain:
             provider = self._get_active_provider(model_cfg, errors)
             if provider is None:
+                continue
+
+            if not self._check_context_fits(
+                model_cfg, estimated_tokens, request.max_tokens, errors
+            ):
                 continue
 
             request_for_model = request.model_copy(
@@ -211,6 +236,41 @@ class ModelRouter:
             if result is not None:
                 return result
         return None
+
+    def _check_context_fits(
+        self,
+        model_cfg: ModelConfig,
+        estimated_input_tokens: int,
+        max_output_tokens: int,
+        errors: list[tuple[str, str]],
+    ) -> bool:
+        """Check if estimated tokens fit within model's context window.
+
+        Compares estimated input + requested output tokens against
+        the model's max_context. Skips check if max_context is 0
+        (unknown/unlimited).
+        """
+        if model_cfg.max_context <= 0:
+            return True
+
+        total_needed = estimated_input_tokens + max_output_tokens
+        if total_needed > model_cfg.max_context:
+            msg = (
+                f"context overflow: ~{estimated_input_tokens:,} input + "
+                f"{max_output_tokens:,} output = ~{total_needed:,} tokens, "
+                f"model limit {model_cfg.max_context:,}"
+            )
+            logger.warning(
+                "model_skipped_context_overflow",
+                model=model_cfg.model_id,
+                estimated_input=estimated_input_tokens,
+                max_output=max_output_tokens,
+                total_needed=total_needed,
+                max_context=model_cfg.max_context,
+            )
+            errors.append((model_cfg.model_id, msg))
+            return False
+        return True
 
     def _get_active_provider(
         self,

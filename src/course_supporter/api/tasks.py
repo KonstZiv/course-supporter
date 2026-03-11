@@ -777,7 +777,13 @@ async def arq_execute_step(
             tree_summary = build_material_tree_summary(flat_nodes)
 
             # Load sliding window context from previous steps.
-            children_summaries = await _load_children_summaries(session, target_node)
+            # Skip children_summaries when full snapshots are available —
+            # they would be redundant and inflate the prompt.
+            children_summaries: list[NodeSummary] = []
+            if not children_snap:
+                children_summaries = await _load_children_summaries(
+                    session, target_node
+                )
 
             # Parent + sibling context for reconcile/refine steps
             parent_context: NodeSummary | None = None

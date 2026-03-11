@@ -332,19 +332,22 @@ class TestChildrenSummaries:
     async def test_children_summaries_passed_to_agent(
         self, job_id: str, root_node_id: str
     ) -> None:
-        """Parent node receives children summaries in StepInput."""
+        """Parent node receives children summaries when no full snapshots exist."""
         from course_supporter.models.step import StepInput
 
         child = _make_node(title="Child Topic")
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry], children=[child])
 
+        # Snapshot with summary but NO structure → not a full snapshot,
+        # so children_summaries path is used instead of children_snapshots.
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
         child_snap.materialnode_id = child.id
         child_snap.summary = "Child covers basics"
         child_snap.core_concepts = ["variables"]
         child_snap.mentioned_concepts = ["functions"]
+        child_snap.structure = None  # no full structure → not a snapshot
 
         deps = _MockDeps(root_nodes=[root])
         deps.snap_repo.get_latest_for_nodes = AsyncMock(
@@ -659,8 +662,14 @@ class TestContextCompression:
         """Parent node collects only its own materials when children have snapshots."""
         from course_supporter.models.step import StepInput
 
-        parent_entry = _make_entry(state="ready")
-        child_entry = _make_entry(state="ready")
+        parent_entry = _make_entry(
+            state="ready",
+            processed_content='{"source_type": "text", "source_url": "file:///parent.md"}',
+        )
+        child_entry = _make_entry(
+            state="ready",
+            processed_content='{"source_type": "text", "source_url": "file:///child.md"}',
+        )
         child = _make_node(title="Child Topic", materials=[child_entry])
         root = _make_node(materials=[parent_entry], children=[child])
 
@@ -688,6 +697,9 @@ class TestContextCompression:
         assert step_input.children_snapshots[0].summary_nested_nodes == "Nested info"
         # Only parent's own materials, not child's
         assert len(step_input.materials) == 1
+        assert step_input.materials[0].source_url == "file:///parent.md"
+        # children_summaries skipped when full snapshots are available
+        assert step_input.children_summaries == []
 
     async def test_parent_without_own_materials_still_works(
         self, job_id: str, root_node_id: str

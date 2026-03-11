@@ -49,6 +49,14 @@ def convert_to_structure_nodes(
                     else None
                 ),
                 difficulty=module.difficulty,
+                prerequisites=module.prerequisites or None,
+                estimated_duration=module.estimated_duration,
+                success_criteria=module.success_criteria or None,
+                assessment_method=module.assessment_method,
+                competencies=module.competencies or None,
+                common_mistakes=module.common_mistakes or None,
+                teaching_strategy=module.teaching_strategy,
+                activities=module.activities or None,
             )
         )
 
@@ -62,6 +70,9 @@ def convert_to_structure_nodes(
                     node_type=StructureNodeType.LESSON,
                     order=les_idx,
                     title=lesson.title,
+                    description=lesson.description or None,
+                    learning_goal=lesson.learning_goal or None,
+                    estimated_duration=lesson.estimated_duration,
                     timecodes=_build_timecodes(lesson),
                     slide_references=_build_slide_refs(lesson),
                 )
@@ -80,6 +91,7 @@ def convert_to_structure_nodes(
                         key_concepts=(
                             [{"summary": concept.title, "details": concept.definition}]
                         ),
+                        common_mistakes=(concept.common_mistakes or None),
                         timecodes=(
                             [{"timecode": t} for t in concept.timecodes]
                             if concept.timecodes
@@ -106,7 +118,7 @@ def convert_to_structure_nodes(
                         parent_structurenode_id=les_id,
                         node_type=StructureNodeType.EXERCISE,
                         order=ex_idx,
-                        title=f"Exercise {ex_idx + 1}",
+                        title=exercise.title or f"Exercise {ex_idx + 1}",
                         description=exercise.description,
                         difficulty=_map_difficulty_level(exercise.difficulty_level),
                         success_criteria=exercise.grading_criteria,

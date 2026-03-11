@@ -99,6 +99,7 @@ class ExerciseOutput(BaseModel):
     Maps to ORM Exercise table fields.
     """
 
+    title: str = ""
     description: str
     reference_solution: str | None = None
     grading_criteria: str | None = None
@@ -116,6 +117,7 @@ class ConceptOutput(BaseModel):
     title: str
     definition: str
     examples: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
     timecodes: list[str] = Field(default_factory=list)
     slide_references: list[int] = Field(default_factory=list)
     web_references: list[WebReference] = Field(default_factory=list)
@@ -129,6 +131,9 @@ class LessonOutput(BaseModel):
     """
 
     title: str
+    description: str = ""
+    learning_goal: str = ""
+    estimated_duration: int | None = None
     video_start_timecode: str | None = None
     video_end_timecode: str | None = None
     slide_range: SlideRange | None = None
@@ -137,6 +142,12 @@ class LessonOutput(BaseModel):
 
 
 ModuleDifficulty = Literal["easy", "medium", "hard"]
+AssessmentMethod = Literal[
+    "quiz", "project", "code_review", "peer_review", "self_assessment", "exercise"
+]
+TeachingStrategy = Literal[
+    "lecture", "hands_on", "project_based", "flipped", "blended", "discussion"
+]
 
 
 class ModuleOutput(BaseModel):
@@ -152,6 +163,14 @@ class ModuleOutput(BaseModel):
     expected_knowledge: list[str] = Field(default_factory=list)
     expected_skills: list[str] = Field(default_factory=list)
     difficulty: ModuleDifficulty = "medium"
+    prerequisites: list[str] = Field(default_factory=list)
+    estimated_duration: int | None = None
+    success_criteria: str = ""
+    assessment_method: AssessmentMethod = "exercise"
+    competencies: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
+    teaching_strategy: TeachingStrategy = "hands_on"
+    activities: list[str] = Field(default_factory=list)
     lessons: list[LessonOutput] = Field(default_factory=list)
 
 

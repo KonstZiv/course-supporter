@@ -243,6 +243,87 @@ class TestConvertToStructureNodes:
         assert concept.timecodes is None
         assert concept.slide_references is None
         assert concept.web_references is None
+        assert concept.common_mistakes is None
+
+    def test_concept_common_mistakes(self, snapshot_id: uuid.UUID) -> None:
+        """Concept common_mistakes are mapped to StructureNode."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            concepts=[
+                                ConceptOutput(
+                                    title="C",
+                                    definition="D",
+                                    common_mistakes=[
+                                        "Confusing = with ==",
+                                        "Forgetting return statement",
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        concept = next(n for n in nodes if n.node_type == StructureNodeType.CONCEPT)
+        assert concept.common_mistakes == [
+            "Confusing = with ==",
+            "Forgetting return statement",
+        ]
+
+    def test_exercise_with_title(self, snapshot_id: uuid.UUID) -> None:
+        """Exercise with LLM-generated title uses it instead of fallback."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            exercises=[
+                                ExerciseOutput(
+                                    title="Build a Calculator",
+                                    description="Create a CLI calculator",
+                                    difficulty_level=3,
+                                ),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        exercise = next(n for n in nodes if n.node_type == StructureNodeType.EXERCISE)
+        assert exercise.title == "Build a Calculator"
+
+    def test_exercise_without_title_fallback(self, snapshot_id: uuid.UUID) -> None:
+        """Exercise without title falls back to 'Exercise N'."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            exercises=[
+                                ExerciseOutput(description="Do something"),
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        exercise = next(n for n in nodes if n.node_type == StructureNodeType.EXERCISE)
+        assert exercise.title == "Exercise 1"
 
     def test_unique_ids(self, snapshot_id: uuid.UUID) -> None:
         nodes = convert_to_structure_nodes(_minimal_structure(), snapshot_id)
@@ -260,3 +341,96 @@ class TestConvertToStructureNodes:
         nodes = convert_to_structure_nodes(structure, snapshot_id)
         assert nodes[0].expected_knowledge is None
         assert nodes[0].expected_skills is None
+
+    def test_module_enriched_fields(self, snapshot_id: uuid.UUID) -> None:
+        """All new module-level fields are mapped to StructureNode."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    difficulty="hard",
+                    prerequisites=["Variables", "Functions"],
+                    estimated_duration=90,
+                    success_criteria="Student can build a REST API",
+                    assessment_method="project",
+                    competencies=["API design", "debugging"],
+                    common_mistakes=[
+                        "Forgetting to handle errors",
+                        "Not validating input",
+                    ],
+                    teaching_strategy="project_based",
+                    activities=["Build a TODO API", "Review peer code"],
+                ),
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        module = nodes[0]
+
+        assert module.difficulty == "hard"
+        assert module.prerequisites == ["Variables", "Functions"]
+        assert module.estimated_duration == 90
+        assert module.success_criteria == "Student can build a REST API"
+        assert module.assessment_method == "project"
+        assert module.competencies == ["API design", "debugging"]
+        assert module.common_mistakes == [
+            "Forgetting to handle errors",
+            "Not validating input",
+        ]
+        assert module.teaching_strategy == "project_based"
+        assert module.activities == ["Build a TODO API", "Review peer code"]
+
+    def test_module_enriched_fields_defaults(self, snapshot_id: uuid.UUID) -> None:
+        """Module with default values maps None for empty lists, defaults for enums."""
+        structure = CourseStructure(
+            title="C",
+            modules=[ModuleOutput(title="M")],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        module = nodes[0]
+
+        assert module.difficulty == "medium"
+        assert module.prerequisites is None
+        assert module.estimated_duration is None
+        assert module.success_criteria is None
+        assert module.assessment_method == "exercise"
+        assert module.competencies is None
+        assert module.common_mistakes is None
+        assert module.teaching_strategy == "hands_on"
+        assert module.activities is None
+
+    def test_lesson_enriched_fields(self, snapshot_id: uuid.UUID) -> None:
+        """Lesson description, learning_goal, estimated_duration are mapped."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            description="Intro to variables",
+                            learning_goal="Declare and use variables",
+                            estimated_duration=25,
+                        ),
+                    ],
+                ),
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        lesson = next(n for n in nodes if n.node_type == StructureNodeType.LESSON)
+        assert lesson.description == "Intro to variables"
+        assert lesson.learning_goal == "Declare and use variables"
+        assert lesson.estimated_duration == 25
+
+    def test_lesson_enriched_fields_defaults(self, snapshot_id: uuid.UUID) -> None:
+        """Lesson with default values maps None for empty strings."""
+        structure = CourseStructure(
+            title="C",
+            modules=[ModuleOutput(title="M", lessons=[LessonOutput(title="L")])],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        lesson = next(n for n in nodes if n.node_type == StructureNodeType.LESSON)
+        assert lesson.description is None
+        assert lesson.learning_goal is None
+        assert lesson.estimated_duration is None

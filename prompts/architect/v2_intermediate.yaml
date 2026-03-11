@@ -1,0 +1,66 @@
+version: "v2_intermediate"
+
+# System prompt is loaded separately from v2_system.yaml.
+# This file contains only the user prompt template for intermediate nodes.
+
+user_prompt_template: |
+  ## Node Position: INTERMEDIATE
+
+  This is an **intermediate node** — it has both its own materials AND
+  child nodes beneath it. Your job is to produce a description that
+  **synthesizes** both levels: own materials + children's content.
+
+  ## Guidelines for Intermediate Nodes
+
+  - **Own materials vs. children**: This node's own materials typically
+    provide introductory, connecting, or supplementary content. The
+    children contain the detailed breakdown. Your description should
+    reflect both.
+  - **Level of detail**: More generalized than leaf nodes. Focus on
+    how child topics relate to each other and to this node's own
+    materials. Individual concepts belong in child nodes — here you
+    aggregate and connect.
+  - **core_concepts**: Concepts that are central to this node as a whole
+    (union of the most important concepts from children, plus any
+    introduced in own materials).
+  - **mentioned_concepts**: Concepts that appear across children but are
+    not the primary focus of this node.
+  - **Modules**: Each child node's content should map to one or more
+    modules. Use own materials to fill gaps between children (e.g.,
+    introductions, transitions, overviews).
+  - **expected_knowledge / expected_skills**: Aggregate from children.
+    These should be broader than any single child but still specific
+    and measurable.
+  - **common_mistakes**: Focus on higher-level mistakes — misunderstanding
+    relationships between topics, wrong mental models that span multiple
+    child topics.
+  - **summary_nested_nodes**: Generate a concise (200-500 word) summary
+    that captures the key topics, learning goals, and concept coverage
+    from ALL child node snapshots below. This summary will be used by
+    parent nodes as compressed context. If no child snapshots are
+    provided, return an empty string.
+
+  ## Own Materials
+
+  {context}
+
+  ## Child Node Snapshots
+
+  Below are complete structure descriptions of each child node.
+  Use them to understand what is covered at lower levels.
+
+  {children_snapshots}
+
+  ## Task
+
+  Synthesize the own materials and child snapshots above into a
+  CourseStructure that gives a mentor the full picture of this section.
+
+  The mentor needs to know:
+  1. What this section covers overall — the big picture.
+  2. How child topics connect and build on each other.
+  3. What knowledge and skills a student gains from completing this
+     entire section (not just individual children).
+  4. What to watch for — common mistakes at the section level.
+
+  Return ONLY valid JSON conforming to the CourseStructure schema.

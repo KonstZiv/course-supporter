@@ -795,3 +795,26 @@ class TestAgentDispatch:
         deps.agent.execute.assert_called_once()
         step_input = deps.agent.execute.call_args[0][0]
         assert step_input.step_type.value == "generate"
+
+
+class TestDetermineNodePosition:
+    """Unit tests for _determine_node_position helper."""
+
+    def test_root_node(self) -> None:
+        node = _make_node(parent_materialnode_id=None, children=[])
+        from course_supporter.api.tasks import _determine_node_position
+
+        assert _determine_node_position(node) == "root"
+
+    def test_leaf_node(self) -> None:
+        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[])
+        from course_supporter.api.tasks import _determine_node_position
+
+        assert _determine_node_position(node) == "leaf"
+
+    def test_intermediate_node(self) -> None:
+        child = _make_node()
+        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[child])
+        from course_supporter.api.tasks import _determine_node_position
+
+        assert _determine_node_position(node) == "intermediate"

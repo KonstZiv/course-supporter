@@ -12,7 +12,7 @@ import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.agents.architect import ArchitectAgent
+from course_supporter.agents.architect import ArchitectAgent, NodePosition
 from course_supporter.agents.reconciler import ReconcileAgent
 from course_supporter.agents.refine import RefineAgent
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
@@ -443,6 +443,23 @@ def _snapshot_to_summary(
     )
 
 
+def _determine_node_position(node: MaterialNode) -> NodePosition:
+    """Determine node position in the material tree hierarchy.
+
+    Args:
+        node: MaterialNode with children relationship loaded.
+
+    Returns:
+        NodePosition.ROOT if no parent, LEAF if no children,
+        INTERMEDIATE otherwise.
+    """
+    if node.parent_materialnode_id is None:
+        return NodePosition.ROOT
+    if not node.children:
+        return NodePosition.LEAF
+    return NodePosition.INTERMEDIATE
+
+
 async def _load_children_summaries(
     session: AsyncSession,
     node: MaterialNode,
@@ -836,7 +853,8 @@ async def arq_execute_step(
             elif st == _StepType.REFINE:
                 agent = RefineAgent(router, mode=mode)
             else:
-                agent = ArchitectAgent(router, mode=mode)
+                node_position = _determine_node_position(target_node)
+                agent = ArchitectAgent(router, mode=mode, node_position=node_position)
             step_output = await agent.execute(step_input)
 
             snapshot_id = await _persist_step_result(

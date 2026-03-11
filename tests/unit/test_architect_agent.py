@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.agents.architect import (
-    PROMPT_PATHS,
     ArchitectAgent,
     GenerationResult,
+    NodePosition,
     PreparedPrompt,
 )
 from course_supporter.agents.prompt_loader import PromptData
@@ -62,7 +62,8 @@ class TestArchitectAgentInit:
     def test_default_params(self, mock_router: AsyncMock) -> None:
         """ArchitectAgent initializes with sensible defaults."""
         agent = ArchitectAgent(mock_router)
-        assert agent._prompt_path == PROMPT_PATHS["free"]
+        assert agent._prompt_path is None
+        assert agent._node_position is None
         assert agent._mode == "free"
         assert agent._strategy == "default"
         assert agent._temperature == 0.0
@@ -82,17 +83,25 @@ class TestArchitectAgentInit:
         assert agent._temperature == 0.3
         assert agent._max_tokens == 4096
 
-    def test_free_mode_uses_free_prompt(self, mock_router: AsyncMock) -> None:
-        """Free mode selects v1.yaml prompt."""
+    def test_free_mode_without_position_uses_v1(self, mock_router: AsyncMock) -> None:
+        """Free mode without node_position falls back to v1 prompts."""
         agent = ArchitectAgent(mock_router, mode="free")
-        assert agent._prompt_path == PROMPT_PATHS["free"]
+        assert agent._prompt_path is None
+        assert agent._node_position is None
         assert agent._mode == "free"
 
-    def test_guided_mode_uses_guided_prompt(self, mock_router: AsyncMock) -> None:
-        """Guided mode selects v1_guided.yaml prompt."""
+    def test_guided_mode_without_position_uses_v1(self, mock_router: AsyncMock) -> None:
+        """Guided mode without node_position falls back to v1 prompts."""
         agent = ArchitectAgent(mock_router, mode="guided")
-        assert agent._prompt_path == PROMPT_PATHS["guided"]
+        assert agent._prompt_path is None
+        assert agent._node_position is None
         assert agent._mode == "guided"
+
+    def test_node_position_sets_v2_prompts(self, mock_router: AsyncMock) -> None:
+        """Setting node_position enables v2 prompt selection."""
+        agent = ArchitectAgent(mock_router, node_position=NodePosition.LEAF)
+        assert agent._node_position == NodePosition.LEAF
+        assert agent._prompt_path is None
 
     def test_explicit_prompt_path_overrides_mode(self, mock_router: AsyncMock) -> None:
         """Explicit prompt_path overrides mode-based selection."""

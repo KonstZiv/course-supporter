@@ -99,6 +99,7 @@ class ExerciseOutput(BaseModel):
     Maps to ORM Exercise table fields.
     """
 
+    title: str = ""
     description: str
     reference_solution: str | None = None
     grading_criteria: str | None = None

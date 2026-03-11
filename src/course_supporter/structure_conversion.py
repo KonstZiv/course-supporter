@@ -118,7 +118,7 @@ def convert_to_structure_nodes(
                         parent_structurenode_id=les_id,
                         node_type=StructureNodeType.EXERCISE,
                         order=ex_idx,
-                        title=f"Exercise {ex_idx + 1}",
+                        title=exercise.title or f"Exercise {ex_idx + 1}",
                         description=exercise.description,
                         difficulty=_map_difficulty_level(exercise.difficulty_level),
                         success_criteria=exercise.grading_criteria,

@@ -375,11 +375,13 @@ class TestGetTreeSetCommittedValue:
         ) as mock_scv:
             await repo.get_subtree(cid)
 
-        # set_committed_value called for each node (root + child)
-        assert mock_scv.call_count == 2
-        for call in mock_scv.call_args_list:
-            assert call[0][1] == "children"
-            assert call[0][2] == []
+        # set_committed_value called for: children + parent init (2 nodes)
+        # + parent assignment for child node during tree assembly.
+        # See material_node_repository.py:get_subtree() lines 189-206.
+        assert mock_scv.call_count == 5
+        attrs_set = [call[0][1] for call in mock_scv.call_args_list]
+        assert attrs_set.count("children") == 2
+        assert attrs_set.count("parent") == 3
 
     async def test_falls_back_to_direct_assignment_for_mocks(self) -> None:
         """get_subtree uses direct assignment for non-ORM objects (tests)."""

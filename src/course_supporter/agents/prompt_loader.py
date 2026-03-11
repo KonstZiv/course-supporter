@@ -38,7 +38,7 @@ def load_prompt(path: str | Path) -> PromptData:
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
-    with prompt_path.open() as f:
+    with prompt_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     return PromptData.model_validate(data)
@@ -69,10 +69,10 @@ def load_split_prompt(
         if not p.exists():
             raise FileNotFoundError(f"Prompt file not found: {p}")
 
-    with sys_path.open() as f:
+    with sys_path.open(encoding="utf-8") as f:
         sys_data: dict[str, str] = yaml.safe_load(f)
 
-    with usr_path.open() as f:
+    with usr_path.open(encoding="utf-8") as f:
         usr_data: dict[str, str] = yaml.safe_load(f)
 
     return PromptData(

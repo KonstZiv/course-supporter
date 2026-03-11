@@ -801,20 +801,23 @@ class TestDetermineNodePosition:
     """Unit tests for _determine_node_position helper."""
 
     def test_root_node(self) -> None:
-        node = _make_node(parent_materialnode_id=None, children=[])
+        from course_supporter.agents.architect import NodePosition
         from course_supporter.api.tasks import _determine_node_position
 
-        assert _determine_node_position(node) == "root"
+        node = _make_node(parent_materialnode_id=None, children=[])
+        assert _determine_node_position(node) == NodePosition.ROOT
 
     def test_leaf_node(self) -> None:
-        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[])
+        from course_supporter.agents.architect import NodePosition
         from course_supporter.api.tasks import _determine_node_position
 
-        assert _determine_node_position(node) == "leaf"
+        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[])
+        assert _determine_node_position(node) == NodePosition.LEAF
 
     def test_intermediate_node(self) -> None:
-        child = _make_node()
-        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[child])
+        from course_supporter.agents.architect import NodePosition
         from course_supporter.api.tasks import _determine_node_position
 
-        assert _determine_node_position(node) == "intermediate"
+        child = _make_node()
+        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[child])
+        assert _determine_node_position(node) == NodePosition.INTERMEDIATE

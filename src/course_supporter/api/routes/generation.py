@@ -239,8 +239,7 @@ def _flat_to_tree(
     for n in flat_nodes:
         # Prevent Pydantic from triggering lazy-load on the ORM
         # children relationship (greenlet error in async context).
-        if hasattr(n, "_sa_instance_state"):
-            set_committed_value(n, "children", [])
+        set_committed_value(n, "children", [])
         resp = StructureNodeResponse.model_validate(n)
         node_map[resp.id] = resp
 

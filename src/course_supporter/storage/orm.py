@@ -555,6 +555,11 @@ class StructureSnapshot(Base):
         nullable=True,
         comment="Reconciliation corrections audit trail",
     )
+    summary_nested_nodes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="LLM-generated compressed summary of all nested node snapshots",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

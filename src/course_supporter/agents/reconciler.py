@@ -112,6 +112,7 @@ class ReconcileAgent:
             summary=structure.summary,
             core_concepts=structure.core_concepts,
             mentioned_concepts=structure.mentioned_concepts,
+            summary_nested_nodes=structure.summary_nested_nodes,
             prompt_version=prompt_data.version,
             response=response,
         )

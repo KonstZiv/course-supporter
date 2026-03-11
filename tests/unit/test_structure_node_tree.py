@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 
 from course_supporter.api.routes.generation import _flat_to_tree
 from course_supporter.api.schemas import StructureNodeResponse
-from course_supporter.storage.orm import StructureNodeType
+from course_supporter.storage.orm import StructureNode, StructureNodeType
 
 
 def _make_sn(
@@ -18,37 +17,17 @@ def _make_sn(
     order: int = 0,
     title: str = "Node",
     **kwargs: object,
-) -> SimpleNamespace:
-    """Create a fake StructureNode-like object for testing."""
-    defaults: dict[str, object] = {
-        "id": node_id or uuid.uuid4(),
-        "parent_structurenode_id": parent_id,
-        "node_type": node_type,
-        "order": order,
-        "title": title,
-        "description": None,
-        "learning_goal": None,
-        "expected_knowledge": None,
-        "expected_skills": None,
-        "prerequisites": None,
-        "difficulty": None,
-        "estimated_duration": None,
-        "success_criteria": None,
-        "assessment_method": None,
-        "competencies": None,
-        "key_concepts": None,
-        "common_mistakes": None,
-        "teaching_strategy": None,
-        "activities": None,
-        "teaching_style": None,
-        "deep_dive_references": None,
-        "timecodes": None,
-        "slide_references": None,
-        "web_references": None,
-        "children": [],
-    }
-    defaults.update(kwargs)
-    return SimpleNamespace(**defaults)
+) -> StructureNode:
+    """Create a detached StructureNode ORM instance for testing."""
+    return StructureNode(
+        id=node_id or uuid.uuid4(),
+        structuresnapshot_id=uuid.uuid4(),
+        parent_structurenode_id=parent_id,
+        node_type=node_type,
+        order=order,
+        title=title,
+        **kwargs,  # type: ignore[arg-type]
+    )
 
 
 class TestFlatToTree:

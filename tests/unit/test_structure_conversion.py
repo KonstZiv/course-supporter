@@ -317,3 +317,39 @@ class TestConvertToStructureNodes:
         assert module.common_mistakes is None
         assert module.teaching_strategy == "hands_on"
         assert module.activities is None
+
+    def test_lesson_enriched_fields(self, snapshot_id: uuid.UUID) -> None:
+        """Lesson description, learning_goal, estimated_duration are mapped."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    lessons=[
+                        LessonOutput(
+                            title="L",
+                            description="Intro to variables",
+                            learning_goal="Declare and use variables",
+                            estimated_duration=25,
+                        ),
+                    ],
+                ),
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        lesson = next(n for n in nodes if n.node_type == StructureNodeType.LESSON)
+        assert lesson.description == "Intro to variables"
+        assert lesson.learning_goal == "Declare and use variables"
+        assert lesson.estimated_duration == 25
+
+    def test_lesson_enriched_fields_defaults(self, snapshot_id: uuid.UUID) -> None:
+        """Lesson with default values maps None for empty strings."""
+        structure = CourseStructure(
+            title="C",
+            modules=[ModuleOutput(title="M", lessons=[LessonOutput(title="L")])],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        lesson = next(n for n in nodes if n.node_type == StructureNodeType.LESSON)
+        assert lesson.description is None
+        assert lesson.learning_goal is None
+        assert lesson.estimated_duration is None

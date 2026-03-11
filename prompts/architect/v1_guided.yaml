@@ -92,6 +92,11 @@ system_prompt: |
 
   ### Lesson level
   - **title**: lesson title
+  - **description**: 1-2 sentence summary of what this lesson covers
+  - **learning_goal**: specific, measurable goal for this lesson (what the student
+    will be able to do after completing it)
+  - **estimated_duration**: estimated time in minutes to complete this lesson
+    (watching video, reading, doing exercises)
   - **video_start_timecode** / **video_end_timecode**: time range in source video
     (format "HH:MM:SS", null if no video)
   - **slide_range**: {"start": N, "end": M} from presentation (null if no slides)

@@ -260,3 +260,60 @@ class TestConvertToStructureNodes:
         nodes = convert_to_structure_nodes(structure, snapshot_id)
         assert nodes[0].expected_knowledge is None
         assert nodes[0].expected_skills is None
+
+    def test_module_enriched_fields(self, snapshot_id: uuid.UUID) -> None:
+        """All new module-level fields are mapped to StructureNode."""
+        structure = CourseStructure(
+            title="C",
+            modules=[
+                ModuleOutput(
+                    title="M",
+                    difficulty="hard",
+                    prerequisites=["Variables", "Functions"],
+                    estimated_duration=90,
+                    success_criteria="Student can build a REST API",
+                    assessment_method="project",
+                    competencies=["API design", "debugging"],
+                    common_mistakes=[
+                        "Forgetting to handle errors",
+                        "Not validating input",
+                    ],
+                    teaching_strategy="project_based",
+                    activities=["Build a TODO API", "Review peer code"],
+                ),
+            ],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        module = nodes[0]
+
+        assert module.difficulty == "hard"
+        assert module.prerequisites == ["Variables", "Functions"]
+        assert module.estimated_duration == 90
+        assert module.success_criteria == "Student can build a REST API"
+        assert module.assessment_method == "project"
+        assert module.competencies == ["API design", "debugging"]
+        assert module.common_mistakes == [
+            "Forgetting to handle errors",
+            "Not validating input",
+        ]
+        assert module.teaching_strategy == "project_based"
+        assert module.activities == ["Build a TODO API", "Review peer code"]
+
+    def test_module_enriched_fields_defaults(self, snapshot_id: uuid.UUID) -> None:
+        """Module with default values maps None for empty lists, defaults for enums."""
+        structure = CourseStructure(
+            title="C",
+            modules=[ModuleOutput(title="M")],
+        )
+        nodes = convert_to_structure_nodes(structure, snapshot_id)
+        module = nodes[0]
+
+        assert module.difficulty == "medium"
+        assert module.prerequisites is None
+        assert module.estimated_duration is None
+        assert module.success_criteria is None
+        assert module.assessment_method == "exercise"
+        assert module.competencies is None
+        assert module.common_mistakes is None
+        assert module.teaching_strategy == "hands_on"
+        assert module.activities is None

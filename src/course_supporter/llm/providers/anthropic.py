@@ -16,6 +16,11 @@ class AnthropicProvider(LLMProvider):
 
     provider_name = "anthropic"
 
+    # Anthropic API requires max_tokens; used when neither request
+    # nor model config specifies a value.
+    DEFAULT_MAX_TOKENS = 8192
+    default_max_output_tokens: int = DEFAULT_MAX_TOKENS
+
     def __init__(self, api_key: str, default_model: str) -> None:
         super().__init__()
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
@@ -26,7 +31,7 @@ class AnthropicProvider(LLMProvider):
         model = request.model or self._default_model
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": request.max_tokens,
+            "max_tokens": request.max_tokens or self.DEFAULT_MAX_TOKENS,
             "temperature": request.temperature,
             "messages": [{"role": "user", "content": request.prompt}],
         }

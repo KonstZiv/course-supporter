@@ -54,6 +54,11 @@ class LLMProvider(abc.ABC):
 
     provider_name: str = ""
 
+    # Override in subclasses where the API requires max_tokens
+    # (e.g. Anthropic). Used by ModelRouter token guard when neither
+    # request nor model config specifies a value.
+    default_max_output_tokens: int | None = None
+
     def __init__(self) -> None:
         self._enabled: bool = True
 

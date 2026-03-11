@@ -46,7 +46,7 @@ class RefineAgent:
         mode: Literal["free", "guided"] = "free",
         strategy: str = "default",
         temperature: float = 0.0,
-        max_tokens: int = 8192,
+        max_tokens: int | None = None,
     ) -> None:
         self._router = router
         self._mode = mode

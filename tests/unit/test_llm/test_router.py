@@ -78,6 +78,7 @@ def _ok_provider(response: LLMResponse | None = None) -> LLMProvider:
     p.complete = AsyncMock(return_value=resp)
     p.complete_structured = AsyncMock(return_value=({"parsed": True}, resp))
     p.enabled = True
+    p.default_max_output_tokens = None
     return p  # type: ignore[return-value]
 
 
@@ -87,12 +88,14 @@ def _fail_provider(exc: Exception | None = None) -> LLMProvider:
     p.complete = AsyncMock(side_effect=error)
     p.complete_structured = AsyncMock(side_effect=error)
     p.enabled = True
+    p.default_max_output_tokens = None
     return p  # type: ignore[return-value]
 
 
 def _disabled_provider() -> LLMProvider:
     p = AsyncMock(spec=LLMProvider)
     p.enabled = False
+    p.default_max_output_tokens = None
     return p  # type: ignore[return-value]
 
 
@@ -260,6 +263,7 @@ class TestRetryBehavior:
         """First call fails, second succeeds."""
         p = AsyncMock(spec=LLMProvider)
         p.enabled = True
+        p.default_max_output_tokens = None
         p.complete = AsyncMock(
             side_effect=[Exception("transient"), _resp("p_a", "model-a")],
         )
@@ -325,6 +329,7 @@ class TestModelIdPassedToProvider:
 
         p = AsyncMock(spec=LLMProvider)
         p.enabled = True
+        p.default_max_output_tokens = None
         p.complete = AsyncMock(side_effect=capture_complete)
 
         await ModelRouter(
@@ -333,6 +338,37 @@ class TestModelIdPassedToProvider:
         ).complete("act", "hi")
 
         assert captured_requests[0].model == "model-a"
+
+
+class TestContextGuardProviderDefault:
+    """Token guard uses provider.default_max_output_tokens."""
+
+    async def test_provider_default_included_in_context_check(self) -> None:
+        """Provider default_max_output_tokens overflows 100k context."""
+        # model-a has max_context=100000, no max_output_tokens in config.
+        # Provider default_max_output_tokens=99999 → 99999 + input > 100000 → skip.
+        p_a = _ok_provider(_resp("p_a", "model-a"))
+        p_a.default_max_output_tokens = 99999  # type: ignore[attr-defined]
+        p_b = _ok_provider(_resp("p_b", "model-b"))
+        p_b.default_max_output_tokens = None  # type: ignore[attr-defined]
+
+        r = await ModelRouter(
+            {"p_a": p_a, "p_b": p_b},
+            _registry({"default": ["model-a", "model-b"]}),
+        ).complete("act", "short prompt")
+        # model-a skipped (99999 output + input > 100000), model-b used
+        assert r.provider == "p_b"
+
+    async def test_provider_default_fits(self) -> None:
+        """Provider default_max_output_tokens=8192 fits in 100k context."""
+        p_a = _ok_provider(_resp("p_a", "model-a"))
+        p_a.default_max_output_tokens = 8192  # type: ignore[attr-defined]
+
+        r = await ModelRouter(
+            {"p_a": p_a},
+            _registry({"default": ["model-a"]}),
+        ).complete("act", "short prompt")
+        assert r.provider == "p_a"
 
 
 class TestIsRetryable:

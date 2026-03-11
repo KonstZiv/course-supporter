@@ -23,6 +23,7 @@ import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.api.deps import get_arq_redis, get_session
 from course_supporter.api.schemas import (
@@ -236,8 +237,11 @@ def _flat_to_tree(
     roots: list[StructureNodeResponse] = []
 
     for n in flat_nodes:
+        # Prevent Pydantic from triggering lazy-load on the ORM
+        # children relationship (greenlet error in async context).
+        if hasattr(n, "_sa_instance_state"):
+            set_committed_value(n, "children", [])
         resp = StructureNodeResponse.model_validate(n)
-        resp.children = []
         node_map[resp.id] = resp
 
     for n in flat_nodes:

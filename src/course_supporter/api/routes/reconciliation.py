@@ -13,10 +13,10 @@ from typing import Annotated, Any
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_session
+from course_supporter.api.deps import get_arq_redis, get_session
 from course_supporter.api.routes.editable import (
     _build_tree,
     _orm_to_response,
@@ -47,13 +47,7 @@ PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 _ALLOWED_FIELDS: frozenset[str] = frozenset(_CONTENT_FIELDS)
 
 
-def _get_arq(request: Request) -> ArqRedis:
-    """Extract ARQ Redis pool from app state."""
-    arq_redis: ArqRedis = request.app.state.arq_redis
-    return arq_redis
-
-
-ArqDep = Annotated[ArqRedis, Depends(_get_arq)]
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 
 def _editable_tree_to_dicts(
@@ -151,10 +145,7 @@ async def reconcile_preview_result(
             detail="Job completed but result_data is missing",
         )
 
-    return ReconciliationPreviewResponse(
-        issues=job.result_data.get("issues", []),
-        context_summary=job.result_data.get("context_summary", ""),
-    )
+    return ReconciliationPreviewResponse.model_validate(job.result_data)
 
 
 @router.post("/nodes/{node_id}/reconcile/apply")

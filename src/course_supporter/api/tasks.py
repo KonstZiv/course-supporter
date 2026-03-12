@@ -34,10 +34,6 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import MaterialNode, StructureSnapshot
     from course_supporter.storage.s3 import S3Client
 
-# Enough output tokens for 20 structured issues + context_summary.
-# Capped at 8192 to stay within DeepSeek's max_tokens limit.
-_RECONCILE_PREVIEW_MAX_TOKENS = 8192
-
 
 class _HasSourceUrl(Protocol):
     source_url: str
@@ -952,11 +948,7 @@ async def arq_reconcile_preview(
             tree_dicts = _editable_tree_to_dicts(flat)
 
             # Call LLM via ReconcileAgent
-            agent = ReconcileAgent(
-                router,
-                strategy="default",
-                max_tokens=_RECONCILE_PREVIEW_MAX_TOKENS,
-            )
+            agent = ReconcileAgent(router, strategy="default")
             preview = await agent.preview(tree_dicts)
 
             # Store result on Job

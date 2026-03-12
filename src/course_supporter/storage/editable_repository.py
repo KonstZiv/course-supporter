@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.editable_conversion import (
@@ -95,14 +95,11 @@ class EditableRepository:
         materialnode_id: uuid.UUID,
     ) -> int:
         """Delete all editable nodes for a MaterialNode. Returns count."""
-        stmt = (
-            delete(StructureNodeEditable)
-            .where(StructureNodeEditable.materialnode_id == materialnode_id)
-            .returning(func.count())
+        stmt = delete(StructureNodeEditable).where(
+            StructureNodeEditable.materialnode_id == materialnode_id
         )
-        result = await self._session.execute(stmt)
-        row = result.scalar()
-        return int(row) if row else 0
+        result: CursorResult[tuple[()]] = await self._session.execute(stmt)  # type: ignore[assignment]
+        return result.rowcount
 
     # ── Init from snapshot ──────────────────────────────────
 

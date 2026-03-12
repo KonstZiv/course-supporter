@@ -838,3 +838,38 @@ class StorageUsageResponse(BaseModel):
 
     total_bytes: int = Field(description="Total storage used in bytes.")
     file_count: int = Field(description="Number of files in storage.")
+
+
+# --- Reconciliation ---
+
+
+class ReconciliationIssueResponse(BaseModel):
+    """Single field-level issue detected during reconciliation."""
+
+    id: uuid.UUID
+    editable_node_id: uuid.UUID
+    node_title: str
+    field: str
+    issue_type: str
+    description: str
+    current_value: Any = None
+    suggested_value: Any = None
+    reasoning: str
+
+
+class ReconciliationPreviewResponse(BaseModel):
+    """Full reconciliation preview result."""
+
+    issues: list[ReconciliationIssueResponse]
+    context_summary: str
+
+
+class ReconcileApplyRequest(BaseModel):
+    """Request to apply selected reconciliation issues."""
+
+    accepted_issue_ids: list[uuid.UUID] = Field(
+        description="IDs of issues the user accepted.",
+    )
+    issues: list[ReconciliationIssueResponse] = Field(
+        description="Full issue objects (from preview response).",
+    )

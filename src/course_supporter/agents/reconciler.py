@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 
@@ -13,11 +13,13 @@ from course_supporter.agents.prompt_loader import format_user_prompt, load_promp
 from course_supporter.ingestion.merge import MergeStep
 from course_supporter.llm.router import ModelRouter
 from course_supporter.models.course import CourseStructure
+from course_supporter.models.reconciliation import ReconciliationPreview
 from course_supporter.models.step import StepOutput
 
 logger = structlog.get_logger()
 
 RECONCILE_PROMPT_PATH = "prompts/architect/v1_reconcile.yaml"
+RECONCILE_PREVIEW_PROMPT_PATH = "prompts/architect/v1_reconcile_preview.yaml"
 
 
 class ReconcileAgent:
@@ -116,6 +118,60 @@ class ReconcileAgent:
             prompt_version=prompt_data.version,
             response=response,
         )
+
+    async def preview(
+        self,
+        editable_tree: list[dict[str, Any]],
+    ) -> ReconciliationPreview:
+        """Analyze an editable tree and return field-level issues.
+
+        Unlike ``execute``, this does not modify the structure. It
+        returns a list of specific issues with suggested fixes.
+
+        Args:
+            editable_tree: Serialized editable nodes (nested dicts).
+
+        Returns:
+            ReconciliationPreview with detected issues.
+        """
+        import json
+
+        context = json.dumps(editable_tree, ensure_ascii=False, indent=2)
+
+        prompt_data = load_prompt(RECONCILE_PREVIEW_PROMPT_PATH)
+        user_prompt = format_user_prompt(
+            prompt_data.user_prompt_template,
+            context,
+        )
+
+        logger.info(
+            "reconcile_preview_generating",
+            strategy=self._strategy,
+            prompt_version=prompt_data.version,
+            context_chars=len(user_prompt),
+        )
+
+        raw_preview, response = await self._router.complete_structured(
+            action="course_structuring",
+            prompt=user_prompt,
+            response_schema=ReconciliationPreview,
+            system_prompt=prompt_data.system_prompt,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            strategy=self._strategy,
+        )
+        preview: ReconciliationPreview = raw_preview
+
+        logger.info(
+            "reconcile_preview_done",
+            issues_count=len(preview.issues),
+            model=response.model_id,
+            tokens_in=response.tokens_in,
+            tokens_out=response.tokens_out,
+            cost_usd=response.cost_usd,
+        )
+
+        return preview
 
 
 def _format_summary_details(summary: NodeSummary) -> list[str]:

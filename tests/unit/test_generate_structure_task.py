@@ -201,7 +201,7 @@ class _MockDeps:
         # build_material_tree_summary — returns empty list by default
         self.tree_summary: list[Any] = []
 
-        # EditableRepository
+        # EditableRepository — return value not consumed by caller
         self.editable_repo = AsyncMock()
         self.editable_repo.init_from_snapshot = AsyncMock(return_value=[])
 

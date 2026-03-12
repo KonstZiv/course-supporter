@@ -4,38 +4,40 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import inspect as sa_inspect
+
 from course_supporter.storage.orm import (
     StructureNode,
     StructureNodeEditable,
     _uuid7,
 )
 
-# Fields to copy from StructureNode → StructureNodeEditable.
-_CONTENT_FIELDS: tuple[str, ...] = (
-    "node_type",
-    "order",
-    "title",
-    "description",
-    "learning_goal",
-    "expected_knowledge",
-    "expected_skills",
-    "prerequisites",
-    "difficulty",
-    "estimated_duration",
-    "success_criteria",
-    "assessment_method",
-    "competencies",
-    "key_concepts",
-    "common_mistakes",
-    "teaching_strategy",
-    "activities",
-    "teaching_style",
-    "deep_dive_references",
-    "content_version",
-    "timecodes",
-    "slide_references",
-    "web_references",
+# Metadata-only columns excluded from content copying.
+_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {
+        "id",
+        "materialnode_id",
+        "source_snapshot_id",
+        "source_structurenode_id",
+        "parent_editable_id",
+        "edited_fields",
+        "created_at",
+        "updated_at",
+    }
 )
+
+
+def _derive_content_fields() -> tuple[str, ...]:
+    """Derive shared content columns from StructureNodeEditable mapper.
+
+    Automatically picks up any new content columns added to the ORM
+    model, avoiding brittle manual enumeration.
+    """
+    mapper = sa_inspect(StructureNodeEditable)
+    return tuple(col.key for col in mapper.columns if col.key not in _EXCLUDED_FIELDS)
+
+
+_CONTENT_FIELDS: tuple[str, ...] = _derive_content_fields()
 
 
 def convert_structure_nodes_to_editables(

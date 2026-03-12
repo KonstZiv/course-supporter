@@ -71,7 +71,8 @@ system_prompt: |
      gaps based on what already exists in the tree.
   5. Prioritize high-impact issues over cosmetic ones.
   6. If the tree is fully consistent, return an empty issues array.
-  7. Return between 5 and 20 issues — focus on the most important ones.
+  7. Return up to 20 issues — focus on the most important ones. If fewer
+     than 5 important issues are found, return only those.
 
 user_prompt_template: |
   Analyze the following editable structure tree for cross-node consistency issues.

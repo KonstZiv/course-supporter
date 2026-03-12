@@ -181,6 +181,11 @@ class MaterialNode(Base):
         back_populates="node",
         cascade="all, delete-orphan",
     )
+    editables: Mapped[list["StructureNodeEditable"]] = relationship(
+        back_populates="material_node",
+        cascade="all, delete-orphan",
+        foreign_keys="StructureNodeEditable.materialnode_id",
+    )
 
 
 class MaterialState(StrEnum):
@@ -476,6 +481,117 @@ class StructureNode(Base):
         remote_side="StructureNode.id",
     )
     children: Mapped[list["StructureNode"]] = relationship(
+        back_populates="parent",
+        cascade="all, delete-orphan",
+    )
+
+
+class StructureNodeEditable(Base):
+    """Mutable working copy of a course structure node.
+
+    Linked to a ``MaterialNode`` (not a snapshot) so it survives
+    re-generation.  Auto-created from the latest ``StructureSnapshot``
+    after each generation run.  Users edit fields here; the
+    ``edited_fields`` JSONB list tracks which fields were changed
+    manually vs. copied from the LLM baseline.
+    """
+
+    __tablename__ = "structure_nodes_editable"
+    __table_args__ = {
+        "comment": (
+            "Mutable overlay for course structure nodes. "
+            "Working copy that survives re-generation"
+        ),
+    }
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    materialnode_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to owning MaterialNode (survives re-generation)",
+    )
+    source_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("structure_snapshots.id", ondelete="SET NULL"),
+        index=True,
+        comment="Which snapshot this editable was initialised from",
+    )
+    source_structurenode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("structure_nodes.id", ondelete="SET NULL"),
+        index=True,
+        comment="Original StructureNode this was copied from (for diff tracking)",
+    )
+    parent_editable_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("structure_nodes_editable.id", ondelete="CASCADE"),
+        index=True,
+        comment="Self-referential FK. NULL = top-level module",
+    )
+    node_type: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        comment="Enum: module, lesson, concept, exercise",
+    )
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Section 1: Formal & organisational ──
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    learning_goal: Mapped[str | None] = mapped_column(Text)
+    expected_knowledge: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    expected_skills: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    prerequisites: Mapped[list[str] | None] = mapped_column(JSONB)
+    difficulty: Mapped[str | None] = mapped_column(String(20))
+    estimated_duration: Mapped[int | None] = mapped_column(Integer)
+
+    # ── Section 2: Results & assessment ──
+    success_criteria: Mapped[str | None] = mapped_column(Text)
+    assessment_method: Mapped[str | None] = mapped_column(String(50))
+    competencies: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    # ── Section 3: Methodological accents ──
+    key_concepts: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    common_mistakes: Mapped[list[str] | None] = mapped_column(JSONB)
+    teaching_strategy: Mapped[str | None] = mapped_column(String(50))
+    activities: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    # ── Section 4: Context & adaptivity ──
+    teaching_style: Mapped[str | None] = mapped_column(String(50))
+    deep_dive_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    content_version: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # ── Section 5: Material references ──
+    timecodes: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    slide_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    web_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+
+    # ── Edit tracking ──
+    edited_fields: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default="[]",
+        comment="Field names manually edited by the user",
+    )
+
+    # ── Timestamps ──
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    material_node: Mapped["MaterialNode"] = relationship(
+        back_populates="editables",
+        foreign_keys=[materialnode_id],
+    )
+    source_snapshot: Mapped["StructureSnapshot | None"] = relationship(
+        foreign_keys=[source_snapshot_id],
+    )
+    parent: Mapped["StructureNodeEditable | None"] = relationship(
+        back_populates="children",
+        remote_side="StructureNodeEditable.id",
+    )
+    children: Mapped[list["StructureNodeEditable"]] = relationship(
         back_populates="parent",
         cascade="all, delete-orphan",
     )

@@ -201,6 +201,10 @@ class _MockDeps:
         # build_material_tree_summary — returns empty list by default
         self.tree_summary: list[Any] = []
 
+        # EditableRepository — return value not consumed by caller
+        self.editable_repo = AsyncMock()
+        self.editable_repo.init_from_snapshot = AsyncMock(return_value=[])
+
         # MaterialState / MappingValidationState — used for enum comparison
         # These are imported inside the function via lazy import, so we
         # let them resolve naturally. Our mock entries use string values
@@ -269,6 +273,10 @@ async def _run_task(
             "course_supporter.tree_utils.build_material_tree_summary",
             return_value=deps.tree_summary,
         ),
+        patch(
+            "course_supporter.api.tasks.EditableRepository",
+            return_value=deps.editable_repo,
+        ),
     ):
         await arq_generate_structure(
             ctx,
@@ -309,6 +317,10 @@ class TestHappyPathNodeLevel:
             uuid.UUID(job_id),
             "complete",
         )
+        # Editable tree auto-initialised
+        deps.editable_repo.init_from_snapshot.assert_called_once()
+        call_kwargs = deps.editable_repo.init_from_snapshot.call_args.kwargs
+        assert call_kwargs["preserve_edited"] is True
 
 
 class TestHappyPathCourseLevel:

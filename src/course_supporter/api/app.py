@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
+from course_supporter.api.routes.editable import router as editable_router
 from course_supporter.api.routes.generation import router as generation_router
 from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.materials import router as materials_router
@@ -225,6 +226,7 @@ async def unhandled_exception_handler(
     )
 
 
+app.include_router(editable_router, prefix="/api/v1")
 app.include_router(generation_router, prefix="/api/v1")
 app.include_router(nodes_router, prefix="/api/v1")
 app.include_router(materials_router, prefix="/api/v1")

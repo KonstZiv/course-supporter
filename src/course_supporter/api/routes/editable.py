@@ -137,6 +137,7 @@ async def update_editable_node(
 
     updated = await repo.update_fields(editable_id, fields)
     await session.commit()
+    await session.refresh(updated)
 
     return _orm_to_response(updated)
 
@@ -170,6 +171,9 @@ async def init_editable_tree(
         preserve_edited=body.preserve_edited,
     )
     await session.commit()
+
+    # Re-fetch the tree after commit to avoid MissingGreenlet on expired ORM objects
+    editables = await repo.get_tree(node_id)
 
     source_snapshot_id = editables[0].source_snapshot_id if editables else None
 

@@ -58,14 +58,23 @@ async def _require_node_for_tenant(
     return node
 
 
+def _orm_to_response(node: StructureNodeEditable) -> EditableNodeResponse:
+    """Convert ORM object to response, bypassing lazy-loaded relationships."""
+    data = {
+        k: getattr(node, k)
+        for k in EditableNodeResponse.model_fields
+        if k != "children"
+    }
+    return EditableNodeResponse.model_validate({**data, "children": []})
+
+
 def _build_tree(flat: list[StructureNodeEditable]) -> list[EditableNodeResponse]:
     """Convert flat list of editables into a nested tree of responses."""
     response_map: dict[uuid.UUID, EditableNodeResponse] = {}
     roots: list[EditableNodeResponse] = []
 
     for node in flat:
-        resp = EditableNodeResponse.model_validate(node)
-        resp.children = []
+        resp = _orm_to_response(node)
         response_map[node.id] = resp
 
     for node in flat:
@@ -129,7 +138,7 @@ async def update_editable_node(
     updated = await repo.update_fields(editable_id, fields)
     await session.commit()
 
-    return EditableNodeResponse.model_validate(updated)
+    return _orm_to_response(updated)
 
 
 @router.post("/nodes/{node_id}/editable/init")

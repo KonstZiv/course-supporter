@@ -36,4 +36,8 @@ class ReconciliationPreview(BaseModel):
     """Full preview result from reconciliation analysis."""
 
     issues: list[ReconciliationIssue] = Field(default_factory=list)
-    context_summary: str = ""
+    context_summary: str = Field(
+        default="",
+        max_length=200,
+        description="Brief statistical count of detected issues.",
+    )

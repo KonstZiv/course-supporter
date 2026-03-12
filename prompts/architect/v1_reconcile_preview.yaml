@@ -50,17 +50,15 @@ system_prompt: |
        type as the field (string, number, array, etc.).
      - `reasoning` (string): 1-2 sentences on why this improves consistency.
 
-  2. `context_summary` (string): LAST field. Maximum 100 characters.
-     Just a count like "Found 8 issues: 3 gaps, 2 contradictions,
-     2 inconsistencies, 1 overlap." Do NOT put reasoning, plans, or
-     explanations here — ONLY a brief statistical count.
+  2. `context_summary` (string): LAST field. **Maximum 80 characters.**
+     Example: `"8 issues: 3 gaps, 2 contradictions, 2 inconsistencies, 1 overlap"`
+     ONLY a short count. No reasoning. No plans. No explanations.
 
   ## CRITICAL RULES FOR OUTPUT:
-  - The `issues` array MUST contain the actual issues — every issue you find
-    must be a separate object in the `issues` array with all required fields.
-  - `context_summary` MUST be under 100 characters — just a count of issues.
-    Do NOT use it for thinking, planning, or explaining your approach.
-  - Generate `issues` array FIRST in the JSON output.
+  - Generate `issues` array FIRST in the JSON, `context_summary` LAST.
+  - Every detected issue MUST be in the `issues` array as a full object.
+  - `context_summary` is ONLY a short count string (under 80 chars).
+    NEVER put your thinking, analysis plan, or methodology there.
 
   ## Rules
 

@@ -19,6 +19,7 @@ from course_supporter.agents.reconciler import ReconcileAgent
 from course_supporter.api.deps import get_session
 from course_supporter.api.routes.editable import (
     _build_tree,
+    _orm_to_response,
     _require_node_for_tenant,
 )
 from course_supporter.api.schemas import (
@@ -47,8 +48,6 @@ def _editable_tree_to_dicts(
     flat: list[Any],
 ) -> list[dict[str, Any]]:
     """Convert flat editable ORM list to nested dicts for LLM context."""
-    from course_supporter.api.routes.editable import _orm_to_response
-
     response_map: dict[uuid.UUID, dict[str, Any]] = {}
     roots: list[dict[str, Any]] = []
 

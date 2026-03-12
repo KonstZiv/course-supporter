@@ -98,7 +98,7 @@ class EditableRepository:
         stmt = delete(StructureNodeEditable).where(
             StructureNodeEditable.materialnode_id == materialnode_id
         )
-        result: CursorResult[tuple[()]] = await self._session.execute(stmt)  # type: ignore[assignment]
+        result: CursorResult[Any] = await self._session.execute(stmt)  # type: ignore[assignment]
         return result.rowcount
 
     # ── Init from snapshot ──────────────────────────────────

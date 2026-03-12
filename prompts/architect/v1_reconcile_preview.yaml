@@ -33,22 +33,34 @@ system_prompt: |
 
   ## Output Format
 
-  Return a JSON object with:
-  - `context_summary`: A 1-2 sentence overview of the tree's consistency state.
-  - `issues`: An array of issue objects, each with:
-    - `editable_node_id`: UUID of the affected node (from the input tree)
-    - `node_title`: Title of the affected node (for readability)
-    - `field`: The specific field name (e.g., "difficulty", "prerequisites",
-      "learning_goal", "key_concepts", "common_mistakes", etc.)
-    - `issue_type`: One of "contradiction", "gap", "overlap", "inconsistency"
-    - `description`: Clear, concise description of the problem
-    - `current_value`: The current value of the field (or null if missing)
-    - `suggested_value`: What the value should be changed to
-    - `reasoning`: Why this change improves consistency
+  Return a JSON object with TWO fields:
+
+  1. `context_summary` (string): A SHORT 1-2 sentence overview. Do NOT put
+     issue details here — keep it brief like "Found 8 issues: 3 gaps,
+     2 contradictions, 2 inconsistencies, 1 overlap."
+
+  2. `issues` (array): THIS IS THE MAIN OUTPUT. Each element must have:
+     - `editable_node_id` (string): Exact UUID of the affected node copied
+       from the input tree's `id` field.
+     - `node_title` (string): Title of the affected node.
+     - `field` (string): Exact field name (e.g., "difficulty", "prerequisites",
+       "learning_goal", "key_concepts", "common_mistakes", "estimated_duration").
+     - `issue_type` (string): One of "contradiction", "gap", "overlap",
+       "inconsistency".
+     - `description` (string): Clear 1-sentence description of the problem.
+     - `current_value`: Current value of the field (copy from input, or null).
+     - `suggested_value`: The concrete new value to set. Must be the same
+       type as the field (string, number, array, etc.).
+     - `reasoning` (string): 1-2 sentences on why this improves consistency.
+
+  ## CRITICAL: The `issues` array MUST contain the actual issues.
+  Do NOT describe issues only in `context_summary` — every issue you find
+  must be a separate object in the `issues` array with all required fields.
+  The `context_summary` is only a brief statistical overview.
 
   ## Rules
 
-  1. Be SPECIFIC — always reference exact node IDs and field names.
+  1. Be SPECIFIC — always reference exact node UUIDs and field names.
   2. Respect `edited_fields` — if a field was manually edited by the user,
      prefer to keep the user's value. However, if the manual edit clearly
      contradicts factual truth or creates a logical impossibility, you MUST
@@ -58,8 +70,8 @@ system_prompt: |
   4. Do NOT fabricate content — only suggest reorganizing, fixing, or filling
      gaps based on what already exists in the tree.
   5. Prioritize high-impact issues over cosmetic ones.
-  6. If the tree is consistent, return an empty issues array.
-  7. Limit to at most 20 issues — focus on the most important ones.
+  6. If the tree is fully consistent, return an empty issues array.
+  7. Return between 5 and 20 issues — focus on the most important ones.
 
 user_prompt_template: |
   Analyze the following editable structure tree for cross-node consistency issues.

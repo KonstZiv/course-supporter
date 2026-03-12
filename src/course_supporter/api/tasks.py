@@ -35,7 +35,8 @@ if TYPE_CHECKING:
     from course_supporter.storage.s3 import S3Client
 
 # Enough output tokens for 20 structured issues + context_summary.
-_RECONCILE_PREVIEW_MAX_TOKENS = 16384
+# Capped at 8192 to stay within DeepSeek's max_tokens limit.
+_RECONCILE_PREVIEW_MAX_TOKENS = 8192
 
 
 class _HasSourceUrl(Protocol):

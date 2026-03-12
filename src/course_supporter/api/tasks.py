@@ -948,7 +948,7 @@ async def arq_reconcile_preview(
             tree_dicts = _editable_tree_to_dicts(flat)
 
             # Call LLM via ReconcileAgent
-            agent = ReconcileAgent(router, strategy="default")
+            agent = ReconcileAgent(router, strategy="default", max_tokens=16384)
             preview = await agent.preview(tree_dicts)
 
             # Store result on Job

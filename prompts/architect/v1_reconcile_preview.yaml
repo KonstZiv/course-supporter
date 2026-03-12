@@ -33,13 +33,10 @@ system_prompt: |
 
   ## Output Format
 
-  Return a JSON object with TWO fields:
+  Return a JSON object with TWO fields. **Generate `issues` FIRST,
+  then `context_summary` LAST.**
 
-  1. `context_summary` (string): A SHORT 1-2 sentence overview. Do NOT put
-     issue details here — keep it brief like "Found 8 issues: 3 gaps,
-     2 contradictions, 2 inconsistencies, 1 overlap."
-
-  2. `issues` (array): THIS IS THE MAIN OUTPUT. Each element must have:
+  1. `issues` (array): THIS IS THE MAIN OUTPUT. Each element must have:
      - `editable_node_id` (string): Exact UUID of the affected node copied
        from the input tree's `id` field.
      - `node_title` (string): Title of the affected node.
@@ -53,10 +50,17 @@ system_prompt: |
        type as the field (string, number, array, etc.).
      - `reasoning` (string): 1-2 sentences on why this improves consistency.
 
-  ## CRITICAL: The `issues` array MUST contain the actual issues.
-  Do NOT describe issues only in `context_summary` — every issue you find
-  must be a separate object in the `issues` array with all required fields.
-  The `context_summary` is only a brief statistical overview.
+  2. `context_summary` (string): LAST field. Maximum 100 characters.
+     Just a count like "Found 8 issues: 3 gaps, 2 contradictions,
+     2 inconsistencies, 1 overlap." Do NOT put reasoning, plans, or
+     explanations here — ONLY a brief statistical count.
+
+  ## CRITICAL RULES FOR OUTPUT:
+  - The `issues` array MUST contain the actual issues — every issue you find
+    must be a separate object in the `issues` array with all required fields.
+  - `context_summary` MUST be under 100 characters — just a count of issues.
+    Do NOT use it for thinking, planning, or explaining your approach.
+  - Generate `issues` array FIRST in the JSON output.
 
   ## Rules
 

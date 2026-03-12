@@ -527,6 +527,7 @@ class JobResponse(BaseModel):
     tenant_id: uuid.UUID | None
     materialnode_id: uuid.UUID | None
     arq_job_id: str | None
+    result_data: dict[str, Any] | None = None
     error_message: str | None
     queued_at: datetime
     started_at: datetime | None

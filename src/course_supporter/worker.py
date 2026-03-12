@@ -18,6 +18,7 @@ from course_supporter.api.tasks import (
     arq_execute_step,
     arq_generate_structure,
     arq_ingest_material,
+    arq_reconcile_preview,
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
@@ -102,6 +103,7 @@ class WorkerSettings:
         arq_ingest_material,
         arq_generate_structure,
         arq_execute_step,
+        arq_reconcile_preview,
     ]
     on_startup = startup
     on_shutdown = shutdown

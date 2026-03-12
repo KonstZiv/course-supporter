@@ -727,6 +727,9 @@ class Job(Base):
         comment="JSONB array of jobs.id UUIDs (as strings) "
         "that must complete before this job runs",
     )
+    result_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

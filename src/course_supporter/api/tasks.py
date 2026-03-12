@@ -902,3 +902,77 @@ async def arq_execute_step(
             if cascaded:
                 log.info("cascading_failure_propagated", failed_count=len(cascaded))
             log.error("execute_step_failed", error=str(exc))
+
+
+async def arq_reconcile_preview(
+    ctx: dict[str, Any],
+    job_id: str,
+    node_id: str,
+) -> None:
+    """ARQ task: analyze editable tree for cross-node consistency issues.
+
+    Loads editable tree, serializes to JSON, calls LLM via ReconcileAgent,
+    and stores the preview result on the Job record.
+
+    Args:
+        ctx: ARQ worker context (session_factory, model_router).
+        job_id: Job UUID as string.
+        node_id: MaterialNode UUID whose editable tree to analyze.
+    """
+    from course_supporter.api.routes.reconciliation import _editable_tree_to_dicts
+    from course_supporter.storage.job_repository import JobRepository
+
+    jid = uuid.UUID(job_id)
+    nid = uuid.UUID(node_id)
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    router: ModelRouter = ctx["model_router"]
+
+    log = structlog.get_logger().bind(job_id=job_id, node_id=node_id)
+    log.info("reconcile_preview_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        try:
+            await job_repo.update_status(jid, "active")
+            await session.commit()
+
+            # Load editable tree
+            editable_repo = EditableRepository(session)
+            flat = await editable_repo.get_tree(nid)
+
+            if not flat:
+                msg = "No editable tree found. Generate a structure first."
+                raise ValueError(msg)
+
+            tree_dicts = _editable_tree_to_dicts(flat)
+
+            # Call LLM via ReconcileAgent
+            agent = ReconcileAgent(router, strategy="default")
+            preview = await agent.preview(tree_dicts)
+
+            # Store result on Job
+            result_data = {
+                "issues": [issue.model_dump(mode="json") for issue in preview.issues],
+                "context_summary": preview.context_summary,
+            }
+            await job_repo.store_result(jid, result_data)
+
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            log.info(
+                "reconcile_preview_done",
+                issues_count=len(preview.issues),
+            )
+
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_repo = JobRepository(err_session)
+                await err_repo.update_status(
+                    jid,
+                    "failed",
+                    error_message=str(exc),
+                )
+                await err_session.commit()
+            log.error("reconcile_preview_failed", error=str(exc))

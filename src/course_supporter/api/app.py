@@ -24,6 +24,7 @@ from course_supporter.api.routes.generation import router as generation_router
 from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.materials import router as materials_router
 from course_supporter.api.routes.nodes import router as nodes_router
+from course_supporter.api.routes.reconciliation import router as reconciliation_router
 from course_supporter.api.routes.reports import router as reports_router
 from course_supporter.api.routes.storage import router as storage_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -228,6 +229,7 @@ async def unhandled_exception_handler(
 
 app.include_router(editable_router, prefix="/api/v1")
 app.include_router(generation_router, prefix="/api/v1")
+app.include_router(reconciliation_router, prefix="/api/v1")
 app.include_router(nodes_router, prefix="/api/v1")
 app.include_router(materials_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")

@@ -142,6 +142,9 @@ class _MockDeps:
 
         self.tree_summary: list[Any] = []
 
+        self.editable_repo = AsyncMock()
+        self.editable_repo.init_from_snapshot = AsyncMock(return_value=[])
+
 
 def _make_session_factory(session: AsyncMock) -> MagicMock:
     """Create a mock async_sessionmaker."""
@@ -208,10 +211,8 @@ async def _run_task(
             return_value=deps.tree_summary,
         ),
         patch(
-            "course_supporter.storage.editable_repository.EditableRepository",
-            return_value=AsyncMock(
-                init_from_snapshot=AsyncMock(return_value=[]),
-            ),
+            "course_supporter.api.tasks.EditableRepository",
+            return_value=deps.editable_repo,
         ),
     ):
         await arq_execute_step(
@@ -263,6 +264,9 @@ class TestHappyPath:
         await _run_task(job_id, root_node_id, deps)
 
         deps.job_repo.update_status.assert_any_call(uuid.UUID(job_id), "complete")
+        deps.editable_repo.init_from_snapshot.assert_called_once()
+        call_kwargs = deps.editable_repo.init_from_snapshot.call_args.kwargs
+        assert call_kwargs["preserve_edited"] is True
 
     async def test_esc_linked_to_snapshot(self, job_id: str, root_node_id: str) -> None:
         """ExternalServiceCall is created and linked to snapshot."""

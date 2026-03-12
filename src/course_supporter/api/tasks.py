@@ -18,6 +18,7 @@ from course_supporter.agents.refine import RefineAgent
 from course_supporter.ingestion.factory import create_heavy_steps, create_processors
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import ChildSnapshotContext, NodeSummary
+from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
@@ -408,10 +409,6 @@ async def arq_generate_structure(
             await sn_repo.create_tree(sn_nodes)
 
             # Auto-init editable tree from new snapshot
-            from course_supporter.storage.editable_repository import (
-                EditableRepository,
-            )
-
             editable_repo = EditableRepository(session)
             await editable_repo.init_from_snapshot(
                 snapshot_id=snapshot.id,
@@ -718,8 +715,6 @@ async def _persist_step_result(
     await sn_repo.create_tree(sn_nodes)
 
     # Auto-init editable tree from new snapshot
-    from course_supporter.storage.editable_repository import EditableRepository
-
     editable_repo = EditableRepository(session)
     await editable_repo.init_from_snapshot(
         snapshot_id=snapshot.id,

@@ -49,7 +49,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("node_type", sa.String(30), nullable=False),
-        sa.Column("order", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("order", sa.Integer(), nullable=False, server_default=sa.text("0")),
         # Section 1: Formal & organisational
         sa.Column("title", sa.String(500), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
@@ -77,7 +77,12 @@ def upgrade() -> None:
         sa.Column("slide_references", JSONB(), nullable=True),
         sa.Column("web_references", JSONB(), nullable=True),
         # Edit tracking
-        sa.Column("edited_fields", JSONB(), nullable=False, server_default="[]"),
+        sa.Column(
+            "edited_fields",
+            JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
         # Timestamps
         sa.Column(
             "created_at",
@@ -90,6 +95,7 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.func.now(),
+            onupdate=sa.func.now(),
         ),
         comment=(
             "Mutable overlay for course structure nodes. "

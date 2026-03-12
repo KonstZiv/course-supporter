@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections import deque
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,6 +118,14 @@ class JobRepository:
     async def set_arq_job_id(self, job_id: uuid.UUID, arq_job_id: str) -> None:
         """Set the ARQ job identifier after enqueue."""
         stmt = update(Job).where(Job.id == job_id).values(arq_job_id=arq_job_id)
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def store_result(
+        self, job_id: uuid.UUID, result_data: dict[str, Any]
+    ) -> None:
+        """Store task result payload on the Job record."""
+        stmt = update(Job).where(Job.id == job_id).values(result_data=result_data)
         await self._session.execute(stmt)
         await self._session.flush()
 

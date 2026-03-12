@@ -2,7 +2,7 @@
 
 Routes
 ------
-- ``POST /nodes/{nid}/reconcile/preview`` — Analyze editable tree for issues
+- ``POST /nodes/{nid}/reconcile/preview`` — Enqueue async preview job
 - ``POST /nodes/{nid}/reconcile/apply``   — Apply accepted issue fixes
 """
 
@@ -12,11 +12,11 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from arq.connections import ArqRedis
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.agents.reconciler import ReconcileAgent
-from course_supporter.api.deps import get_session
+from course_supporter.api.deps import get_arq_redis, get_session
 from course_supporter.api.routes.editable import (
     _build_tree,
     _orm_to_response,
@@ -24,14 +24,17 @@ from course_supporter.api.routes.editable import (
 )
 from course_supporter.api.schemas import (
     EditableTreeResponse,
+    JobResponse,
     ReconcileApplyRequest,
     ReconciliationPreviewResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.enqueue import enqueue_reconcile_preview
 from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
 from course_supporter.storage.editable_repository import EditableRepository
+from course_supporter.storage.job_repository import JobRepository
 
 logger = structlog.get_logger()
 
@@ -42,6 +45,9 @@ PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 
 # Only content fields may be patched via reconciliation apply.
 _ALLOWED_FIELDS: frozenset[str] = frozenset(_CONTENT_FIELDS)
+
+
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 
 def _editable_tree_to_dicts(
@@ -68,17 +74,17 @@ def _editable_tree_to_dicts(
     return roots
 
 
-@router.post("/nodes/{node_id}/reconcile/preview")
+@router.post("/nodes/{node_id}/reconcile/preview", status_code=202)
 async def reconcile_preview(
     node_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
-    request: Request,
-) -> ReconciliationPreviewResponse:
-    """Analyze editable tree for cross-node consistency issues.
+    arq: ArqDep,
+) -> JobResponse:
+    """Enqueue async reconciliation preview for cross-node consistency issues.
 
-    Calls LLM synchronously and returns a list of field-level issues
-    with suggested fixes. Does not modify any data.
+    Returns a Job record (202). Poll ``GET /jobs/{job_id}`` for status.
+    When complete, ``result_data`` contains the preview issues.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
@@ -91,16 +97,55 @@ async def reconcile_preview(
             detail="No editable tree found. Generate a structure first.",
         )
 
-    tree_dicts = _editable_tree_to_dicts(flat)
-
-    router_instance = request.app.state.model_router
-    agent = ReconcileAgent(router_instance, strategy="default")
-    preview = await agent.preview(tree_dicts)
-
-    return ReconciliationPreviewResponse(
-        issues=[issue.model_dump() for issue in preview.issues],
-        context_summary=preview.context_summary,
+    job = await enqueue_reconcile_preview(
+        redis=arq,
+        session=session,
+        tenant_id=tenant.tenant_id,
+        node_id=node_id,
     )
+    await session.commit()
+
+    return JobResponse.model_validate(job)
+
+
+@router.get("/nodes/{node_id}/reconcile/preview/result")
+async def reconcile_preview_result(
+    node_id: uuid.UUID,
+    job_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> ReconciliationPreviewResponse:
+    """Fetch reconciliation preview result from a completed job.
+
+    Query params:
+        job_id: UUID of the reconcile_preview job.
+
+    Returns 404 if job not found, 409 if job not yet complete.
+    """
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+
+    job_repo = JobRepository(session)
+    job = await job_repo.get_by_id_for_tenant(job_id, tenant.tenant_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.job_type != "reconcile_preview":
+        raise HTTPException(status_code=400, detail="Job is not a reconcile_preview")
+
+    if job.status != "complete":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job not yet complete (status: {job.status})",
+        )
+
+    if not job.result_data:
+        raise HTTPException(
+            status_code=500,
+            detail="Job completed but result_data is missing",
+        )
+
+    return ReconciliationPreviewResponse.model_validate(job.result_data)
 
 
 @router.post("/nodes/{node_id}/reconcile/apply")

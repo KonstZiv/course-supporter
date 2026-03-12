@@ -148,6 +148,53 @@ async def enqueue_generation(
     return job
 
 
+async def enqueue_reconcile_preview(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    node_id: uuid.UUID,
+) -> Job:
+    """Create a Job record and enqueue reconciliation preview to ARQ.
+
+    The caller is responsible for committing the session.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: Active DB session (caller controls transaction).
+        tenant_id: Owning tenant UUID.
+        node_id: MaterialNode whose editable tree to analyze.
+
+    Returns:
+        The created Job with ``arq_job_id`` set.
+    """
+    log = structlog.get_logger().bind(node_id=str(node_id))
+    repo = JobRepository(session)
+
+    job = await repo.create(
+        tenant_id=tenant_id,
+        materialnode_id=node_id,
+        job_type="reconcile_preview",
+        input_params={"node_id": str(node_id)},
+    )
+
+    arq_job = await redis.enqueue_job(
+        "arq_reconcile_preview",
+        str(job.id),
+        str(node_id),
+    )
+
+    if arq_job is not None:
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    log.info(
+        "reconcile_preview_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
 async def enqueue_step(
     *,
     redis: ArqRedis,

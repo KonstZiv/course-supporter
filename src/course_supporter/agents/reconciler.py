@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
@@ -134,8 +135,6 @@ class ReconcileAgent:
         Returns:
             ReconciliationPreview with detected issues.
         """
-        import json
-
         context = json.dumps(editable_tree, ensure_ascii=False, indent=2)
 
         prompt_data = load_prompt(RECONCILE_PREVIEW_PROMPT_PATH)

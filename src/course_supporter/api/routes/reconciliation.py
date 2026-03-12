@@ -29,6 +29,7 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
 from course_supporter.storage.editable_repository import EditableRepository
 
 logger = structlog.get_logger()
@@ -38,12 +39,14 @@ router = APIRouter(tags=["reconciliation"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 
+# Only content fields may be patched via reconciliation apply.
+_ALLOWED_FIELDS: frozenset[str] = frozenset(_CONTENT_FIELDS)
+
 
 def _editable_tree_to_dicts(
     flat: list[Any],
 ) -> list[dict[str, Any]]:
     """Convert flat editable ORM list to nested dicts for LLM context."""
-
     from course_supporter.api.routes.editable import _orm_to_response
 
     response_map: dict[uuid.UUID, dict[str, Any]] = {}
@@ -112,6 +115,7 @@ async def reconcile_apply(
 
     Patches each accepted issue's field with the suggested value.
     Does NOT add to ``edited_fields`` — these are LLM-suggested changes.
+    Only fields in ``_CONTENT_FIELDS`` whitelist are allowed.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
@@ -123,19 +127,32 @@ async def reconcile_apply(
 
     repo = EditableRepository(session)
 
+    # Batch-load all referenced nodes in one query
+    flat = await repo.get_tree(node_id)
+    nodes_map = {n.id: n for n in flat}
+
     for issue in accepted_issues:
-        node = await repo.get_by_id(issue.editable_node_id)
-        if node is None or node.materialnode_id != node_id:
+        if issue.field not in _ALLOWED_FIELDS:
+            logger.warning(
+                "reconcile_apply_skip_field",
+                editable_id=str(issue.editable_node_id),
+                field=issue.field,
+                reason="field_not_in_whitelist",
+            )
+            continue
+
+        node = nodes_map.get(issue.editable_node_id)
+        if node is None:
             logger.warning(
                 "reconcile_apply_skip_node",
                 editable_id=str(issue.editable_node_id),
-                reason="not_found_or_wrong_parent",
+                reason="not_found_in_tree",
             )
             continue
 
         setattr(node, issue.field, issue.suggested_value)
-        await session.flush()
 
+    await session.flush()
     await session.commit()
 
     flat = await repo.get_tree(node_id)

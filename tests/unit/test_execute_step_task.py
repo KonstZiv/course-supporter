@@ -207,6 +207,12 @@ async def _run_task(
             "course_supporter.tree_utils.build_material_tree_summary",
             return_value=deps.tree_summary,
         ),
+        patch(
+            "course_supporter.storage.editable_repository.EditableRepository",
+            return_value=AsyncMock(
+                init_from_snapshot=AsyncMock(return_value=[]),
+            ),
+        ),
     ):
         await arq_execute_step(
             ctx,

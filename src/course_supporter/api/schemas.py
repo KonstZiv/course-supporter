@@ -680,6 +680,96 @@ class SnapshotListResponse(BaseModel):
     offset: int = Field(description="Number of items skipped (as requested).")
 
 
+# --- Editable Structure Nodes ---
+
+
+class EditableNodeResponse(BaseModel):
+    """Single editable structure node with edit-tracking metadata."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    materialnode_id: uuid.UUID
+    source_snapshot_id: uuid.UUID | None = None
+    source_structurenode_id: uuid.UUID | None = None
+    node_type: str
+    order: int
+    title: str
+    description: str | None = None
+    learning_goal: str | None = None
+    expected_knowledge: list[dict[str, str]] | None = None
+    expected_skills: list[dict[str, str]] | None = None
+    prerequisites: list[str] | None = None
+    difficulty: str | None = None
+    estimated_duration: int | None = None
+    success_criteria: str | None = None
+    assessment_method: str | None = None
+    competencies: list[str] | None = None
+    key_concepts: list[dict[str, str]] | None = None
+    common_mistakes: list[str] | None = None
+    teaching_strategy: str | None = None
+    activities: list[str] | None = None
+    teaching_style: str | None = None
+    deep_dive_references: list[dict[str, Any]] | None = None
+    timecodes: list[dict[str, Any]] | None = None
+    slide_references: list[dict[str, Any]] | None = None
+    web_references: list[dict[str, Any]] | None = None
+    edited_fields: list[str] = Field(default_factory=list)
+    children: list[EditableNodeResponse] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class EditableTreeResponse(BaseModel):
+    """Full editable tree for a MaterialNode."""
+
+    materialnode_id: uuid.UUID
+    source_snapshot_id: uuid.UUID | None = None
+    nodes: list[EditableNodeResponse]
+
+
+class EditableNodeUpdateRequest(BaseModel):
+    """Partial update for an editable structure node.
+
+    Only provided fields are updated. Field names are
+    auto-tracked in ``edited_fields``.
+    """
+
+    title: str | None = None
+    description: str | None = None
+    learning_goal: str | None = None
+    expected_knowledge: list[dict[str, str]] | None = None
+    expected_skills: list[dict[str, str]] | None = None
+    prerequisites: list[str] | None = None
+    difficulty: str | None = None
+    estimated_duration: int | None = None
+    success_criteria: str | None = None
+    assessment_method: str | None = None
+    competencies: list[str] | None = None
+    key_concepts: list[dict[str, str]] | None = None
+    common_mistakes: list[str] | None = None
+    teaching_strategy: str | None = None
+    activities: list[str] | None = None
+    teaching_style: str | None = None
+    deep_dive_references: list[dict[str, Any]] | None = None
+    timecodes: list[dict[str, Any]] | None = None
+    slide_references: list[dict[str, Any]] | None = None
+    web_references: list[dict[str, Any]] | None = None
+
+
+class EditableInitRequest(BaseModel):
+    """Request to (re-)initialise editable tree from a snapshot."""
+
+    snapshot_id: uuid.UUID | None = Field(
+        default=None,
+        description="Specific snapshot to init from. ``null`` = latest.",
+    )
+    preserve_edited: bool = Field(
+        default=True,
+        description="Carry over manually-edited field values.",
+    )
+
+
 # --- Presigned Upload ---
 
 

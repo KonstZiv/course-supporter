@@ -49,7 +49,8 @@ _ALLOWED_FIELDS: frozenset[str] = frozenset(_CONTENT_FIELDS)
 
 def _get_arq(request: Request) -> ArqRedis:
     """Extract ARQ Redis pool from app state."""
-    return request.app.state.arq_redis  # type: ignore[no-any-return]
+    arq_redis: ArqRedis = request.app.state.arq_redis
+    return arq_redis
 
 
 ArqDep = Annotated[ArqRedis, Depends(_get_arq)]

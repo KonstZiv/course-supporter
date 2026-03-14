@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import anyio
 import structlog
@@ -951,12 +951,58 @@ async def arq_reconcile_preview(
             agent = ReconcileAgent(router, strategy="default")
             preview = await agent.preview(tree_dicts)
 
-            # Store result on Job
+            # Store result on Job (backward compat)
             result_data = {
                 "issues": [issue.model_dump(mode="json") for issue in preview.issues],
                 "context_summary": preview.context_summary,
             }
             await job_repo.store_result(jid, result_data)
+
+            # Persist in ReconciliationPreview cache if fingerprint available
+            job = await job_repo.get_by_id(jid)
+            combined_fp = (
+                job.input_params.get("combined_fingerprint")
+                if job and job.input_params
+                else None
+            )
+            if combined_fp:
+                from course_supporter.fingerprint import compute_editable_tree_hash
+                from course_supporter.storage.reconciliation_preview_repository import (
+                    ReconciliationPreviewRepository,
+                )
+
+                editable_hash = compute_editable_tree_hash(flat)
+                # Extract node_fp from combined_fp:
+                # combined_fp = SHA-256(node_fp + ":" + editable_hash)
+                # We need to store the actual node_fp, so compute it now.
+                from course_supporter.fingerprint import FingerprintService
+                from course_supporter.storage.material_node_repository import (
+                    MaterialNodeRepository,
+                )
+
+                mn_repo = MaterialNodeRepository(session)
+                subtree = await mn_repo.get_subtree(nid, include_materials=True)
+                node_fp = ""
+                if subtree:
+                    fp_svc = FingerprintService(session)
+                    try:
+                        node_fp = await fp_svc.ensure_node_fp(subtree[0])
+                        await session.flush()
+                    except (ValueError, AttributeError):
+                        node_fp = ""
+
+                if node_fp:
+                    rp_repo = ReconciliationPreviewRepository(session)
+                    issues_list = cast(list[dict[str, Any]], result_data["issues"])
+                    await rp_repo.upsert(
+                        materialnode_id=nid,
+                        combined_fingerprint=combined_fp,
+                        node_fingerprint=node_fp,
+                        editable_tree_hash=editable_hash,
+                        issues=issues_list,
+                        context_summary=preview.context_summary,
+                        job_id=jid,
+                    )
 
             await job_repo.update_status(jid, "complete")
             await session.commit()

@@ -690,6 +690,74 @@ class StructureSnapshot(Base):
 
 
 # ──────────────────────────────────────────────
+# Reconciliation Preview Cache
+# ──────────────────────────────────────────────
+
+
+class ReconciliationPreview(Base):
+    """Cached reconciliation preview result with fingerprint-based idempotency.
+
+    Stores LLM-generated issues for a given (materialnode_id,
+    combined_fingerprint) pair. The combined fingerprint is derived
+    from the Merkle node fingerprint and the editable tree hash,
+    so re-running preview with identical inputs returns the cached
+    result without an LLM call.
+    """
+
+    __tablename__ = "reconciliation_previews"
+    __table_args__ = (
+        Index(
+            "uq_recon_preview_identity",
+            "materialnode_id",
+            "combined_fingerprint",
+            unique=True,
+        ),
+        {
+            "comment": (
+                "Cached reconciliation preview results keyed by "
+                "combined fingerprint (node materials + editable tree)"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    materialnode_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to MaterialNode being reconciled",
+    )
+    combined_fingerprint: Mapped[str] = mapped_column(
+        String(128),
+        comment="SHA-256(node_fp + ':' + editable_hash) for idempotency",
+    )
+    node_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        comment="Merkle hash of materials at preview creation time",
+    )
+    editable_tree_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 of editable tree content at preview creation time",
+    )
+    issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        comment="List of reconciliation issues from LLM",
+    )
+    context_summary: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        index=True,
+        comment="FK to the Job that produced this preview",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    material_node: Mapped["MaterialNode"] = relationship()
+    job: Mapped["Job | None"] = relationship()
+
+
+# ──────────────────────────────────────────────
 # Job Tracking
 # ──────────────────────────────────────────────
 

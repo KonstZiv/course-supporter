@@ -865,6 +865,18 @@ class ReconciliationPreviewResponse(BaseModel):
     context_summary: str
 
 
+class ReconciliationStatusResponse(BaseModel):
+    """Reconciliation status for a node including freshness info."""
+
+    has_preview: bool
+    preview: ReconciliationPreviewResponse | None = None
+    freshness: str = Field(
+        description=("One of: fresh, stale_materials, stale_edited, stale_both, none"),
+    )
+    job_id: str | None = None
+    job_status: str | None = None
+
+
 class ReconcileApplyRequest(BaseModel):
     """Request to apply selected reconciliation issues."""
 

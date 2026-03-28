@@ -30,6 +30,10 @@ _EDITABLE_REPO = "course_supporter.api.routes.reconciliation.EditableRepository"
 _ENQUEUE = "course_supporter.api.routes.reconciliation.enqueue_reconcile_preview"
 _JOB_REPO = "course_supporter.api.routes.reconciliation.JobRepository"
 _COMPUTE_FP = "course_supporter.api.routes.reconciliation._compute_current_fingerprints"
+_PREVIEW_REPO = (
+    "course_supporter.api.routes.reconciliation.ReconciliationPreviewRepository"
+)
+_MAKE_FP = "course_supporter.api.routes.reconciliation._make_combined_fingerprint"
 
 
 def _make_job(
@@ -150,6 +154,41 @@ class TestReconcilePreview:
         assert data["id"] == str(job.id)
         assert data["job_type"] == "reconcile_preview"
         assert data["status"] == "queued"
+
+    async def test_200_idempotent_cached(self, client: AsyncClient) -> None:
+        """Returns 202 but skips enqueue when matching preview exists."""
+        existing_job = _make_job(status="complete")
+        editable = _make_editable_node()
+        cached_preview = MagicMock()
+        cached_preview.job_id = existing_job.id
+
+        with (
+            patch(_REQUIRE_NODE, new_callable=AsyncMock),
+            patch(_EDITABLE_REPO) as mock_repo_cls,
+            patch(
+                _COMPUTE_FP,
+                new_callable=AsyncMock,
+                return_value=("abc123", "def456"),
+            ),
+            patch(_MAKE_FP, return_value="combined_hash"),
+            patch(_PREVIEW_REPO) as mock_preview_cls,
+            patch(_JOB_REPO) as mock_job_cls,
+        ):
+            mock_repo_cls.return_value.get_tree = AsyncMock(return_value=[editable])
+            mock_preview_cls.return_value.find_by_fingerprint = AsyncMock(
+                return_value=cached_preview,
+            )
+            mock_job_cls.return_value.get_by_id = AsyncMock(
+                return_value=existing_job,
+            )
+            resp = await client.post(
+                f"/api/v1/nodes/{NODE_ID}/reconcile/preview",
+            )
+
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["id"] == str(existing_job.id)
+        assert data["status"] == "complete"
 
     async def test_404_no_editable_tree(self, client: AsyncClient) -> None:
         """Returns 404 when no editable tree exists."""

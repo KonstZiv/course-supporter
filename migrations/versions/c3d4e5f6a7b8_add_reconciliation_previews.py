@@ -22,7 +22,7 @@ def upgrade() -> None:
         "reconciliation_previews",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("materialnode_id", sa.Uuid(), nullable=False),
-        sa.Column("combined_fingerprint", sa.String(128), nullable=False),
+        sa.Column("combined_fingerprint", sa.String(64), nullable=False),
         sa.Column("node_fingerprint", sa.String(64), nullable=False),
         sa.Column("editable_tree_hash", sa.String(64), nullable=False),
         sa.Column(

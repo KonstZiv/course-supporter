@@ -727,7 +727,7 @@ class ReconciliationPreview(Base):
         comment="FK to MaterialNode being reconciled",
     )
     combined_fingerprint: Mapped[str] = mapped_column(
-        String(128),
+        String(64),
         comment="SHA-256(node_fp + ':' + editable_hash) for idempotency",
     )
     node_fingerprint: Mapped[str] = mapped_column(

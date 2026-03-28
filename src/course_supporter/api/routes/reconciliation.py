@@ -259,6 +259,8 @@ async def reconcile_preview(
         tenant_id=tenant.tenant_id,
         node_id=node_id,
         combined_fingerprint=fp_to_store,
+        node_fingerprint=current_node_fp,
+        editable_tree_hash=current_editable_hash,
     )
     await session.commit()
 

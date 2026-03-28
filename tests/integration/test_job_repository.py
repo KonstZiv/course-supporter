@@ -28,7 +28,7 @@ class TestJobCreate:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -47,7 +47,7 @@ class TestJobCreate:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
             input_params=params,
         )
@@ -63,7 +63,7 @@ class TestJobCreate:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -89,7 +89,7 @@ class TestJobLifecycleSuccess:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
         assert job.status == "queued"
@@ -113,7 +113,7 @@ class TestJobLifecycleSuccess:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -134,7 +134,7 @@ class TestJobLifecycleFailureRetry:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -164,7 +164,7 @@ class TestJobTransitionValidation:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -185,7 +185,7 @@ class TestJobQueries:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_tenant.id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -202,7 +202,7 @@ class TestJobQueries:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
 
@@ -223,14 +223,14 @@ class TestJobQueries:
         for _ in range(3):
             await repo.create(
                 tenant_id=seed_root_node.tenant_id,
-                node_id=seed_root_node.id,
+                materialnode_id=seed_root_node.id,
                 job_type="ingest",
             )
 
         # Add 1 active (not counted)
         job_active = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
         await repo.update_status(job_active.id, "active")
@@ -245,7 +245,7 @@ class TestJobQueries:
         repo = JobRepository(db_session)
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
-            node_id=seed_root_node.id,
+            materialnode_id=seed_root_node.id,
             job_type="ingest",
         )
         assert job.arq_job_id is None

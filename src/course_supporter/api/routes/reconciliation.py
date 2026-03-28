@@ -110,7 +110,13 @@ async def _compute_current_fingerprints(
         fp_service = FingerprintService(session)
         node_fp = await fp_service.ensure_node_fp(root)
         await session.flush()
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "node_fingerprint_failed",
+            node_id=str(node_id),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         node_fp = None
 
     # Editable tree hash
@@ -245,12 +251,19 @@ async def reconcile_preview(
                 node_id=str(node_id),
                 combined_fp=combined_fp[:16],
             )
-            # Return existing job if available, or a synthetic response
             if existing.job_id:
                 job_repo = JobRepository(session)
                 job = await job_repo.get_by_id(existing.job_id)
                 if job is not None:
                     return JobResponse.model_validate(job)
+            # Preview cached but job missing — re-enqueue to give
+            # the frontend a valid job_id to poll. Upsert will
+            # overwrite the preview with identical data.
+            logger.warning(
+                "reconcile_preview_job_missing",
+                node_id=str(node_id),
+                preview_id=str(existing.id),
+            )
 
     fp_to_store = combined_fp if current_node_fp and current_editable_hash else None
     job = await enqueue_reconcile_preview(

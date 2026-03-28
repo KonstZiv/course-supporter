@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import anyio
 import structlog
@@ -951,12 +951,36 @@ async def arq_reconcile_preview(
             agent = ReconcileAgent(router, strategy="default")
             preview = await agent.preview(tree_dicts)
 
-            # Store result on Job
+            # Store result on Job (backward compat)
             result_data = {
                 "issues": [issue.model_dump(mode="json") for issue in preview.issues],
                 "context_summary": preview.context_summary,
             }
             await job_repo.store_result(jid, result_data)
+
+            # Persist in ReconciliationPreview cache if fingerprint available
+            job = await job_repo.get_by_id(jid)
+            params = job.input_params if job and job.input_params else {}
+            combined_fp = params.get("combined_fingerprint")
+            node_fp = params.get("node_fingerprint")
+            editable_hash = params.get("editable_tree_hash")
+
+            if combined_fp and node_fp and editable_hash:
+                from course_supporter.storage.reconciliation_preview_repository import (
+                    ReconciliationPreviewRepository,
+                )
+
+                rp_repo = ReconciliationPreviewRepository(session)
+                issues_list = cast(list[dict[str, Any]], result_data["issues"])
+                await rp_repo.upsert(
+                    materialnode_id=nid,
+                    combined_fingerprint=str(combined_fp),
+                    node_fingerprint=str(node_fp),
+                    editable_tree_hash=str(editable_hash),
+                    issues=issues_list,
+                    context_summary=preview.context_summary,
+                    job_id=jid,
+                )
 
             await job_repo.update_status(jid, "complete")
             await session.commit()

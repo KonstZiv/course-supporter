@@ -82,7 +82,11 @@ class TestArqIngestMaterialE2E:
         # Create job in DB
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
+            job = await job_repo.create(
+                tenant_id=tid,
+                materialnode_id=nid,
+                job_type="ingest",
+            )
             await session.commit()
             job_id = job.id
 
@@ -119,7 +123,7 @@ class TestArqIngestMaterialE2E:
         assert final_job.status == "complete"
         assert final_job.completed_at is not None
         assert final_mat is not None
-        assert final_mat.state == "done"
+        assert final_mat.state == "ready"
         assert final_mat.processed_content is not None
 
     async def test_failure_full_lifecycle(
@@ -140,7 +144,11 @@ class TestArqIngestMaterialE2E:
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
+            job = await job_repo.create(
+                tenant_id=tid,
+                materialnode_id=nid,
+                job_type="ingest",
+            )
             await session.commit()
             job_id = job.id
 
@@ -198,7 +206,11 @@ class TestArqIngestMaterialE2E:
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            job = await job_repo.create(tenant_id=tid, node_id=nid, job_type="ingest")
+            job = await job_repo.create(
+                tenant_id=tid,
+                materialnode_id=nid,
+                job_type="ingest",
+            )
             await session.commit()
             job_id = job.id
 

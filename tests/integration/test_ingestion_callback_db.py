@@ -52,7 +52,7 @@ class TestOnSuccessDB:
         assert job.status == "complete"
         assert job.completed_at is not None
         assert material is not None
-        assert material.state == "done"
+        assert material.state == "ready"
         assert material.processed_content == content
 
 

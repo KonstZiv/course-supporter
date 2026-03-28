@@ -3,10 +3,40 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import MaterialEntry, MaterialNode
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import StructureNodeEditable
+
+
+def compute_editable_tree_hash(flat: list[StructureNodeEditable]) -> str:
+    """Compute a stable SHA-256 hash of the editable tree content fields.
+
+    For each editable node, serialises content fields (from
+    ``_CONTENT_FIELDS``) to canonical JSON (``sort_keys=True``).
+    Nodes are sorted by ``id`` for deterministic ordering.
+
+    Args:
+        flat: Flat list of StructureNodeEditable ORM objects.
+
+    Returns:
+        64-char lowercase hex SHA-256 digest.
+    """
+    from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
+
+    parts: list[str] = []
+    for node in sorted(flat, key=lambda n: str(n.id)):
+        content: dict[str, object] = {}
+        for field in _CONTENT_FIELDS:
+            content[field] = getattr(node, field)
+        parts.append(json.dumps(content, sort_keys=True, default=str))
+
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
 class FingerprintService:

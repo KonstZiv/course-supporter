@@ -154,6 +154,9 @@ async def enqueue_reconcile_preview(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     node_id: uuid.UUID,
+    combined_fingerprint: str | None = None,
+    node_fingerprint: str | None = None,
+    editable_tree_hash: str | None = None,
 ) -> Job:
     """Create a Job record and enqueue reconciliation preview to ARQ.
 
@@ -164,6 +167,9 @@ async def enqueue_reconcile_preview(
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
         node_id: MaterialNode whose editable tree to analyze.
+        combined_fingerprint: Optional fingerprint for idempotency cache.
+        node_fingerprint: Merkle hash of materials at enqueue time.
+        editable_tree_hash: SHA-256 of editable tree at enqueue time.
 
     Returns:
         The created Job with ``arq_job_id`` set.
@@ -171,11 +177,19 @@ async def enqueue_reconcile_preview(
     log = structlog.get_logger().bind(node_id=str(node_id))
     repo = JobRepository(session)
 
+    input_params: dict[str, object] = {"node_id": str(node_id)}
+    if combined_fingerprint is not None:
+        input_params["combined_fingerprint"] = combined_fingerprint
+    if node_fingerprint is not None:
+        input_params["node_fingerprint"] = node_fingerprint
+    if editable_tree_hash is not None:
+        input_params["editable_tree_hash"] = editable_tree_hash
+
     job = await repo.create(
         tenant_id=tenant_id,
         materialnode_id=node_id,
         job_type="reconcile_preview",
-        input_params={"node_id": str(node_id)},
+        input_params=input_params,
     )
 
     arq_job = await redis.enqueue_job(

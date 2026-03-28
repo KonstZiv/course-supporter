@@ -29,6 +29,7 @@ _REQUIRE_NODE = "course_supporter.api.routes.reconciliation._require_node_for_te
 _EDITABLE_REPO = "course_supporter.api.routes.reconciliation.EditableRepository"
 _ENQUEUE = "course_supporter.api.routes.reconciliation.enqueue_reconcile_preview"
 _JOB_REPO = "course_supporter.api.routes.reconciliation.JobRepository"
+_COMPUTE_FP = "course_supporter.api.routes.reconciliation._compute_current_fingerprints"
 
 
 def _make_job(
@@ -137,6 +138,7 @@ class TestReconcilePreview:
             patch(_REQUIRE_NODE, new_callable=AsyncMock),
             patch(_EDITABLE_REPO) as mock_repo_cls,
             patch(_ENQUEUE, new_callable=AsyncMock, return_value=job),
+            patch(_COMPUTE_FP, new_callable=AsyncMock, return_value=(None, None)),
         ):
             mock_repo_cls.return_value.get_tree = AsyncMock(return_value=[editable])
             resp = await client.post(

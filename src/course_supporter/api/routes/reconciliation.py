@@ -204,7 +204,7 @@ async def reconcile_status(
     )
 
 
-@router.post("/nodes/{node_id}/reconcile/preview")
+@router.post("/nodes/{node_id}/reconcile/preview", status_code=202)
 async def reconcile_preview(
     node_id: uuid.UUID,
     tenant: PrepDep,

@@ -24,24 +24,24 @@ jobs:
             echo "=== Build ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker
 
+            echo "=== Migrations (before app start) ==="
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml run --rm -T app \
+                python -m alembic upgrade head
+
             echo "=== Deploy ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
 
-            echo "=== Migrations ==="
-            docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app \
-                python -m alembic upgrade head
-
             echo "=== Health check ==="
-            for i in $(seq 1 10); do
+            for i in $(seq 1 15); do
               if docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app curl -sf http://localhost:8000/health; then
                 echo ""
                 echo "Application is healthy."
                 break
               fi
-              echo "Waiting for application to start... ($i/10)"
+              echo "Waiting for application to start... ($i/15)"
               sleep 5
-              if [ "$i" -eq 10 ]; then
-                echo "Health check failed after 10 retries." >&2
+              if [ "$i" -eq 15 ]; then
+                echo "Health check failed after 15 retries." >&2
                 exit 1
               fi
             done

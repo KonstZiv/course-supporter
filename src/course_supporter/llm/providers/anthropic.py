@@ -1,7 +1,9 @@
 """Anthropic Claude provider."""
 
+import itertools
 import json
 import re
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import anthropic
@@ -12,7 +14,11 @@ from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic provider using official SDK."""
+    """Anthropic provider using official SDK.
+
+    When multiple API keys are provided, SDK clients are
+    pre-created and rotated in round-robin order per request.
+    """
 
     provider_name = "anthropic"
 
@@ -21,10 +27,16 @@ class AnthropicProvider(LLMProvider):
     DEFAULT_MAX_TOKENS = 8192
     default_max_output_tokens: int = DEFAULT_MAX_TOKENS
 
-    def __init__(self, api_key: str, default_model: str) -> None:
+    def __init__(self, api_keys: Sequence[str], default_model: str) -> None:
         super().__init__()
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._clients = tuple(anthropic.AsyncAnthropic(api_key=k) for k in api_keys)
+        self._client_cycle: Iterator[anthropic.AsyncAnthropic] = itertools.cycle(
+            self._clients
+        )
         self._default_model = default_model
+
+    def _next_client(self) -> anthropic.AsyncAnthropic:
+        return next(self._client_cycle)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Anthropic."""
@@ -38,8 +50,9 @@ class AnthropicProvider(LLMProvider):
         if request.system_prompt:
             kwargs["system"] = request.system_prompt
 
+        client = self._next_client()
         with self._measure_latency() as timer:
-            response = await self._client.messages.create(**kwargs)
+            response = await client.messages.create(**kwargs)
 
         return LLMResponse(
             content=response.content[0].text if response.content else "",

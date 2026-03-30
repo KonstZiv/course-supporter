@@ -5,9 +5,12 @@ from datetime import time
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import SecretStr, computed_field, field_validator
+from pydantic import Field, PrivateAttr, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from course_supporter.key_pool import KeyPool
 
 
 class Environment(StrEnum):
@@ -17,10 +20,16 @@ class Environment(StrEnum):
     TESTING = "testing"
 
 
+_PROVIDER_KEYS = ("gemini", "anthropic", "openai", "deepseek")
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables.
 
     All LLM API keys use SecretStr to prevent accidental logging.
+    Keys may contain multiple comma/whitespace-separated values
+    for round-robin rotation across provider quotas.
+
     Database URL is assembled from individual components to match
     the official PostgreSQL Docker image environment variables.
     """
@@ -29,6 +38,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # --- App ---
@@ -91,10 +101,56 @@ class Settings(BaseSettings):
     s3_bucket: str = "course-materials"
 
     # --- LLM API Keys ---
-    gemini_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
-    openai_api_key: SecretStr | None = None
-    deepseek_api_key: SecretStr | None = None
+    # Raw fields hold the original env value (may be comma-separated).
+    # Access via @property (e.g. settings.gemini_api_key) for a single
+    # rotated key, or via key_pool_for("gemini") for the full pool.
+    gemini_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="gemini_api_key"
+    )
+    anthropic_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="anthropic_api_key"
+    )
+    openai_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="openai_api_key"
+    )
+    deepseek_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="deepseek_api_key"
+    )
+
+    _key_pools: dict[str, KeyPool] = PrivateAttr(default_factory=dict)
+
+    def model_post_init(self, __context: Any) -> None:
+        for name in _PROVIDER_KEYS:
+            secret: SecretStr | None = getattr(self, f"{name}_api_key_raw")
+            if secret is not None:
+                self._key_pools[name] = KeyPool(secret.get_secret_value())
+
+    # --- Backward-compatible @property accessors ---
+    # Each call returns the next key from the round-robin pool.
+
+    @property
+    def gemini_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("gemini")
+        return pool.next_key() if pool else None
+
+    @property
+    def anthropic_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("anthropic")
+        return pool.next_key() if pool else None
+
+    @property
+    def openai_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("openai")
+        return pool.next_key() if pool else None
+
+    @property
+    def deepseek_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("deepseek")
+        return pool.next_key() if pool else None
+
+    def key_pool_for(self, provider: str) -> KeyPool | None:
+        """Return the full key pool for a provider, or None."""
+        return self._key_pools.get(provider)
 
     # --- LLM Default Models ---
     # Configurable per environment via env vars.

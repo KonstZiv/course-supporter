@@ -1,5 +1,6 @@
 """ElevenLabs Scribe STT provider via HTTP API."""
 
+import asyncio
 import itertools
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -68,11 +69,13 @@ class ElevenLabsSTTProvider(STTProvider):
         if lang_code:
             data["language_code"] = lang_code
 
+        audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
+
         client = self._next_client()
-        with self._measure_latency() as timer, audio_path.open("rb") as f:  # noqa: ASYNC230
+        with self._measure_latency() as timer:
             resp = await client.post(
                 "/v1/speech-to-text",
-                files={"file": (audio_path.name, f, content_type)},
+                files={"file": (audio_path.name, audio_bytes, content_type)},
                 data=data,
             )
 

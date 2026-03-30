@@ -1,5 +1,6 @@
 """Deepgram Nova STT provider via HTTP API."""
 
+import asyncio
 import itertools
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -56,7 +57,7 @@ class DeepgramSTTProvider(STTProvider):
         if request.language:
             params["language"] = request.language
 
-        audio_bytes = audio_path.read_bytes()  # noqa: ASYNC240
+        audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         client = self._next_client()
         with self._measure_latency() as timer:
             resp = await client.post(

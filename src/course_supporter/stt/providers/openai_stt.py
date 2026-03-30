@@ -1,5 +1,6 @@
 """OpenAI STT provider (GPT-4o Mini Transcribe, Whisper)."""
 
+import asyncio
 import itertools
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -46,11 +47,13 @@ class OpenAISTTProvider(STTProvider):
         # gpt-4o-mini-transcribe does not support verbose_json.
         response_format = "verbose_json" if model.startswith("whisper") else "json"
 
+        audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
+
         client = self._next_client()
-        with self._measure_latency() as timer, audio_path.open("rb") as f:  # noqa: ASYNC230
+        with self._measure_latency() as timer:
             result = await client.audio.transcriptions.create(  # type: ignore[call-overload]
                 model=model,
-                file=f,
+                file=audio_bytes,
                 language=request.language or "",
                 response_format=response_format,
             )

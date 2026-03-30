@@ -1,6 +1,8 @@
 """OpenAI-compatible provider (OpenAI + DeepSeek)."""
 
+import itertools
 import json
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import openai
@@ -14,11 +16,13 @@ class OpenAICompatProvider(LLMProvider):
     """Provider for OpenAI API and compatible services (DeepSeek).
 
     DeepSeek uses the same API format with a different base_url.
+    When multiple API keys are provided, SDK clients are
+    pre-created and rotated in round-robin order per request.
     """
 
     def __init__(
         self,
-        api_key: str,
+        api_keys: Sequence[str],
         default_model: str,
         provider_name: str = "openai",
         base_url: str | None = None,
@@ -26,10 +30,15 @@ class OpenAICompatProvider(LLMProvider):
         super().__init__()
         self.provider_name = provider_name
         self._default_model = default_model
-        self._client = openai.AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
+        self._clients = tuple(
+            openai.AsyncOpenAI(api_key=k, base_url=base_url) for k in api_keys
         )
+        self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
+            self._clients
+        )
+
+    def _next_client(self) -> openai.AsyncOpenAI:
+        return next(self._client_cycle)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API."""
@@ -39,8 +48,9 @@ class OpenAICompatProvider(LLMProvider):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
+        client = self._next_client()
         with self._measure_latency() as timer:
-            response = await self._client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=model,
                 # OpenAI SDK expects union of typed message params
                 # (ChatCompletionSystemMessageParam | ...), but accepts
@@ -80,11 +90,12 @@ class OpenAICompatProvider(LLMProvider):
         messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": request.prompt})
 
+        client = self._next_client()
         with self._measure_latency() as timer:
             # call-overload: OpenAI SDK overloads don't match dict-based
             # messages + dict-based response_format simultaneously, but
             # both are accepted at runtime per OpenAI API docs.
-            response = await self._client.chat.completions.create(  # type: ignore[call-overload]
+            response = await client.chat.completions.create(  # type: ignore[call-overload]
                 model=model,
                 messages=messages,
                 temperature=request.temperature,

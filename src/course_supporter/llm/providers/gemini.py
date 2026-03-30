@@ -1,5 +1,7 @@
 """Google Gemini provider via google-genai SDK."""
 
+import itertools
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 from google import genai
@@ -15,14 +17,21 @@ class GeminiProvider(LLMProvider):
 
     Supports text generation and structured output via
     response_mime_type="application/json" + response_schema.
+
+    When multiple API keys are provided, SDK clients are
+    pre-created and rotated in round-robin order per request.
     """
 
     provider_name = "gemini"
 
-    def __init__(self, api_key: str, default_model: str) -> None:
+    def __init__(self, api_keys: Sequence[str], default_model: str) -> None:
         super().__init__()
-        self._client = genai.Client(api_key=api_key)
+        self._clients = tuple(genai.Client(api_key=k) for k in api_keys)
+        self._client_cycle: Iterator[genai.Client] = itertools.cycle(self._clients)
         self._default_model = default_model
+
+    def _next_client(self) -> genai.Client:
+        return next(self._client_cycle)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Gemini."""
@@ -37,8 +46,9 @@ class GeminiProvider(LLMProvider):
             request.contents if request.contents else request.prompt
         )
 
+        client = self._next_client()
         with self._measure_latency() as timer:
-            response = await self._client.aio.models.generate_content(
+            response = await client.aio.models.generate_content(
                 model=model,
                 contents=contents,
                 config=config,
@@ -73,8 +83,9 @@ class GeminiProvider(LLMProvider):
             request.contents if request.contents else request.prompt
         )
 
+        client = self._next_client()
         with self._measure_latency() as timer:
-            response = await self._client.aio.models.generate_content(
+            response = await client.aio.models.generate_content(
                 model=model,
                 contents=contents,
                 config=config,

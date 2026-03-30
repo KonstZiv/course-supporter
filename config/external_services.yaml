@@ -63,6 +63,28 @@ providers:
         unit_type: minutes
         local: true
 
+  # --- STT providers ---
+  elevenlabs:
+    type: stt
+    models:
+      - id: scribe_v1
+        unit_type: minutes
+        cost_per_minute: 0.0037
+
+  openai_stt:
+    type: stt
+    models:
+      - id: gpt-4o-mini-transcribe
+        unit_type: minutes
+        cost_per_minute: 0.003
+
+  deepgram:
+    type: stt
+    models:
+      - id: nova-3
+        unit_type: minutes
+        cost_per_minute: 0.0052
+
 strategies:
   default:
     providers: [gemini, anthropic, openai, deepseek]
@@ -75,6 +97,15 @@ strategies:
     fallback: true
   transcription:
     providers: [gemini, whisper]
+    fallback: true
+  stt_default:
+    providers: [elevenlabs, openai_stt, deepgram]
+    fallback: true
+  stt_quality:
+    providers: [elevenlabs, openai_stt]
+    fallback: true
+  stt_budget:
+    providers: [deepgram, openai_stt]
     fallback: true
 
 actions:
@@ -110,9 +141,11 @@ actions:
       budget: [deepseek-chat]
 
   transcribe:
-    strategy: transcription
+    strategy: stt_default
     chain:
-      default: [gemini-2.5-flash]
+      default: [scribe_v1, gpt-4o-mini-transcribe, nova-3]
+      quality: [scribe_v1, gpt-4o-mini-transcribe]
+      budget: [nova-3, gpt-4o-mini-transcribe]
 
   describe_slides:
     strategy: default

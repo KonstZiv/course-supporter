@@ -39,6 +39,7 @@ dependencies = [
     "pyyaml>=6.0",
     "arq>=0.27.0",
     "redis[hiredis]>=5",
+    "python-iso639>=2026.1.31",
 ]
 
 [dependency-groups]
@@ -157,6 +158,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "uuid_utils.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "iso639.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

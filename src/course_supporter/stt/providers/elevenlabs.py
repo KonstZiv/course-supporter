@@ -10,19 +10,9 @@ import structlog
 
 from course_supporter.stt.providers.base import STTProvider
 from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment
+from course_supporter.stt.utils import guess_content_type, iso639_1_to_3, iso639_3_to_1
 
 logger = structlog.get_logger()
-
-# ElevenLabs uses ISO 639-3 codes; map from ISO 639-1.
-_LANG_MAP: dict[str, str] = {
-    "uk": "ukr",
-    "en": "eng",
-    "ru": "rus",
-    "pl": "pol",
-    "de": "deu",
-    "fr": "fra",
-    "es": "spa",
-}
 
 
 class ElevenLabsSTTProvider(STTProvider):
@@ -57,13 +47,10 @@ class ElevenLabsSTTProvider(STTProvider):
     async def transcribe(self, request: STTRequest) -> STTResult:
         """Transcribe audio via ElevenLabs Scribe API."""
         audio_path = Path(request.audio_path)
-        content_type = _guess_content_type(audio_path.suffix)
+        content_type = guess_content_type(audio_path.suffix)
 
-        lang_code = (
-            _LANG_MAP.get(request.language, request.language)
-            if request.language
-            else None
-        )
+        # ElevenLabs expects ISO 639-3 codes (e.g. "ukr", not "uk").
+        lang_code = iso639_1_to_3(request.language) if request.language else None
 
         data: dict[str, str] = {"model_id": self._default_model}
         if lang_code:
@@ -85,8 +72,8 @@ class ElevenLabsSTTProvider(STTProvider):
         text: str = body.get("text", "")
         detected_lang = body.get("language_code")
 
-        # Convert ISO 639-3 back to 639-1 if possible.
-        lang_out = _reverse_lang(detected_lang) if detected_lang else None
+        # Convert detected ISO 639-3 back to 639-1.
+        lang_out = iso639_3_to_1(detected_lang) if detected_lang else None
 
         segments = _build_segments(body)
 
@@ -98,25 +85,6 @@ class ElevenLabsSTTProvider(STTProvider):
             model_id=self._default_model,
             latency_ms=timer.elapsed_ms,
         )
-
-
-def _guess_content_type(suffix: str) -> str:
-    """Map file extension to MIME type."""
-    mapping: dict[str, str] = {
-        ".mp3": "audio/mpeg",
-        ".wav": "audio/wav",
-        ".m4a": "audio/mp4",
-        ".webm": "audio/webm",
-        ".ogg": "audio/ogg",
-        ".flac": "audio/flac",
-    }
-    return mapping.get(suffix.lower(), "application/octet-stream")
-
-
-def _reverse_lang(iso3: str) -> str | None:
-    """Convert ISO 639-3 back to 639-1 (best-effort)."""
-    reverse = {v: k for k, v in _LANG_MAP.items()}
-    return reverse.get(iso3)
 
 
 def _build_segments(body: dict[str, object]) -> list[STTSegment]:

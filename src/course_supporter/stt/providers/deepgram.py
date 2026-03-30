@@ -10,6 +10,7 @@ import structlog
 
 from course_supporter.stt.providers.base import STTProvider
 from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment
+from course_supporter.stt.utils import guess_content_type
 
 logger = structlog.get_logger()
 
@@ -46,7 +47,7 @@ class DeepgramSTTProvider(STTProvider):
     async def transcribe(self, request: STTRequest) -> STTResult:
         """Transcribe audio via Deepgram API."""
         audio_path = Path(request.audio_path)
-        content_type = _guess_content_type(audio_path.suffix)
+        content_type = guess_content_type(audio_path.suffix)
 
         params: dict[str, str] = {
             "model": self._default_model,
@@ -90,19 +91,6 @@ class DeepgramSTTProvider(STTProvider):
             latency_ms=timer.elapsed_ms,
             audio_duration_sec=duration,
         )
-
-
-def _guess_content_type(suffix: str) -> str:
-    """Map file extension to MIME type."""
-    mapping: dict[str, str] = {
-        ".mp3": "audio/mpeg",
-        ".wav": "audio/wav",
-        ".m4a": "audio/mp4",
-        ".webm": "audio/webm",
-        ".ogg": "audio/ogg",
-        ".flac": "audio/flac",
-    }
-    return mapping.get(suffix.lower(), "application/octet-stream")
 
 
 def _build_segments(alt: dict[str, object]) -> list[STTSegment]:

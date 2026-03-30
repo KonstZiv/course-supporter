@@ -20,7 +20,9 @@ class Environment(StrEnum):
     TESTING = "testing"
 
 
-_PROVIDER_KEYS = ("gemini", "anthropic", "openai", "deepseek", "elevenlabs", "deepgram")
+_LLM_PROVIDER_KEYS = ("gemini", "anthropic", "openai", "deepseek")
+_STT_PROVIDER_KEYS = ("elevenlabs", "deepgram")
+_ALL_PROVIDER_KEYS = _LLM_PROVIDER_KEYS + _STT_PROVIDER_KEYS
 
 
 class Settings(BaseSettings):
@@ -126,7 +128,7 @@ class Settings(BaseSettings):
     _key_pools: dict[str, KeyPool] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        for name in _PROVIDER_KEYS:
+        for name in _ALL_PROVIDER_KEYS:
             secret: SecretStr | None = getattr(self, f"{name}_api_key_raw")
             if secret is not None:
                 self._key_pools[name] = KeyPool(secret.get_secret_value())

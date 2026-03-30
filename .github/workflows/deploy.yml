@@ -31,17 +31,18 @@ jobs:
             echo "=== Deploy ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
 
-            echo "=== Health check ==="
-            for i in $(seq 1 15); do
-              if docker compose --env-file .env.prod -f docker-compose.prod.yaml exec -T app curl -sf http://localhost:8000/health; then
-                echo ""
+            echo "=== Health check (via Docker health status) ==="
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' course-supporter-app 2>/dev/null || echo "unknown")
+              if [ "$status" = "healthy" ]; then
                 echo "Application is healthy."
                 break
               fi
-              echo "Waiting for application to start... ($i/15)"
+              echo "Waiting for healthy status... ($i/30) current=$status"
               sleep 5
-              if [ "$i" -eq 15 ]; then
-                echo "Health check failed after 15 retries." >&2
+              if [ "$i" -eq 30 ]; then
+                echo "Health check failed after 30 retries." >&2
+                docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail 30
                 exit 1
               fi
             done

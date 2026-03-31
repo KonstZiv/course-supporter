@@ -6,7 +6,8 @@
     "avg_accuracy": 0,
     "total_input_tokens": 0,
     "total_output_tokens": 0,
-    "raw": []
+    "raw": [],
+    "partial": true
   },
   "gpt4o_combined": {
     "model": "gpt-4o",
@@ -146,13 +147,15 @@
     "avg_accuracy": 0,
     "total_input_tokens": 0,
     "total_output_tokens": 0,
-    "raw": []
+    "raw": [],
+    "partial": true
   },
   "gemini_flash_describe": {
     "model": "gemini-2.0-flash",
     "prompt": "describe_only",
     "total_input_tokens": 0,
     "total_output_tokens": 0,
-    "raw": []
+    "raw": [],
+    "partial": true
   }
 }

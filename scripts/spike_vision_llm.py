@@ -208,24 +208,32 @@ def test_gemini(
     frames: list[Path],
     prompt: str,
     model_id: str = "gemini-2.0-flash",
+    max_retries_per_frame: int = 6,
 ) -> dict:
-    """Test Gemini Vision on frames with key rotation and rate limit handling."""
+    """Test Gemini Vision on frames with key rotation and rate limit handling.
+
+    Stops early if all keys are exhausted, returning partial results.
+    """
     keys = _get_gemini_keys()
     if not keys:
         return {"error": "No GEMINI_API_KEY"}
 
     print(f"  Using {len(keys)} Gemini key(s)")
     key_idx = 0
+    all_keys_exhausted = False
 
     results: list[dict] = []
     total_input = 0
     total_output = 0
 
     for i, frame_path in enumerate(frames):
-        img_data = frame_path.read_bytes()
+        if all_keys_exhausted:
+            break
 
-        # Try each key, with retries on rate limit
-        for attempt in range(len(keys) * 2):
+        img_data = frame_path.read_bytes()
+        frame_done = False
+
+        for attempt in range(max_retries_per_frame):
             current_key = keys[key_idx % len(keys)]
             client = genai.Client(api_key=current_key)
 
@@ -263,18 +271,33 @@ def test_gemini(
                         "output_tokens": out_tok,
                     }
                 )
-                # Rotate key after each successful call
                 key_idx += 1
-                # Small pause between requests
+                frame_done = True
+                print(
+                    f"    [{i + 1}/{len(frames)}] {frame_path.name} OK ({latency:.1f}s)"
+                )
                 if i < len(frames) - 1:
-                    time.sleep(2)
+                    time.sleep(3)
                 break
 
             except Exception as e:
-                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                err = str(e)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
                     key_idx += 1
-                    wait = 10 if attempt < len(keys) else 30
-                    print(f"    Rate limited, rotating key, wait {wait}s...")
+                    # Check if we've tried all keys twice
+                    if attempt >= len(keys) * 2 - 1:
+                        print(
+                            f"    All keys exhausted after {attempt + 1}"
+                            " retries, stopping."
+                        )
+                        all_keys_exhausted = True
+                        break
+                    wait = 8 if attempt < len(keys) else 15
+                    print(
+                        f"    Rate limited (key {key_idx % len(keys)}),"
+                        f" wait {wait}s... "
+                        f"(attempt {attempt + 1}/{max_retries_per_frame})"
+                    )
                     time.sleep(wait)
                 else:
                     print(f"    Error: {e}")
@@ -287,7 +310,17 @@ def test_gemini(
                             "output_tokens": 0,
                         }
                     )
+                    frame_done = True
                     break
+
+        if not frame_done and not all_keys_exhausted:
+            print(f"    [{i + 1}/{len(frames)}] {frame_path.name} FAILED (max retries)")
+
+    n_ok = len([r for r in results if not r["response"].startswith("ERROR")])
+    print(
+        f"  Completed: {n_ok}/{len(frames)} frames"
+        f"{' (partial — quota exhausted)' if all_keys_exhausted else ''}"
+    )
 
     return {
         "model": model_id,
@@ -295,6 +328,7 @@ def test_gemini(
         "results": results,
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,
+        "partial": all_keys_exhausted,
     }
 
 
@@ -406,6 +440,16 @@ def compute_accuracies(test_data: dict) -> tuple[list[dict], float]:
     return accs, round(avg, 1)
 
 
+def _should_run(all_results: dict, test_key: str) -> bool:
+    """Check if a test should run: not done, or partial (quota exhausted)."""
+    if test_key not in all_results:
+        return True
+    entry = all_results[test_key]
+    if not entry.get("raw"):
+        return True
+    return bool(entry.get("partial"))
+
+
 # ─── Main ────────────────────────────────────────────────────────────
 
 
@@ -422,12 +466,15 @@ def main() -> None:
 
     all_results = load_results()
     if all_results:
-        done = [k for k, v in all_results.items() if v.get("raw")]
-        print(f"  Resuming: {len(done)} tests already done: {done}")
+        for k, v in all_results.items():
+            n = len(v.get("raw", []))
+            partial = v.get("partial", False)
+            status = f"{n} frames" + (" (PARTIAL)" if partial else "")
+            print(f"  {k}: {status}")
 
     # ── Test 1: Combined prompt — Gemini Flash ────────────────
     test_key = "gemini_flash_combined"
-    if test_key not in all_results or not all_results[test_key].get("raw"):
+    if _should_run(all_results, test_key):
         print("\n" + "─" * 70)
         print("TEST 1: Combined prompt — Gemini Flash")
         print("─" * 70)
@@ -443,19 +490,21 @@ def main() -> None:
                 "total_input_tokens": data["total_input_tokens"],
                 "total_output_tokens": data["total_output_tokens"],
                 "raw": data["results"],
+                "partial": data.get("partial", False),
             }
-            print(f"  Avg accuracy: {avg}%")
+            print(f"  Avg accuracy: {avg}% ({len(data['results'])} frames)")
         else:
             all_results[test_key] = {"error": data["error"], "raw": []}
             print(f"  Error: {data['error']}")
         save_results(all_results)
     else:
+        n = len(all_results[test_key].get("raw", []))
         avg = all_results[test_key].get("avg_accuracy", 0)
-        print(f"\n  [SKIP] Test 1 already done: avg={avg}%")
+        print(f"\n  [SKIP] Test 1 done: {n} frames, avg={avg}%")
 
     # ── Test 2: Combined prompt — GPT-4o ──────────────────────
     test_key = "gpt4o_combined"
-    if test_key not in all_results or not all_results[test_key].get("raw"):
+    if _should_run(all_results, test_key):
         print("\n" + "─" * 70)
         print("TEST 2: Combined prompt — GPT-4o")
         print("─" * 70)
@@ -483,7 +532,7 @@ def main() -> None:
 
     # ── Test 3: OCR-only prompt — Gemini Flash ────────────────
     test_key = "gemini_flash_ocr"
-    if test_key not in all_results or not all_results[test_key].get("raw"):
+    if _should_run(all_results, test_key):
         print("\n" + "─" * 70)
         print("TEST 3: OCR-only prompt — Gemini Flash")
         print("─" * 70)
@@ -499,19 +548,21 @@ def main() -> None:
                 "total_input_tokens": data["total_input_tokens"],
                 "total_output_tokens": data["total_output_tokens"],
                 "raw": data["results"],
+                "partial": data.get("partial", False),
             }
-            print(f"  Avg accuracy: {avg}%")
+            print(f"  Avg accuracy: {avg}% ({len(data['results'])} frames)")
         else:
             all_results[test_key] = {"error": data["error"], "raw": []}
             print(f"  Error: {data['error']}")
         save_results(all_results)
     else:
+        n = len(all_results[test_key].get("raw", []))
         avg = all_results[test_key].get("avg_accuracy", 0)
-        print(f"\n  [SKIP] Test 3 already done: avg={avg}%")
+        print(f"\n  [SKIP] Test 3 done: {n} frames, avg={avg}%")
 
     # ── Test 4: Description-only — Gemini Flash ───────────────
     test_key = "gemini_flash_describe"
-    if test_key not in all_results or not all_results[test_key].get("raw"):
+    if _should_run(all_results, test_key):
         print("\n" + "─" * 70)
         print("TEST 4: Description-only — Gemini Flash")
         print("─" * 70)
@@ -524,6 +575,7 @@ def main() -> None:
                 "total_input_tokens": data["total_input_tokens"],
                 "total_output_tokens": data["total_output_tokens"],
                 "raw": data["results"],
+                "partial": data.get("partial", False),
             }
             for r in data["results"]:
                 preview = r["response"][:100].replace("\n", " ")
@@ -534,7 +586,7 @@ def main() -> None:
         save_results(all_results)
     else:
         n = len(all_results[test_key].get("raw", []))
-        print(f"\n  [SKIP] Test 4 already done: {n} frames")
+        print(f"\n  [SKIP] Test 4 done: {n} frames")
 
     # ── Summary ───────────────────────────────────────────────
     print("\n" + "=" * 70)

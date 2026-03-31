@@ -1,0 +1,158 @@
+{
+  "gemini_flash_combined": {
+    "model": "gemini-2.0-flash",
+    "prompt": "combined",
+    "accuracies": [],
+    "avg_accuracy": 0,
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "raw": []
+  },
+  "gpt4o_combined": {
+    "model": "gpt-4o",
+    "prompt": "combined",
+    "accuracies": [
+      {
+        "frame": "golden_006_92s.jpg",
+        "accuracy": 24.2,
+        "latency": 4.97
+      },
+      {
+        "frame": "golden_012_210s.jpg",
+        "accuracy": 15.6,
+        "latency": 7.54
+      },
+      {
+        "frame": "golden_017_318s.jpg",
+        "accuracy": 9.5,
+        "latency": 6.95
+      },
+      {
+        "frame": "golden_027_988s.jpg",
+        "accuracy": 15.9,
+        "latency": 9.53
+      },
+      {
+        "frame": "golden_042_1220s.jpg",
+        "accuracy": 8.4,
+        "latency": 9.08
+      },
+      {
+        "frame": "golden_060_1366s.jpg",
+        "accuracy": 25.5,
+        "latency": 5.15
+      },
+      {
+        "frame": "golden_065_1403s.jpg",
+        "accuracy": 16.7,
+        "latency": 2.84
+      },
+      {
+        "frame": "golden_075_1500s.jpg",
+        "accuracy": 6.6,
+        "latency": 4.22
+      },
+      {
+        "frame": "golden_080_1524s.jpg",
+        "accuracy": 8.2,
+        "latency": 4.53
+      },
+      {
+        "frame": "golden_085_1549s.jpg",
+        "accuracy": 6.2,
+        "latency": 3.46
+      }
+    ],
+    "avg_accuracy": 13.7,
+    "total_input_tokens": 12970,
+    "total_output_tokens": 3321,
+    "raw": [
+      {
+        "frame": "golden_006_92s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"console\",\n  \"description\": \"На екрані зображено консоль у середовищі розробки PyCharm. Лектор демонструє роботу з типами int та float у Python, показуючи різницю між ними при виконанні коду в консолі.\",\n  \"extracted_text\": \"Python Console\\n>>> type(1111)\\n<class 'int'>\\n>>> type(1111.0)\\n<class 'float'>\\n\\nimport sys; print('Python %s on %s' % (sys.version, sys.platform))\\nsys.path.extend(['/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic'])\\n\\n/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/.venv/bin/python /Applications/PyCharm.app/...\\nuv (pythonbasic) [Python 3.13.2]\",\n  \"has_code\": true,\n  \"importance\": 3\n}\n```",
+        "latency_sec": 4.97,
+        "input_tokens": 1297,
+        "output_tokens": 219
+      },
+      {
+        "frame": "golden_012_210s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"slide\",\n  \"description\": \"На екрані показано слайд з українського курсу програмування на Python. Викладач обговорює числові типи int і float, надає пояснення та приклади використання вбудованих функцій відповідно до цих типів. Видно частину інтерфейсу редактора коду з відкритими зображеннями слайдів.\",\n  \"extracted_text\": \"int&float: вбудовані числові типи\\nPython має декілька вбудованих числових типів. В межах цього курсу ми познайомимось лише з int (цілі числа) та float (числа з плаваючою комою).\\n>>> type(1)\\n<class 'int'>\\nЦіле число – це число без десяткових знаків. Наприклад, 1 є цілим числом, але 1.0 не є таким. Цілочисельний тип даних має назву int, яку можна побачити за допомогою type().\\nЗверніть увагу що в коді саме число - зображується без лапок. І як функція str() - перетворює число в рядок, так же існує функція int() - яка приймає рядок і якщо це можливо - перетворює його в число. За замовчуванням рядок розуміється як десяткове число. int() - вміє працювати не лише з десятковими числами, а й з двійковими і з іншими системами числення. Приклад будке число з шістнадцятирічною системою числення.\\nДокладніше – дивіться документацію тут.\\n>>> int(\\\"22\\\")\\n22\\n>>> int(\\\"faa12\\\", base=16)\\n1026578\",\n  \"has_code\": true,\n  \"importance\": 4\n}\n```",
+        "latency_sec": 7.54,
+        "input_tokens": 1297,
+        "output_tokens": 437
+      },
+      {
+        "frame": "golden_017_318s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"slide\",\n  \"description\": \"На екрані видно слайд з курсу програмування Python українською мовою. Тема слайду стосується вбудованих числових типів int і float. Також видно профільний портрет лектора у верхньому лівому кутку, що накладається на основний слайд. Лектор пояснює, як працювати з числовими типами даних у Python.\",\n  \"extracted_text\": \"int&float: вбудовані числові типи\\nдля зручності набору ви можете при наборі чисел розбивати цифри на групи символами підкреслення\\n>>> 1000000\\n1000000\\n>>> 1_000_000\\n1000000\\n>>> type(1.0)\\n<class 'float'>\\n>>> float('2.12')\\n2.12\\n>>> 1000000.0\\n1_000_000.0\\n>>> 1e6\\n1000000.0\\n>>> 1E6\\n1000000.0\\nІснує кілька шляхів представлення літералу з плаваючою комою. Кожен із наведених нижче елементів створює літерал із плаваючою комою зі значенням один мільйон.\",\n  \"has_code\": true,\n  \"importance\": 4\n}\n```",
+        "latency_sec": 6.95,
+        "input_tokens": 1297,
+        "output_tokens": 320
+      },
+      {
+        "frame": "golden_027_988s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"На екрані видно лектора в овальному окні та робочий стіл з відкритою IDE, де показано слайд і консоль Python. Лектор обговорює функції 'round' у Python та їх використання для роботи з цілими і дробовими числами. Внизу показано Python код з операціями ділення та округлення.\",\n  \"extracted_text\": \"int&float: функції\\n\\nВ Python є декілька вбудованих функцій для роботи з числами (найпоширеніші - round() - округлення, abs() - абсолютне значення, div() - піднесення до десяткової степені). Також є вбудований модуль math, який надає велику кількість різноманітних математичних операцій. Детально пропонуємо розібратись за документацією. А ми розберемо роботу популярної функції round().\\n>>> round(5.6)\\n6\\n>>> round(5.5)\\n6\\n>>> round(-5.5)\\n-6\\nЯкщо ви пам'ятаєте шкільний курс математики, то останнє округлення повинно Вас здивувати. Нас вчила що округлення треба робити 'вгору' при значенні '5' розряду що округлюється.\\nТут працює правило 'округлення, пов'язаного з парними числами' - тобто якщо цифра числа перед тим що округлюється парна - округлення робиться 'вниз', а якщо непарна - то вгору. Це рекомендована IEEE 754 норма направлена на те щоб обмежити вплив округлення на операції з великою кількістю чисел.\\nPython code:\\n\\n>>> 2.157 // 1.22\\n1.0\\n>>> 2.157 % 1.22\\n0.937\\n\\nSpecial Variables:\\na = (int) 2000000\\nb = (float) 1000.00091\",\n  \"has_code\": true,\n  \"importance\": 3\n}\n```",
+        "latency_sec": 9.53,
+        "input_tokens": 1297,
+        "output_tokens": 481
+      },
+      {
+        "frame": "golden_042_1220s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"slide\",\n  \"description\": \"На екрані видно слайд з українського курсу програмування на Python. Тема слайду стосується зв'язку типів int та float з bool. Пояснюється робота 'конструкторів' типів у Python, приклади перетворення об'єктів у різні типи даних, а також наводяться окремі приклади з кодом для демонстрації змін типів.\",\n  \"extracted_text\": \"int&float: зв’язок з bool\\n\\nМи вже працювали з “конструкторами” відповідних типів str() і bool() - які отримують якийсь об’єкт і намагаються створити з нього об’єкт свого класу - str() - повертає рядок, bool() - повертає True/False відповідно правил для кожного типу об’єктів.\\n\\n>>> int(\\\"23\\\")\\n23\\n>>> float(\\\"45.54\\\")\\n45.54\\n\\nТочно так же ми маємо “конструктори” типів int() та float() які отримують об’єкт і намагаються перетворити його на “свій” тип даних - якщо це можливо.\\n\\n>>> str(3.1415)\\n'3.1415'\\n>>> bool(\\\"it is my line\\\")\\nTrue\\n\\nЗвертаю увагу на те, як числа перетворються функцією bool: якщо число дорівнює 0 - то False, в інших випадках це True\\n\\n>>> bool(0)\\nFalse\\n>>> bool(3.14)\\nTrue\\n\\n>>> False + True * 4\\n4\\n\\nP.S. Базвально-то False і True - це також числа. False = 0, True = 1. Над ними навіть можна робити математичні операції. Оті і живіть тепер з цим)))\\n\\npython quick start\",\n  \"has_code\": true,\n  \"importance\": 4\n}\n```",
+        "latency_sec": 9.08,
+        "input_tokens": 1297,
+        "output_tokens": 457
+      },
+      {
+        "frame": "golden_060_1366s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"Екран показує процес редагування коду в редакторі коду, Python IDE. Лектор демонструє базову програму, яка приймає введення користувача та виводить його назад. У терміналі відображається виконання цього коду з прикладом вводу числового значення.\",\n  \"extracted_text\": \"num_1 = input(\\\"Enter a number: \\\")\\n\\nprint(f\\\"The number is: {num_1}\\\")\\n\\n/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/.venv/bin/python /Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py\\nEnter a number: 111\\nThe number is: 111\\n\\nProcess finished with exit code 0\",\n  \"has_code\": true,\n  \"importance\": 3\n}\n```",
+        "latency_sec": 5.15,
+        "input_tokens": 1297,
+        "output_tokens": 221
+      },
+      {
+        "frame": "golden_065_1403s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"На екрані продемонстровано відеоурок з програмування на Python. Викладач пояснює, як використовувати функцію input() для отримання введених користувачем даних та перевіряє тип даних у Python. Видно код, а також виконання програми в терміналі.\",\n  \"extracted_text\": \"num_1 = input(\\\"Enter a number: \\\")\\n\\nprint(f\\\"The number is: {num_1}\\\")\\nprint(f\\\"type of number is: {type(num_1)}\\\")\\n\\n/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/.venv/bin/python /Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py\\nEnter a number: 123\\nThe number is: 123\\ntype of number is: <class 'str'>\\n\\nProcess finished with exit code 0\",\n  \"has_code\": true,\n  \"importance\": 3\n}\n```",
+        "latency_sec": 2.84,
+        "input_tokens": 1297,
+        "output_tokens": 247
+      },
+      {
+        "frame": "golden_075_1500s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"На екрані показано середовище програмування, де викладач демонструє код на Python. Показано зміну типів даних з рядка в числові типи (int і float). На екрані також відображено помилку, яка виникає при вводу некоректних даних для перетворення в цілочисельний тип.\",\n  \"extracted_text\": \"num_1_str = input(\\\"Enter a number: \\\")\\nnum_2_str = input(\\\"Enter another number: \\\")\\n\\nnum_1 = int(num_1_str)\\nnum_2 = float(num_2_str)\\n\\nnumbers\\nnum_1_str\\nnum_2_str\\nenumerate\\n\\n/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/.venv/bin/python /Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py\\nEnter a number: + 12\\nTraceback (most recent call last):\\n  File \\\"/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py\\\", line 3, in <module>\\n    num_1 = int(num_1_str)\\nValueError: invalid literal for int() with base 10: '+ 12'\\n\\nProcess finished with exit code 1\",\n  \"has_code\": true,\n  \"importance\": 3\n}\n```",
+        "latency_sec": 4.22,
+        "input_tokens": 1297,
+        "output_tokens": 348
+      },
+      {
+        "frame": "golden_080_1524s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"На екрані показано вікно редактора коду, де лектор пояснює різницю між цілими числами (int) та дробовими числами (float) у Python. Введено код для перетворення введених користувачем рядків на числа різних типів. Також представлено результат виконання коду в терміналі.\",\n  \"extracted_text\": \"int_float.py\\nnum_1_str = input(\\\"Enter a number: \\\")\\nnum_2_str = input(\\\"Enter another number: \\\")\\n\\nnum_1 = int(num_1_str)\\nnum_2 = float(num_2_str)\\n\\nprint(f\\\"The number is: {num_1}\\\")\\nprint(f\\\"type of number is: {type(num_1)}\\\")\\n\\nprint(f\\\"The number is: {num_2}\\\")\\nprint(f\\\"type of number is: {type(num_2)}\\\")\\n\\n/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/.venv/bin/python /Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py\\nEnter a number: 11\\nEnter another number: 11\\nThe number is: 11\\ntype of number is: <class 'int'>\\nThe number is: 11.0\\ntype of number is: <class 'float'>\\n\\nProcess finished with exit code 0\\n\",\n  \"has_code\": true,\n  \"importance\": 4\n}\n```",
+        "latency_sec": 4.53,
+        "input_tokens": 1297,
+        "output_tokens": 365
+      },
+      {
+        "frame": "golden_085_1549s.jpg",
+        "response": "```json\n{\n  \"scene_type\": \"code_editing\",\n  \"description\": \"На екрані показано редактор коду, де викладач демонструє виправлення помилок при роботі з типами даних у Python. Використовується функція `float()` для перетворення введених даних, але виникає помилка через неправильний формат числа.\",\n  \"extracted_text\": \"num_1_str = input(\\\"Enter a number: \\\")\\nnum_2_str = input(\\\"Enter another number: \\\")\\n\\nnum_1 = int(num_1_str)\\nnum_2 = float(num_2_str)\\n\\nprint(f\\\"The number is: {num_1}\\\")\\nprint(f\\\"type of number is: {type(num_1)}\\\")\\n\\nprint(f\\\"The number is: {num_2}\\\")\\nprint(f\\\"type of number is: {type(num_2)}\\\")\",\n  \"has_code\": true,\n  \"importance\": 4\n}\n```",
+        "latency_sec": 3.46,
+        "input_tokens": 1297,
+        "output_tokens": 226
+      }
+    ]
+  },
+  "gemini_flash_ocr": {
+    "model": "gemini-2.0-flash",
+    "prompt": "ocr_only",
+    "accuracies": [],
+    "avg_accuracy": 0,
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "raw": []
+  },
+  "gemini_flash_describe": {
+    "model": "gemini-2.0-flash",
+    "prompt": "describe_only",
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "raw": []
+  }
+}

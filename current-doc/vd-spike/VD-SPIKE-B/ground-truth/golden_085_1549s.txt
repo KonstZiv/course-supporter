@@ -1,0 +1,29 @@
+scene_type: code_with_terminal
+code_area: editor (top) + terminal output (bottom)
+
+Editor (int_float.py):
+```python
+num_1_str = input("Enter a number: ")
+num_2_str = input("Enter another number: ")
+
+num_1 = int(num_1_str)
+num_2 = float(num_2_str)
+
+print(f"The number is: {num_1}")
+print(f"type of number is: {type(num_1)}")
+
+print(f"The number is: {num_2}")
+print(f"type of number is: {type(num_2)}")
+```
+
+Terminal output (traceback):
+```
+Enter a number: 11
+Enter another number: -123,001
+Traceback (most recent call last):
+  File "/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py", line 5, in <module>
+    num_2 = float(num_2_str)
+ValueError: could not convert string to float: '-123,001'
+
+Process finished with exit code 1
+```

@@ -1,0 +1,29 @@
+scene_type: slide_with_console
+code_area: console (left) + slide code examples (right)
+
+Console (left):
+```python
+>>> int("23")
+23
+>>> float("45.54")
+45.54
+>>> False + True
+1
+>>>
+```
+
+Slide code examples (right top):
+```python
+>>> str(3.1415)
+'3.1415'
+>>> bool("it is my line")
+True
+```
+
+Slide code examples (right bottom):
+```python
+>>> bool(0)
+False
+>>> bool(3.14)
+True
+```

@@ -1,0 +1,10 @@
+scene_type: slide_with_console
+code_area: console (bottom panel)
+
+```python
+>>> type(11111)
+<class 'int'>
+>>> type(1111.6)
+<class 'float'>
+>>>
+```

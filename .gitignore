@@ -217,3 +217,7 @@ minio_data/
 # PyCharm
 .idea/
 .keys-issued-to-users
+
+# VD Spike — large media files
+current-doc/vd-spike/sample.mp4
+current-doc/vd-spike/golden-frames/

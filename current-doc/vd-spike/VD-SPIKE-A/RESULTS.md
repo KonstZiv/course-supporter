@@ -165,4 +165,68 @@ hash_size=16, threshold=10% (dist>25)
 
 ### Для Spike B
 
-Golden frames: **17 кадрів** (fps=1.0, hash_size=16, threshold=5%, PiP mask). Timestamps покривають все відео від 0 до 634 сек. Достатньо для тестування Vision LLM на різних типах контенту (слайди, код, переходи).
+Golden frames: **17 кадрів** (fps=1.0, hash_size=16, threshold=5%, PiP mask). Timestamps покривають все відео від 0 до 634 сек.
+
+---
+
+## 7. Sample 2: Відео з кодом (27 хв)
+
+**Відео:** [2.02 Python Quick Start: Names and Objects](https://www.youtube.com/watch?v=b-1zy2CKgjY)
+**Характеристики:** 1280x720, 30 fps, 1640s (27.3 min), містить приклади в Python консолі
+
+### Порівняння з sample1
+
+| Параметр | sample1 (10 хв, слайди) | sample2 (27 хв, з кодом) |
+|---|---|---|
+| Scene detection (0.03) | 17 | 49 |
+| fps=0.5 base | 318 | 820 |
+| PiP zone | bottom_left (conf 0.73) | top_left (conf 0.75) |
+| PiP mask ефект (5%) | 16→11 | 93→71 (**-24%**) |
+| dHash 5% + mask | 11 | **71** |
+| dHash 10% + mask | 9 | **41** |
+| dHash 15% + mask | 9 | **29** |
+
+### PiP Detection — sample2
+
+| Zone | Avg Motion |
+|---|---|
+| top_left | 15.67 |
+| bottom_right | 3.97 |
+| top_right | 3.44 |
+| bottom_left | 1.93 |
+
+**PiP:** top_left, confidence 0.747 — правильно визначив камеру в іншому куті.
+
+### Scene detection — sample2
+
+| Threshold | Frames |
+|---|---|
+| 0.01 | 139 |
+| 0.02 | 77 |
+| 0.03 | 49 |
+| 0.05 | 43 |
+| 0.1 | 35 |
+
+### Golden frames — sample2
+
+- **Кількість:** 91 (fps=1.0, hash_size=16, threshold=5%, PiP mask)
+- **Шлях:** `current-doc/vd-spike/golden-frames-sample2/`
+
+### Висновки по sample2
+
+1. **PiP tracking працює** на різних позиціях камери (bottom_left vs top_left), confidence >0.7 в обох
+2. **PiP mask зменшує false positives на 24%** (93→71 при 5%)
+3. Відео з кодом дає **значно більше унікальних кадрів** (71 vs 11 при 5%) — кожна зміна в консолі фіксується
+4. **Scene detection** на довшому відео з кодом дає суттєво більше кадрів (49 vs 17 при threshold 0.03)
+5. **Рекомендовані параметри підтверджуються** на другому відео: fps=0.5, hash_size=16, threshold 5-10%
+
+### Фінальна рекомендація (підтверджена на 2 відео)
+
+| Параметр | Значення | Обґрунтування |
+|---|---|---|
+| **Extraction** | fps=0.5 | Баланс. 2-год відео → ~3600 кадрів |
+| **hash_size** | 16 | Найточніший |
+| **Threshold** | 5% (dist>12) | Ловить зміни в коді. Production може 10% |
+| **PiP detection** | Temporal diff | Працює на різних позиціях, confidence >0.7 |
+| **PiP mask** | Обов'язково | -24% false positives |
+| **Cooldown** | 4 сек, 3 consecutive | Для live coding (не впливає на слайди) |

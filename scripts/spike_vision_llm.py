@@ -370,12 +370,48 @@ def test_openai(
     }
 
 
+# ─── Incremental results store ───────────────────────────────────────
+
+RESULTS_FILE = RESULTS_DIR / "results.json"
+
+
+def load_results() -> dict:
+    """Load previously saved results (incremental resume)."""
+    if RESULTS_FILE.exists():
+        return json.loads(RESULTS_FILE.read_text())
+    return {}
+
+
+def save_results(all_results: dict) -> None:
+    """Save results incrementally after each test."""
+    RESULTS_FILE.write_text(json.dumps(all_results, indent=2, ensure_ascii=False))
+    print(f"  [saved to {RESULTS_FILE}]")
+
+
+def compute_accuracies(test_data: dict) -> tuple[list[dict], float]:
+    """Compute code accuracy for a test's raw results."""
+    accs: list[dict] = []
+    for r in test_data.get("raw", []):
+        gt = load_ground_truth(r["frame"])
+        if gt:
+            acc = compute_code_accuracy(r["response"], gt)
+            accs.append(
+                {
+                    "frame": r["frame"],
+                    "accuracy": round(acc * 100, 1),
+                    "latency": r["latency_sec"],
+                }
+            )
+    avg = sum(a["accuracy"] for a in accs) / len(accs) if accs else 0
+    return accs, round(avg, 1)
+
+
 # ─── Main ────────────────────────────────────────────────────────────
 
 
 def main() -> None:
     print("=" * 70)
-    print("VD-SPIKE-B: Vision LLM Testing")
+    print("VD-SPIKE-B: Vision LLM Testing (incremental)")
     print("=" * 70)
 
     frame_paths = [GOLDEN_DIR / f for f in TEST_FRAMES]
@@ -384,200 +420,158 @@ def main() -> None:
     for p in frame_paths:
         assert p.exists(), f"Frame not found: {p}"
 
-    # ── Test 1: Combined prompt (most important) ──────────────
-    print("\n" + "─" * 70)
-    print("TEST 1: Combined prompt (describe + extract) — Gemini Flash")
-    print("─" * 70)
+    all_results = load_results()
+    if all_results:
+        done = [k for k, v in all_results.items() if v.get("raw")]
+        print(f"  Resuming: {len(done)} tests already done: {done}")
 
-    gemini_combined = test_gemini(
-        gt_frame_paths,
-        COMBINED_PROMPT,
-        "gemini-2.0-flash",
-    )
-    print(f"  Gemini Flash: {len(gemini_combined['results'])} frames")
-    print(
-        f"  Tokens: {gemini_combined['total_input_tokens']} in,"
-        f" {gemini_combined['total_output_tokens']} out"
-    )
+    # ── Test 1: Combined prompt — Gemini Flash ────────────────
+    test_key = "gemini_flash_combined"
+    if test_key not in all_results or not all_results[test_key].get("raw"):
+        print("\n" + "─" * 70)
+        print("TEST 1: Combined prompt — Gemini Flash")
+        print("─" * 70)
 
-    # Compute accuracy for each frame
-    accuracies: list[dict] = []
-    for r in gemini_combined["results"]:
-        gt = load_ground_truth(r["frame"])
-        if gt:
-            acc = compute_code_accuracy(r["response"], gt)
-            accuracies.append(
-                {
-                    "frame": r["frame"],
-                    "accuracy": round(acc * 100, 1),
-                    "latency": r["latency_sec"],
-                }
-            )
-            print(
-                f"    {r['frame']}: accuracy={acc * 100:.1f}%,"
-                f" latency={r['latency_sec']}s"
-            )
-
-    avg_acc = (
-        sum(a["accuracy"] for a in accuracies) / len(accuracies) if accuracies else 0
-    )
-    print(f"\n  Average code accuracy: {avg_acc:.1f}%")
+        data = test_gemini(gt_frame_paths, COMBINED_PROMPT, "gemini-2.0-flash")
+        if "error" not in data:
+            accs, avg = compute_accuracies({"raw": data["results"]})
+            all_results[test_key] = {
+                "model": "gemini-2.0-flash",
+                "prompt": "combined",
+                "accuracies": accs,
+                "avg_accuracy": avg,
+                "total_input_tokens": data["total_input_tokens"],
+                "total_output_tokens": data["total_output_tokens"],
+                "raw": data["results"],
+            }
+            print(f"  Avg accuracy: {avg}%")
+        else:
+            all_results[test_key] = {"error": data["error"], "raw": []}
+            print(f"  Error: {data['error']}")
+        save_results(all_results)
+    else:
+        avg = all_results[test_key].get("avg_accuracy", 0)
+        print(f"\n  [SKIP] Test 1 already done: avg={avg}%")
 
     # ── Test 2: Combined prompt — GPT-4o ──────────────────────
-    print("\n" + "─" * 70)
-    print("TEST 2: Combined prompt — GPT-4o")
-    print("─" * 70)
+    test_key = "gpt4o_combined"
+    if test_key not in all_results or not all_results[test_key].get("raw"):
+        print("\n" + "─" * 70)
+        print("TEST 2: Combined prompt — GPT-4o")
+        print("─" * 70)
 
-    gpt_combined = test_openai(
-        gt_frame_paths,
-        COMBINED_PROMPT,
-        "gpt-4o",
-    )
-    print(f"  GPT-4o: {len(gpt_combined['results'])} frames")
-    print(
-        f"  Tokens: {gpt_combined['total_input_tokens']} in,"
-        f" {gpt_combined['total_output_tokens']} out"
-    )
-
-    gpt_accuracies: list[dict] = []
-    for r in gpt_combined["results"]:
-        gt = load_ground_truth(r["frame"])
-        if gt:
-            acc = compute_code_accuracy(r["response"], gt)
-            gpt_accuracies.append(
-                {
-                    "frame": r["frame"],
-                    "accuracy": round(acc * 100, 1),
-                    "latency": r["latency_sec"],
-                }
-            )
-            print(
-                f"    {r['frame']}: accuracy={acc * 100:.1f}%,"
-                f" latency={r['latency_sec']}s"
-            )
-
-    gpt_avg = (
-        sum(a["accuracy"] for a in gpt_accuracies) / len(gpt_accuracies)
-        if gpt_accuracies
-        else 0
-    )
-    print(f"\n  Average code accuracy: {gpt_avg:.1f}%")
+        data = test_openai(gt_frame_paths, COMBINED_PROMPT, "gpt-4o")
+        if "error" not in data:
+            accs, avg = compute_accuracies({"raw": data["results"]})
+            all_results[test_key] = {
+                "model": "gpt-4o",
+                "prompt": "combined",
+                "accuracies": accs,
+                "avg_accuracy": avg,
+                "total_input_tokens": data["total_input_tokens"],
+                "total_output_tokens": data["total_output_tokens"],
+                "raw": data["results"],
+            }
+            print(f"  Avg accuracy: {avg}%")
+        else:
+            all_results[test_key] = {"error": data["error"], "raw": []}
+            print(f"  Error: {data['error']}")
+        save_results(all_results)
+    else:
+        avg = all_results[test_key].get("avg_accuracy", 0)
+        print(f"\n  [SKIP] Test 2 already done: avg={avg}%")
 
     # ── Test 3: OCR-only prompt — Gemini Flash ────────────────
-    print("\n" + "─" * 70)
-    print("TEST 3: OCR-only prompt — Gemini Flash")
-    print("─" * 70)
+    test_key = "gemini_flash_ocr"
+    if test_key not in all_results or not all_results[test_key].get("raw"):
+        print("\n" + "─" * 70)
+        print("TEST 3: OCR-only prompt — Gemini Flash")
+        print("─" * 70)
 
-    gemini_ocr = test_gemini(
-        gt_frame_paths,
-        OCR_PROMPT,
-        "gemini-2.0-flash",
-    )
-    print(f"  Gemini Flash OCR: {len(gemini_ocr['results'])} frames")
+        data = test_gemini(gt_frame_paths, OCR_PROMPT, "gemini-2.0-flash")
+        if "error" not in data:
+            accs, avg = compute_accuracies({"raw": data["results"]})
+            all_results[test_key] = {
+                "model": "gemini-2.0-flash",
+                "prompt": "ocr_only",
+                "accuracies": accs,
+                "avg_accuracy": avg,
+                "total_input_tokens": data["total_input_tokens"],
+                "total_output_tokens": data["total_output_tokens"],
+                "raw": data["results"],
+            }
+            print(f"  Avg accuracy: {avg}%")
+        else:
+            all_results[test_key] = {"error": data["error"], "raw": []}
+            print(f"  Error: {data['error']}")
+        save_results(all_results)
+    else:
+        avg = all_results[test_key].get("avg_accuracy", 0)
+        print(f"\n  [SKIP] Test 3 already done: avg={avg}%")
 
-    ocr_accuracies: list[dict] = []
-    for r in gemini_ocr["results"]:
-        gt = load_ground_truth(r["frame"])
-        if gt:
-            acc = compute_code_accuracy(r["response"], gt)
-            ocr_accuracies.append(
-                {
-                    "frame": r["frame"],
-                    "accuracy": round(acc * 100, 1),
-                    "latency": r["latency_sec"],
-                }
-            )
-            print(
-                f"    {r['frame']}: accuracy={acc * 100:.1f}%,"
-                f" latency={r['latency_sec']}s"
-            )
+    # ── Test 4: Description-only — Gemini Flash ───────────────
+    test_key = "gemini_flash_describe"
+    if test_key not in all_results or not all_results[test_key].get("raw"):
+        print("\n" + "─" * 70)
+        print("TEST 4: Description-only — Gemini Flash")
+        print("─" * 70)
 
-    ocr_avg = (
-        sum(a["accuracy"] for a in ocr_accuracies) / len(ocr_accuracies)
-        if ocr_accuracies
-        else 0
-    )
-    print(f"\n  Average OCR accuracy: {ocr_avg:.1f}%")
-
-    # ── Test 4: Description-only — Gemini Flash (batch) ───────
-    print("\n" + "─" * 70)
-    print("TEST 4: Description-only — Gemini Flash (all 14 frames)")
-    print("─" * 70)
-
-    gemini_desc = test_gemini(
-        frame_paths,
-        DESCRIBE_PROMPT,
-        "gemini-2.0-flash",
-    )
-    print(f"  Gemini Flash descriptions: {len(gemini_desc['results'])} frames")
-    for r in gemini_desc["results"]:
-        preview = r["response"][:120].replace("\n", " ")
-        print(f"    {r['frame']}: {preview}...")
-
-    # ── Save all results ──────────────────────────────────────
-    all_results = {
-        "gemini_flash_combined": {
-            "model": "gemini-2.0-flash",
-            "prompt": "combined",
-            "accuracies": accuracies,
-            "avg_accuracy": round(avg_acc, 1),
-            "total_input_tokens": gemini_combined["total_input_tokens"],
-            "total_output_tokens": gemini_combined["total_output_tokens"],
-            "raw": gemini_combined["results"],
-        },
-        "gpt4o_combined": {
-            "model": "gpt-4o",
-            "prompt": "combined",
-            "accuracies": gpt_accuracies,
-            "avg_accuracy": round(gpt_avg, 1),
-            "total_input_tokens": gpt_combined["total_input_tokens"],
-            "total_output_tokens": gpt_combined["total_output_tokens"],
-            "raw": gpt_combined["results"],
-        },
-        "gemini_flash_ocr": {
-            "model": "gemini-2.0-flash",
-            "prompt": "ocr_only",
-            "accuracies": ocr_accuracies,
-            "avg_accuracy": round(ocr_avg, 1),
-            "total_input_tokens": gemini_ocr["total_input_tokens"],
-            "total_output_tokens": gemini_ocr["total_output_tokens"],
-            "raw": gemini_ocr["results"],
-        },
-        "gemini_flash_describe": {
-            "model": "gemini-2.0-flash",
-            "prompt": "describe_only",
-            "total_input_tokens": gemini_desc["total_input_tokens"],
-            "total_output_tokens": gemini_desc["total_output_tokens"],
-            "raw": gemini_desc["results"],
-        },
-    }
-
-    results_path = RESULTS_DIR / "results.json"
-    results_path.write_text(json.dumps(all_results, indent=2, ensure_ascii=False))
-    print(f"\nResults saved to {results_path}")
+        data = test_gemini(frame_paths, DESCRIBE_PROMPT, "gemini-2.0-flash")
+        if "error" not in data:
+            all_results[test_key] = {
+                "model": "gemini-2.0-flash",
+                "prompt": "describe_only",
+                "total_input_tokens": data["total_input_tokens"],
+                "total_output_tokens": data["total_output_tokens"],
+                "raw": data["results"],
+            }
+            for r in data["results"]:
+                preview = r["response"][:100].replace("\n", " ")
+                print(f"    {r['frame']}: {preview}...")
+        else:
+            all_results[test_key] = {"error": data["error"], "raw": []}
+            print(f"  Error: {data['error']}")
+        save_results(all_results)
+    else:
+        n = len(all_results[test_key].get("raw", []))
+        print(f"\n  [SKIP] Test 4 already done: {n} frames")
 
     # ── Summary ───────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    print(f"\n  Gemini Flash combined: avg accuracy {avg_acc:.1f}%")
-    print(f"  GPT-4o combined:       avg accuracy {gpt_avg:.1f}%")
-    print(f"  Gemini Flash OCR-only: avg accuracy {ocr_avg:.1f}%")
-    print()
 
-    if avg_acc >= 90 or gpt_avg >= 90:
-        print("  ✓ Vision LLM accuracy >= 90%")
-        print("  → Stage C (separate OCR) NOT NEEDED")
-    elif avg_acc >= 70 or gpt_avg >= 70:
-        print("  ~ Vision LLM accuracy 70-90%")
-        print("  → Stage C as fallback for code frames")
+    for key, label in [
+        ("gemini_flash_combined", "Gemini Flash combined"),
+        ("gpt4o_combined", "GPT-4o combined"),
+        ("gemini_flash_ocr", "Gemini Flash OCR-only"),
+    ]:
+        entry = all_results.get(key, {})
+        avg = entry.get("avg_accuracy", 0)
+        n = len(entry.get("raw", []))
+        status = f"avg={avg}%" if n > 0 else "NOT RUN"
+        print(f"  {label}: {status} ({n} frames)")
+
+    desc = all_results.get("gemini_flash_describe", {})
+    desc_n = len(desc.get("raw", []))
+    print(f"  Gemini Flash describe: {desc_n} frames")
+
+    # Stage C decision
+    gem_avg = all_results.get("gemini_flash_combined", {}).get("avg_accuracy", 0)
+    gpt_avg = all_results.get("gpt4o_combined", {}).get("avg_accuracy", 0)
+    best = max(gem_avg, gpt_avg)
+
+    print()
+    if best >= 90:
+        print(f"  DECISION: Stage C NOT NEEDED (best={best}%)")
+    elif best >= 70:
+        print(f"  DECISION: Stage C as fallback (best={best}%)")
+    elif best > 0:
+        print(f"  DECISION: Stage C REQUIRED (best={best}%)")
     else:
-        print("  ✗ Vision LLM accuracy < 70%")
-        print("  → Stage C (separate OCR) REQUIRED")
+        print("  DECISION: Pending (no successful tests yet)")
 
     print("\n" + "=" * 70)
-    print("SPIKE B COMPLETE")
-    print("=" * 70)
 
 
 if __name__ == "__main__":

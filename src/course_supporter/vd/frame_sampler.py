@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
 import structlog
 
@@ -36,18 +36,26 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Internal rectangle helper (x1, y1, x2, y2 — pixel coords)
+# Internal data structures
 # ---------------------------------------------------------------------------
 
 
-class _Rect:
-    __slots__ = ("x1", "x2", "y1", "y2")
+class _Rect(NamedTuple):
+    """Pixel-coordinate rectangle (x1, y1, x2, y2)."""
 
-    def __init__(self, x1: int, y1: int, x2: int, y2: int) -> None:
-        self.x1 = x1
-        self.y1 = y1
-        self.x2 = x2
-        self.y2 = y2
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+
+class _FrameEntry(TypedDict, total=False):
+    """Intermediate frame data passed between pipeline steps."""
+
+    path: Path
+    timestamp: float
+    dhash: Any  # imagehash.ImageHash at runtime
+    is_fill: bool
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +390,9 @@ class FrameSampler:
         interval: float,
         hash_size: int,
         mask: _Rect | None,
-    ) -> list[dict[str, object]]:
-        """Compute dHash for each raw extracted frame.
-
-        Returns a list of dicts with path, timestamp, dhash.
-        """
-        entries: list[dict[str, object]] = []
+    ) -> list[_FrameEntry]:
+        """Compute dHash for each raw extracted frame."""
+        entries: list[_FrameEntry] = []
         for i, path in enumerate(paths):
             h = _compute_dhash(path, hash_size, mask)
             entries.append(
@@ -401,19 +406,24 @@ class FrameSampler:
 
     @staticmethod
     def _dedup_with_cooldown(
-        entries: list[dict[str, object]],
+        entries: list[_FrameEntry],
         p: SamplingParams,
-    ) -> list[dict[str, object]]:
+    ) -> list[_FrameEntry]:
         """dHash dedup with cooldown for continuous changes (live coding).
 
         Algorithm:
         - Frames exceeding the dHash threshold are "unstable" (visually
           different from the last kept frame).
-        - Isolated unstable frames are kept (slide transitions, new content).
+        - Isolated unstable frames are kept (slide transitions, new
+          content appearing).  This is intentional — they represent
+          meaningful visual changes such as a new slide or code output.
         - If ``pip_cooldown_count`` consecutive unstable frames are seen,
           "coding mode" activates — all subsequent frames are skipped
           until a stable frame appears after ``pip_cooldown_sec`` since
           the last kept frame.
+        - Stable frames (below dHash threshold) outside coding mode are
+          NOT added — they are visually similar to the last kept frame
+          and would be duplicates.  This is standard dHash deduplication.
         """
         if not entries:
             return []
@@ -424,43 +434,48 @@ class FrameSampler:
         result = [entries[0]]
         consecutive = 0
         coding_mode = False
-        last_added_ts = float(entries[0]["timestamp"])  # type: ignore[arg-type]
+        last_added_ts = entries[0]["timestamp"]
 
         for entry in entries[1:]:
             h_cur: Any = entry["dhash"]
             h_prev: Any = result[-1]["dhash"]
             dist = h_cur - h_prev
-            ts = float(entry["timestamp"])  # type: ignore[arg-type]
+            ts = entry["timestamp"]
 
             if dist > threshold:
                 consecutive += 1
                 if consecutive >= p.pip_cooldown_count:
                     coding_mode = True
+                # Keep meaningful changes before coding mode activates
                 if not coding_mode:
                     result.append(entry)
                     last_added_ts = ts
+                # In coding mode: skip — rapid continuous changes
             else:
+                # Stable frame — reset consecutive counter
                 consecutive = 0
                 if coding_mode and ts - last_added_ts >= p.pip_cooldown_sec:
                     result.append(entry)
                     last_added_ts = ts
                     coding_mode = False
+                # Outside coding mode: skip (standard dHash dedup —
+                # frame is too similar to the last kept one)
 
         return result
 
     async def _fill_gaps(
         self,
-        entries: list[dict[str, object]],
+        entries: list[_FrameEntry],
         video_path: Path,
         gap_dir: Path,
         p: SamplingParams,
         mask: _Rect | None,
-    ) -> list[dict[str, object]]:
+    ) -> list[_FrameEntry]:
         """Insert frames where gap exceeds *gap_fill_max_sec*."""
         if len(entries) < 2:
             return list(entries)
 
-        result: list[dict[str, object]] = []
+        result: list[_FrameEntry] = []
         fill_idx = 0
 
         for i, entry in enumerate(entries):
@@ -468,8 +483,8 @@ class FrameSampler:
             if i + 1 >= len(entries):
                 break
 
-            ts_cur = float(entry["timestamp"])  # type: ignore[arg-type]
-            ts_next = float(entries[i + 1]["timestamp"])  # type: ignore[arg-type]
+            ts_cur = entry["timestamp"]
+            ts_next = entries[i + 1]["timestamp"]
             gap = ts_next - ts_cur
 
             if gap <= p.gap_fill_max_sec:
@@ -500,12 +515,12 @@ class FrameSampler:
                 )
                 fill_idx += 1
 
-        result.sort(key=lambda e: float(e["timestamp"]))  # type: ignore[arg-type]
+        result.sort(key=lambda e: e["timestamp"])
         return result
 
     @staticmethod
     def _segment_scenes(
-        entries: list[dict[str, object]],
+        entries: list[_FrameEntry],
         p: SamplingParams,
     ) -> tuple[list[SampledFrame], list[Scene]]:
         """Assign change classes, segment into scenes, build schema objects."""
@@ -517,8 +532,8 @@ class FrameSampler:
         # -- pass 1: compute distances and change classes --
         enriched: list[dict[str, object]] = []
         for i, entry in enumerate(entries):
-            path: Path = entry["path"]  # type: ignore[assignment]
-            ts = float(entry["timestamp"])  # type: ignore[arg-type]
+            path = entry["path"]
+            ts = entry["timestamp"]
             h: Any = entry["dhash"]
             is_fill = bool(entry.get("is_fill", False))
 
@@ -528,7 +543,7 @@ class FrameSampler:
                 cc = ChangeClass.FIRST
             else:
                 prev_h: Any = entries[i - 1]["dhash"]
-                prev_ts = float(entries[i - 1]["timestamp"])  # type: ignore[arg-type]
+                prev_ts = entries[i - 1]["timestamp"]
                 dist = (h - prev_h) / max_bits
                 time_gap = ts - prev_ts
                 is_boundary = (

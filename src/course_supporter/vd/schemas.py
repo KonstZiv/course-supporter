@@ -44,7 +44,7 @@ class SampledFrame(BaseModel):
     timestamp_sec: float = Field(ge=0.0)
     scene_id: int = Field(ge=0, description="Assigned during scene segmentation.")
     source: FrameSource
-    dhash: str = Field(description="Hex-encoded dHash (hash_size=16 -> 256 chars).")
+    dhash: str = Field(description="Hex-encoded dHash (hash_size=16 -> 64 hex chars).")
     dhash_dist: float = Field(
         ge=0.0,
         le=1.0,

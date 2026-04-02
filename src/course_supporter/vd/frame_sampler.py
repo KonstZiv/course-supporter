@@ -17,12 +17,9 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any
 
-import imagehash
-import numpy as np
 import structlog
-from PIL import Image
 
 from course_supporter.vd.schemas import (
     ChangeClass,
@@ -35,7 +32,7 @@ from course_supporter.vd.schemas import (
 )
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
+    import imagehash
 
 logger = structlog.get_logger()
 
@@ -165,12 +162,16 @@ def _compute_dhash(
     mask: _Rect | None,
 ) -> imagehash.ImageHash:
     """Compute dHash for an image, optionally masking a PiP region."""
-    img: Image.Image = Image.open(img_path)
+    import imagehash as _imagehash
+    import numpy as _np
+    from PIL import Image as _Image
+
+    img: _Image.Image = _Image.open(img_path)
     if mask is not None:
-        arr = np.array(img)
+        arr = _np.array(img)
         arr[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
-        img = Image.fromarray(arr)
-    return imagehash.dhash(img, hash_size=hash_size)
+        img = _Image.fromarray(arr)
+    return _imagehash.dhash(img, hash_size=hash_size)
 
 
 def _normalised_distance(
@@ -218,6 +219,7 @@ def _detect_pip(
     The zone with consistently highest motion is likely a PiP camera.
     """
     import cv2
+    import numpy as _np
 
     zones = _build_zones(width, height)
     zone_totals: dict[str, float] = {z: 0.0 for z in zones}
@@ -233,11 +235,11 @@ def _detect_pip(
             continue
 
         diff = cv2.absdiff(img1, img2)
-        gray = cast("NDArray[np.uint8]", cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY))
+        gray: Any = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 
         for name, rect in zones.items():
             region = gray[rect.y1 : rect.y2, rect.x1 : rect.x2]
-            zone_totals[name] += float(np.mean(region))
+            zone_totals[name] += float(_np.mean(region))
         pairs += 1
 
     if pairs == 0:
@@ -425,8 +427,8 @@ class FrameSampler:
         last_stable_ts = float(entries[0]["timestamp"])  # type: ignore[arg-type]
 
         for entry in entries[1:]:
-            h_cur = cast(imagehash.ImageHash, entry["dhash"])
-            h_prev = cast(imagehash.ImageHash, result[-1]["dhash"])
+            h_cur: Any = entry["dhash"]
+            h_prev: Any = result[-1]["dhash"]
             dist = h_cur - h_prev
             ts = float(entry["timestamp"])  # type: ignore[arg-type]
 
@@ -518,7 +520,7 @@ class FrameSampler:
         for i, entry in enumerate(entries):
             path: Path = entry["path"]  # type: ignore[assignment]
             ts = float(entry["timestamp"])  # type: ignore[arg-type]
-            h = cast(imagehash.ImageHash, entry["dhash"])
+            h: Any = entry["dhash"]
             is_fill = bool(entry.get("is_fill", False))
 
             if i == 0:
@@ -526,7 +528,7 @@ class FrameSampler:
                 time_gap = 0.0
                 cc = ChangeClass.FIRST
             else:
-                prev_h = cast(imagehash.ImageHash, entries[i - 1]["dhash"])
+                prev_h: Any = entries[i - 1]["dhash"]
                 prev_ts = float(entries[i - 1]["timestamp"])  # type: ignore[arg-type]
                 dist = (h - prev_h) / max_bits
                 time_gap = ts - prev_ts

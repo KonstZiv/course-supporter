@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
+import cv2
+import imagehash
+import numpy as np
 import structlog
+from PIL import Image
 
 from course_supporter.vd.schemas import (
     ChangeClass,
@@ -33,9 +37,6 @@ from course_supporter.vd.schemas import (
     SamplingParams,
     Scene,
 )
-
-if TYPE_CHECKING:
-    import imagehash
 
 logger = structlog.get_logger()
 
@@ -173,16 +174,12 @@ def _compute_dhash(
     mask: _Rect | None,
 ) -> imagehash.ImageHash:
     """Compute dHash for an image, optionally masking a PiP region."""
-    import imagehash as _imagehash
-    import numpy as _np
-    from PIL import Image as _Image
-
-    img: _Image.Image = _Image.open(img_path)
+    img: Image.Image = Image.open(img_path)
     if mask is not None:
-        arr = _np.array(img)
+        arr = np.array(img)
         arr[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
-        img = _Image.fromarray(arr)
-    return _imagehash.dhash(img, hash_size=hash_size)
+        img = Image.fromarray(arr)
+    return imagehash.dhash(img, hash_size=hash_size)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +203,6 @@ def _color_hist_distance(
     mask: _Rect | None,
 ) -> float:
     """Bhattacharyya distance between colour histograms of two frames."""
-    import cv2
 
     img1 = cv2.imread(str(path1))
     img2 = cv2.imread(str(path2))
@@ -249,8 +245,6 @@ def _flow_coherence(
 
     Uses Farneback dense optical flow.
     """
-    import cv2
-    import numpy as _np
 
     img1 = cv2.imread(str(path1))
     img2 = cv2.imread(str(path2))
@@ -282,7 +276,7 @@ def _flow_coherence(
 
     # Only consider pixels with significant movement (>1px)
     significant = mag > 1.0
-    n_sig = int(_np.count_nonzero(significant))
+    n_sig = int(np.count_nonzero(significant))
     if n_sig < 100:
         return 0.0  # no meaningful motion
 
@@ -290,12 +284,12 @@ def _flow_coherence(
     # Perfectly coherent motion → all angles equal → coherence = 1.
     sig_angles = ang[significant]
     mean_angle = float(
-        _np.arctan2(
-            _np.mean(_np.sin(sig_angles)),
-            _np.mean(_np.cos(sig_angles)),
+        np.arctan2(
+            np.mean(np.sin(sig_angles)),
+            np.mean(np.cos(sig_angles)),
         )
     )
-    coherence = float(_np.mean(_np.cos(sig_angles - mean_angle)))
+    coherence = float(np.mean(np.cos(sig_angles - mean_angle)))
     return max(coherence, 0.0)
 
 
@@ -310,8 +304,6 @@ def _compare_frames(
     pixel_noise_floor: int = 25,
 ) -> _FrameMetrics:
     """Compute all 5 metrics between two frames."""
-    import cv2
-    import numpy as _np
 
     # --- dHash (pre-computed) ---
     max_bits = hash_size * hash_size
@@ -333,7 +325,7 @@ def _compare_frames(
 
     # --- Pixel diff ---
     abs_diff = cv2.absdiff(gray1, gray2)
-    changed = int(_np.count_nonzero(abs_diff > pixel_noise_floor))
+    changed = int(np.count_nonzero(abs_diff > pixel_noise_floor))
     total = gray1.shape[0] * gray1.shape[1]
     pixel_diff = changed / total
 
@@ -365,10 +357,10 @@ def _compare_frames(
     edges1 = cv2.Canny(gray1, 50, 150)
     edges2 = cv2.Canny(gray2, 50, 150)
     edge_diff_map = cv2.absdiff(edges1, edges2)
-    edge_changed = int(_np.count_nonzero(edge_diff_map))
+    edge_changed = int(np.count_nonzero(edge_diff_map))
     max_edges = max(
-        int(_np.count_nonzero(edges1)),
-        int(_np.count_nonzero(edges2)),
+        int(np.count_nonzero(edges1)),
+        int(np.count_nonzero(edges2)),
         1,
     )
     edge_diff = edge_changed / max_edges
@@ -385,14 +377,12 @@ def _compute_ssim(
     win_size: int = 11,
 ) -> float:
     """Compute mean SSIM between two grayscale images."""
-    import cv2
-    import numpy as _np
 
     c1 = (k1 * 255) ** 2
     c2 = (k2 * 255) ** 2
 
-    g1 = gray1.astype(_np.float64)
-    g2 = gray2.astype(_np.float64)
+    g1 = gray1.astype(np.float64)
+    g2 = gray2.astype(np.float64)
 
     mu1 = cv2.GaussianBlur(g1, (win_size, win_size), 1.5)
     mu2 = cv2.GaussianBlur(g2, (win_size, win_size), 1.5)
@@ -405,7 +395,7 @@ def _compute_ssim(
     den = (mu1 * mu1 + mu2 * mu2 + c1) * (sigma1_sq + sigma2_sq + c2)
 
     ssim_map = num / den
-    return float(_np.mean(ssim_map))
+    return float(np.mean(ssim_map))
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +432,6 @@ def _detect_pip(
     Compares consecutive frames, measures mean pixel change per zone.
     The zone with consistently highest motion is likely a PiP camera.
     """
-    import cv2
-    import numpy as _np
 
     zones = _build_zones(width, height)
     zone_totals: dict[str, float] = {z: 0.0 for z in zones}
@@ -463,7 +451,7 @@ def _detect_pip(
 
         for name, rect in zones.items():
             region = gray[rect.y1 : rect.y2, rect.x1 : rect.x2]
-            zone_totals[name] += float(_np.mean(region))
+            zone_totals[name] += float(np.mean(region))
         pairs += 1
 
     if pairs == 0:

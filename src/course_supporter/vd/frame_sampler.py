@@ -1,15 +1,19 @@
-"""Frame sampling, dHash deduplication, PiP detection, and scene segmentation.
-
-Async-first port of ``scripts/spike_frame_sampling.py`` and the ``step_frames``
-function from ``scripts/spike_vd_pipeline.py``.
+"""Frame sampling, multi-metric deduplication, PiP detection, scene segmentation.
 
 Pipeline steps:
 1. FFmpeg fps extraction -> temp JPEG files (async subprocess).
 2. PiP detection via temporal diff across 8 candidate zones.
-3. dHash computation (with optional PiP mask) -> deduplication.
+3. Multi-metric dedup (5 metrics, tiered voting).
 4. Gap filling (no gap > ``gap_fill_max_sec``).
 5. Scene boundary detection -> ``Scene`` grouping.
 6. Return ``FrameSamplingResult``.
+
+Metrics used for dedup voting:
+- dHash: structural gradient hash (coarse shape changes).
+- pixel_diff: fraction of pixels changed above noise floor.
+- color_hist: Bhattacharyya distance of colour histograms.
+- SSIM: structural similarity index (perceptual).
+- edge_diff: change in Canny edge map.
 """
 
 from __future__ import annotations
@@ -159,7 +163,7 @@ async def _get_video_resolution(video: Path) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
-# dHash helpers
+# Per-frame hashing
 # ---------------------------------------------------------------------------
 
 
@@ -181,14 +185,227 @@ def _compute_dhash(
     return _imagehash.dhash(img, hash_size=hash_size)
 
 
-def _normalised_distance(
-    h1: imagehash.ImageHash,
-    h2: imagehash.ImageHash,
-    hash_size: int,
+# ---------------------------------------------------------------------------
+# Multi-metric frame comparison
+# ---------------------------------------------------------------------------
+
+
+class _FrameMetrics(NamedTuple):
+    """Comparison result between two frames (5 independent signals)."""
+
+    dhash_dist: float  # 0-1, normalised Hamming
+    pixel_diff: float  # 0-1, fraction of changed pixels
+    color_hist: float  # 0-1, Bhattacharyya distance
+    ssim: float  # 0-1, 1 = identical
+    edge_diff: float  # 0-1, relative change in edge pixels
+
+
+def _color_hist_distance(
+    path1: Path,
+    path2: Path,
+    mask: _Rect | None,
 ) -> float:
-    """Normalised Hamming distance in [0, 1]."""
+    """Bhattacharyya distance between colour histograms of two frames."""
+    import cv2
+
+    img1 = cv2.imread(str(path1))
+    img2 = cv2.imread(str(path2))
+    if img1 is None or img2 is None:
+        return 1.0
+
+    if mask is not None:
+        img1[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+        img2[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+
+    hist1 = cv2.calcHist(
+        [img1],
+        [0, 1, 2],
+        None,
+        [8, 8, 8],
+        [0, 256, 0, 256, 0, 256],
+    )
+    hist2 = cv2.calcHist(
+        [img2],
+        [0, 1, 2],
+        None,
+        [8, 8, 8],
+        [0, 256, 0, 256, 0, 256],
+    )
+    cv2.normalize(hist1, hist1)
+    cv2.normalize(hist2, hist2)
+    return float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA))
+
+
+def _flow_coherence(
+    path1: Path,
+    path2: Path,
+    mask: _Rect | None,
+) -> float:
+    """Optical flow coherence between two frames.
+
+    Returns a value in [0, 1] where 1 means all moving pixels go in
+    the same direction (rotation, scroll, pan) and 0 means chaotic or
+    no motion (content replacement).
+
+    Uses Farneback dense optical flow.
+    """
+    import cv2
+    import numpy as _np
+
+    img1 = cv2.imread(str(path1))
+    img2 = cv2.imread(str(path2))
+    if img1 is None or img2 is None:
+        return 0.0
+
+    gray1: Any = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    gray2: Any = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    if mask is not None:
+        gray1[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+        gray2[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+
+    no_flow: Any = None
+    flow: Any = cv2.calcOpticalFlowFarneback(
+        gray1,
+        gray2,
+        no_flow,
+        pyr_scale=0.5,
+        levels=3,
+        winsize=15,
+        iterations=3,
+        poly_n=5,
+        poly_sigma=1.2,
+        flags=0,
+    )
+
+    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+
+    # Only consider pixels with significant movement (>1px)
+    significant = mag > 1.0
+    n_sig = int(_np.count_nonzero(significant))
+    if n_sig < 100:
+        return 0.0  # no meaningful motion
+
+    # Coherence: mean cosine similarity of angles to the mean angle.
+    # Perfectly coherent motion → all angles equal → coherence = 1.
+    sig_angles = ang[significant]
+    mean_angle = float(
+        _np.arctan2(
+            _np.mean(_np.sin(sig_angles)),
+            _np.mean(_np.cos(sig_angles)),
+        )
+    )
+    coherence = float(_np.mean(_np.cos(sig_angles - mean_angle)))
+    return max(coherence, 0.0)
+
+
+def _compare_frames(
+    path_prev: Path,
+    path_cur: Path,
+    hash_size: int,
+    dhash_prev: Any,
+    dhash_cur: Any,
+    mask: _Rect | None,
+    *,
+    pixel_noise_floor: int = 25,
+) -> _FrameMetrics:
+    """Compute all 5 metrics between two frames."""
+    import cv2
+    import numpy as _np
+
+    # --- dHash (pre-computed) ---
     max_bits = hash_size * hash_size
-    return float((h1 - h2) / max_bits)
+    dhash_dist = float((dhash_prev - dhash_cur) / max_bits)
+
+    # --- Load images ---
+    img1 = cv2.imread(str(path_prev))
+    img2 = cv2.imread(str(path_cur))
+    if img1 is None or img2 is None:
+        return _FrameMetrics(dhash_dist, 1.0, 1.0, 0.0, 1.0)
+
+    # Apply PiP mask to both
+    if mask is not None:
+        img1[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+        img2[mask.y1 : mask.y2, mask.x1 : mask.x2] = 128
+
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # --- Pixel diff ---
+    abs_diff = cv2.absdiff(gray1, gray2)
+    changed = int(_np.count_nonzero(abs_diff > pixel_noise_floor))
+    total = gray1.shape[0] * gray1.shape[1]
+    pixel_diff = changed / total
+
+    # --- Color histogram (Bhattacharyya) ---
+    hist1 = cv2.calcHist(
+        [img1],
+        [0, 1, 2],
+        None,
+        [8, 8, 8],
+        [0, 256, 0, 256, 0, 256],
+    )
+    hist2 = cv2.calcHist(
+        [img2],
+        [0, 1, 2],
+        None,
+        [8, 8, 8],
+        [0, 256, 0, 256, 0, 256],
+    )
+    cv2.normalize(hist1, hist1)
+    cv2.normalize(hist2, hist2)
+    color_hist = float(
+        cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA),
+    )
+
+    # --- SSIM (simplified, window-based) ---
+    ssim = _compute_ssim(gray1, gray2)
+
+    # --- Edge diff (Canny) ---
+    edges1 = cv2.Canny(gray1, 50, 150)
+    edges2 = cv2.Canny(gray2, 50, 150)
+    edge_diff_map = cv2.absdiff(edges1, edges2)
+    edge_changed = int(_np.count_nonzero(edge_diff_map))
+    max_edges = max(
+        int(_np.count_nonzero(edges1)),
+        int(_np.count_nonzero(edges2)),
+        1,
+    )
+    edge_diff = edge_changed / max_edges
+
+    return _FrameMetrics(dhash_dist, pixel_diff, color_hist, ssim, edge_diff)
+
+
+def _compute_ssim(
+    gray1: Any,
+    gray2: Any,
+    *,
+    k1: float = 0.01,
+    k2: float = 0.03,
+    win_size: int = 11,
+) -> float:
+    """Compute mean SSIM between two grayscale images."""
+    import cv2
+    import numpy as _np
+
+    c1 = (k1 * 255) ** 2
+    c2 = (k2 * 255) ** 2
+
+    g1 = gray1.astype(_np.float64)
+    g2 = gray2.astype(_np.float64)
+
+    mu1 = cv2.GaussianBlur(g1, (win_size, win_size), 1.5)
+    mu2 = cv2.GaussianBlur(g2, (win_size, win_size), 1.5)
+
+    sigma1_sq = cv2.GaussianBlur(g1 * g1, (win_size, win_size), 1.5) - mu1 * mu1
+    sigma2_sq = cv2.GaussianBlur(g2 * g2, (win_size, win_size), 1.5) - mu2 * mu2
+    sigma12 = cv2.GaussianBlur(g1 * g2, (win_size, win_size), 1.5) - mu1 * mu2
+
+    num = (2 * mu1 * mu2 + c1) * (2 * sigma12 + c2)
+    den = (mu1 * mu1 + mu2 * mu2 + c1) * (sigma1_sq + sigma2_sq + c2)
+
+    ssim_map = num / den
+    return float(_np.mean(ssim_map))
 
 
 # ---------------------------------------------------------------------------
@@ -353,10 +570,15 @@ class FrameSampler:
                 h=pip_mask.height,
             )
 
-        # 3. Compute dHash + dedup with cooldown
-        raw_entries = self._compute_hashes(raw_paths, interval, p.hash_size, mask_rect)
-        deduped = self._dedup_with_cooldown(raw_entries, p)
-        logger.info("dhash_dedup", before=len(raw_entries), after=len(deduped))
+        # 3. Compute dHash + multi-metric dedup
+        raw_entries = self._compute_hashes(
+            raw_paths,
+            interval,
+            p.hash_size,
+            mask_rect,
+        )
+        deduped = self._dedup_voting(raw_entries, p, mask_rect)
+        logger.info("dedup_voting", before=len(raw_entries), after=len(deduped))
 
         # 4. Gap fill
         gap_dir = output_dir / "gap_fill"
@@ -370,7 +592,7 @@ class FrameSampler:
         logger.info("gap_fill", before=len(deduped), after=len(filled))
 
         # 5. Scene segmentation
-        frames, scenes = self._segment_scenes(filled, p)
+        frames, scenes = self._segment_scenes(filled, p, mask_rect)
         logger.info("scene_segmentation", frames=len(frames), scenes=len(scenes))
 
         return FrameSamplingResult(
@@ -405,61 +627,58 @@ class FrameSampler:
         return entries
 
     @staticmethod
-    def _dedup_with_cooldown(
+    def _dedup_voting(
         entries: list[_FrameEntry],
         p: SamplingParams,
+        mask: _Rect | None,
     ) -> list[_FrameEntry]:
-        """dHash dedup with cooldown for continuous changes (live coding).
+        """Multi-metric dedup with tiered voting.
 
-        Algorithm:
-        - Frames exceeding the dHash threshold are "unstable" (visually
-          different from the last kept frame).
-        - Isolated unstable frames are kept (slide transitions, new
-          content appearing).  This is intentional — they represent
-          meaningful visual changes such as a new slide or code output.
-        - If ``pip_cooldown_count`` consecutive unstable frames are seen,
-          "coding mode" activates — all subsequent frames are skipped
-          until a stable frame appears after ``pip_cooldown_sec`` since
-          the last kept frame.
-        - Stable frames (below dHash threshold) outside coding mode are
-          NOT added — they are visually similar to the last kept frame
-          and would be duplicates.  This is standard dHash deduplication.
+        Each frame is compared to the last *kept* frame using 5
+        independent metrics.  A frame is kept if:
+
+        - **Tier 1:** any single strong signal (dHash > 15% or
+          pixel_diff > 10%) — obvious scene change.
+        - **Tier 2:** at least ``min_votes`` metrics vote "changed".
+
+        This catches subtle changes (code highlighting, incremental
+        assembly, partial UI updates) that dHash alone would miss.
         """
         if not entries:
             return []
 
-        max_bits = p.hash_size * p.hash_size
-        threshold = int(max_bits * p.dhash_threshold)
-
         result = [entries[0]]
-        consecutive = 0
-        coding_mode = False
-        last_added_ts = entries[0]["timestamp"]
 
         for entry in entries[1:]:
-            h_cur: Any = entry["dhash"]
-            h_prev: Any = result[-1]["dhash"]
-            dist = h_cur - h_prev
-            ts = entry["timestamp"]
+            prev = result[-1]
+            metrics = _compare_frames(
+                prev["path"],
+                entry["path"],
+                p.hash_size,
+                prev["dhash"],
+                entry["dhash"],
+                mask,
+                pixel_noise_floor=p.pixel_noise_floor,
+            )
 
-            if dist > threshold:
-                consecutive += 1
-                if consecutive >= p.pip_cooldown_count:
-                    coding_mode = True
-                # Keep meaningful changes before coding mode activates
-                if not coding_mode:
-                    result.append(entry)
-                    last_added_ts = ts
-                # In coding mode: skip — rapid continuous changes
-            else:
-                # Stable frame — reset consecutive counter
-                consecutive = 0
-                if coding_mode and ts - last_added_ts >= p.pip_cooldown_sec:
-                    result.append(entry)
-                    last_added_ts = ts
-                    coding_mode = False
-                # Outside coding mode: skip (standard dHash dedup —
-                # frame is too similar to the last kept one)
+            # Tier 1: strong signal — keep unconditionally
+            if (
+                metrics.dhash_dist > p.tier1_dhash
+                or metrics.pixel_diff > p.tier1_pixel_diff
+            ):
+                result.append(entry)
+                continue
+
+            # Tier 2: voting — keep if enough metrics agree
+            votes = (
+                (metrics.dhash_dist > p.vote_dhash)
+                + (metrics.pixel_diff > p.vote_pixel_diff)
+                + (metrics.color_hist > p.vote_color_hist)
+                + (metrics.ssim < p.vote_ssim)
+                + (metrics.edge_diff > p.vote_edge_diff)
+            )
+            if votes >= p.min_votes:
+                result.append(entry)
 
         return result
 
@@ -522,8 +741,20 @@ class FrameSampler:
     def _segment_scenes(
         entries: list[_FrameEntry],
         p: SamplingParams,
+        mask: _Rect | None,
     ) -> tuple[list[SampledFrame], list[Scene]]:
-        """Assign change classes, segment into scenes, build schema objects."""
+        """Assign change classes, segment into scenes, build schema objects.
+
+        Scene boundary requires passing three gates:
+
+        1. **dHash** — structure changed (>20%).
+        2. **Colour histogram** — colours changed too (not just motion).
+        3. **Optical flow** — no coherent motion detected (not rotation
+           or scrolling where colours change because new parts appear).
+
+        Time gaps >``scene_boundary_time_gap`` force a boundary
+        regardless of visual similarity.
+        """
         if not entries:
             return [], []
 
@@ -546,12 +777,35 @@ class FrameSampler:
                 prev_ts = entries[i - 1]["timestamp"]
                 dist = (h - prev_h) / max_bits
                 time_gap = ts - prev_ts
-                is_boundary = (
-                    dist > p.scene_boundary_dhash
-                    or time_gap > p.scene_boundary_time_gap
-                )
-                if is_boundary:
+
+                if time_gap > p.scene_boundary_time_gap:
+                    # Long gap → always a boundary
                     cc = ChangeClass.BOUNDARY
+                elif dist > p.scene_boundary_dhash:
+                    # Gate 1 passed (dHash). Check gate 2 (colour).
+                    color_dist = _color_hist_distance(
+                        entries[i - 1]["path"],
+                        entry["path"],
+                        mask,
+                    )
+                    if color_dist <= p.scene_boundary_color_hist:
+                        # Colours same → motion (rotation with
+                        # same palette, gestures, camera shake)
+                        cc = ChangeClass.MEDIUM
+                    else:
+                        # Gate 2 passed. Check gate 3 (flow).
+                        coherence = _flow_coherence(
+                            entries[i - 1]["path"],
+                            entry["path"],
+                            mask,
+                        )
+                        if coherence > p.scene_boundary_flow_coherence:
+                            # Coherent motion (rotation showing
+                            # new colours, scrolling) → same scene
+                            cc = ChangeClass.MEDIUM
+                        else:
+                            # All three gates passed → real boundary
+                            cc = ChangeClass.BOUNDARY
                 elif dist > 0.10:
                     cc = ChangeClass.MEDIUM
                 else:

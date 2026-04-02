@@ -84,19 +84,56 @@ class PiPMask(BaseModel):
 
 
 class SamplingParams(BaseModel):
-    """Parameters used for frame extraction and deduplication.
+    """Parameters for frame extraction and multi-metric deduplication.
 
-    Defaults are spike-proven values.
+    Dedup uses a tiered voting system with 5 metrics:
+    dHash, pixel_diff, color_histogram, SSIM, edge_diff.
+
+    - Tier 1: strong signal from any single metric -> keep frame.
+    - Tier 2: ``min_votes`` out of 5 metrics vote "changed" -> keep.
     """
 
     fps: float = 0.5
     hash_size: int = 16
-    dhash_threshold: float = 0.05
     gap_fill_max_sec: float = 15.0
     scene_boundary_dhash: float = 0.20
+    scene_boundary_color_hist: float = Field(
+        default=0.20,
+        description=(
+            "Color histogram distance required to confirm a dHash-based "
+            "scene boundary. Prevents motion (rotation, gestures) from "
+            "creating false boundaries."
+        ),
+    )
+    scene_boundary_flow_coherence: float = Field(
+        default=0.6,
+        description=(
+            "If optical flow coherence exceeds this, the visual change "
+            "is coherent motion (rotation, scroll) — not a new scene."
+        ),
+    )
     scene_boundary_time_gap: float = 10.0
-    pip_cooldown_sec: float = 4.0
-    pip_cooldown_count: int = 3
+
+    # Tier 1: unconditional keep (obvious scene change)
+    tier1_dhash: float = Field(
+        default=0.15,
+        description="dHash dist above this = Tier 1.",
+    )
+    tier1_pixel_diff: float = Field(
+        default=0.10,
+        description="Pixel diff above this = Tier 1.",
+    )
+
+    # Tier 2: per-metric vote thresholds
+    vote_dhash: float = 0.03
+    vote_pixel_diff: float = 0.02
+    vote_color_hist: float = 0.15
+    vote_ssim: float = Field(default=0.95, description="SSIM below this = vote.")
+    vote_edge_diff: float = 0.05
+    min_votes: int = Field(default=2, ge=1, le=5)
+
+    # Noise floor for pixel diff (intensity levels 0-255)
+    pixel_noise_floor: int = Field(default=25, ge=1, le=128)
 
 
 class FrameSamplingResult(BaseModel):

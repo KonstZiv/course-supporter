@@ -132,10 +132,11 @@ class TestSamplingParams:
         p = SamplingParams()
         assert p.fps == 0.5
         assert p.hash_size == 16
-        assert p.dhash_threshold == 0.05
         assert p.gap_fill_max_sec == 15.0
         assert p.scene_boundary_dhash == 0.20
         assert p.scene_boundary_time_gap == 10.0
+        assert p.tier1_dhash == 0.15
+        assert p.min_votes == 2
 
 
 class TestFrameSamplingResult:

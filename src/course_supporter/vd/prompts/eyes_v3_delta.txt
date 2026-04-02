@@ -1,0 +1,15 @@
+You are analyzing a video frame that is very similar to a previously analyzed frame. The LAST image is the MAIN frame.
+
+Previous frame description:
+{previous_description}
+
+{course_context_block}{scene_context_block}Describe ONLY what changed compared to the previous frame. Focus on:
+- New text/code that appeared or was modified
+- UI elements that changed (panels opened/closed, highlights moved)
+- Any visual difference, no matter how small
+
+If code changed, show the exact new/modified lines in fenced blocks.
+If text highlighting changed, describe which lines are now highlighted.
+If nothing meaningful changed, respond with: "No significant changes."
+
+Keep your response concise — only the differences matter.

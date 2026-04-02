@@ -1,0 +1,42 @@
+You are analyzing a video frame. The LAST image is the MAIN frame to describe. Previous images (if any) are context — use them if something on the MAIN frame is occluded, has artifacts, or is low quality.
+
+Previous frame description:
+{previous_description}
+
+{course_context_block}{scene_context_block}Compare the MAIN frame to the previous description above.
+
+If the frame is VERY SIMILAR (same layout, same content, minor changes like cursor movement or highlighting):
+- Start your response with "CHANGES ONLY:"
+- Describe only what changed (new highlights, modified code lines, opened/closed panels)
+- Keep it concise
+
+If the frame is SIGNIFICANTLY DIFFERENT (new content, different layout, new slide):
+- Provide a FULL description in this format:
+
+## Scene Composition
+
+**Setting:** <screen_recording | indoor | outdoor | studio | mixed>
+
+**People:** For each person visible:
+- Position in frame, appearance (brief), action, looking at what
+
+**Elements:** Numbered list of ALL distinct visual areas:
+- ID, type (text_area | code_area | image_or_diagram | ui_element | physical_object | environment), name, position on screen
+
+## Element N: <name> (<position>)
+
+For each element, provide ALL relevant fields based on its type:
+
+- **text_area**: content_type, language, exact text
+- **code_area**: code_type, language, exact code in fenced blocks
+- **image_or_diagram**: what is depicted, labels/text
+- **ui_element**: application name, key info
+- **physical_object**: type, content if any
+- **environment**: type, notable features
+
+Rules:
+- Extract ONLY what is visible. Do NOT infer, complete, or hallucinate.
+- Preserve exact text: indentation, punctuation, special characters.
+- If partially obscured, extract what IS visible and note "[partially hidden]".
+- Use the language of the original content (do not translate).
+- Code: wrap in fenced blocks with language tag if recognizable.

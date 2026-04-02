@@ -4,8 +4,15 @@ Sends each frame (with up to 2 context images) to a Vision LLM and
 parses the Markdown response into an ``EyesResult``.  Uses prompt v3
 (language-agnostic, Scene Composition + Elements).
 
-Rate limiting is enforced via an async token-bucket that respects
-per-key RPM quotas with round-robin key rotation.
+Supports three delta strategies for similar frames:
+- ``NONE``: always full description (baseline).
+- ``EXPLICIT``: we decide based on ``change_class`` — low/medium
+  changes get a delta prompt (variant A).
+- ``CONDITIONAL``: LLM decides — prompt includes previous description
+  and LLM chooses full vs delta (variant B).
+
+Rate limiting is enforced via an async lock that respects per-key
+RPM quotas with round-robin key rotation.
 """
 
 from __future__ import annotations
@@ -18,26 +25,31 @@ from typing import Any
 import structlog
 
 from course_supporter.key_pool import KeyPool
-from course_supporter.vd.schemas import EyesResult, SampledFrame, Scene
+from course_supporter.vd.schemas import (
+    ChangeClass,
+    DeltaStrategy,
+    EyesResult,
+    SampledFrame,
+    Scene,
+)
 
 logger = structlog.get_logger()
 
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "eyes_v3.txt"
-_EYES_PROMPT: str | None = None
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_PROMPT_CACHE: dict[str, str] = {}
 
 
-def _load_prompt() -> str:
-    """Load and cache the Eyes v3 prompt template."""
-    global _EYES_PROMPT
-    if _EYES_PROMPT is None:
-        _EYES_PROMPT = _PROMPT_PATH.read_text()
-    return _EYES_PROMPT
+def _load_prompt(name: str) -> str:
+    """Load and cache a prompt template by filename."""
+    if name not in _PROMPT_CACHE:
+        _PROMPT_CACHE[name] = (_PROMPTS_DIR / name).read_text()
+    return _PROMPT_CACHE[name]
 
 
 def _parse_response(text: str) -> tuple[str, str, int]:
     """Extract (description, scene_type, importance) from LLM response.
 
-    Tries Markdown format first (prompt v3), falls back to truncation.
+    Handles both full Markdown responses and delta/conditional responses.
 
     Returns:
         Tuple of (description_300chars, scene_type, importance).
@@ -68,6 +80,12 @@ def _parse_response(text: str) -> tuple[str, str, int]:
     return description[:300], scene_type, importance
 
 
+def _is_conditional_delta(text: str) -> bool:
+    """Check if a conditional-mode response chose delta format."""
+    stripped = text.strip()
+    return stripped.upper().startswith("CHANGES ONLY:")
+
+
 class VisualAnalyzer:
     """Per-frame Vision LLM analysis with context images.
 
@@ -77,6 +95,7 @@ class VisualAnalyzer:
         rpm_per_key: Requests per minute per API key.
         context_max_gap_sec: Max time gap for context images.
         max_context_images: Max number of previous frames as context.
+        delta_strategy: How to handle frames similar to previous.
     """
 
     def __init__(
@@ -87,11 +106,13 @@ class VisualAnalyzer:
         rpm_per_key: int = 5,
         context_max_gap_sec: float = 7.0,
         max_context_images: int = 2,
+        delta_strategy: DeltaStrategy = DeltaStrategy.NONE,
     ) -> None:
         self._key_pool = key_pool
         self._model = model
         self._context_max_gap = context_max_gap_sec
         self._max_ctx_images = max_context_images
+        self._delta_strategy = delta_strategy
 
         total_rpm = rpm_per_key * len(key_pool)
         self._min_interval = 60.0 / total_rpm
@@ -128,12 +149,17 @@ class VisualAnalyzer:
                 if 0 < gap <= self._context_max_gap:
                     ctx_frames.append(frames[j])
 
+            # Determine if this frame should use delta mode
+            prev_result = results[-1] if results else None
+            use_delta = self._should_use_delta(frame, prev_result)
+
             result = await self._analyze_frame(
                 frame=frame,
                 context_frames=ctx_frames,
                 frame_dir=frame_dir,
                 course_context=course_context,
                 scene_context=scene_ctx,
+                prev_result=prev_result if use_delta else None,
             )
             results.append(result)
 
@@ -147,6 +173,27 @@ class VisualAnalyzer:
 
         return results
 
+    def _should_use_delta(
+        self,
+        frame: SampledFrame,
+        prev_result: EyesResult | None,
+    ) -> bool:
+        """Decide whether to use delta mode for this frame."""
+        if prev_result is None:
+            return False
+
+        if self._delta_strategy == DeltaStrategy.NONE:
+            return False
+
+        if self._delta_strategy == DeltaStrategy.CONDITIONAL:
+            # Always provide previous description; LLM decides
+            return True
+
+        # EXPLICIT: we decide based on change_class
+        # FIRST and BOUNDARY always get full description
+        # LOW and MEDIUM get delta
+        return frame.change_class in (ChangeClass.LOW, ChangeClass.MEDIUM)
+
     async def _analyze_frame(
         self,
         frame: SampledFrame,
@@ -154,6 +201,7 @@ class VisualAnalyzer:
         frame_dir: Path,
         course_context: str,
         scene_context: list[dict[str, Any]],
+        prev_result: EyesResult | None,
     ) -> EyesResult:
         """Analyze a single frame with Vision LLM."""
         import google.genai as genai
@@ -179,8 +227,12 @@ class VisualAnalyzer:
             ),
         )
 
-        # Build prompt text
-        prompt = self._build_prompt(course_context, scene_context)
+        # Build prompt text based on strategy
+        prompt = self._build_prompt(
+            course_context,
+            scene_context,
+            prev_result,
+        )
         parts.append(genai.types.Part.from_text(text=prompt))
 
         # Rate-limited API call
@@ -189,6 +241,18 @@ class VisualAnalyzer:
         # Parse response
         response_text = api_result["text"]
         description, scene_type, importance = _parse_response(response_text)
+
+        # Determine if response is actually a delta
+        is_delta = False
+        base_frame_id: str | None = None
+        if prev_result is not None:
+            if self._delta_strategy == DeltaStrategy.EXPLICIT:
+                is_delta = True
+                base_frame_id = prev_result.frame_id
+            elif self._delta_strategy == DeltaStrategy.CONDITIONAL:
+                if _is_conditional_delta(response_text):
+                    is_delta = True
+                    base_frame_id = prev_result.frame_id
 
         return EyesResult(
             frame_id=frame.frame_id,
@@ -202,6 +266,8 @@ class VisualAnalyzer:
             description=description,
             scene_type=scene_type,
             importance=importance,
+            is_delta=is_delta,
+            base_frame_id=base_frame_id,
         )
 
     async def _call_llm(self, parts: list[Any]) -> dict[str, Any]:
@@ -252,14 +318,13 @@ class VisualAnalyzer:
             )
             return result
 
-    @staticmethod
     def _build_prompt(
+        self,
         course_context: str,
         scene_context: list[dict[str, Any]],
+        prev_result: EyesResult | None,
     ) -> str:
-        """Format the Eyes v3 prompt with context blocks."""
-        template = _load_prompt()
-
+        """Build the appropriate prompt based on delta strategy."""
         course_block = ""
         if course_context:
             course_block = (
@@ -273,6 +338,25 @@ class VisualAnalyzer:
             )
             scene_block = f"Previous frames in this scene:\n{items}\n\n"
 
+        # Choose template based on strategy and whether we have prev
+        if prev_result is not None:
+            if self._delta_strategy == DeltaStrategy.EXPLICIT:
+                template = _load_prompt("eyes_v3_delta.txt")
+                return template.format(
+                    previous_description=prev_result.response[:2000],
+                    course_context_block=course_block,
+                    scene_context_block=scene_block,
+                )
+            if self._delta_strategy == DeltaStrategy.CONDITIONAL:
+                template = _load_prompt("eyes_v3_conditional.txt")
+                return template.format(
+                    previous_description=prev_result.response[:2000],
+                    course_context_block=course_block,
+                    scene_context_block=scene_block,
+                )
+
+        # Full description (NONE strategy or first frame)
+        template = _load_prompt("eyes_v3.txt")
         return template.format(
             course_context_block=course_block,
             scene_context_block=scene_block,

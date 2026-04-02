@@ -152,6 +152,14 @@ class FrameSamplingResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DeltaStrategy(StrEnum):
+    """How to handle frames similar to the previous one."""
+
+    NONE = "none"
+    EXPLICIT = "explicit"
+    CONDITIONAL = "conditional"
+
+
 class EyesResult(BaseModel):
     """Per-frame Vision LLM response (prompt v3, Markdown output)."""
 
@@ -174,6 +182,14 @@ class EyesResult(BaseModel):
     scene_type: str = Field(
         default="",
         description="Extracted 'Setting' value from prompt v3 response.",
+    )
+    is_delta: bool = Field(
+        default=False,
+        description="True if response describes only changes from base frame.",
+    )
+    base_frame_id: str | None = Field(
+        default=None,
+        description="Frame ID of the base (full) description for delta.",
     )
     importance: int = Field(default=3, ge=1, le=5)
 

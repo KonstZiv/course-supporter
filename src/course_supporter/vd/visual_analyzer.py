@@ -1,0 +1,293 @@
+"""Per-frame Vision LLM analysis (Eyes step).
+
+Sends each frame (with up to 2 context images) to a Vision LLM and
+parses the Markdown response into an ``EyesResult``.  Uses prompt v3
+(language-agnostic, Scene Composition + Elements).
+
+Rate limiting is enforced via an async token-bucket that respects
+per-key RPM quotas with round-robin key rotation.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from typing import Any
+
+import structlog
+
+from course_supporter.key_pool import KeyPool
+from course_supporter.vd.schemas import EyesResult, SampledFrame, Scene
+
+logger = structlog.get_logger()
+
+_PROMPT_PATH = Path(__file__).parent / "prompts" / "eyes_v3.txt"
+_EYES_PROMPT: str | None = None
+
+
+def _load_prompt() -> str:
+    """Load and cache the Eyes v3 prompt template."""
+    global _EYES_PROMPT
+    if _EYES_PROMPT is None:
+        _EYES_PROMPT = _PROMPT_PATH.read_text()
+    return _EYES_PROMPT
+
+
+def _parse_response(text: str) -> tuple[str, str, int]:
+    """Extract (description, scene_type, importance) from LLM response.
+
+    Tries Markdown format first (prompt v3), falls back to truncation.
+
+    Returns:
+        Tuple of (description_300chars, scene_type, importance).
+    """
+    description = ""
+    scene_type = ""
+    importance = 3
+
+    for line in text.splitlines():
+        if line.startswith("**Setting:**"):
+            scene_type = line.split("**Setting:**", 1)[-1].strip()
+            break
+
+    # Collect Scene Composition section as description
+    in_comp = False
+    desc_parts: list[str] = []
+    for line in text.splitlines():
+        if "## Scene Composition" in line:
+            in_comp = True
+            continue
+        if in_comp and line.startswith("## "):
+            break
+        if in_comp and line.strip():
+            desc_parts.append(line.strip())
+
+    description = " ".join(desc_parts[:3]) if desc_parts else text[:200]
+
+    return description[:300], scene_type, importance
+
+
+class VisualAnalyzer:
+    """Per-frame Vision LLM analysis with context images.
+
+    Args:
+        key_pool: Gemini API key pool for rotation.
+        model: Vision LLM model identifier.
+        rpm_per_key: Requests per minute per API key.
+        context_max_gap_sec: Max time gap for context images.
+        max_context_images: Max number of previous frames as context.
+    """
+
+    def __init__(
+        self,
+        key_pool: KeyPool,
+        *,
+        model: str = "gemini-2.5-flash",
+        rpm_per_key: int = 5,
+        context_max_gap_sec: float = 7.0,
+        max_context_images: int = 2,
+    ) -> None:
+        self._key_pool = key_pool
+        self._model = model
+        self._context_max_gap = context_max_gap_sec
+        self._max_ctx_images = max_context_images
+
+        total_rpm = rpm_per_key * len(key_pool)
+        self._min_interval = 60.0 / total_rpm
+        self._last_call_time = 0.0
+        self._lock = asyncio.Lock()
+
+    async def analyze_scene(
+        self,
+        scene: Scene,
+        frames: list[SampledFrame],
+        frame_dir: Path,
+        *,
+        course_context: str = "",
+    ) -> list[EyesResult]:
+        """Analyze all frames in a scene sequentially.
+
+        Args:
+            scene: Scene metadata.
+            frames: Frames belonging to this scene (ordered by time).
+            frame_dir: Directory containing frame JPEG files.
+            course_context: Running course-level context text.
+
+        Returns:
+            List of EyesResult, one per frame.
+        """
+        results: list[EyesResult] = []
+        scene_ctx: list[dict[str, Any]] = []
+
+        for i, frame in enumerate(frames):
+            # Select context images: previous frames within time gap
+            ctx_frames: list[SampledFrame] = []
+            for j in range(max(0, i - self._max_ctx_images), i):
+                gap = frame.timestamp_sec - frames[j].timestamp_sec
+                if 0 < gap <= self._context_max_gap:
+                    ctx_frames.append(frames[j])
+
+            result = await self._analyze_frame(
+                frame=frame,
+                context_frames=ctx_frames,
+                frame_dir=frame_dir,
+                course_context=course_context,
+                scene_context=scene_ctx,
+            )
+            results.append(result)
+
+            # Update scene context for next frame
+            scene_ctx.append(
+                {
+                    "ts": frame.timestamp_sec,
+                    "desc": result.description,
+                }
+            )
+
+        return results
+
+    async def _analyze_frame(
+        self,
+        frame: SampledFrame,
+        context_frames: list[SampledFrame],
+        frame_dir: Path,
+        course_context: str,
+        scene_context: list[dict[str, Any]],
+    ) -> EyesResult:
+        """Analyze a single frame with Vision LLM."""
+        import google.genai as genai
+
+        parts: list[Any] = []
+
+        # Context images (previous frames, oldest first)
+        for cf in context_frames:
+            img_path = self._find_frame(frame_dir, cf.filename)
+            parts.append(
+                genai.types.Part.from_bytes(
+                    data=img_path.read_bytes(),
+                    mime_type="image/jpeg",
+                ),
+            )
+
+        # Main image (current frame — LAST image per prompt)
+        main_path = self._find_frame(frame_dir, frame.filename)
+        parts.append(
+            genai.types.Part.from_bytes(
+                data=main_path.read_bytes(),
+                mime_type="image/jpeg",
+            ),
+        )
+
+        # Build prompt text
+        prompt = self._build_prompt(course_context, scene_context)
+        parts.append(genai.types.Part.from_text(text=prompt))
+
+        # Rate-limited API call
+        api_result = await self._call_llm(parts)
+
+        # Parse response
+        response_text = api_result["text"]
+        description, scene_type, importance = _parse_response(response_text)
+
+        return EyesResult(
+            frame_id=frame.frame_id,
+            timestamp_sec=frame.timestamp_sec,
+            scene_id=frame.scene_id,
+            response=response_text,
+            n_images=len(context_frames) + 1,
+            latency_sec=api_result["latency_sec"],
+            input_tokens=api_result["input_tokens"],
+            output_tokens=api_result["output_tokens"],
+            description=description,
+            scene_type=scene_type,
+            importance=importance,
+        )
+
+    async def _call_llm(self, parts: list[Any]) -> dict[str, Any]:
+        """Make a rate-limited Vision LLM call with key rotation."""
+        import google.genai as genai
+
+        async with self._lock:
+            # Enforce RPM
+            elapsed = time.monotonic() - self._last_call_time
+            if elapsed < self._min_interval:
+                await asyncio.sleep(self._min_interval - elapsed)
+
+            key = self._key_pool.next_key()
+            client = genai.Client(api_key=key.get_secret_value())
+
+            t0 = time.monotonic()
+            try:
+                contents: Any = [genai.types.Content(parts=parts)]
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=self._model,
+                    contents=contents,
+                )
+            except Exception:
+                logger.exception(
+                    "vision_llm_error",
+                    model=self._model,
+                )
+                raise
+
+            self._last_call_time = time.monotonic()
+            latency = round(time.monotonic() - t0, 2)
+
+            usage = response.usage_metadata
+            result = {
+                "text": response.text or "",
+                "input_tokens": (usage.prompt_token_count if usage else 0),
+                "output_tokens": (usage.candidates_token_count if usage else 0),
+                "latency_sec": latency,
+            }
+
+            logger.info(
+                "eyes_frame_done",
+                model=self._model,
+                latency=latency,
+                tokens_in=result["input_tokens"],
+                tokens_out=result["output_tokens"],
+            )
+            return result
+
+    @staticmethod
+    def _build_prompt(
+        course_context: str,
+        scene_context: list[dict[str, Any]],
+    ) -> str:
+        """Format the Eyes v3 prompt with context blocks."""
+        template = _load_prompt()
+
+        course_block = ""
+        if course_context:
+            course_block = (
+                f"Course context (what has been covered):\n{course_context}\n\n"
+            )
+
+        scene_block = ""
+        if scene_context:
+            items = "\n".join(
+                f"- {item['ts']:.0f}s: {item['desc']}" for item in scene_context[-5:]
+            )
+            scene_block = f"Previous frames in this scene:\n{items}\n\n"
+
+        return template.format(
+            course_context_block=course_block,
+            scene_context_block=scene_block,
+        )
+
+    @staticmethod
+    def _find_frame(frame_dir: Path, filename: str) -> Path:
+        """Locate a frame file in frame_dir or its subdirectories."""
+        direct = frame_dir / filename
+        if direct.exists():
+            return direct
+        for sub in frame_dir.iterdir():
+            if sub.is_dir():
+                candidate = sub / filename
+                if candidate.exists():
+                    return candidate
+        msg = f"Frame not found: {filename} in {frame_dir}"
+        raise FileNotFoundError(msg)

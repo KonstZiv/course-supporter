@@ -1,9 +1,9 @@
 # VD-SPIKE-A: Frame Sampling + PiP Tracking
 
-**Статус:** TODO
+**Статус:** DONE (merged to dev)
 **Фаза:** 1 — Spike
 **Пріоритет:** Critical
 **Залежності:** VD-000
-**Блокує:** VD-SPIKE-B, VD-SPIKE-C
+**Результати:** `RESULTS.md`, golden frames в `golden-frames/` та `golden-frames-sample2/`
 
-Тестування FFmpeg scene detection vs fps, dHash threshold/hash_size tuning, PiP dynamic tracking (temporal diff + Vision LLM), cooldown logic. Результат — golden frames для наступних spike.
+Обрані параметри: fps=0.5, hash_size=16, threshold=5%, PiP temporal diff (confidence 0.73), cooldown 4s/3.

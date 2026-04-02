@@ -1,0 +1,29 @@
+scene_type: code_with_terminal
+code_area: editor (top) + terminal output (bottom)
+
+Editor (int_float.py):
+```python
+num_1_str = input("Enter a number: ")
+num_2_str = input("Enter another number: ")
+
+num_1 = int(num_1_str)
+num_2 = float(num_2_str)
+
+print(f"The number is: {num_1}")
+print(f"type of number is: {type(num_1)}")
+
+print(f"The number is: {num_2}")
+print(f"type of number is: {type(num_2)}")
+```
+
+Terminal output:
+```
+Enter a number: 11
+Enter another number: 11
+The number is: 11
+type of number is: <class 'int'>
+The number is: 11.0
+type of number is: <class 'float'>
+
+Process finished with exit code 0
+```

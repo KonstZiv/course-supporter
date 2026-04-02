@@ -1,0 +1,1126 @@
+{
+  "windows": [
+    {
+      "id": 0,
+      "scene_id": 0,
+      "anchor": 0,
+      "indices": [
+        0
+      ],
+      "names": [
+        "golden_000_0s.jpg"
+      ],
+      "ts_range": [
+        0,
+        0
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 1,
+      "scene_id": 1,
+      "anchor": 1,
+      "indices": [
+        1
+      ],
+      "names": [
+        "golden_001_2s.jpg"
+      ],
+      "ts_range": [
+        2,
+        2
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 2,
+      "scene_id": 2,
+      "anchor": 2,
+      "indices": [
+        2
+      ],
+      "names": [
+        "golden_002_12s.jpg"
+      ],
+      "ts_range": [
+        12,
+        12
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 3,
+      "scene_id": 3,
+      "anchor": 3,
+      "indices": [
+        3
+      ],
+      "names": [
+        "golden_003_29s.jpg"
+      ],
+      "ts_range": [
+        29,
+        29
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 4,
+      "scene_id": 4,
+      "anchor": 4,
+      "indices": [
+        4,
+        5
+      ],
+      "names": [
+        "golden_004_65s.jpg",
+        "golden_005_66s.jpg"
+      ],
+      "ts_range": [
+        65,
+        66
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 5,
+      "scene_id": 5,
+      "anchor": 6,
+      "indices": [
+        6
+      ],
+      "names": [
+        "golden_006_92s.jpg"
+      ],
+      "ts_range": [
+        92,
+        92
+      ],
+      "size": 1,
+      "gt_frames": [
+        "golden_006_92s.jpg"
+      ]
+    },
+    {
+      "id": 6,
+      "scene_id": 6,
+      "anchor": 7,
+      "indices": [
+        7
+      ],
+      "names": [
+        "golden_007_103s.jpg"
+      ],
+      "ts_range": [
+        103,
+        103
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 7,
+      "scene_id": 7,
+      "anchor": 8,
+      "indices": [
+        8,
+        9
+      ],
+      "names": [
+        "golden_008_137s.jpg",
+        "golden_009_141s.jpg"
+      ],
+      "ts_range": [
+        137,
+        141
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 8,
+      "scene_id": 8,
+      "anchor": 10,
+      "indices": [
+        10
+      ],
+      "names": [
+        "golden_010_154s.jpg"
+      ],
+      "ts_range": [
+        154,
+        154
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 9,
+      "scene_id": 9,
+      "anchor": 11,
+      "indices": [
+        11
+      ],
+      "names": [
+        "golden_011_197s.jpg"
+      ],
+      "ts_range": [
+        197,
+        197
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 10,
+      "scene_id": 10,
+      "anchor": 12,
+      "indices": [
+        12,
+        13
+      ],
+      "names": [
+        "golden_012_210s.jpg",
+        "golden_013_215s.jpg"
+      ],
+      "ts_range": [
+        210,
+        215
+      ],
+      "size": 2,
+      "gt_frames": [
+        "golden_012_210s.jpg"
+      ]
+    },
+    {
+      "id": 11,
+      "scene_id": 11,
+      "anchor": 14,
+      "indices": [
+        14
+      ],
+      "names": [
+        "golden_014_220s.jpg"
+      ],
+      "ts_range": [
+        220,
+        220
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 12,
+      "scene_id": 12,
+      "anchor": 15,
+      "indices": [
+        15
+      ],
+      "names": [
+        "golden_015_239s.jpg"
+      ],
+      "ts_range": [
+        239,
+        239
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 13,
+      "scene_id": 13,
+      "anchor": 16,
+      "indices": [
+        16
+      ],
+      "names": [
+        "golden_016_257s.jpg"
+      ],
+      "ts_range": [
+        257,
+        257
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 14,
+      "scene_id": 14,
+      "anchor": 17,
+      "indices": [
+        17
+      ],
+      "names": [
+        "golden_017_318s.jpg"
+      ],
+      "ts_range": [
+        318,
+        318
+      ],
+      "size": 1,
+      "gt_frames": [
+        "golden_017_318s.jpg"
+      ]
+    },
+    {
+      "id": 15,
+      "scene_id": 15,
+      "anchor": 18,
+      "indices": [
+        18
+      ],
+      "names": [
+        "golden_018_355s.jpg"
+      ],
+      "ts_range": [
+        355,
+        355
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 16,
+      "scene_id": 16,
+      "anchor": 19,
+      "indices": [
+        19
+      ],
+      "names": [
+        "golden_019_529s.jpg"
+      ],
+      "ts_range": [
+        529,
+        529
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 17,
+      "scene_id": 17,
+      "anchor": 20,
+      "indices": [
+        20
+      ],
+      "names": [
+        "golden_020_608s.jpg"
+      ],
+      "ts_range": [
+        608,
+        608
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 18,
+      "scene_id": 18,
+      "anchor": 21,
+      "indices": [
+        21
+      ],
+      "names": [
+        "golden_021_621s.jpg"
+      ],
+      "ts_range": [
+        621,
+        621
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 19,
+      "scene_id": 19,
+      "anchor": 22,
+      "indices": [
+        22,
+        23
+      ],
+      "names": [
+        "golden_022_761s.jpg",
+        "golden_023_764s.jpg"
+      ],
+      "ts_range": [
+        761,
+        764
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 20,
+      "scene_id": 20,
+      "anchor": 24,
+      "indices": [
+        24
+      ],
+      "names": [
+        "golden_024_770s.jpg"
+      ],
+      "ts_range": [
+        770,
+        770
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 21,
+      "scene_id": 21,
+      "anchor": 25,
+      "indices": [
+        25
+      ],
+      "names": [
+        "golden_025_795s.jpg"
+      ],
+      "ts_range": [
+        795,
+        795
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 22,
+      "scene_id": 22,
+      "anchor": 26,
+      "indices": [
+        26
+      ],
+      "names": [
+        "golden_026_928s.jpg"
+      ],
+      "ts_range": [
+        928,
+        928
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 23,
+      "scene_id": 23,
+      "anchor": 27,
+      "indices": [
+        27,
+        28,
+        29
+      ],
+      "names": [
+        "golden_027_988s.jpg",
+        "golden_028_991s.jpg",
+        "golden_029_993s.jpg"
+      ],
+      "ts_range": [
+        988,
+        993
+      ],
+      "size": 3,
+      "gt_frames": [
+        "golden_027_988s.jpg"
+      ]
+    },
+    {
+      "id": 24,
+      "scene_id": 23,
+      "anchor": 30,
+      "indices": [
+        28,
+        29,
+        30,
+        31,
+        32
+      ],
+      "names": [
+        "golden_028_991s.jpg",
+        "golden_029_993s.jpg",
+        "golden_030_994s.jpg",
+        "golden_031_1001s.jpg",
+        "golden_032_1011s.jpg"
+      ],
+      "ts_range": [
+        991,
+        1011
+      ],
+      "size": 5,
+      "gt_frames": []
+    },
+    {
+      "id": 25,
+      "scene_id": 23,
+      "anchor": 32,
+      "indices": [
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "names": [
+        "golden_030_994s.jpg",
+        "golden_031_1001s.jpg",
+        "golden_032_1011s.jpg",
+        "golden_033_1012s.jpg",
+        "golden_034_1021s.jpg"
+      ],
+      "ts_range": [
+        994,
+        1021
+      ],
+      "size": 5,
+      "gt_frames": []
+    },
+    {
+      "id": 26,
+      "scene_id": 24,
+      "anchor": 35,
+      "indices": [
+        35
+      ],
+      "names": [
+        "golden_035_1055s.jpg"
+      ],
+      "ts_range": [
+        1055,
+        1055
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 27,
+      "scene_id": 25,
+      "anchor": 36,
+      "indices": [
+        36
+      ],
+      "names": [
+        "golden_036_1063s.jpg"
+      ],
+      "ts_range": [
+        1063,
+        1063
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 28,
+      "scene_id": 26,
+      "anchor": 37,
+      "indices": [
+        37
+      ],
+      "names": [
+        "golden_037_1143s.jpg"
+      ],
+      "ts_range": [
+        1143,
+        1143
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 29,
+      "scene_id": 27,
+      "anchor": 38,
+      "indices": [
+        38,
+        39,
+        40
+      ],
+      "names": [
+        "golden_038_1189s.jpg",
+        "golden_039_1192s.jpg",
+        "golden_040_1193s.jpg"
+      ],
+      "ts_range": [
+        1189,
+        1193
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 30,
+      "scene_id": 27,
+      "anchor": 41,
+      "indices": [
+        39,
+        40,
+        41
+      ],
+      "names": [
+        "golden_039_1192s.jpg",
+        "golden_040_1193s.jpg",
+        "golden_041_1194s.jpg"
+      ],
+      "ts_range": [
+        1192,
+        1194
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 31,
+      "scene_id": 28,
+      "anchor": 42,
+      "indices": [
+        42
+      ],
+      "names": [
+        "golden_042_1220s.jpg"
+      ],
+      "ts_range": [
+        1220,
+        1220
+      ],
+      "size": 1,
+      "gt_frames": [
+        "golden_042_1220s.jpg"
+      ]
+    },
+    {
+      "id": 32,
+      "scene_id": 29,
+      "anchor": 43,
+      "indices": [
+        43,
+        44,
+        45
+      ],
+      "names": [
+        "golden_043_1227s.jpg",
+        "golden_044_1232s.jpg",
+        "golden_045_1236s.jpg"
+      ],
+      "ts_range": [
+        1227,
+        1236
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 33,
+      "scene_id": 30,
+      "anchor": 46,
+      "indices": [
+        46
+      ],
+      "names": [
+        "golden_046_1268s.jpg"
+      ],
+      "ts_range": [
+        1268,
+        1268
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 34,
+      "scene_id": 31,
+      "anchor": 47,
+      "indices": [
+        47,
+        48
+      ],
+      "names": [
+        "golden_047_1276s.jpg",
+        "golden_048_1285s.jpg"
+      ],
+      "ts_range": [
+        1276,
+        1285
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 35,
+      "scene_id": 32,
+      "anchor": 49,
+      "indices": [
+        49,
+        50,
+        51
+      ],
+      "names": [
+        "golden_049_1304s.jpg",
+        "golden_050_1305s.jpg",
+        "golden_051_1306s.jpg"
+      ],
+      "ts_range": [
+        1304,
+        1306
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 36,
+      "scene_id": 32,
+      "anchor": 51,
+      "indices": [
+        49,
+        50,
+        51,
+        52
+      ],
+      "names": [
+        "golden_049_1304s.jpg",
+        "golden_050_1305s.jpg",
+        "golden_051_1306s.jpg",
+        "golden_052_1307s.jpg"
+      ],
+      "ts_range": [
+        1304,
+        1307
+      ],
+      "size": 4,
+      "gt_frames": []
+    },
+    {
+      "id": 37,
+      "scene_id": 33,
+      "anchor": 53,
+      "indices": [
+        53
+      ],
+      "names": [
+        "golden_053_1314s.jpg"
+      ],
+      "ts_range": [
+        1314,
+        1314
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 38,
+      "scene_id": 34,
+      "anchor": 54,
+      "indices": [
+        54,
+        55
+      ],
+      "names": [
+        "golden_054_1325s.jpg",
+        "golden_055_1331s.jpg"
+      ],
+      "ts_range": [
+        1325,
+        1331
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 39,
+      "scene_id": 35,
+      "anchor": 56,
+      "indices": [
+        56,
+        57,
+        58
+      ],
+      "names": [
+        "golden_056_1343s.jpg",
+        "golden_057_1344s.jpg",
+        "golden_058_1349s.jpg"
+      ],
+      "ts_range": [
+        1343,
+        1349
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 40,
+      "scene_id": 35,
+      "anchor": 58,
+      "indices": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "names": [
+        "golden_056_1343s.jpg",
+        "golden_057_1344s.jpg",
+        "golden_058_1349s.jpg",
+        "golden_059_1354s.jpg"
+      ],
+      "ts_range": [
+        1343,
+        1354
+      ],
+      "size": 4,
+      "gt_frames": []
+    },
+    {
+      "id": 41,
+      "scene_id": 36,
+      "anchor": 60,
+      "indices": [
+        60
+      ],
+      "names": [
+        "golden_060_1366s.jpg"
+      ],
+      "ts_range": [
+        1366,
+        1366
+      ],
+      "size": 1,
+      "gt_frames": [
+        "golden_060_1366s.jpg"
+      ]
+    },
+    {
+      "id": 42,
+      "scene_id": 37,
+      "anchor": 61,
+      "indices": [
+        61,
+        62,
+        63
+      ],
+      "names": [
+        "golden_061_1377s.jpg",
+        "golden_062_1381s.jpg",
+        "golden_063_1384s.jpg"
+      ],
+      "ts_range": [
+        1377,
+        1384
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 43,
+      "scene_id": 37,
+      "anchor": 64,
+      "indices": [
+        62,
+        63,
+        64,
+        65
+      ],
+      "names": [
+        "golden_062_1381s.jpg",
+        "golden_063_1384s.jpg",
+        "golden_064_1394s.jpg",
+        "golden_065_1403s.jpg"
+      ],
+      "ts_range": [
+        1381,
+        1403
+      ],
+      "size": 4,
+      "gt_frames": [
+        "golden_065_1403s.jpg"
+      ]
+    },
+    {
+      "id": 44,
+      "scene_id": 38,
+      "anchor": 66,
+      "indices": [
+        66,
+        67
+      ],
+      "names": [
+        "golden_066_1421s.jpg",
+        "golden_067_1426s.jpg"
+      ],
+      "ts_range": [
+        1421,
+        1426
+      ],
+      "size": 2,
+      "gt_frames": []
+    },
+    {
+      "id": 45,
+      "scene_id": 39,
+      "anchor": 68,
+      "indices": [
+        68
+      ],
+      "names": [
+        "golden_068_1448s.jpg"
+      ],
+      "ts_range": [
+        1448,
+        1448
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 46,
+      "scene_id": 40,
+      "anchor": 69,
+      "indices": [
+        69
+      ],
+      "names": [
+        "golden_069_1462s.jpg"
+      ],
+      "ts_range": [
+        1462,
+        1462
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 47,
+      "scene_id": 41,
+      "anchor": 70,
+      "indices": [
+        70,
+        71,
+        72
+      ],
+      "names": [
+        "golden_070_1484s.jpg",
+        "golden_071_1490s.jpg",
+        "golden_072_1491s.jpg"
+      ],
+      "ts_range": [
+        1484,
+        1491
+      ],
+      "size": 3,
+      "gt_frames": []
+    },
+    {
+      "id": 48,
+      "scene_id": 41,
+      "anchor": 73,
+      "indices": [
+        71,
+        72,
+        73,
+        74,
+        75
+      ],
+      "names": [
+        "golden_071_1490s.jpg",
+        "golden_072_1491s.jpg",
+        "golden_073_1494s.jpg",
+        "golden_074_1499s.jpg",
+        "golden_075_1500s.jpg"
+      ],
+      "ts_range": [
+        1490,
+        1500
+      ],
+      "size": 5,
+      "gt_frames": [
+        "golden_075_1500s.jpg"
+      ]
+    },
+    {
+      "id": 49,
+      "scene_id": 41,
+      "anchor": 75,
+      "indices": [
+        73,
+        74,
+        75,
+        76,
+        77
+      ],
+      "names": [
+        "golden_073_1494s.jpg",
+        "golden_074_1499s.jpg",
+        "golden_075_1500s.jpg",
+        "golden_076_1502s.jpg",
+        "golden_077_1512s.jpg"
+      ],
+      "ts_range": [
+        1494,
+        1512
+      ],
+      "size": 5,
+      "gt_frames": [
+        "golden_075_1500s.jpg"
+      ]
+    },
+    {
+      "id": 50,
+      "scene_id": 41,
+      "anchor": 78,
+      "indices": [
+        76,
+        77,
+        78,
+        79,
+        80
+      ],
+      "names": [
+        "golden_076_1502s.jpg",
+        "golden_077_1512s.jpg",
+        "golden_078_1517s.jpg",
+        "golden_079_1519s.jpg",
+        "golden_080_1524s.jpg"
+      ],
+      "ts_range": [
+        1502,
+        1524
+      ],
+      "size": 5,
+      "gt_frames": [
+        "golden_080_1524s.jpg"
+      ]
+    },
+    {
+      "id": 51,
+      "scene_id": 41,
+      "anchor": 81,
+      "indices": [
+        79,
+        80,
+        81,
+        82,
+        83
+      ],
+      "names": [
+        "golden_079_1519s.jpg",
+        "golden_080_1524s.jpg",
+        "golden_081_1528s.jpg",
+        "golden_082_1534s.jpg",
+        "golden_083_1539s.jpg"
+      ],
+      "ts_range": [
+        1519,
+        1539
+      ],
+      "size": 5,
+      "gt_frames": [
+        "golden_080_1524s.jpg"
+      ]
+    },
+    {
+      "id": 52,
+      "scene_id": 41,
+      "anchor": 84,
+      "indices": [
+        82,
+        83,
+        84,
+        85,
+        86
+      ],
+      "names": [
+        "golden_082_1534s.jpg",
+        "golden_083_1539s.jpg",
+        "golden_084_1545s.jpg",
+        "golden_085_1549s.jpg",
+        "golden_086_1552s.jpg"
+      ],
+      "ts_range": [
+        1534,
+        1552
+      ],
+      "size": 5,
+      "gt_frames": [
+        "golden_085_1549s.jpg"
+      ]
+    },
+    {
+      "id": 53,
+      "scene_id": 41,
+      "anchor": 87,
+      "indices": [
+        85,
+        86,
+        87
+      ],
+      "names": [
+        "golden_085_1549s.jpg",
+        "golden_086_1552s.jpg",
+        "golden_087_1553s.jpg"
+      ],
+      "ts_range": [
+        1549,
+        1553
+      ],
+      "size": 3,
+      "gt_frames": [
+        "golden_085_1549s.jpg"
+      ]
+    },
+    {
+      "id": 54,
+      "scene_id": 42,
+      "anchor": 88,
+      "indices": [
+        88
+      ],
+      "names": [
+        "golden_088_1564s.jpg"
+      ],
+      "ts_range": [
+        1564,
+        1564
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 55,
+      "scene_id": 43,
+      "anchor": 89,
+      "indices": [
+        89
+      ],
+      "names": [
+        "golden_089_1575s.jpg"
+      ],
+      "ts_range": [
+        1575,
+        1575
+      ],
+      "size": 1,
+      "gt_frames": []
+    },
+    {
+      "id": 56,
+      "scene_id": 44,
+      "anchor": 90,
+      "indices": [
+        90
+      ],
+      "names": [
+        "golden_090_1579s.jpg"
+      ],
+      "ts_range": [
+        1579,
+        1579
+      ],
+      "size": 1,
+      "gt_frames": []
+    }
+  ],
+  "total_windows": 57,
+  "windows_with_gt": 13,
+  "complete": true
+}

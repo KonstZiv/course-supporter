@@ -1,0 +1,22 @@
+scene_type: code_with_terminal
+code_area: editor (top, with autocomplete popup occluding lower lines) + terminal output (bottom)
+
+Editor (int_float.py, visible lines only):
+```python
+num_1_str = input("Enter a number: ")
+num_2_str = input("Enter another number: ")
+
+num_1 = int(num_1_str)
+num_2 = float(num_2_str)
+```
+
+Terminal output (traceback):
+```
+Enter a number: + 12
+Traceback (most recent call last):
+  File "/Users/kostyantynzivenko/Desktop/documents/PythonStart/pythonbasic/2-04_int_and_float/int_float.py", line 3, in <module>
+    num_1 = int(num_1_str)
+ValueError: invalid literal for int() with base 10: '+ 12'
+
+Process finished with exit code 1
+```

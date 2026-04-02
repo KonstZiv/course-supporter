@@ -1,0 +1,88 @@
+{
+  "model": "gemini-3.1-flash-lite-preview",
+  "evals": [
+    {
+      "frame": "golden_006_92s.jpg",
+      "eyes_accuracy": 66.7,
+      "merged_accuracy": 66.7,
+      "v1_best": 66.7,
+      "delta_eyes": 0.0,
+      "delta_merged": 0.0
+    },
+    {
+      "frame": "golden_012_210s.jpg",
+      "eyes_accuracy": 94.8,
+      "merged_accuracy": 94.8,
+      "v1_best": 97.4,
+      "delta_eyes": -2.6,
+      "delta_merged": -2.6
+    },
+    {
+      "frame": "golden_017_318s.jpg",
+      "eyes_accuracy": 54.1,
+      "merged_accuracy": 54.1,
+      "v1_best": 54.1,
+      "delta_eyes": 0.0,
+      "delta_merged": 0.0
+    },
+    {
+      "frame": "golden_027_988s.jpg",
+      "eyes_accuracy": 100.0,
+      "merged_accuracy": 100.0,
+      "v1_best": 100.0,
+      "delta_eyes": 0.0,
+      "delta_merged": 0.0
+    },
+    {
+      "frame": "golden_042_1220s.jpg",
+      "eyes_accuracy": 35.5,
+      "merged_accuracy": 35.5,
+      "v1_best": 39.2,
+      "delta_eyes": -3.7,
+      "delta_merged": -3.7
+    },
+    {
+      "frame": "golden_060_1366s.jpg",
+      "eyes_accuracy": 100.0,
+      "merged_accuracy": 100.0,
+      "v1_best": 47.6,
+      "delta_eyes": 52.4,
+      "delta_merged": 52.4
+    },
+    {
+      "frame": "golden_065_1403s.jpg",
+      "eyes_accuracy": 100.0,
+      "merged_accuracy": 100.0,
+      "v1_best": 85.5,
+      "delta_eyes": 14.5,
+      "delta_merged": 14.5
+    },
+    {
+      "frame": "golden_075_1500s.jpg",
+      "eyes_accuracy": 23.6,
+      "merged_accuracy": 100.0,
+      "v1_best": 23.9,
+      "delta_eyes": -0.3,
+      "delta_merged": 76.1
+    },
+    {
+      "frame": "golden_080_1524s.jpg",
+      "eyes_accuracy": 100.0,
+      "merged_accuracy": 100.0,
+      "v1_best": 93.2,
+      "delta_eyes": 6.8,
+      "delta_merged": 6.8
+    },
+    {
+      "frame": "golden_085_1549s.jpg",
+      "eyes_accuracy": 100.0,
+      "merged_accuracy": 100.0,
+      "v1_best": 45.5,
+      "delta_eyes": 54.5,
+      "delta_merged": 54.5
+    }
+  ],
+  "avg_eyes": 77.5,
+  "avg_merged": 85.1,
+  "avg_v1_best": 65.3
+}

@@ -6,45 +6,35 @@
 
 ## Що робимо
 
-Створюємо Pydantic моделі для всіх stages VD pipeline: frame sampling, PiP tracking, visual analysis, OCR (умовний), aggregation.
+Створюємо Pydantic моделі для VD pipeline на основі spike JSON структур.
 
 ## Яким чином
 
 Створити `src/course_supporter/vd/schemas.py` з моделями:
 
-```python
-# Stage A: Frame Sampling
-class Rect(BaseModel): ...               # bounding box (x1, y1, x2, y2)
-class PiPMask(BaseModel): ...            # zone_name, rect, active
-class PiPEvent(BaseModel): ...           # timestamp, zone, method, confidence
-class SampledFrame(BaseModel): ...       # index, timestamp, path, dhash, hamming, pip_mask
-class FrameSamplingResult(BaseModel): ... # frames, pip_events, total_raw, params, resolution
+### Stage A: Frame Sampling
 
-# Stage B: Visual Analysis
-class FrameClassification(BaseModel): ... # Pass 1: scene_type, description, has_text, importance
-class VisualAnalysis(BaseModel): ...      # Pass 2: frame_range, timestamps, description, extracted_text
-class VisualAnalysisResult(BaseModel): ... # analyses, frames_analyzed, cost
+- `SampledFrame` — frame_id, filename, timestamp_sec, scene_id, dhash, hamming_from_prev, is_gap_fill
+- `Scene` — scene_id, frame_ids, start_sec, end_sec
+- `FrameSamplingResult` — frames, scenes, pip_mask, video_resolution, sampling_params
 
-# Stage C: OCR (умовний)
-class OCRExtraction(BaseModel): ...       # frame_index, raw_text, corrected_text, type, language
+### Stage B: Visual Analysis
 
-# Stage D: Aggregation
-# Використовує існуючі ContentChunk з models/source.py
-```
+- `EyesResult` — frame_id, scene_id, response (raw Markdown), context_frames, model
+- `InstantMemory` — scene_id, merged_text, frame_count
+- `SceneMemory` — scene_id, scene_type, summary, complete_text, topics, importance
+- `CourseMemory` — text (≤200 words), scenes_covered
+- `SceneAnalysis` — scene, eyes_results, instant_memory, scene_memory
+- `VDResult` — scenes, course_memory, frames_total, frames_analyzed, model
 
-Дотримуватись паттернів з `stt/schemas.py` (STTRequest, STTResult, STTSegment).
+### Cross-modal Alignment (ingestion level)
 
-## Результат
+- `AlignedSegment` — start_sec, end_sec, stt_text, vd_scene, semantic_overlap, conflicts, alignment_confidence
+- `AlignmentReport` — coverage_gaps, vd_orphans, stt_orphans, conflicts, semantic_coverage
 
-- Файл `src/course_supporter/vd/schemas.py`
-- Файл `src/course_supporter/vd/__init__.py` з re-exports
-- Всі моделі з type hints (mypy strict)
-- Docstrings англійською
+## Acceptance criteria
 
-## Як перевіряємо
-
-```bash
-uv run mypy src/course_supporter/vd/schemas.py   # strict, no errors
-uv run ruff check src/course_supporter/vd/        # no lint errors
-uv run python -c "from course_supporter.vd.schemas import SampledFrame, VisualAnalysis"
-```
+- [ ] Всі models мають валідацію і serialization
+- [ ] `mypy --strict` проходить
+- [ ] Відповідають реальним spike JSON структурам з `VD-SPIKE-B/pipeline/`
+- [ ] `__init__.py` створений для `src/course_supporter/vd/`

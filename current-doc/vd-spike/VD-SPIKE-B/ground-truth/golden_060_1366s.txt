@@ -1,0 +1,17 @@
+scene_type: code_with_terminal
+code_area: editor (top) + terminal output (bottom)
+
+Editor (int_float.py):
+```python
+num_1 = input("Enter a number: ")
+
+print(f"The number is: {num_1}")
+```
+
+Terminal output:
+```
+Enter a number: 111
+The number is: 111
+
+Process finished with exit code 0
+```

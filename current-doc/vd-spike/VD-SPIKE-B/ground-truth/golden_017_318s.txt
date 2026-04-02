@@ -1,0 +1,30 @@
+scene_type: slide_with_console
+code_area: slide code examples (right) + console (left)
+
+Slide code examples (right top):
+```python
+>>> 1000000
+1000000
+>>> 1_000_000
+1000000
+```
+
+Console (left):
+```python
+>>> type(1.0)
+<class 'float'>
+>>> float('2.12')
+2.12
+```
+
+Slide code examples (right bottom):
+```python
+>>> 1000000.0
+1000000.0
+>>> 1_000_000.0
+1000000.0
+>>> 1E6
+1000000.0
+>>> 1e6
+1000000.0
+```

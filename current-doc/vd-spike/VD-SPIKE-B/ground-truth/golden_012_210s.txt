@@ -11,6 +11,6 @@ Slide code examples (right, dark background):
 ```python
 >>> int("22")
 22
->>> int("fa12", base=16)
-64018
+>>> int("faa12", base=16)
+1026578
 ```

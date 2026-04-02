@@ -1,0 +1,1275 @@
+{
+  "frames": [
+    {
+      "name": "golden_000_0s.jpg",
+      "index": 0,
+      "timestamp": 0,
+      "dhash": "3586714532497695f70534da419c618c67856595451643274393438653174396",
+      "dhash_dist": 0.0,
+      "change_class": "first"
+    },
+    {
+      "name": "golden_001_2s.jpg",
+      "index": 1,
+      "timestamp": 2,
+      "dhash": "c024c05ee79ce6cce6c4a784d658d8dcfd8cf98cfc8cfcccfc8cd89ca874bcdc",
+      "dhash_dist": 0.543,
+      "time_gap": 2,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_002_12s.jpg",
+      "index": 2,
+      "timestamp": 12,
+      "dhash": "c024c01ec40ced5cec5cb08cc304d334f844f344f444f5ccf5a4d224a8d8bcdc",
+      "dhash_dist": 0.2539,
+      "time_gap": 10,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_003_29s.jpg",
+      "index": 3,
+      "timestamp": 29,
+      "dhash": "c624c01ca724e7a4a7a4a694c694c6848644906480648164a4648264bcdcbcd8",
+      "dhash_dist": 0.293,
+      "time_gap": 17,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_004_65s.jpg",
+      "index": 4,
+      "timestamp": 65,
+      "dhash": "c024c01ec624eec4edecb29cc714d734f844f344b444f5c4fda4d224acdcbcdc",
+      "dhash_dist": 0.2227,
+      "time_gap": 36,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_005_66s.jpg",
+      "index": 5,
+      "timestamp": 66,
+      "dhash": "c024c01ec40ced5cac5cb08cc314d334f844f344f444f5ccf5a4d224acd8bcdc",
+      "dhash_dist": 0.082,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_006_92s.jpg",
+      "index": 6,
+      "timestamp": 92,
+      "dhash": "c624c01ce724e7a4a7a4a694c694c684c644a8648064c16494648364bc5cbcd8",
+      "dhash_dist": 0.2812,
+      "time_gap": 26,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_007_103s.jpg",
+      "index": 7,
+      "timestamp": 103,
+      "dhash": "c624c09ce724e7a487a48694c694c684c46488648664886488648374bcdcbcd8",
+      "dhash_dist": 0.0625,
+      "time_gap": 11,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_008_137s.jpg",
+      "index": 8,
+      "timestamp": 137,
+      "dhash": "c624c01ce724e7a4a7a4a694c694c684866480648264a064a4649b74bc5cbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 34,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_009_141s.jpg",
+      "index": 9,
+      "timestamp": 141,
+      "dhash": "c624e01ce724e7a4c7a48694c694c684c66489649464c46484648374bcdcbcd8",
+      "dhash_dist": 0.0664,
+      "time_gap": 4,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_010_154s.jpg",
+      "index": 10,
+      "timestamp": 154,
+      "dhash": "c224c09ce724c7a4c7a48694c694c684866480648264a06484649274bcdcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 13,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_011_197s.jpg",
+      "index": 11,
+      "timestamp": 197,
+      "dhash": "c224c01ce724e7a4a7a4a694c694c684926490648e64806490648374bcdcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 43,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_012_210s.jpg",
+      "index": 12,
+      "timestamp": 210,
+      "dhash": "c024c21eec0ced5cec5cb08cc304d334f844f344f444f5ccf5a4d224acd8bcdc",
+      "dhash_dist": 0.3008,
+      "time_gap": 13,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_013_215s.jpg",
+      "index": 13,
+      "timestamp": 215,
+      "dhash": "c024801ec40ced78cd4cb044d344c36cf344f844f7c4f9c4fa44da24ac5cbcdc",
+      "dhash_dist": 0.1562,
+      "time_gap": 5,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_014_220s.jpg",
+      "index": 14,
+      "timestamp": 220,
+      "dhash": "c224c01ce764e694a594a784c694c694966490648c648064906483749cdcbcd8",
+      "dhash_dist": 0.3203,
+      "time_gap": 5,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_015_239s.jpg",
+      "index": 15,
+      "timestamp": 239,
+      "dhash": "c024c21ee40ced7cac4cb044d344e36cf344f844f7c4f4c4f044d3248c5cbcdc",
+      "dhash_dist": 0.2891,
+      "time_gap": 19,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_016_257s.jpg",
+      "index": 16,
+      "timestamp": 257,
+      "dhash": "c624c01ce764e694a584a784c694c694866480648a64806480648374bcdcbcd8",
+      "dhash_dist": 0.3047,
+      "time_gap": 18,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_017_318s.jpg",
+      "index": 17,
+      "timestamp": 318,
+      "dhash": "c024c21ee40ced7cac4cb044d344e37cf344f844f7c4f4c4f044d324ac5cbcdc",
+      "dhash_dist": 0.2969,
+      "time_gap": 61,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_018_355s.jpg",
+      "index": 18,
+      "timestamp": 355,
+      "dhash": "c024c01ee40ced78ad4cb0c4934cc36cf364f884f684f38cf9a4da24acdcbcdc",
+      "dhash_dist": 0.1016,
+      "time_gap": 37,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_019_529s.jpg",
+      "index": 19,
+      "timestamp": 529,
+      "dhash": "c024c01ee48ced78ad4cb144c344c370f30cf884fe84f584fb84da24acdcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 174,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_020_608s.jpg",
+      "index": 20,
+      "timestamp": 608,
+      "dhash": "c024c01ee48ced38ad4cb0c49344e344e37cf374f0acf39cf824db24a45cbcdc",
+      "dhash_dist": 0.1406,
+      "time_gap": 79,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_021_621s.jpg",
+      "index": 21,
+      "timestamp": 621,
+      "dhash": "c224c01ce724e694a594a5a4c6a4c684864489648464806490648374bcdcbcd8",
+      "dhash_dist": 0.3086,
+      "time_gap": 13,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_022_761s.jpg",
+      "index": 22,
+      "timestamp": 761,
+      "dhash": "c064821ecc0ccd7ccd4cb0c4d344e344e374f774f0bcf79cf424d324acd8bcdc",
+      "dhash_dist": 0.332,
+      "time_gap": 140,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_023_764s.jpg",
+      "index": 23,
+      "timestamp": 764,
+      "dhash": "c024c01ee44ced34ac34a34cc35cf74cf8e4f71cfb34f43cf824da24ac5cbcdc",
+      "dhash_dist": 0.1992,
+      "time_gap": 3,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_024_770s.jpg",
+      "index": 24,
+      "timestamp": 770,
+      "dhash": "c264c19ce664e7a4a5a4a664c6a4c6848644806484648064886483749c5cbcd8",
+      "dhash_dist": 0.3125,
+      "time_gap": 6,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_025_795s.jpg",
+      "index": 25,
+      "timestamp": 795,
+      "dhash": "c024c21eec8ced34ac34a34c8354f76cf0e4f71cf424f43cf024d224ac5cbcdc",
+      "dhash_dist": 0.3086,
+      "time_gap": 25,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_026_928s.jpg",
+      "index": 26,
+      "timestamp": 928,
+      "dhash": "c024c05ec41cadc4ccd4b204dadcf35ce36ce364f34cf69cfba4da24acdcbcdc",
+      "dhash_dist": 0.2148,
+      "time_gap": 133,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_027_988s.jpg",
+      "index": 27,
+      "timestamp": 988,
+      "dhash": "c2a4c01ce7e4e664a7a4a5a4c7a4c68486c481648464c86488648374bc5cbcd8",
+      "dhash_dist": 0.3594,
+      "time_gap": 60,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_028_991s.jpg",
+      "index": 28,
+      "timestamp": 991,
+      "dhash": "c2a4c01ce7e4e664a7a4a5a4c7a4c684c684a06480648164a4648364bd5cbcd8",
+      "dhash_dist": 0.0508,
+      "time_gap": 3,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_029_993s.jpg",
+      "index": 29,
+      "timestamp": 993,
+      "dhash": "c2a4c01ce7e4e66487a485a4cba4db04cb04946484648464b2648364bc5cbcdc",
+      "dhash_dist": 0.0938,
+      "time_gap": 2,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_030_994s.jpg",
+      "index": 30,
+      "timestamp": 994,
+      "dhash": "c2a4c01ce7e4e66487a485a4c7a4c684c684986494648464b2648364bc5cbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_031_1001s.jpg",
+      "index": 31,
+      "timestamp": 1001,
+      "dhash": "c224c01ce7e4e664a7a4a5a4c7a4c684c784a8648864916494648374bcdcbcd8",
+      "dhash_dist": 0.0664,
+      "time_gap": 7,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_032_1011s.jpg",
+      "index": 32,
+      "timestamp": 1011,
+      "dhash": "c2a4c01cc7e4e66487a485a4cba4db048b04906484649464aa648364bcdcbcd8",
+      "dhash_dist": 0.1094,
+      "time_gap": 10,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_033_1012s.jpg",
+      "index": 33,
+      "timestamp": 1012,
+      "dhash": "c2a4c01cc7e4e66487a485a4c7a4c684c784a8649264c4e4a4648374bcdcbcd8",
+      "dhash_dist": 0.0938,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_034_1021s.jpg",
+      "index": 34,
+      "timestamp": 1021,
+      "dhash": "c224c01ce7e4e664a7a4a5a4c7a4c684c684a86484648164946483749cdcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 9,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_035_1055s.jpg",
+      "index": 35,
+      "timestamp": 1055,
+      "dhash": "c2a4c01ce7e4e664a7a4a5a4c7a4c684864488648764906488648374bcdcbcd8",
+      "dhash_dist": 0.0508,
+      "time_gap": 34,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_036_1063s.jpg",
+      "index": 36,
+      "timestamp": 1063,
+      "dhash": "c024c21ecc1cedc4acd4b20493dce35ce36ce364f74cf6dcf5a4d224ac58bcdc",
+      "dhash_dist": 0.332,
+      "time_gap": 8,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_037_1143s.jpg",
+      "index": 37,
+      "timestamp": 1143,
+      "dhash": "c024801e841c8d74cd44bc44d944f344e37cf344fc44f74cf724db24acdcbcdc",
+      "dhash_dist": 0.168,
+      "time_gap": 80,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_038_1189s.jpg",
+      "index": 38,
+      "timestamp": 1189,
+      "dhash": "c264c01ce764e694a794a584c794c584c644886487649064a0648374bcdcbcd8",
+      "dhash_dist": 0.332,
+      "time_gap": 46,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_039_1192s.jpg",
+      "index": 39,
+      "timestamp": 1192,
+      "dhash": "c264c09cc764c694a794a584c794c584c684a06484648164b4648364bddcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 3,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_040_1193s.jpg",
+      "index": 40,
+      "timestamp": 1193,
+      "dhash": "c264c09ce764e69487948584cb94cf84cb048464846490e4aa648364bc5cbcd8",
+      "dhash_dist": 0.0898,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_041_1194s.jpg",
+      "index": 41,
+      "timestamp": 1194,
+      "dhash": "c264c09cc764e69487948584c794c584c684a86480648164a4648364bc5cbcd8",
+      "dhash_dist": 0.0742,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_042_1220s.jpg",
+      "index": 42,
+      "timestamp": 1220,
+      "dhash": "c024c21ecc1cad74cd44b444dd46f344e374f344f446f74ce624d3248cdcbcdc",
+      "dhash_dist": 0.3086,
+      "time_gap": 26,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_043_1227s.jpg",
+      "index": 43,
+      "timestamp": 1227,
+      "dhash": "c624c09cc764e684a794a584c794c584c604a86480648164946483649c5cbcd8",
+      "dhash_dist": 0.3125,
+      "time_gap": 7,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_044_1232s.jpg",
+      "index": 44,
+      "timestamp": 1232,
+      "dhash": "c224c01ce764e68487948584c794c584c604b8648064c464ec648374bcdcbcd8",
+      "dhash_dist": 0.0625,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_045_1236s.jpg",
+      "index": 45,
+      "timestamp": 1236,
+      "dhash": "c624c01ce764a684a794a584c794c584c66480648664886490648374bcdcbcd8",
+      "dhash_dist": 0.0742,
+      "time_gap": 4,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_046_1268s.jpg",
+      "index": 46,
+      "timestamp": 1268,
+      "dhash": "c224c09ce764e68487948584c794c584866481648b64c464c4648374bcdcbcdc",
+      "dhash_dist": 0.0664,
+      "time_gap": 32,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_047_1276s.jpg",
+      "index": 47,
+      "timestamp": 1276,
+      "dhash": "c024c21ecc1ced74ad44b444dd46f344e374f744f446f74ce624d324acd8bcdc",
+      "dhash_dist": 0.3047,
+      "time_gap": 8,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_048_1285s.jpg",
+      "index": 48,
+      "timestamp": 1285,
+      "dhash": "c024c01ec41cad64ec74b48cd334d784f78cf1c4f35cfa18fba4d3a4ac58bcdc",
+      "dhash_dist": 0.1992,
+      "time_gap": 9,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_049_1304s.jpg",
+      "index": 49,
+      "timestamp": 1304,
+      "dhash": "c024c03eec1ced64ac74a88cdb34db84db8cdbc4db5cda18dba4dba4e458ecdc",
+      "dhash_dist": 0.1016,
+      "time_gap": 19,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_050_1305s.jpg",
+      "index": 50,
+      "timestamp": 1305,
+      "dhash": "c624c13ee69ce6e4a674a68cceb4d784e68ccec4c6dcde98d9a4dba4e458ecdc",
+      "dhash_dist": 0.1445,
+      "time_gap": 1,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_051_1306s.jpg",
+      "index": 51,
+      "timestamp": 1306,
+      "dhash": "c024c01ee41ced64ac74b48cd334d784f78cf1c4b35cba18b9a4bba48c58bcdc",
+      "dhash_dist": 0.1797,
+      "time_gap": 1,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_052_1307s.jpg",
+      "index": 52,
+      "timestamp": 1307,
+      "dhash": "c024c01ee41ced64ac74b68cd97cd96cf8ecf1e4b35cb818b9a4bba48c58bcdc",
+      "dhash_dist": 0.0781,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_053_1314s.jpg",
+      "index": 53,
+      "timestamp": 1314,
+      "dhash": "c024c004a404e404a404a404c804c004c004c004c80480048004c2149cdcbcd8",
+      "dhash_dist": 0.2969,
+      "time_gap": 7,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_054_1325s.jpg",
+      "index": 54,
+      "timestamp": 1325,
+      "dhash": "c0a4c004e124e524a4c48404c804c004c004c004c80480048804c224bcfcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 11,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_055_1331s.jpg",
+      "index": 55,
+      "timestamp": 1331,
+      "dhash": "c064c204e894e404c4448404c804c004c004c004c80480048804c224bcdcbcd8",
+      "dhash_dist": 0.0547,
+      "time_gap": 6,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_056_1343s.jpg",
+      "index": 56,
+      "timestamp": 1343,
+      "dhash": "c224c0c4e424e524a524a524c324d124c904c044c80480048804c224bcfcbcd8",
+      "dhash_dist": 0.1211,
+      "time_gap": 12,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_057_1344s.jpg",
+      "index": 57,
+      "timestamp": 1344,
+      "dhash": "c224c0c4e424e52485048444c804c004c004c004c80480048804c224bcfcbcd8",
+      "dhash_dist": 0.0625,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_058_1349s.jpg",
+      "index": 58,
+      "timestamp": 1349,
+      "dhash": "c224c204e444a404e404a404c804c004c004c004c80480048804c2a4bcdcbcd8",
+      "dhash_dist": 0.0586,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_059_1354s.jpg",
+      "index": 59,
+      "timestamp": 1354,
+      "dhash": "c030c004e484e404a404a404c804c0048a2480848004b2449004e284bcfcbcdc",
+      "dhash_dist": 0.1016,
+      "time_gap": 5,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_060_1366s.jpg",
+      "index": 60,
+      "timestamp": 1366,
+      "dhash": "c024c004e484a404e4048404c804c004800480848004a4449804e224bcfcbcdc",
+      "dhash_dist": 0.0547,
+      "time_gap": 12,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_061_1377s.jpg",
+      "index": 61,
+      "timestamp": 1377,
+      "dhash": "c024c094c424e52485248524c844c004800480848004a4449804e324bcfcbcdc",
+      "dhash_dist": 0.0625,
+      "time_gap": 11,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_062_1381s.jpg",
+      "index": 62,
+      "timestamp": 1381,
+      "dhash": "c224c4a4c484e60484048404c804c004800480848004a4249804e224bcfcbcdc",
+      "dhash_dist": 0.0664,
+      "time_gap": 4,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_063_1384s.jpg",
+      "index": 63,
+      "timestamp": 1384,
+      "dhash": "c0e48324c524c4c4c504a404c804c004800480848004a4449804e224bcfcbcdc",
+      "dhash_dist": 0.0781,
+      "time_gap": 3,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_064_1394s.jpg",
+      "index": 64,
+      "timestamp": 1394,
+      "dhash": "c030c124e484e484a504a404c804c004880480848004a884a004e3a4bcfcbcdc",
+      "dhash_dist": 0.0938,
+      "time_gap": 10,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_065_1403s.jpg",
+      "index": 65,
+      "timestamp": 1403,
+      "dhash": "c024c004e404e404e504a404c804c004800480848404a484a804e2a4bcdcbcdc",
+      "dhash_dist": 0.0547,
+      "time_gap": 9,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_066_1421s.jpg",
+      "index": 66,
+      "timestamp": 1421,
+      "dhash": "c024c0c4c424e524852484c4c804c004800480848404a444a804c324bcfcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 18,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_067_1426s.jpg",
+      "index": 67,
+      "timestamp": 1426,
+      "dhash": "c0248004c104c404c404a404c804c004820480848404a444a804e224bcfcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_068_1448s.jpg",
+      "index": 68,
+      "timestamp": 1448,
+      "dhash": "c030c014a004e404a404a404c804c004800480848004b4849004c224bcfcbcdc",
+      "dhash_dist": 0.0742,
+      "time_gap": 22,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_069_1462s.jpg",
+      "index": 69,
+      "timestamp": 1462,
+      "dhash": "c024c004e504e404a4048404c804c004840481248884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0742,
+      "time_gap": 14,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_070_1484s.jpg",
+      "index": 70,
+      "timestamp": 1484,
+      "dhash": "c024c304e104a486e404a404c804c004842480c4a884a0048404e2a4bcfcbcdc",
+      "dhash_dist": 0.0586,
+      "time_gap": 22,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_071_1490s.jpg",
+      "index": 71,
+      "timestamp": 1490,
+      "dhash": "c024c024e404a484a404a504c804c004840481248884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0586,
+      "time_gap": 6,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_072_1491s.jpg",
+      "index": 72,
+      "timestamp": 1491,
+      "dhash": "c024c084c124e524850484c4c804c004840481248884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0625,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_073_1494s.jpg",
+      "index": 73,
+      "timestamp": 1494,
+      "dhash": "c064c004e504e444a4048504c804c004842480c4a884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0742,
+      "time_gap": 3,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_074_1499s.jpg",
+      "index": 74,
+      "timestamp": 1499,
+      "dhash": "c124c004c4c4e42485248124c124d32491248844a804a0048404e224bcfcbcdc",
+      "dhash_dist": 0.1016,
+      "time_gap": 5,
+      "change_class": "medium"
+    },
+    {
+      "name": "golden_075_1500s.jpg",
+      "index": 75,
+      "timestamp": 1500,
+      "dhash": "c124c024c4c6e42485248124c924c044800480a4a884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0625,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_076_1502s.jpg",
+      "index": 76,
+      "timestamp": 1502,
+      "dhash": "c124c0a4e004a004a484a404c804c004840480a4a884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.082,
+      "time_gap": 2,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_077_1512s.jpg",
+      "index": 77,
+      "timestamp": 1512,
+      "dhash": "c124c404e406a104a494a4ccce4cc004840480a48804a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0625,
+      "time_gap": 10,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_078_1517s.jpg",
+      "index": 78,
+      "timestamp": 1517,
+      "dhash": "c124c004e406a104e404a404c804c004840480c4a884a0048404e224bcfcbcdc",
+      "dhash_dist": 0.0586,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_079_1519s.jpg",
+      "index": 79,
+      "timestamp": 1519,
+      "dhash": "c130c014e406e104a404a404c804c004882480848004b5449004e224bcfcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 2,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_080_1524s.jpg",
+      "index": 80,
+      "timestamp": 1524,
+      "dhash": "c230c014e406e004a404a404c804c00488048084c40484848404e224bcfcbcdc",
+      "dhash_dist": 0.0508,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_081_1528s.jpg",
+      "index": 81,
+      "timestamp": 1528,
+      "dhash": "c124c004e006c004a404a404c804c00482148884c0048444a404e224bcfcbcdc",
+      "dhash_dist": 0.0586,
+      "time_gap": 4,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_082_1534s.jpg",
+      "index": 82,
+      "timestamp": 1534,
+      "dhash": "c12480a4c006c004e484a404c804c00488248084c804c484a404e2a4bcfcbcdc",
+      "dhash_dist": 0.0625,
+      "time_gap": 6,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_083_1539s.jpg",
+      "index": 83,
+      "timestamp": 1539,
+      "dhash": "c130c0a4e406e004a4848404c884c084882480848004b0849004e2a4bcfcbcdc",
+      "dhash_dist": 0.0742,
+      "time_gap": 5,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_084_1545s.jpg",
+      "index": 84,
+      "timestamp": 1545,
+      "dhash": "c230c014c406e404a4848404c884c084820480848004aa849004e2a4bcdcbcdc",
+      "dhash_dist": 0.0547,
+      "time_gap": 6,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_085_1549s.jpg",
+      "index": 85,
+      "timestamp": 1549,
+      "dhash": "c224c004c006e004c484a404c804c004810485448004a0848444e284bcdcbcdc",
+      "dhash_dist": 0.0859,
+      "time_gap": 4,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_086_1552s.jpg",
+      "index": 86,
+      "timestamp": 1552,
+      "dhash": "c1248004e006c1246484a404c804c004800481448284a8048144e2a4bcdcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 3,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_087_1553s.jpg",
+      "index": 87,
+      "timestamp": 1553,
+      "dhash": "c124c004a006e124a484a404c804c004800485148044a0448414e284bcdcbcdc",
+      "dhash_dist": 0.0703,
+      "time_gap": 1,
+      "change_class": "low"
+    },
+    {
+      "name": "golden_088_1564s.jpg",
+      "index": 88,
+      "timestamp": 1564,
+      "dhash": "c124c084e406e104a484a404c804c004800484a48284a0848104e2a4bcdcbcdc",
+      "dhash_dist": 0.0664,
+      "time_gap": 11,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_089_1575s.jpg",
+      "index": 89,
+      "timestamp": 1575,
+      "dhash": "c124c004e406e104a4848404c804c014c004c004c80480048804c284bcdcbcd8",
+      "dhash_dist": 0.0742,
+      "time_gap": 11,
+      "change_class": "boundary"
+    },
+    {
+      "name": "golden_090_1579s.jpg",
+      "index": 90,
+      "timestamp": 1579,
+      "dhash": "c824c91ee41ced64ac74948cd334f784f78cf1c4f35cfa18f9a4d3a4ac78bcdc",
+      "dhash_dist": 0.3008,
+      "time_gap": 4,
+      "change_class": "boundary"
+    }
+  ],
+  "scenes": [
+    {
+      "id": 0,
+      "start": 0,
+      "end": 0,
+      "count": 1,
+      "ts_range": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": 1,
+      "start": 1,
+      "end": 1,
+      "count": 1,
+      "ts_range": [
+        2,
+        2
+      ]
+    },
+    {
+      "id": 2,
+      "start": 2,
+      "end": 2,
+      "count": 1,
+      "ts_range": [
+        12,
+        12
+      ]
+    },
+    {
+      "id": 3,
+      "start": 3,
+      "end": 3,
+      "count": 1,
+      "ts_range": [
+        29,
+        29
+      ]
+    },
+    {
+      "id": 4,
+      "start": 4,
+      "end": 5,
+      "count": 2,
+      "ts_range": [
+        65,
+        66
+      ]
+    },
+    {
+      "id": 5,
+      "start": 6,
+      "end": 6,
+      "count": 1,
+      "ts_range": [
+        92,
+        92
+      ]
+    },
+    {
+      "id": 6,
+      "start": 7,
+      "end": 7,
+      "count": 1,
+      "ts_range": [
+        103,
+        103
+      ]
+    },
+    {
+      "id": 7,
+      "start": 8,
+      "end": 9,
+      "count": 2,
+      "ts_range": [
+        137,
+        141
+      ]
+    },
+    {
+      "id": 8,
+      "start": 10,
+      "end": 10,
+      "count": 1,
+      "ts_range": [
+        154,
+        154
+      ]
+    },
+    {
+      "id": 9,
+      "start": 11,
+      "end": 11,
+      "count": 1,
+      "ts_range": [
+        197,
+        197
+      ]
+    },
+    {
+      "id": 10,
+      "start": 12,
+      "end": 13,
+      "count": 2,
+      "ts_range": [
+        210,
+        215
+      ]
+    },
+    {
+      "id": 11,
+      "start": 14,
+      "end": 14,
+      "count": 1,
+      "ts_range": [
+        220,
+        220
+      ]
+    },
+    {
+      "id": 12,
+      "start": 15,
+      "end": 15,
+      "count": 1,
+      "ts_range": [
+        239,
+        239
+      ]
+    },
+    {
+      "id": 13,
+      "start": 16,
+      "end": 16,
+      "count": 1,
+      "ts_range": [
+        257,
+        257
+      ]
+    },
+    {
+      "id": 14,
+      "start": 17,
+      "end": 17,
+      "count": 1,
+      "ts_range": [
+        318,
+        318
+      ]
+    },
+    {
+      "id": 15,
+      "start": 18,
+      "end": 18,
+      "count": 1,
+      "ts_range": [
+        355,
+        355
+      ]
+    },
+    {
+      "id": 16,
+      "start": 19,
+      "end": 19,
+      "count": 1,
+      "ts_range": [
+        529,
+        529
+      ]
+    },
+    {
+      "id": 17,
+      "start": 20,
+      "end": 20,
+      "count": 1,
+      "ts_range": [
+        608,
+        608
+      ]
+    },
+    {
+      "id": 18,
+      "start": 21,
+      "end": 21,
+      "count": 1,
+      "ts_range": [
+        621,
+        621
+      ]
+    },
+    {
+      "id": 19,
+      "start": 22,
+      "end": 23,
+      "count": 2,
+      "ts_range": [
+        761,
+        764
+      ]
+    },
+    {
+      "id": 20,
+      "start": 24,
+      "end": 24,
+      "count": 1,
+      "ts_range": [
+        770,
+        770
+      ]
+    },
+    {
+      "id": 21,
+      "start": 25,
+      "end": 25,
+      "count": 1,
+      "ts_range": [
+        795,
+        795
+      ]
+    },
+    {
+      "id": 22,
+      "start": 26,
+      "end": 26,
+      "count": 1,
+      "ts_range": [
+        928,
+        928
+      ]
+    },
+    {
+      "id": 23,
+      "start": 27,
+      "end": 34,
+      "count": 8,
+      "ts_range": [
+        988,
+        1021
+      ]
+    },
+    {
+      "id": 24,
+      "start": 35,
+      "end": 35,
+      "count": 1,
+      "ts_range": [
+        1055,
+        1055
+      ]
+    },
+    {
+      "id": 25,
+      "start": 36,
+      "end": 36,
+      "count": 1,
+      "ts_range": [
+        1063,
+        1063
+      ]
+    },
+    {
+      "id": 26,
+      "start": 37,
+      "end": 37,
+      "count": 1,
+      "ts_range": [
+        1143,
+        1143
+      ]
+    },
+    {
+      "id": 27,
+      "start": 38,
+      "end": 41,
+      "count": 4,
+      "ts_range": [
+        1189,
+        1194
+      ]
+    },
+    {
+      "id": 28,
+      "start": 42,
+      "end": 42,
+      "count": 1,
+      "ts_range": [
+        1220,
+        1220
+      ]
+    },
+    {
+      "id": 29,
+      "start": 43,
+      "end": 45,
+      "count": 3,
+      "ts_range": [
+        1227,
+        1236
+      ]
+    },
+    {
+      "id": 30,
+      "start": 46,
+      "end": 46,
+      "count": 1,
+      "ts_range": [
+        1268,
+        1268
+      ]
+    },
+    {
+      "id": 31,
+      "start": 47,
+      "end": 48,
+      "count": 2,
+      "ts_range": [
+        1276,
+        1285
+      ]
+    },
+    {
+      "id": 32,
+      "start": 49,
+      "end": 52,
+      "count": 4,
+      "ts_range": [
+        1304,
+        1307
+      ]
+    },
+    {
+      "id": 33,
+      "start": 53,
+      "end": 53,
+      "count": 1,
+      "ts_range": [
+        1314,
+        1314
+      ]
+    },
+    {
+      "id": 34,
+      "start": 54,
+      "end": 55,
+      "count": 2,
+      "ts_range": [
+        1325,
+        1331
+      ]
+    },
+    {
+      "id": 35,
+      "start": 56,
+      "end": 59,
+      "count": 4,
+      "ts_range": [
+        1343,
+        1354
+      ]
+    },
+    {
+      "id": 36,
+      "start": 60,
+      "end": 60,
+      "count": 1,
+      "ts_range": [
+        1366,
+        1366
+      ]
+    },
+    {
+      "id": 37,
+      "start": 61,
+      "end": 65,
+      "count": 5,
+      "ts_range": [
+        1377,
+        1403
+      ]
+    },
+    {
+      "id": 38,
+      "start": 66,
+      "end": 67,
+      "count": 2,
+      "ts_range": [
+        1421,
+        1426
+      ]
+    },
+    {
+      "id": 39,
+      "start": 68,
+      "end": 68,
+      "count": 1,
+      "ts_range": [
+        1448,
+        1448
+      ]
+    },
+    {
+      "id": 40,
+      "start": 69,
+      "end": 69,
+      "count": 1,
+      "ts_range": [
+        1462,
+        1462
+      ]
+    },
+    {
+      "id": 41,
+      "start": 70,
+      "end": 87,
+      "count": 18,
+      "ts_range": [
+        1484,
+        1553
+      ]
+    },
+    {
+      "id": 42,
+      "start": 88,
+      "end": 88,
+      "count": 1,
+      "ts_range": [
+        1564,
+        1564
+      ]
+    },
+    {
+      "id": 43,
+      "start": 89,
+      "end": 89,
+      "count": 1,
+      "ts_range": [
+        1575,
+        1575
+      ]
+    },
+    {
+      "id": 44,
+      "start": 90,
+      "end": 90,
+      "count": 1,
+      "ts_range": [
+        1579,
+        1579
+      ]
+    }
+  ],
+  "complete": true
+}

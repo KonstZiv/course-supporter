@@ -1,8 +1,8 @@
 # VD-000: Підготовка середовища
 
-**Статус:** TODO
+**Статус:** DONE
 **Фаза:** 0 — Підготовка
 **Пріоритет:** Critical
-**Блокує:** VD-SPIKE-A, VD-SPIKE-B, VD-SPIKE-C, всі VD-001+
+**Блокує:** VD-001+
 
-Встановити opencv, Pillow, imagehash як `[vd]` optional deps. Завантажити тестове відео (yt-dlp). Smoke test.
+Встановлено opencv, Pillow, imagehash як `[vd]` optional deps. Тестові відео: sample.mp4 (10 хв), sample2.mp4 (27 хв). Smoke test passed.

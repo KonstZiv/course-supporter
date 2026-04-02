@@ -1,9 +1,9 @@
 # VD-SPIKE-B: Vision LLM — описи, OCR, combined prompt
 
-**Статус:** TODO
+**Статус:** DONE
 **Фаза:** 2 — Spike
 **Пріоритет:** Critical
 **Залежності:** VD-SPIKE-A
-**Блокує:** VD-SPIKE-C (умовно), VD-001+
+**Результати:** `VD-SPIKE-REPORT.md`, pipeline state в `pipeline/`, ground truth в `ground-truth/`
 
-7 тестів Vision LLM (Gemini Flash/Pro, GPT-4o, Claude) на golden frames: описи, text extraction (Vision LLM як OCR), combined prompt, STT context, two-pass, crop strategy. **КЛЮЧОВЕ РІШЕННЯ:** чи потрібен Stage C (OCR engine)?
+Обрана модель: gemini-3.1-flash-lite-preview (99.3% accuracy). Stage C (OCR) скіпнуто. Prompt v3 (Markdown). Hierarchical memory: instant→scene→course.

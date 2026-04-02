@@ -119,52 +119,79 @@ def load_ground_truth(frame_name: str) -> str:
     return ""
 
 
+def _extract_code_blocks(text: str) -> str:
+    """Extract content from fenced code blocks (```...```)."""
+    blocks: list[str] = []
+    in_block = False
+    current: list[str] = []
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            if in_block:
+                blocks.append("\n".join(current))
+                current = []
+                in_block = False
+            else:
+                in_block = True
+        elif in_block:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return "\n---\n".join(blocks)
+
+
+def _normalize_response(text: str) -> str:
+    """Extract comparable text from a response.
+
+    Handles JSON combined-prompt responses by extracting `extracted_text`.
+    Falls back to extracting code blocks for OCR-only responses.
+    """
+    stripped = text.strip()
+
+    # Strip ```json wrapper if present
+    inner = stripped
+    if inner.startswith("```"):
+        lines = inner.splitlines()
+        lines = lines[1:]  # remove opening ```json
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        inner = "\n".join(lines)
+
+    # Try JSON parse → extract "extracted_text" field
+    try:
+        data = json.loads(inner)
+        if isinstance(data, dict) and "extracted_text" in data:
+            return data["extracted_text"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Not JSON — extract code blocks (OCR-only prompt)
+    blocks = _extract_code_blocks(text)
+    return blocks if blocks else text
+
+
 def compute_code_accuracy(extracted: str, ground_truth: str) -> float:
     """Compute character-level accuracy of code extraction.
 
-    Extracts code blocks from both texts and compares.
+    Normalizes both response and ground truth before comparing.
     """
+    ex_text = _normalize_response(extracted)
+    gt_text = _extract_code_blocks(ground_truth)  # GT always has ``` blocks
 
-    def extract_code_blocks(text: str) -> str:
-        blocks: list[str] = []
-        in_block = False
-        current: list[str] = []
-        for line in text.splitlines():
-            if line.strip().startswith("```"):
-                if in_block:
-                    blocks.append("\n".join(current))
-                    current = []
-                    in_block = False
-                else:
-                    in_block = True
-            elif in_block:
-                current.append(line)
-        if current:
-            blocks.append("\n".join(current))
-        return "\n---\n".join(blocks)
+    if not gt_text.strip():
+        return 1.0 if not ex_text.strip() else 0.0
 
-    gt_code = extract_code_blocks(ground_truth)
-    ex_code = extract_code_blocks(extracted)
-
-    if not gt_code:
-        return 1.0 if not ex_code else 0.0
-
-    # Character-level similarity (simple)
-    gt_chars = gt_code.strip()
-    ex_chars = ex_code.strip()
+    gt_chars = gt_text.strip()
+    ex_chars = ex_text.strip()
 
     if not gt_chars:
         return 1.0
 
-    # Use longest common subsequence ratio
+    # Greedy sequential character matching
     matches = 0
     gt_idx = 0
     ex_idx = 0
-    gt_len = len(gt_chars)
-    ex_len = len(ex_chars)
 
-    # Simple sequential matching
-    while gt_idx < gt_len and ex_idx < ex_len:
+    while gt_idx < len(gt_chars) and ex_idx < len(ex_chars):
         if gt_chars[gt_idx] == ex_chars[ex_idx]:
             matches += 1
             gt_idx += 1
@@ -172,7 +199,7 @@ def compute_code_accuracy(extracted: str, ground_truth: str) -> float:
         else:
             ex_idx += 1
 
-    return matches / gt_len if gt_len > 0 else 1.0
+    return matches / len(gt_chars)
 
 
 # ─── Gemini ──────────────────────────────────────────────────────────
@@ -207,11 +234,15 @@ def _get_gemini_keys() -> list[str]:
 def test_gemini(
     frames: list[Path],
     prompt: str,
-    model_id: str = "gemini-2.0-flash",
+    model_id: str = "gemini-2.5-flash",
     max_retries_per_frame: int = 6,
+    existing_results: list[dict] | None = None,
+    on_frame_done: None | object = None,
 ) -> dict:
     """Test Gemini Vision on frames with key rotation and rate limit handling.
 
+    Resumes from existing_results (skips already-done frames).
+    Calls on_frame_done() after each successful frame for incremental save.
     Stops early if all keys are exhausted, returning partial results.
     """
     keys = _get_gemini_keys()
@@ -219,16 +250,23 @@ def test_gemini(
         return {"error": "No GEMINI_API_KEY"}
 
     print(f"  Using {len(keys)} Gemini key(s)")
+
+    # Resume: collect already-done frame names
+    done_frames = {r["frame"] for r in (existing_results or [])}
+    results: list[dict] = list(existing_results or [])
+    if done_frames:
+        print(f"  Resuming: {len(done_frames)} frames already done")
+
     key_idx = 0
     all_keys_exhausted = False
-
-    results: list[dict] = []
-    total_input = 0
-    total_output = 0
+    total_input = sum(r.get("input_tokens", 0) for r in results)
+    total_output = sum(r.get("output_tokens", 0) for r in results)
 
     for i, frame_path in enumerate(frames):
         if all_keys_exhausted:
             break
+        if frame_path.name in done_frames:
+            continue
 
         img_data = frame_path.read_bytes()
         frame_done = False
@@ -276,15 +314,17 @@ def test_gemini(
                 print(
                     f"    [{i + 1}/{len(frames)}] {frame_path.name} OK ({latency:.1f}s)"
                 )
+                # Incremental save callback
+                if on_frame_done is not None:
+                    on_frame_done()  # type: ignore[operator]
                 if i < len(frames) - 1:
-                    time.sleep(3)
+                    time.sleep(13)  # 5 RPM limit → 12s+ between requests
                 break
 
             except Exception as e:
                 err = str(e)
                 if "429" in err or "RESOURCE_EXHAUSTED" in err:
                     key_idx += 1
-                    # Check if we've tried all keys twice
                     if attempt >= len(keys) * 2 - 1:
                         print(
                             f"    All keys exhausted after {attempt + 1}"
@@ -472,19 +512,68 @@ def main() -> None:
             status = f"{n} frames" + (" (PARTIAL)" if partial else "")
             print(f"  {k}: {status}")
 
-    # ── Test 1: Combined prompt — Gemini Flash ────────────────
-    test_key = "gemini_flash_combined"
-    if _should_run(all_results, test_key):
+    def _run_gemini_test(
+        test_key: str,
+        label: str,
+        frames: list[Path],
+        prompt: str,
+        has_accuracy: bool = True,
+    ) -> None:
+        """Run a single Gemini test with frame-level resume and save."""
+        if not _should_run(all_results, test_key):
+            n = len(all_results[test_key].get("raw", []))
+            avg = all_results[test_key].get("avg_accuracy", "")
+            extra = f", avg={avg}%" if avg else ""
+            print(f"\n  [SKIP] {label} done: {n} frames{extra}")
+            return
+
         print("\n" + "─" * 70)
-        print("TEST 1: Combined prompt — Gemini Flash")
+        print(f"{label}")
         print("─" * 70)
 
-        data = test_gemini(gt_frame_paths, COMBINED_PROMPT, "gemini-2.0-flash")
-        if "error" not in data:
+        existing_raw = all_results.get(test_key, {}).get("raw", [])
+
+        def _save_after_frame() -> None:
+            """Incremental save after each frame."""
+            if has_accuracy:
+                accs, avg = compute_accuracies({"raw": data["results"]})
+                all_results[test_key] = {
+                    "model": "gemini-2.5-flash",
+                    "prompt": test_key.split("_", 2)[-1],
+                    "accuracies": accs,
+                    "avg_accuracy": avg,
+                    "total_input_tokens": data["total_input_tokens"],
+                    "total_output_tokens": data["total_output_tokens"],
+                    "raw": data["results"],
+                    "partial": True,  # still in progress
+                }
+            else:
+                all_results[test_key] = {
+                    "model": "gemini-2.5-flash",
+                    "prompt": "describe_only",
+                    "total_input_tokens": data["total_input_tokens"],
+                    "total_output_tokens": data["total_output_tokens"],
+                    "raw": data["results"],
+                    "partial": True,
+                }
+            save_results(all_results)
+
+        data = test_gemini(
+            frames,
+            prompt,
+            "gemini-2.5-flash",
+            existing_results=existing_raw,
+            on_frame_done=_save_after_frame,
+        )
+
+        if "error" in data:
+            all_results[test_key] = {"error": data["error"], "raw": []}
+            print(f"  Error: {data['error']}")
+        elif has_accuracy:
             accs, avg = compute_accuracies({"raw": data["results"]})
             all_results[test_key] = {
-                "model": "gemini-2.0-flash",
-                "prompt": "combined",
+                "model": "gemini-2.5-flash",
+                "prompt": test_key.split("_", 2)[-1],
                 "accuracies": accs,
                 "avg_accuracy": avg,
                 "total_input_tokens": data["total_input_tokens"],
@@ -494,13 +583,26 @@ def main() -> None:
             }
             print(f"  Avg accuracy: {avg}% ({len(data['results'])} frames)")
         else:
-            all_results[test_key] = {"error": data["error"], "raw": []}
-            print(f"  Error: {data['error']}")
+            all_results[test_key] = {
+                "model": "gemini-2.5-flash",
+                "prompt": "describe_only",
+                "total_input_tokens": data["total_input_tokens"],
+                "total_output_tokens": data["total_output_tokens"],
+                "raw": data["results"],
+                "partial": data.get("partial", False),
+            }
+            for r in data["results"]:
+                preview = r["response"][:100].replace("\n", " ")
+                print(f"    {r['frame']}: {preview}...")
         save_results(all_results)
-    else:
-        n = len(all_results[test_key].get("raw", []))
-        avg = all_results[test_key].get("avg_accuracy", 0)
-        print(f"\n  [SKIP] Test 1 done: {n} frames, avg={avg}%")
+
+    # ── Test 1: Combined prompt — Gemini Flash ────────────────
+    _run_gemini_test(
+        "gemini_flash_combined",
+        "TEST 1: Combined prompt — Gemini 2.5 Flash",
+        gt_frame_paths,
+        COMBINED_PROMPT,
+    )
 
     # ── Test 2: Combined prompt — GPT-4o ──────────────────────
     test_key = "gpt4o_combined"
@@ -531,62 +633,21 @@ def main() -> None:
         print(f"\n  [SKIP] Test 2 already done: avg={avg}%")
 
     # ── Test 3: OCR-only prompt — Gemini Flash ────────────────
-    test_key = "gemini_flash_ocr"
-    if _should_run(all_results, test_key):
-        print("\n" + "─" * 70)
-        print("TEST 3: OCR-only prompt — Gemini Flash")
-        print("─" * 70)
-
-        data = test_gemini(gt_frame_paths, OCR_PROMPT, "gemini-2.0-flash")
-        if "error" not in data:
-            accs, avg = compute_accuracies({"raw": data["results"]})
-            all_results[test_key] = {
-                "model": "gemini-2.0-flash",
-                "prompt": "ocr_only",
-                "accuracies": accs,
-                "avg_accuracy": avg,
-                "total_input_tokens": data["total_input_tokens"],
-                "total_output_tokens": data["total_output_tokens"],
-                "raw": data["results"],
-                "partial": data.get("partial", False),
-            }
-            print(f"  Avg accuracy: {avg}% ({len(data['results'])} frames)")
-        else:
-            all_results[test_key] = {"error": data["error"], "raw": []}
-            print(f"  Error: {data['error']}")
-        save_results(all_results)
-    else:
-        n = len(all_results[test_key].get("raw", []))
-        avg = all_results[test_key].get("avg_accuracy", 0)
-        print(f"\n  [SKIP] Test 3 done: {n} frames, avg={avg}%")
+    _run_gemini_test(
+        "gemini_flash_ocr",
+        "TEST 3: OCR-only prompt — Gemini 2.5 Flash",
+        gt_frame_paths,
+        OCR_PROMPT,
+    )
 
     # ── Test 4: Description-only — Gemini Flash ───────────────
-    test_key = "gemini_flash_describe"
-    if _should_run(all_results, test_key):
-        print("\n" + "─" * 70)
-        print("TEST 4: Description-only — Gemini Flash")
-        print("─" * 70)
-
-        data = test_gemini(frame_paths, DESCRIBE_PROMPT, "gemini-2.0-flash")
-        if "error" not in data:
-            all_results[test_key] = {
-                "model": "gemini-2.0-flash",
-                "prompt": "describe_only",
-                "total_input_tokens": data["total_input_tokens"],
-                "total_output_tokens": data["total_output_tokens"],
-                "raw": data["results"],
-                "partial": data.get("partial", False),
-            }
-            for r in data["results"]:
-                preview = r["response"][:100].replace("\n", " ")
-                print(f"    {r['frame']}: {preview}...")
-        else:
-            all_results[test_key] = {"error": data["error"], "raw": []}
-            print(f"  Error: {data['error']}")
-        save_results(all_results)
-    else:
-        n = len(all_results[test_key].get("raw", []))
-        print(f"\n  [SKIP] Test 4 done: {n} frames")
+    _run_gemini_test(
+        "gemini_flash_describe",
+        "TEST 4: Description-only — Gemini 2.5 Flash",
+        frame_paths,
+        DESCRIBE_PROMPT,
+        has_accuracy=False,
+    )
 
     # ── Summary ───────────────────────────────────────────────
     print("\n" + "=" * 70)

@@ -1,7 +1,7 @@
 # Video Processing Pipeline — Повний план (Березень 2026)
 
 **Дата:** 2026-03-31
-**Статус:** Final — очікує результатів spike-досліджень
+**Статус:** ⚠️ SUPERSEDED — цей документ є історичним. Актуальний план: [`VD-IMPLEMENTATION-PLAN.md`](VD-IMPLEMENTATION-PLAN.md). Результати spike: [`VD-SPIKE-REPORT.md`](VD-SPIKE-REPORT.md).
 **Попередній spike:** [STT Spike Report](../stt-spike/STT-SPIKE-REPORT-UA.md) (2026-03-30)
 
 ---

@@ -172,6 +172,10 @@ module = "iso639.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "PIL.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "cv2.*"
 ignore_missing_imports = true
 

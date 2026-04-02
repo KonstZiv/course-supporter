@@ -1,6 +1,6 @@
 # VD-001: Pydantic моделі (schemas.py)
 
-**Статус:** TODO
+**Статус:** DONE
 **Фаза:** 4 — Implementation
 **Пріоритет:** Critical
 **Залежності:** Spikes A+B

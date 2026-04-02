@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from course_supporter.vd.frame_sampler import FrameSampler, _FrameMetrics
+from course_supporter.vd.frame_sampler import (
+    FrameSampler,
+    _FrameEntry,
+    _FrameMetrics,
+)
 from course_supporter.vd.schemas import (
     ChangeClass,
     FrameSource,
@@ -17,17 +21,17 @@ def _make_entry(
     dhash_val: int = 0,
     *,
     is_fill: bool = False,
-) -> dict[str, object]:
+) -> _FrameEntry:
     """Create a mock frame entry for testing pure dedup/segmentation."""
     mock_hash = MagicMock()
     mock_hash.__sub__ = MagicMock(return_value=dhash_val)
     mock_hash.__str__ = MagicMock(return_value=f"hash_{ts}")
-    return {
-        "path": MagicMock(name=f"frame_{ts}s.jpg"),
-        "timestamp": ts,
-        "dhash": mock_hash,
-        "is_fill": is_fill,
-    }
+    return _FrameEntry(
+        path=MagicMock(name=f"frame_{ts}s.jpg"),
+        timestamp=ts,
+        dhash=mock_hash,
+        is_fill=is_fill,
+    )
 
 
 def _patch_compare(metrics: _FrameMetrics):

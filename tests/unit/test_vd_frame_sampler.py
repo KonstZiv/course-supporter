@@ -196,10 +196,16 @@ class TestSegmentScenes:
                 e["dhash"].__sub__ = MagicMock(return_value=2)
             entries.append(e)
 
-        # Color histogram confirms: different content
-        with patch(
-            "course_supporter.vd.frame_sampler._color_hist_distance",
-            return_value=0.5,
+        # Color histogram confirms + flow says no coherent motion
+        with (
+            patch(
+                "course_supporter.vd.frame_sampler._color_hist_distance",
+                return_value=0.5,
+            ),
+            patch(
+                "course_supporter.vd.frame_sampler._flow_coherence",
+                return_value=0.1,
+            ),
         ):
             frames, scenes = FrameSampler._segment_scenes(
                 entries,

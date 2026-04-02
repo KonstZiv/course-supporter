@@ -43,22 +43,25 @@ class TestDedupWithCooldown:
         result = FrameSampler._dedup_with_cooldown(entries, SamplingParams())
         assert len(result) == 1
 
-    def test_keeps_different_frames(self) -> None:
-        """Frames with distance > threshold should be kept."""
-        p = SamplingParams(hash_size=16, dhash_threshold=0.05)
+    def test_keeps_different_frames_before_coding_mode(self) -> None:
+        """Unstable frames below cooldown_count are kept."""
+        p = SamplingParams(
+            hash_size=16,
+            dhash_threshold=0.05,
+            pip_cooldown_count=3,
+        )
         threshold = int(16 * 16 * 0.05)  # = 12
 
+        # 2 consecutive unstable frames (< cooldown_count=3) → kept
         entries = [_make_entry(0.0)]
-        for i in range(1, 5):
+        for i in range(1, 3):
             e = _make_entry(float(i * 2))
-            # Make each frame differ by more than threshold
             e["dhash"].__sub__ = MagicMock(return_value=threshold + 5)
             entries.append(e)
 
         result = FrameSampler._dedup_with_cooldown(entries, p)
-        # All should be kept (no coding mode because
-        # cooldown_count=3 and we reset consecutive after each keep)
-        assert len(result) == 5
+        # First + 2 unstable = 3 (coding mode not reached)
+        assert len(result) == 3
 
     def test_removes_similar_frames(self) -> None:
         """Frames with distance <= threshold should be removed."""
@@ -75,7 +78,7 @@ class TestDedupWithCooldown:
         assert len(result) == 1  # only first frame kept
 
     def test_coding_mode_activation(self) -> None:
-        """3+ consecutive changes should trigger coding mode."""
+        """3+ consecutive unstable frames trigger coding mode."""
         p = SamplingParams(
             hash_size=16,
             dhash_threshold=0.05,
@@ -84,17 +87,19 @@ class TestDedupWithCooldown:
         )
         threshold = int(16 * 16 * 0.05)
 
-        # Frame 0: kept (first)
-        # Frame 1-4: all exceed threshold → coding mode after frame 3
-        # Frame 5: below threshold, but not 4s stable yet
-        # Frame 6: below threshold, 4s+ stable → captured
+        # Frame 0 (0s): kept (first)
+        # Frame 1 (1s): unstable, consecutive=1 (<3) → kept
+        # Frame 2 (2s): unstable, consecutive=2 (<3) → kept
+        # Frame 3 (3s): unstable, consecutive=3 → coding_mode! → skipped
+        # Frame 4 (4s): unstable, coding_mode → skipped
+        # Frame 5 (5s): stable, coding_mode, 5-2=3s < 4s cooldown → skipped
+        # Frame 6 (9s): stable, coding_mode, 9-2=7s >= 4s cooldown → kept
         entries = [_make_entry(0.0)]
         for i in range(1, 5):
             e = _make_entry(float(i))
             e["dhash"].__sub__ = MagicMock(return_value=threshold + 10)
             entries.append(e)
 
-        # Stable frames at 5s and 9s (>4s gap)
         stable1 = _make_entry(5.0)
         stable1["dhash"].__sub__ = MagicMock(return_value=1)
         entries.append(stable1)
@@ -104,8 +109,8 @@ class TestDedupWithCooldown:
         entries.append(stable2)
 
         result = FrameSampler._dedup_with_cooldown(entries, p)
-        # First + 2 before coding mode + 1 after cooldown = 4
-        assert len(result) >= 2  # at least first + post-cooldown
+        # Frame 0 + Frame 1 + Frame 2 + Frame 6 = 4
+        assert len(result) == 4
 
 
 class TestSegmentScenes:

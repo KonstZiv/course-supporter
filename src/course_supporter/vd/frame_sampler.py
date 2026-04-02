@@ -15,7 +15,6 @@ Pipeline steps:
 from __future__ import annotations
 
 import asyncio
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -318,17 +317,13 @@ class FrameSampler:
         interval = 1.0 / p.fps
         logger.info("ffmpeg_extracted", frame_count=len(raw_paths))
 
-        # 2. PiP detection (use a denser extraction for better accuracy)
-        pip_dir = output_dir / "pip_detect"
-        pip_paths = await _ffmpeg_extract_fps(video_path, 1.0, pip_dir)
+        # 2. PiP detection (reuse raw frames to avoid second extraction)
         pip_mask = _detect_pip(
-            pip_paths,
+            raw_paths,
             width,
             height,
             confidence_threshold=0.3,
         )
-        # Clean up PiP detection frames
-        shutil.rmtree(pip_dir, ignore_errors=True)
 
         mask_rect = (
             _Rect(
@@ -411,9 +406,14 @@ class FrameSampler:
     ) -> list[dict[str, object]]:
         """dHash dedup with cooldown for continuous changes (live coding).
 
-        Spike-proven algorithm: if ``pip_cooldown_count`` consecutive frames
-        exceed the dHash threshold, enter "coding mode" and wait for
-        ``pip_cooldown_sec`` of visual stability before capturing.
+        Algorithm:
+        - Frames exceeding the dHash threshold are "unstable" (visually
+          different from the last kept frame).
+        - Isolated unstable frames are kept (slide transitions, new content).
+        - If ``pip_cooldown_count`` consecutive unstable frames are seen,
+          "coding mode" activates — all subsequent frames are skipped
+          until a stable frame appears after ``pip_cooldown_sec`` since
+          the last kept frame.
         """
         if not entries:
             return []
@@ -424,7 +424,7 @@ class FrameSampler:
         result = [entries[0]]
         consecutive = 0
         coding_mode = False
-        last_stable_ts = float(entries[0]["timestamp"])  # type: ignore[arg-type]
+        last_added_ts = float(entries[0]["timestamp"])  # type: ignore[arg-type]
 
         for entry in entries[1:]:
             h_cur: Any = entry["dhash"]
@@ -438,14 +438,13 @@ class FrameSampler:
                     coding_mode = True
                 if not coding_mode:
                     result.append(entry)
-                    consecutive = 0
+                    last_added_ts = ts
             else:
-                if coding_mode and ts - last_stable_ts >= p.pip_cooldown_sec:
-                    result.append(entry)
-                    coding_mode = False
-                    consecutive = 0
-                last_stable_ts = ts
                 consecutive = 0
+                if coding_mode and ts - last_added_ts >= p.pip_cooldown_sec:
+                    result.append(entry)
+                    last_added_ts = ts
+                    coding_mode = False
 
         return result
 

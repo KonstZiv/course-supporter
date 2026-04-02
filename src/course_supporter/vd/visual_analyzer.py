@@ -106,7 +106,7 @@ class VisualAnalyzer:
         rpm_per_key: int = 5,
         context_max_gap_sec: float = 7.0,
         max_context_images: int = 2,
-        delta_strategy: DeltaStrategy = DeltaStrategy.NONE,
+        delta_strategy: DeltaStrategy = DeltaStrategy.CONDITIONAL,
     ) -> None:
         self._key_pool = key_pool
         self._model = model

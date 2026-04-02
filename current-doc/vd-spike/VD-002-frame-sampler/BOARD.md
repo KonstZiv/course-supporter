@@ -1,6 +1,6 @@
 # VD-002: Frame Sampler
 
-**Статус:** TODO
+**Статус:** DONE
 **Фаза:** 4 — Implementation
 **Пріоритет:** High
 **Залежності:** VD-001

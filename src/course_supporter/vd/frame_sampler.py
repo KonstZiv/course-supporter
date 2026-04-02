@@ -142,7 +142,11 @@ async def _ffmpeg_extract_single(
     return process.returncode == 0 and output.exists()  # noqa: ASYNC240
 
 
-async def _get_video_resolution(video: Path) -> tuple[int, int]:
+async def _get_video_resolution(
+    video: Path,
+    *,
+    timeout_sec: float = 30.0,
+) -> tuple[int, int]:
     """Return (width, height) of the video using ffprobe."""
     process = await asyncio.create_subprocess_exec(
         "ffprobe",
@@ -158,8 +162,21 @@ async def _get_video_resolution(video: Path) -> tuple[int, int]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await process.communicate()
-    parts = stdout.decode().strip().split("x")
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(),
+            timeout=timeout_sec,
+        )
+    except TimeoutError:
+        process.kill()
+        msg = f"ffprobe timed out after {timeout_sec}s"
+        raise RuntimeError(msg) from None
+
+    raw = stdout.decode().strip()
+    parts = raw.split("x")
+    if len(parts) != 2:
+        msg = f"Cannot parse ffprobe output: {raw!r}"
+        raise RuntimeError(msg)
     return int(parts[0]), int(parts[1])
 
 

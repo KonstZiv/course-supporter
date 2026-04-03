@@ -362,11 +362,11 @@ class CrossModalAligner:
         if not segments and not stt_chunks and not vd_chunks:
             return []
 
-        # Collect all covered intervals
+        # Collect all covered intervals (segments + STT + VD)
         all_intervals: list[tuple[float, float]] = []
         for s in segments:
             all_intervals.append((s.start_sec, s.end_sec))
-        for c in stt_chunks:
+        for c in [*stt_chunks, *vd_chunks]:
             if c.start_sec is not None and c.end_sec is not None:
                 all_intervals.append((c.start_sec, c.end_sec))
 

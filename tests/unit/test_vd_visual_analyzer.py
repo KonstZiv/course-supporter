@@ -27,7 +27,7 @@ class TestLoadPrompt:
     def test_loads_full_prompt(self) -> None:
         prompt = _load_prompt("eyes_v3.txt")
         assert "## Scene Composition" in prompt
-        assert "{course_context_block}" in prompt
+        assert "{context_block}" in prompt
 
     def test_loads_delta_prompt(self) -> None:
         prompt = _load_prompt("eyes_v3_delta.txt")

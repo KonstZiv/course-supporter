@@ -405,8 +405,7 @@ class VisualAnalyzer:
                 template = _load_prompt("eyes_v3_delta.txt")
                 return template.format(
                     previous_description=prev_result.response[:2000],
-                    course_context_block=context_block,
-                    scene_context_block="",
+                    context_block=context_block,
                 )
             if self._delta_strategy == DeltaStrategy.CONDITIONAL:
                 similarity_hint = _build_similarity_hint(frame)
@@ -414,15 +413,13 @@ class VisualAnalyzer:
                 return template.format(
                     previous_description=prev_result.response[:2000],
                     similarity_hint=similarity_hint,
-                    course_context_block=context_block,
-                    scene_context_block="",
+                    context_block=context_block,
                 )
 
         # Full description (NONE strategy or first frame)
         template = _load_prompt("eyes_v3.txt")
         return template.format(
-            course_context_block=context_block,
-            scene_context_block="",
+            context_block=context_block,
         )
 
     @staticmethod

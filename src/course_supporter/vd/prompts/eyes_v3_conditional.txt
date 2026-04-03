@@ -3,7 +3,7 @@ You are analyzing a video frame. The LAST image is the MAIN frame to describe. P
 Previous frame description:
 {previous_description}
 
-{similarity_hint}{course_context_block}{scene_context_block}Your primary source is the image itself — describe exactly what you see. The context above (if provided) is supporting information: the video context tells you what this video is about overall, and the scene context tells you what is happening in the current scene. Use this context to describe the frame with greater precision — for example, to correctly name tools, identify what step of a process is shown, or understand the purpose of changes.
+{similarity_hint}{context_block}Your primary source is the image itself — describe exactly what you see. The context above (if provided) is supporting information: the video context tells you what this video is about overall, and the scene context tells you what is happening in the current scene. Use this context to describe the frame with greater precision — for example, to correctly name tools, identify what step of a process is shown, or understand the purpose of changes.
 
 Compare the MAIN frame to the previous description above.
 

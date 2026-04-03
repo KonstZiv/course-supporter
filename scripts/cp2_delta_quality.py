@@ -14,8 +14,9 @@ import asyncio
 import html
 import json
 import os
-from base64 import b64encode
 from pathlib import Path
+
+from _utils import find_frame, load_env, thumb_b64
 
 OUT_DIR = Path("tmp/cp2-delta-quality")
 
@@ -48,45 +49,6 @@ TESTS = [
 ]
 
 
-def _load_env() -> None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
-
-
-def _thumb_b64(img_path: Path, max_w: int = 500) -> str:
-    import io
-
-    from PIL import Image
-
-    img = Image.open(img_path)
-    ratio = max_w / img.width
-    new_size = (max_w, int(img.height * ratio))
-    img = img.resize(new_size, Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=80)
-    return b64encode(buf.getvalue()).decode()
-
-
-def _find_frame(frame_dir: Path, filename: str) -> Path | None:
-    direct = frame_dir / filename
-    if direct.exists():
-        return direct
-    for sub in frame_dir.iterdir():
-        if sub.is_dir():
-            candidate = sub / filename
-            if candidate.exists():
-                return candidate
-    return None
-
-
 async def run_scene_slice(
     video_name: str,
     scene_id: int,
@@ -97,7 +59,7 @@ async def run_scene_slice(
     from course_supporter.vd.schemas import DeltaStrategy, SampledFrame, Scene
     from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
-    _load_env()
+    load_env()
     raw_keys = os.environ.get("GEMINI_API_KEY", "")
     key_pool = KeyPool(raw_keys)
 
@@ -121,7 +83,7 @@ async def run_scene_slice(
     scene = Scene(**scene_data)
     frames = [SampledFrame(**f) for f in selected]
 
-    results = await analyzer.analyze_scene(scene, frames, frame_dir)
+    results, _ = await analyzer.analyze_scene(scene, frames, frame_dir)
 
     out: list[dict] = []
     for r, fd in zip(results, selected, strict=True):
@@ -167,7 +129,7 @@ def generate_html(all_results: dict[str, list[dict]]) -> str:
             video = r["_video"]
             fname = r["_filename"]
             frame_dir = Path(f"tmp/cp1-test/{video}/frames")
-            fpath = _find_frame(frame_dir, fname)
+            fpath = find_frame(frame_dir, fname)
 
             badge = (
                 "<span class='delta-badge'>DELTA</span>"
@@ -179,7 +141,7 @@ def generate_html(all_results: dict[str, list[dict]]) -> str:
             a(f"<h3>{r['frame_id']} ({r['timestamp_sec']:.0f}s) {badge}</h3>")
 
             if fpath:
-                b64 = _thumb_b64(fpath, 600)
+                b64 = thumb_b64(fpath, 600)
                 a(f"<img src='data:image/jpeg;base64,{b64}'/>")
 
             a(

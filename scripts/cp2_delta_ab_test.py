@@ -13,40 +13,14 @@ import asyncio
 import html
 import json
 import os
-from base64 import b64encode
 from pathlib import Path
+
+from _utils import find_frame, load_env, thumb_b64
 
 VIDEO_NAME = "video1_python_16min"
 SCENE_ID = 10
 OUT_DIR = Path("tmp/cp2-ab-test")
 CP1_DIR = Path("tmp/cp1-test") / VIDEO_NAME
-
-
-def _load_env() -> None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
-
-
-def _thumb_b64(img_path: Path, max_w: int = 320) -> str:
-    import io
-
-    from PIL import Image
-
-    img = Image.open(img_path)
-    ratio = max_w / img.width
-    new_size = (max_w, int(img.height * ratio))
-    img = img.resize(new_size, Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=75)
-    return b64encode(buf.getvalue()).decode()
 
 
 async def run_strategy(
@@ -60,7 +34,7 @@ async def run_strategy(
     from course_supporter.vd.schemas import DeltaStrategy
     from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
-    _load_env()
+    load_env()
     raw_keys = os.environ.get("GEMINI_API_KEY", "")
     key_pool = KeyPool(raw_keys)
 
@@ -73,9 +47,9 @@ async def run_strategy(
     )
 
     print(f"\n  Running {strategy_name} strategy...")
-    results = await analyzer.analyze_scene(
-        scene,  # type: ignore[arg-type]
-        frames,  # type: ignore[arg-type]
+    results, _ = await analyzer.analyze_scene(
+        scene,
+        frames,
         frame_dir,
     )
 
@@ -140,11 +114,11 @@ def generate_html(
         fid = frame_data["frame_id"]
         ts = frame_data["timestamp_sec"]
         cc = frame_data["change_class"]
-        fpath = _find_frame(frame_dir, frame_data["filename"])
+        fpath = find_frame(frame_dir, frame_data["filename"])
 
         a(f"<h3>Frame {i}: {fid} ({ts:.0f}s, {cc})</h3>")
         if fpath:
-            b64 = _thumb_b64(fpath, 400)
+            b64 = thumb_b64(fpath, 400)
             a(f"<img src='data:image/jpeg;base64,{b64}'/>")
 
         a("<table><tr>")
@@ -174,18 +148,6 @@ def generate_html(
 
     a("</body></html>")
     return "".join(parts)
-
-
-def _find_frame(frame_dir: Path, filename: str) -> Path | None:
-    direct = frame_dir / filename
-    if direct.exists():
-        return direct
-    for sub in frame_dir.iterdir():
-        if sub.is_dir():
-            candidate = sub / filename
-            if candidate.exists():
-                return candidate
-    return None
 
 
 async def main() -> None:

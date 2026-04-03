@@ -346,59 +346,51 @@ class TestShouldUseDelta:
             output_tokens=50,
         )
 
-    def _make_frame(self, cc: ChangeClass) -> object:
-        """Minimal object with change_class attribute."""
-        from unittest.mock import MagicMock
-
-        f = MagicMock()
-        f.change_class = cc
-        return f
-
     def test_none_never_delta(self) -> None:
         a = self._make_analyzer(DeltaStrategy.NONE)
         assert not a._should_use_delta(
-            self._make_frame(ChangeClass.LOW),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.LOW),
+            self._make_prev(),
         )
 
     def test_no_prev_never_delta(self) -> None:
         a = self._make_analyzer(DeltaStrategy.EXPLICIT)
         assert not a._should_use_delta(
-            self._make_frame(ChangeClass.LOW),
-            None,  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.LOW),
+            None,
         )
 
     def test_explicit_low_is_delta(self) -> None:
         a = self._make_analyzer(DeltaStrategy.EXPLICIT)
         assert a._should_use_delta(
-            self._make_frame(ChangeClass.LOW),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.LOW),
+            self._make_prev(),
         )
 
     def test_explicit_medium_is_delta(self) -> None:
         a = self._make_analyzer(DeltaStrategy.EXPLICIT)
         assert a._should_use_delta(
-            self._make_frame(ChangeClass.MEDIUM),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.MEDIUM),
+            self._make_prev(),
         )
 
     def test_explicit_boundary_is_full(self) -> None:
         a = self._make_analyzer(DeltaStrategy.EXPLICIT)
         assert not a._should_use_delta(
-            self._make_frame(ChangeClass.BOUNDARY),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.BOUNDARY),
+            self._make_prev(),
         )
 
     def test_explicit_first_is_full(self) -> None:
         a = self._make_analyzer(DeltaStrategy.EXPLICIT)
         assert not a._should_use_delta(
-            self._make_frame(ChangeClass.FIRST),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.FIRST),
+            self._make_prev(),
         )
 
     def test_conditional_always_with_prev(self) -> None:
         a = self._make_analyzer(DeltaStrategy.CONDITIONAL)
         assert a._should_use_delta(
-            self._make_frame(ChangeClass.BOUNDARY),
-            self._make_prev(),  # type: ignore[arg-type]
+            _make_frame(change_class=ChangeClass.BOUNDARY),
+            self._make_prev(),
         )

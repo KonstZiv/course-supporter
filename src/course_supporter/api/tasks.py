@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.agents.architect import ArchitectAgent, NodePosition
 from course_supporter.agents.reconciler import ReconcileAgent
 from course_supporter.agents.refine import RefineAgent
-from course_supporter.ingestion.factory import create_heavy_steps, create_processors
+from course_supporter.ingestion.factory import (
+    create_heavy_steps,
+    create_processors,
+    create_vd_pipeline,
+)
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import ChildSnapshotContext, NodeSummary
 from course_supporter.storage.editable_repository import EditableRepository
@@ -136,7 +140,8 @@ async def arq_ingest_material(
     log.info("ingestion_started")
 
     heavy = create_heavy_steps(router=router)
-    processors = create_processors(heavy)
+    vd = create_vd_pipeline()
+    processors = create_processors(heavy, vd_pipeline=vd)
     s3: S3Client | None = ctx.get("s3_client")
 
     async with session_factory() as session:

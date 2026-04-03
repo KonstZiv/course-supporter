@@ -24,8 +24,10 @@ from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
+    from course_supporter.config import Settings
     from course_supporter.ingestion.base import SourceProcessor
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.vd.pipeline import VDPipeline
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,13 +81,78 @@ def create_heavy_steps(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class VDModelConfig:
+    """Configuration for VD pipeline LLM calls."""
+
+    model: str = "gemini-2.5-flash"
+    fallback_model: str = "gemini-3.1-flash-lite-preview"
+    rpm_per_key: int = 5
+
+
+def create_vd_pipeline(
+    settings: Settings | None = None,
+) -> VDPipeline | None:
+    """Create VDPipeline from settings, or None if disabled/unconfigured.
+
+    Args:
+        settings: Application settings. If None, loads from get_settings().
+
+    Returns:
+        Configured VDPipeline, or None if VD is disabled or no Gemini keys.
+    """
+    if settings is None:
+        from course_supporter.config import get_settings
+
+        settings = get_settings()
+
+    if not settings.vd_enabled:
+        return None
+
+    key_pool = settings.key_pool_for("gemini")
+    if key_pool is None:
+        return None
+
+    from course_supporter.vd.frame_sampler import FrameSampler
+    from course_supporter.vd.memory_pipeline import MemoryPipeline
+    from course_supporter.vd.pipeline import VDPipeline
+    from course_supporter.vd.visual_analyzer import VisualAnalyzer
+
+    cfg = VDModelConfig(
+        model=settings.vd_model,
+        fallback_model=settings.vd_fallback_model,
+        rpm_per_key=settings.vd_rpm_per_key,
+    )
+    memory = MemoryPipeline(
+        key_pool,
+        model=cfg.model,
+        fallback_model=cfg.fallback_model,
+        rpm_per_key=cfg.rpm_per_key,
+    )
+    analyzer = VisualAnalyzer(
+        key_pool,
+        model=cfg.model,
+        fallback_model=cfg.fallback_model,
+        rpm_per_key=cfg.rpm_per_key,
+        memory=memory,
+    )
+    return VDPipeline(
+        sampler=FrameSampler(),
+        analyzer=analyzer,
+        memory=memory,
+    )
+
+
 def create_processors(
     heavy: HeavySteps,
+    *,
+    vd_pipeline: VDPipeline | None = None,
 ) -> dict[SourceType, SourceProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
         heavy: Bundle of heavy step callables.
+        vd_pipeline: Optional VDPipeline for video visual analysis.
 
     Returns:
         Mapping from SourceType to fully-wired processor instances.
@@ -93,6 +160,7 @@ def create_processors(
     return {
         SourceType.VIDEO: VideoProcessor(
             stt=WhisperVideoProcessor(transcribe_func=heavy.transcribe),
+            vd_pipeline=vd_pipeline,
         ),
         SourceType.PRESENTATION: PresentationProcessor(
             parse_pdf_func=heavy.parse_pdf,

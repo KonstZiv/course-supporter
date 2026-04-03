@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 import imagehash
+from _utils import load_env
 from PIL import Image
 
 # ─── Constants ──────────────────────────────────────────────────────
@@ -91,22 +92,8 @@ def save_state(name: str, data: dict) -> None:
 # ─── Env / API keys ────────────────────────────────────────────────
 
 
-def _load_env() -> None:
-    """Load .env into os.environ (setdefault — won't overwrite)."""
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
-
-
 def _get_gemini_keys() -> list[str]:
-    _load_env()
+    load_env()
     raw = os.environ.get("GEMINI_API_KEY", "")
     keys = list(dict.fromkeys(k.strip() for k in raw.split(",") if k.strip()))
     return keys

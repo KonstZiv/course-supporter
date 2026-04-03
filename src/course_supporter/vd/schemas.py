@@ -152,6 +152,14 @@ class FrameSamplingResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DeltaStrategy(StrEnum):
+    """How to handle frames similar to the previous one."""
+
+    NONE = "none"
+    EXPLICIT = "explicit"
+    CONDITIONAL = "conditional"
+
+
 class EyesResult(BaseModel):
     """Per-frame Vision LLM response (prompt v3, Markdown output)."""
 
@@ -175,54 +183,71 @@ class EyesResult(BaseModel):
         default="",
         description="Extracted 'Setting' value from prompt v3 response.",
     )
+    is_delta: bool = Field(
+        default=False,
+        description="True if response describes only changes from base frame.",
+    )
+    base_frame_id: str | None = Field(
+        default=None,
+        description="Frame ID of the base (full) description for delta.",
+    )
     importance: int = Field(default=3, ge=1, le=5)
-
-
-class MergeMethod(StrEnum):
-    """Strategy used to combine frame-level texts within a scene."""
-
-    SINGLE = "single"
-    CODE_DIFF = "code_diff"
-    LLM_MERGE = "llm_merge"
-    CODE_DIFF_FALLBACK = "code_diff_fallback"
 
 
 class InstantMemory(BaseModel):
-    """Per-scene merged text extraction (code-based or LLM merge)."""
+    """Rolling 2-frame window: current frame narrative + previous frame summary.
 
+    Updated every frame. No LLM — built from Eyes results directly.
+    """
+
+    frame_id: str = Field(description="Current frame ID.")
     scene_id: int = Field(ge=0)
-    merged_text: str
-    frame_count: int = Field(ge=1)
-    method: MergeMethod
+    timestamp_sec: float = Field(ge=0.0)
+    current: str = Field(description="Current frame description (from Eyes).")
+    previous: str = Field(
+        default="",
+        description="Compressed previous frame description.",
+    )
+    is_delta: bool = Field(
+        default=False,
+        description="Whether current Eyes result was a delta response.",
+    )
 
 
 class SceneMemory(BaseModel):
-    """Per-scene LLM-generated summary and structured metadata."""
+    """Rolling scene-level understanding, updated every frame via LLM.
+
+    Accumulates understanding of what is happening in the scene
+    as a whole, not just in the current frame.
+    """
 
     scene_id: int = Field(ge=0)
-    scene_type: str
-    summary: str
-    complete_text: str = ""
+    summary: str = Field(
+        default="",
+        description="Current understanding of the scene (English).",
+    )
+    scene_type: str = Field(default="")
     topics: list[str] = Field(default_factory=list)
     importance: int = Field(default=3, ge=1, le=5)
+    frames_seen: int = Field(default=0, ge=0)
+    previous_scene_summary: str = Field(
+        default="",
+        description="Compressed summary of the previous scene.",
+    )
 
 
-class CourseMemorySnapshot(BaseModel):
-    """Course-level context at a specific point in processing."""
+class VideoMemory(BaseModel):
+    """Running video-level context, updated once per scene via LLM.
 
-    scene_id: int = Field(ge=0)
-    context_snapshot: str
-
-
-class CourseMemory(BaseModel):
-    """Running course-level context (<=200 words), updated per scene."""
+    Short description of the entire video: what it is about and
+    what has been covered so far. Fed back into Eyes prompt.
+    """
 
     text: str = Field(
         default="",
-        description="Current course context fed back into Eyes prompt.",
+        description="Current video context (English, <=200 words).",
     )
     scenes_processed: int = Field(default=0, ge=0)
-    history: list[CourseMemorySnapshot] = Field(default_factory=list)
 
 
 class SceneAnalysis(BaseModel):
@@ -230,7 +255,6 @@ class SceneAnalysis(BaseModel):
 
     scene: Scene
     eyes_results: list[EyesResult]
-    instant_memory: InstantMemory
     scene_memory: SceneMemory
 
 
@@ -238,7 +262,7 @@ class VDResult(BaseModel):
     """Final output of the VD pipeline (Stages A + B)."""
 
     scenes: list[SceneAnalysis]
-    course_memory: CourseMemory
+    video_memory: VideoMemory
     frames_total: int = Field(ge=0)
     frames_analyzed: int = Field(ge=0)
     model: str = Field(description="Vision LLM model ID used.")

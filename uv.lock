@@ -408,9 +408,12 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-genai" },
+    { name = "imagehash" },
     { name = "openai" },
     { name = "openai-whisper" },
+    { name = "opencv-python-headless" },
     { name = "pgvector" },
+    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -427,13 +430,6 @@ dependencies = [
     { name = "trafilatura" },
     { name = "uuid-utils" },
     { name = "yt-dlp" },
-]
-
-[package.optional-dependencies]
-vd = [
-    { name = "imagehash" },
-    { name = "opencv-python-headless" },
-    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -462,12 +458,12 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.13" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128" },
     { name = "google-genai", specifier = ">=1.12" },
-    { name = "imagehash", marker = "extra == 'vd'", specifier = ">=4.3" },
+    { name = "imagehash", specifier = ">=4.3" },
     { name = "openai", specifier = ">=1.68" },
     { name = "openai-whisper", specifier = ">=20240930" },
-    { name = "opencv-python-headless", marker = "extra == 'vd'", specifier = ">=4.9" },
+    { name = "opencv-python-headless", specifier = ">=4.9" },
     { name = "pgvector", specifier = ">=0.4" },
-    { name = "pillow", marker = "extra == 'vd'", specifier = ">=10.0" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pydantic-settings", specifier = ">=2.12" },
@@ -484,7 +480,6 @@ requires-dist = [
     { name = "uuid-utils", specifier = ">=0.9" },
     { name = "yt-dlp", specifier = ">=2024.0" },
 ]
-provides-extras = ["vd"]
 
 [package.metadata.requires-dev]
 dev = [

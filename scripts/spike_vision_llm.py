@@ -18,6 +18,7 @@ from pathlib import Path
 
 import google.genai as genai
 import openai
+from _utils import load_env
 
 GOLDEN_DIR = Path("current-doc/vd-spike/golden-frames-sample2")
 GT_DIR = Path("current-doc/vd-spike/VD-SPIKE-B/ground-truth")
@@ -205,27 +206,11 @@ def compute_code_accuracy(extracted: str, ground_truth: str) -> float:
 # ─── Gemini ──────────────────────────────────────────────────────────
 
 
-def _load_env() -> None:
-    """Load .env file into environment."""
-    import os
-
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
-
-
 def _get_gemini_keys() -> list[str]:
     """Get all Gemini API keys from env (comma-separated rotation)."""
     import os
 
-    _load_env()
+    load_env()
     raw = os.environ.get("GEMINI_API_KEY", "")
     keys = [k.strip() for k in raw.split(",") if k.strip()]
     return keys
@@ -383,7 +368,7 @@ def test_openai(
     """Test OpenAI Vision on frames."""
     import os
 
-    _load_env()
+    load_env()
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         return {"error": "No OPENAI_API_KEY"}

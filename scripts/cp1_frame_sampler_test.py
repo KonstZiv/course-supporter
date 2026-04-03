@@ -13,8 +13,9 @@ import html
 import json
 import subprocess
 import sys
-from base64 import b64encode
 from pathlib import Path
+
+from _utils import thumb_b64
 
 VIDEOS = [
     {
@@ -62,22 +63,6 @@ def download_video(url: str, name: str) -> Path:
         check=True,
     )
     return video_path
-
-
-def _thumb_b64(img_path: Path, max_w: int = 320) -> str:
-    """Create a base64-encoded thumbnail for embedding in HTML."""
-    from PIL import Image
-
-    img = Image.open(img_path)
-    ratio = max_w / img.width
-    new_size = (max_w, int(img.height * ratio))
-    img = img.resize(new_size, Image.LANCZOS)
-
-    import io
-
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=75)
-    return b64encode(buf.getvalue()).decode()
 
 
 def generate_gallery(
@@ -154,7 +139,7 @@ def generate_gallery(
             cc_class = f"cc-{cc}"
 
             if fpath.exists():
-                b64 = _thumb_b64(fpath)
+                b64 = thumb_b64(fpath, max_w=320)
                 img_tag = f'<img src="data:image/jpeg;base64,{b64}" />'
             else:
                 img_tag = f'<div class="no-img">{f["filename"]}</div>'

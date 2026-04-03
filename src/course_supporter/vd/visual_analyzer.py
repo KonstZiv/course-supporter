@@ -42,6 +42,7 @@ logger = structlog.get_logger()
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _PROMPT_CACHE: dict[str, str] = {}
 _MAX_DESCRIPTION_LEN = 300
+_RETRY_BASE_WAIT = 40.0  # seconds, matches typical Gemini retry-after
 
 
 def _load_prompt(name: str) -> str:
@@ -117,6 +118,23 @@ def _build_similarity_hint(frame: SampledFrame | None) -> str:
     )
 
 
+def _is_rate_limit(exc: BaseException) -> bool:
+    """Check if an exception is a 429 rate-limit error."""
+    exc_str = str(exc)
+    return "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str
+
+
+def _retry_wait(exc: BaseException, attempt: int) -> float:
+    """Calculate retry wait time from error or exponential backoff."""
+    import re
+
+    # Try to extract retry delay from error message
+    match = re.search(r"retry\s+in\s+([\d.]+)s", str(exc), re.IGNORECASE)
+    if match:
+        return float(match.group(1)) + 2.0  # add buffer
+    return _RETRY_BASE_WAIT * float(2**attempt)
+
+
 def _build_memory_context(
     instant: InstantMemory | None,
     scene_memory: SceneMemory,
@@ -162,6 +180,7 @@ class VisualAnalyzer:
         key_pool: KeyPool,
         *,
         model: str = "gemini-2.5-flash",
+        fallback_model: str = "gemini-3.1-flash-lite-preview",
         rpm_per_key: int = 5,
         context_max_gap_sec: float = 7.0,
         max_context_images: int = 2,
@@ -170,6 +189,7 @@ class VisualAnalyzer:
     ) -> None:
         self._key_pool = key_pool
         self._model = model
+        self._fallback_model = fallback_model
         self._context_max_gap = context_max_gap_sec
         self._max_ctx_images = max_context_images
         self._delta_strategy = delta_strategy
@@ -345,53 +365,80 @@ class VisualAnalyzer:
             base_frame_id=base_frame_id,
         )
 
-    async def _call_llm(self, parts: list[Any]) -> dict[str, Any]:
-        """Make a rate-limited Vision LLM call with key rotation."""
+    async def _call_llm(
+        self,
+        parts: list[Any],
+        *,
+        _max_retries: int = 3,
+    ) -> dict[str, Any]:
+        """Make a rate-limited Vision LLM call with retry and model fallback.
+
+        On 429: retry with same model first, then switch to fallback model.
+        """
         import google.genai as genai
 
-        async with self._lock:
-            # Enforce RPM
-            elapsed = time.monotonic() - self._last_call_time
-            if elapsed < self._min_interval:
-                await asyncio.sleep(self._min_interval - elapsed)
+        for attempt in range(_max_retries + 1):
+            # First attempt uses primary model, retries use fallback
+            use_model = self._model if attempt == 0 else self._fallback_model
 
-            key = self._key_pool.next_key()
-            client = genai.Client(api_key=key.get_secret_value())
+            async with self._lock:
+                elapsed = time.monotonic() - self._last_call_time
+                if elapsed < self._min_interval:
+                    await asyncio.sleep(self._min_interval - elapsed)
 
-            t0 = time.monotonic()
-            try:
-                contents: Any = [genai.types.Content(parts=parts)]
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=self._model,
-                    contents=contents,
+                key = self._key_pool.next_key()
+                client = genai.Client(api_key=key.get_secret_value())
+
+                t0 = time.monotonic()
+                try:
+                    contents: Any = [genai.types.Content(parts=parts)]
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=use_model,
+                        contents=contents,
+                    )
+                except Exception as exc:
+                    self._last_call_time = time.monotonic()
+                    if attempt < _max_retries and _is_rate_limit(exc):
+                        wait = _retry_wait(exc, attempt)
+                        logger.warning(
+                            "eyes_rate_limit_retry",
+                            attempt=attempt + 1,
+                            wait_sec=wait,
+                            fallback_model=self._fallback_model,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    logger.exception(
+                        "vision_llm_error",
+                        model=use_model,
+                    )
+                    raise
+
+                self._last_call_time = time.monotonic()
+                latency = round(time.monotonic() - t0, 2)
+
+                usage = response.usage_metadata
+                result = {
+                    "text": response.text or "",
+                    "input_tokens": (usage.prompt_token_count or 0 if usage else 0),
+                    "output_tokens": (
+                        usage.candidates_token_count or 0 if usage else 0
+                    ),
+                    "latency_sec": latency,
+                }
+
+                logger.info(
+                    "eyes_frame_done",
+                    model=use_model,
+                    latency=latency,
+                    tokens_in=result["input_tokens"],
+                    tokens_out=result["output_tokens"],
                 )
-            except Exception:
-                logger.exception(
-                    "vision_llm_error",
-                    model=self._model,
-                )
-                raise
+                return result
 
-            self._last_call_time = time.monotonic()
-            latency = round(time.monotonic() - t0, 2)
-
-            usage = response.usage_metadata
-            result = {
-                "text": response.text or "",
-                "input_tokens": (usage.prompt_token_count or 0 if usage else 0),
-                "output_tokens": (usage.candidates_token_count or 0 if usage else 0),
-                "latency_sec": latency,
-            }
-
-            logger.info(
-                "eyes_frame_done",
-                model=self._model,
-                latency=latency,
-                tokens_in=result["input_tokens"],
-                tokens_out=result["output_tokens"],
-            )
-            return result
+        msg = "Unreachable: retry loop exhausted without return or raise"
+        raise RuntimeError(msg)
 
     def _build_prompt(
         self,

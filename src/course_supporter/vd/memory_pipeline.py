@@ -95,6 +95,7 @@ class MemoryPipeline:
     Args:
         key_pool: Gemini API key pool for LLM calls.
         model: Text LLM model identifier.
+        fallback_model: Model to try on 429 rate limit.
         rpm_per_key: Requests per minute per API key.
     """
 
@@ -103,10 +104,12 @@ class MemoryPipeline:
         key_pool: KeyPool,
         *,
         model: str = "gemini-2.5-flash",
+        fallback_model: str = "gemini-3.1-flash-lite-preview",
         rpm_per_key: int = 10,
     ) -> None:
         self._key_pool = key_pool
         self._model = model
+        self._fallback_model = fallback_model
         total_rpm = rpm_per_key * len(key_pool)
         self._min_interval = 60.0 / total_rpm
         self._last_call_time = 0.0
@@ -212,39 +215,63 @@ class MemoryPipeline:
 
         return scene_memory, updated_video
 
-    async def _call_llm(self, prompt: str) -> str:
-        """Rate-limited text LLM call."""
+    async def _call_llm(
+        self,
+        prompt: str,
+        *,
+        _max_retries: int = 3,
+    ) -> str:
+        """Rate-limited text LLM call with retry and model fallback."""
         import google.genai as genai
 
-        async with self._lock:
-            elapsed = time.monotonic() - self._last_call_time
-            if elapsed < self._min_interval:
-                await asyncio.sleep(self._min_interval - elapsed)
+        from course_supporter.vd.visual_analyzer import _is_rate_limit, _retry_wait
 
-            key = self._key_pool.next_key()
-            client = genai.Client(api_key=key.get_secret_value())
+        for attempt in range(_max_retries + 1):
+            use_model = self._model if attempt == 0 else self._fallback_model
 
-            t0 = time.monotonic()
-            try:
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=self._model,
-                    contents=prompt,
-                )
-            except Exception:
-                logger.exception(
-                    "memory_llm_error",
-                    model=self._model,
-                )
-                raise
-            self._last_call_time = time.monotonic()
+            async with self._lock:
+                elapsed = time.monotonic() - self._last_call_time
+                if elapsed < self._min_interval:
+                    await asyncio.sleep(self._min_interval - elapsed)
+
+                key = self._key_pool.next_key()
+                client = genai.Client(api_key=key.get_secret_value())
+
+                t0 = time.monotonic()
+                try:
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=use_model,
+                        contents=prompt,
+                    )
+                except Exception as exc:
+                    self._last_call_time = time.monotonic()
+                    if attempt < _max_retries and _is_rate_limit(exc):
+                        wait = _retry_wait(exc, attempt)
+                        logger.warning(
+                            "memory_rate_limit_retry",
+                            attempt=attempt + 1,
+                            wait_sec=wait,
+                            fallback_model=self._fallback_model,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    logger.exception(
+                        "memory_llm_error",
+                        model=use_model,
+                    )
+                    raise
+                self._last_call_time = time.monotonic()
 
             logger.info(
                 "memory_llm_call",
-                model=self._model,
+                model=use_model,
                 latency=round(time.monotonic() - t0, 2),
             )
             return response.text or ""
+
+        msg = "Unreachable: retry loop exhausted without return or raise"
+        raise RuntimeError(msg)
 
     @staticmethod
     def _parse_scene_memory(

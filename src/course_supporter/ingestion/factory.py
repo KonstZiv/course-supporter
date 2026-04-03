@@ -26,6 +26,7 @@ from course_supporter.models.source import SourceType
 if TYPE_CHECKING:
     from course_supporter.ingestion.base import SourceProcessor
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.vd.pipeline import VDPipeline
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,13 +80,57 @@ def create_heavy_steps(
     )
 
 
+def create_vd_pipeline() -> VDPipeline | None:
+    """Create VDPipeline from settings, or None if disabled/unconfigured.
+
+    Requires GEMINI_API_KEY in env. Returns None if VD is disabled
+    or no Gemini keys are available.
+    """
+    from course_supporter.config import get_settings
+
+    settings = get_settings()
+    if not settings.vd_enabled:
+        return None
+
+    key_pool = settings.key_pool_for("gemini")
+    if key_pool is None:
+        return None
+
+    from course_supporter.vd.frame_sampler import FrameSampler
+    from course_supporter.vd.memory_pipeline import MemoryPipeline
+    from course_supporter.vd.pipeline import VDPipeline
+    from course_supporter.vd.visual_analyzer import VisualAnalyzer
+
+    memory = MemoryPipeline(
+        key_pool,
+        model=settings.vd_model,
+        fallback_model=settings.vd_fallback_model,
+        rpm_per_key=settings.vd_rpm_per_key,
+    )
+    analyzer = VisualAnalyzer(
+        key_pool,
+        model=settings.vd_model,
+        fallback_model=settings.vd_fallback_model,
+        rpm_per_key=settings.vd_rpm_per_key,
+        memory=memory,
+    )
+    return VDPipeline(
+        sampler=FrameSampler(),
+        analyzer=analyzer,
+        memory=memory,
+    )
+
+
 def create_processors(
     heavy: HeavySteps,
+    *,
+    vd_pipeline: VDPipeline | None = None,
 ) -> dict[SourceType, SourceProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
         heavy: Bundle of heavy step callables.
+        vd_pipeline: Optional VDPipeline for video visual analysis.
 
     Returns:
         Mapping from SourceType to fully-wired processor instances.
@@ -93,6 +138,7 @@ def create_processors(
     return {
         SourceType.VIDEO: VideoProcessor(
             stt=WhisperVideoProcessor(transcribe_func=heavy.transcribe),
+            vd_pipeline=vd_pipeline,
         ),
         SourceType.PRESENTATION: PresentationProcessor(
             parse_pdf_func=heavy.parse_pdf,

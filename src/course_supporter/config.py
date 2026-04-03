@@ -188,6 +188,12 @@ class Settings(BaseSettings):
     # Other providers have their own SDKs with built-in endpoints.
     deepseek_base_url: str = "https://api.deepseek.com"
 
+    # --- Visual Description (VD) Pipeline ---
+    vd_model: str = "gemini-2.5-flash"
+    vd_fallback_model: str = "gemini-3.1-flash-lite-preview"
+    vd_rpm_per_key: int = 5
+    vd_enabled: bool = True
+
     # --- Registries ---
     external_services_path: Path = Path("config/external_services.yaml")
     auth_registry_path: Path = Path("config/auth.yaml")

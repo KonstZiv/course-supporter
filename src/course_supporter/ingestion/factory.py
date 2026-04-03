@@ -24,6 +24,7 @@ from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
+    from course_supporter.config import Settings
     from course_supporter.ingestion.base import SourceProcessor
     from course_supporter.llm.router import ModelRouter
     from course_supporter.vd.pipeline import VDPipeline
@@ -80,15 +81,31 @@ def create_heavy_steps(
     )
 
 
-def create_vd_pipeline() -> VDPipeline | None:
+@dataclass(frozen=True, slots=True)
+class VDModelConfig:
+    """Configuration for VD pipeline LLM calls."""
+
+    model: str = "gemini-2.5-flash"
+    fallback_model: str = "gemini-3.1-flash-lite-preview"
+    rpm_per_key: int = 5
+
+
+def create_vd_pipeline(
+    settings: Settings | None = None,
+) -> VDPipeline | None:
     """Create VDPipeline from settings, or None if disabled/unconfigured.
 
-    Requires GEMINI_API_KEY in env. Returns None if VD is disabled
-    or no Gemini keys are available.
-    """
-    from course_supporter.config import get_settings
+    Args:
+        settings: Application settings. If None, loads from get_settings().
 
-    settings = get_settings()
+    Returns:
+        Configured VDPipeline, or None if VD is disabled or no Gemini keys.
+    """
+    if settings is None:
+        from course_supporter.config import get_settings
+
+        settings = get_settings()
+
     if not settings.vd_enabled:
         return None
 
@@ -101,17 +118,22 @@ def create_vd_pipeline() -> VDPipeline | None:
     from course_supporter.vd.pipeline import VDPipeline
     from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
-    memory = MemoryPipeline(
-        key_pool,
+    cfg = VDModelConfig(
         model=settings.vd_model,
         fallback_model=settings.vd_fallback_model,
         rpm_per_key=settings.vd_rpm_per_key,
     )
+    memory = MemoryPipeline(
+        key_pool,
+        model=cfg.model,
+        fallback_model=cfg.fallback_model,
+        rpm_per_key=cfg.rpm_per_key,
+    )
     analyzer = VisualAnalyzer(
         key_pool,
-        model=settings.vd_model,
-        fallback_model=settings.vd_fallback_model,
-        rpm_per_key=settings.vd_rpm_per_key,
+        model=cfg.model,
+        fallback_model=cfg.fallback_model,
+        rpm_per_key=cfg.rpm_per_key,
         memory=memory,
     )
     return VDPipeline(

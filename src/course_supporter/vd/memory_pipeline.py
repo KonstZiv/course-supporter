@@ -225,11 +225,18 @@ class MemoryPipeline:
             client = genai.Client(api_key=key.get_secret_value())
 
             t0 = time.monotonic()
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=self._model,
-                contents=prompt,
-            )
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=self._model,
+                    contents=prompt,
+                )
+            except Exception:
+                logger.exception(
+                    "memory_llm_error",
+                    model=self._model,
+                )
+                raise
             self._last_call_time = time.monotonic()
 
             logger.info(

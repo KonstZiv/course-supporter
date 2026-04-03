@@ -10,7 +10,12 @@ from course_supporter.ingestion.video import (
     VideoProcessor,
     WhisperVideoProcessor,
 )
-from course_supporter.models.source import ChunkType, SourceDocument, SourceType
+from course_supporter.models.source import (
+    ChunkType,
+    ContentChunk,
+    SourceDocument,
+    SourceType,
+)
 
 
 def _make_source(
@@ -72,8 +77,8 @@ class TestWhisperVideoProcessor:
 
         chunk = doc.chunks[0]
         assert chunk.chunk_type == ChunkType.TRANSCRIPT
-        assert chunk.metadata["start_sec"] == 5.5
-        assert chunk.metadata["end_sec"] == 15.3
+        assert chunk.start_sec == 5.5
+        assert chunk.end_sec == 15.3
 
     async def test_no_ffmpeg(self) -> None:
         """FFmpeg not found -> ProcessingError."""
@@ -228,82 +233,122 @@ class TestWhisperUrlDownload:
             await proc._download_audio("https://youtube.com/watch?v=test")
 
 
-class TestVideoProcessorFallbackOnLowTokens:
-    async def test_low_tokens_triggers_whisper_fallback(self) -> None:
-        """Gemini returns low tokens_in -> fallback to Whisper."""
-        proc = VideoProcessor(enable_whisper=False)
+class TestVideoProcessorParallel:
+    """Test parallel STT + VD in VideoProcessor."""
 
-        # Mock Whisper processor
-        mock_whisper = AsyncMock()
-        mock_whisper.process.return_value = SourceDocument(
-            source_type=SourceType.VIDEO,
-            source_url="https://youtube.com/watch?v=long",
-            metadata={"strategy": "whisper"},
-        )
-        proc._whisper = mock_whisper
-
-        # Gemini returns low tokens (video not seen)
-        router = AsyncMock()
-        router.complete.return_value = MagicMock(
-            content="[0:00-0:10] Hallucinated",
-            tokens_in=50,
-        )
-
-        doc = await proc.process(
-            _make_source(url="https://youtube.com/watch?v=long"),
-            router=router,
-        )
-        assert doc.metadata["strategy"] == "whisper"
-        mock_whisper.process.assert_awaited_once()
-
-
-class TestVideoProcessorFallback:
-    async def test_fallback_to_whisper(self) -> None:
-        """Gemini fails -> Whisper succeeds."""
-        proc = VideoProcessor(enable_whisper=False)
-        mock_whisper = AsyncMock()
-        mock_whisper.process.return_value = SourceDocument(
+    async def test_stt_plus_vd_parallel(self) -> None:
+        """Both STT and VD produce chunks in one SourceDocument."""
+        mock_stt = AsyncMock()
+        mock_stt.process.return_value = SourceDocument(
             source_type=SourceType.VIDEO,
             source_url="file:///v.mp4",
-            metadata={"strategy": "whisper"},
+            chunks=[
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text="Hello world",
+                    start_sec=0.0,
+                    end_sec=10.0,
+                ),
+            ],
         )
-        proc._whisper = mock_whisper
 
-        proc._gemini = AsyncMock()
-        proc._gemini.process.side_effect = RuntimeError("Gemini down")
+        mock_vd = AsyncMock()
+        from course_supporter.vd.schemas import (
+            EyesResult,
+            Scene,
+            SceneAnalysis,
+            SceneMemory,
+            VDResult,
+            VideoMemory,
+        )
 
+        mock_vd.process.return_value = VDResult(
+            scenes=[
+                SceneAnalysis(
+                    scene=Scene(
+                        scene_id=0,
+                        frame_ids=["f0"],
+                        start_sec=0.0,
+                        end_sec=10.0,
+                    ),
+                    eyes_results=[
+                        EyesResult(
+                            frame_id="f0",
+                            timestamp_sec=0.0,
+                            scene_id=0,
+                            response="test",
+                            n_images=1,
+                            latency_sec=1.0,
+                            input_tokens=100,
+                            output_tokens=50,
+                        ),
+                    ],
+                    scene_memory=SceneMemory(
+                        scene_id=0,
+                        summary="Code editor with Python",
+                        scene_type="screen_recording",
+                        topics=["python"],
+                        importance=4,
+                    ),
+                ),
+            ],
+            video_memory=VideoMemory(text="Python tutorial"),
+            frames_total=1,
+            frames_analyzed=1,
+            model="test",
+        )
+
+        proc = VideoProcessor(stt=mock_stt, vd_pipeline=mock_vd)
         doc = await proc.process(_make_source())
-        assert doc.metadata["strategy"] == "whisper"
 
-    async def test_both_fail(self) -> None:
-        """Both Gemini and Whisper fail -> raise last error."""
-        proc = VideoProcessor(enable_whisper=False)
-        mock_whisper = AsyncMock()
-        mock_whisper.process.side_effect = ProcessingError("Whisper also failed")
-        proc._whisper = mock_whisper
+        assert len(doc.chunks) == 2
+        assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
+        assert doc.chunks[1].chunk_type == ChunkType.VISUAL_SCENE
+        assert doc.chunks[1].text == "Code editor with Python"
+        assert doc.chunks[1].start_sec == 0.0
+        assert doc.chunks[1].metadata["scene_type"] == "screen_recording"
+        assert doc.metadata["strategy"] == "stt+vd"
 
-        proc._gemini = AsyncMock()
-        proc._gemini.process.side_effect = RuntimeError("Gemini down")
+    async def test_vd_failure_graceful_degradation(self) -> None:
+        """VD failure returns STT-only result."""
+        mock_stt = AsyncMock()
+        mock_stt.process.return_value = SourceDocument(
+            source_type=SourceType.VIDEO,
+            source_url="file:///v.mp4",
+            chunks=[
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text="Speech",
+                    start_sec=0.0,
+                    end_sec=5.0,
+                ),
+            ],
+        )
 
-        with pytest.raises(ProcessingError, match="Whisper also failed"):
-            await proc.process(_make_source())
+        mock_vd = AsyncMock()
+        mock_vd.process.side_effect = RuntimeError("VD crashed")
 
-    def test_enable_whisper_true(self) -> None:
-        """enable_whisper=True creates WhisperVideoProcessor."""
-        proc = VideoProcessor(enable_whisper=True)
-        assert isinstance(proc._whisper, WhisperVideoProcessor)
+        proc = VideoProcessor(stt=mock_stt, vd_pipeline=mock_vd)
+        doc = await proc.process(_make_source())
 
-    def test_enable_whisper_false(self) -> None:
-        """enable_whisper=False leaves _whisper as None."""
-        proc = VideoProcessor(enable_whisper=False)
-        assert proc._whisper is None
+        assert len(doc.chunks) == 1
+        assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
+        assert doc.metadata["strategy"] == "stt"
 
-    def test_transcribe_func_passed_to_whisper(self) -> None:
-        """transcribe_func is forwarded to WhisperVideoProcessor."""
-        mock_func = AsyncMock()
-        proc = VideoProcessor(enable_whisper=True, transcribe_func=mock_func)
-        assert isinstance(proc._whisper, WhisperVideoProcessor)
-        assert proc._whisper._transcribe_func is mock_func  # type: ignore[union-attr]
+    async def test_no_vd_pipeline(self) -> None:
+        """Without VD pipeline, STT-only result."""
+        mock_stt = AsyncMock()
+        mock_stt.process.return_value = SourceDocument(
+            source_type=SourceType.VIDEO,
+            source_url="file:///v.mp4",
+            chunks=[],
+        )
+
+        proc = VideoProcessor(stt=mock_stt, vd_pipeline=None)
+        doc = await proc.process(_make_source())
+
+        assert doc.metadata["strategy"] == "stt"
+        assert doc.metadata["vd_scenes"] == 0
 
 
 class TestWhisperVideoProcessorDefaults:

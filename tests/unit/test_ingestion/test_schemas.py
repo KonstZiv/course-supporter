@@ -51,15 +51,16 @@ class TestContentChunk:
         assert chunk.index == 0
 
     def test_content_chunk_with_timecodes(self) -> None:
-        """Transcript chunk carries start/end timecodes in metadata."""
+        """Transcript chunk carries start/end timecodes as top-level fields."""
         chunk = ContentChunk(
             chunk_type=ChunkType.TRANSCRIPT,
             text="Hello world",
             index=0,
-            metadata={"start_sec": 0.0, "end_sec": 30.0},
+            start_sec=0.0,
+            end_sec=30.0,
         )
-        assert chunk.metadata["start_sec"] == 0.0
-        assert chunk.metadata["end_sec"] == 30.0
+        assert chunk.start_sec == 0.0
+        assert chunk.end_sec == 30.0
 
 
 class TestSourceDocument:

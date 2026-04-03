@@ -19,7 +19,7 @@ from course_supporter.ingestion.heavy_steps import (
 )
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
-from course_supporter.ingestion.video import VideoProcessor
+from course_supporter.ingestion.video import VideoProcessor, WhisperVideoProcessor
 from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 
@@ -92,7 +92,7 @@ def create_processors(
     """
     return {
         SourceType.VIDEO: VideoProcessor(
-            transcribe_func=heavy.transcribe,
+            stt=WhisperVideoProcessor(transcribe_func=heavy.transcribe),
         ),
         SourceType.PRESENTATION: PresentationProcessor(
             parse_pdf_func=heavy.parse_pdf,

@@ -174,10 +174,8 @@ class GeminiVideoProcessor(SourceProcessor):
                         chunk_type=ChunkType.TRANSCRIPT,
                         text=text.strip(),
                         index=idx,
-                        metadata={
-                            "start_sec": _timecode_to_seconds(start_str),
-                            "end_sec": _timecode_to_seconds(end_str),
-                        },
+                        start_sec=_timecode_to_seconds(start_str),
+                        end_sec=_timecode_to_seconds(end_str),
                     )
                 )
             else:
@@ -399,34 +397,36 @@ class WhisperVideoProcessor(SourceProcessor):
                     chunk_type=ChunkType.TRANSCRIPT,
                     text=text,
                     index=idx,
-                    metadata={
-                        "start_sec": round(seg.start_sec, 2),
-                        "end_sec": round(seg.end_sec, 2),
-                    },
+                    start_sec=round(seg.start_sec, 2),
+                    end_sec=round(seg.end_sec, 2),
                 )
             )
         return chunks
 
 
 class VideoProcessor(SourceProcessor):
-    """Composite video processor with Gemini primary + Whisper fallback.
+    """Composite video processor: parallel STT + VD.
 
-    Tries GeminiVideoProcessor first. If it fails and Whisper is enabled,
-    falls back to WhisperVideoProcessor (local FFmpeg + Whisper).
+    Runs audio transcription (STT) and visual description (VD) as
+    independent parallel streams. Both produce ContentChunks with
+    timestamps that can be aligned downstream (VD-007).
+
+    Graceful degradation: if VD fails, STT-only result is returned.
+
+    Args:
+        stt: STT processor (WhisperVideoProcessor or similar).
+        vd_pipeline: Optional VDPipeline for visual analysis.
+            When None, only STT chunks are produced.
     """
 
     def __init__(
         self,
         *,
-        enable_whisper: bool = True,
-        transcribe_func: TranscribeFunc | None = None,
+        stt: WhisperVideoProcessor | None = None,
+        vd_pipeline: object | None = None,
     ) -> None:
-        self._gemini = GeminiVideoProcessor()
-        self._whisper: SourceProcessor | None = (
-            WhisperVideoProcessor(transcribe_func=transcribe_func)
-            if enable_whisper
-            else None
-        )
+        self._stt = stt or WhisperVideoProcessor()
+        self._vd = vd_pipeline
 
     async def process(
         self,
@@ -434,18 +434,95 @@ class VideoProcessor(SourceProcessor):
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
-        try:
-            return await self._gemini.process(source, router=router)
-        except UnsupportedFormatError:
-            raise
-        except Exception:
-            if self._whisper is not None:
-                logger.warning(
-                    "gemini_video_failed_trying_whisper",
+        if source.source_type != SourceType.VIDEO:
+            raise UnsupportedFormatError(
+                f"VideoProcessor expects 'video', got '{source.source_type}'"
+            )
+
+        logger.info("video_processor_start", source_url=source.source_url)
+
+        # Launch STT and VD in parallel
+        stt_task = asyncio.create_task(
+            self._stt.process(source, router=router),
+        )
+        vd_task = self._run_vd(source) if self._vd is not None else None
+
+        # Wait for STT (required)
+        stt_doc = await stt_task
+        stt_chunks = stt_doc.chunks
+
+        # Wait for VD (optional, graceful degradation)
+        vd_chunks: list[ContentChunk] = []
+        if vd_task is not None:
+            try:
+                vd_chunks = await vd_task
+            except Exception:
+                logger.exception(
+                    "vd_pipeline_failed_stt_only",
                     source_url=source.source_url,
                 )
-                return await self._whisper.process(source)
-            raise
+
+        strategy = "stt+vd" if vd_chunks else "stt"
+        logger.info(
+            "video_processor_done",
+            source_url=source.source_url,
+            stt_chunks=len(stt_chunks),
+            vd_chunks=len(vd_chunks),
+            strategy=strategy,
+        )
+
+        return SourceDocument(
+            source_type=SourceType.VIDEO,
+            source_url=source.source_url,
+            title=source.filename or "",
+            chunks=stt_chunks + vd_chunks,
+            metadata={
+                "strategy": strategy,
+                "stt_segments": len(stt_chunks),
+                "vd_scenes": len(vd_chunks),
+            },
+        )
+
+    async def _run_vd(self, source: MaterialEntry) -> list[ContentChunk]:
+        """Run VD pipeline and convert result to ContentChunks."""
+        from course_supporter.vd.pipeline import VDPipeline
+
+        vd: VDPipeline = self._vd  # type: ignore[assignment]
+
+        # VDPipeline needs a local file path
+        video_path = Path(source.source_url)
+        result = await vd.process(video_path)
+
+        return self._vd_result_to_chunks(result)
+
+    @staticmethod
+    def _vd_result_to_chunks(result: object) -> list[ContentChunk]:
+        """Convert VDResult scenes to VISUAL_SCENE ContentChunks."""
+        from course_supporter.vd.schemas import VDResult
+
+        vd_result: VDResult = result  # type: ignore[assignment]
+        chunks: list[ContentChunk] = []
+
+        for idx, analysis in enumerate(vd_result.scenes):
+            sm = analysis.scene_memory
+            chunks.append(
+                ContentChunk(
+                    chunk_type=ChunkType.VISUAL_SCENE,
+                    text=sm.summary,
+                    index=idx,
+                    start_sec=analysis.scene.start_sec,
+                    end_sec=analysis.scene.end_sec,
+                    metadata={
+                        "scene_id": analysis.scene.scene_id,
+                        "scene_type": sm.scene_type,
+                        "importance": sm.importance,
+                        "topics": sm.topics,
+                        "frames_analyzed": len(analysis.eyes_results),
+                    },
+                ),
+            )
+
+        return chunks
 
 
 def _timecode_to_seconds(timecode: str) -> float:

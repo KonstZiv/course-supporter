@@ -26,6 +26,7 @@ class ChunkType(StrEnum):
     HEADING = "heading"
     WEB_CONTENT = "web_content"
     METADATA = "metadata"
+    VISUAL_SCENE = "visual_scene"
 
 
 class ContentChunk(BaseModel):
@@ -33,12 +34,20 @@ class ContentChunk(BaseModel):
 
     Each processor produces a list of these. The chunk_type identifies
     the source (transcript, slide text, etc.) and metadata carries
-    type-specific details (timecodes, slide numbers, heading levels).
+    type-specific details (slide numbers, heading levels, scene info).
     """
 
     chunk_type: ChunkType
     text: str
     index: int = 0
+    start_sec: float | None = Field(
+        default=None,
+        description="Start timestamp in seconds (video/audio chunks).",
+    )
+    end_sec: float | None = Field(
+        default=None,
+        description="End timestamp in seconds (video/audio chunks).",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

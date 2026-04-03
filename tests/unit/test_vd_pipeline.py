@@ -86,7 +86,7 @@ class TestVDPipelineProcess:
     @pytest.fixture
     def mock_analyzer(self) -> MagicMock:
         analyzer = MagicMock()
-        analyzer._model = "test-model"
+        analyzer.model = "test-model"
 
         async def fake_analyze_scene(
             scene: Scene,
@@ -280,7 +280,7 @@ class TestVDPipelineCleanup:
             return_value=_make_sampling_result(n_scenes=0),
         )
         analyzer = MagicMock()
-        analyzer._model = "test"
+        analyzer.model = "test"
 
         pipeline = VDPipeline(sampler, analyzer)
 
@@ -299,7 +299,7 @@ class TestVDPipelineCleanup:
         sampler = MagicMock()
         sampler.sample = AsyncMock(side_effect=RuntimeError("ffmpeg failed"))
         analyzer = MagicMock()
-        analyzer._model = "test"
+        analyzer.model = "test"
 
         pipeline = VDPipeline(sampler, analyzer)
 

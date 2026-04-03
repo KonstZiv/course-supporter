@@ -180,6 +180,11 @@ class VisualAnalyzer:
         self._last_call_time = 0.0
         self._lock = asyncio.Lock()
 
+    @property
+    def model(self) -> str:
+        """Vision LLM model identifier."""
+        return self._model
+
     async def analyze_scene(
         self,
         scene: Scene,

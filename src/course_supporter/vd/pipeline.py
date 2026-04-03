@@ -29,6 +29,8 @@ from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
 logger = structlog.get_logger()
 
+_MAX_PREV_SCENE_SUMMARY_LEN = 300
+
 
 class VDPipeline:
     """Orchestrate the full VD pipeline for a single video.
@@ -94,7 +96,9 @@ class VDPipeline:
             scene_memory = SceneMemory(
                 scene_id=scene.scene_id,
                 previous_scene_summary=(
-                    previous_scene.summary[:300] if previous_scene else ""
+                    previous_scene.summary[:_MAX_PREV_SCENE_SUMMARY_LEN]
+                    if previous_scene
+                    else ""
                 ),
             )
 
@@ -147,5 +151,5 @@ class VDPipeline:
             video_memory=video_memory,
             frames_total=len(sampling.frames),
             frames_analyzed=frames_analyzed,
-            model=self._analyzer._model,
+            model=self._analyzer.model,
         )

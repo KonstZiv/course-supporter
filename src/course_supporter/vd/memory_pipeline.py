@@ -46,6 +46,8 @@ def _load_template(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_PREVIOUS_LEN = 300
+_DELTA_ACCUMULATE_THRESHOLD = 100  # chars of accumulated delta before LLM update
+_DELTA_COUNT_THRESHOLD = 5  # max consecutive deltas before LLM update
 
 
 def _compress_description(text: str, max_len: int = _MAX_PREVIOUS_LEN) -> str:
@@ -60,6 +62,47 @@ def _compress_description(text: str, max_len: int = _MAX_PREVIOUS_LEN) -> str:
         result.append(line)
         total += len(line)
     return " ".join(result) if result else text[:max_len]
+
+
+def append_delta_to_scene(
+    scene_memory: SceneMemory,
+    delta_text: str,
+) -> SceneMemory:
+    """Mechanically append delta description to scene memory (no LLM).
+
+    Adds the delta text to the summary and increments frames_seen.
+    Used when the delta is too short to justify an LLM call.
+    """
+    separator = " | " if scene_memory.summary else ""
+    return SceneMemory(
+        scene_id=scene_memory.scene_id,
+        summary=scene_memory.summary + separator + delta_text,
+        scene_type=scene_memory.scene_type,
+        topics=scene_memory.topics,
+        importance=scene_memory.importance,
+        frames_seen=scene_memory.frames_seen + 1,
+        previous_scene_summary=scene_memory.previous_scene_summary,
+    )
+
+
+def needs_llm_scene_update(
+    instant: InstantMemory,
+    delta_chars_accumulated: int,
+    deltas_since_llm: int,
+) -> bool:
+    """Decide if scene memory needs an LLM update or mechanical append.
+
+    Returns True (LLM needed) when:
+    - Frame is not a delta (full description), OR
+    - Accumulated delta text exceeds threshold, OR
+    - Too many consecutive deltas without LLM update.
+    """
+    if not instant.is_delta:
+        return True
+    new_total = delta_chars_accumulated + len(instant.current)
+    if new_total > _DELTA_ACCUMULATE_THRESHOLD:
+        return True
+    return deltas_since_llm + 1 >= _DELTA_COUNT_THRESHOLD
 
 
 def build_instant_memory(

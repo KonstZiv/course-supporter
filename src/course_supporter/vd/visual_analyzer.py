@@ -25,7 +25,12 @@ from typing import Any
 import structlog
 
 from course_supporter.key_pool import KeyPool
-from course_supporter.vd.memory_pipeline import MemoryPipeline, build_instant_memory
+from course_supporter.vd.memory_pipeline import (
+    MemoryPipeline,
+    append_delta_to_scene,
+    build_instant_memory,
+    needs_llm_scene_update,
+)
 from course_supporter.vd.schemas import (
     ChangeClass,
     DeltaStrategy,
@@ -231,6 +236,8 @@ class VisualAnalyzer:
         instant: InstantMemory | None = None
         current_scene = scene_memory or SceneMemory(scene_id=scene.scene_id)
         current_video = video_memory or VideoMemory()
+        delta_chars_accumulated = 0
+        deltas_since_llm = 0
 
         for i, frame in enumerate(frames):
             # Select context images: previous frames within time gap
@@ -258,10 +265,22 @@ class VisualAnalyzer:
             # Update memory after each frame
             instant = build_instant_memory(result, instant)
             if self._memory is not None:
-                current_scene = await self._memory.update_scene_memory(
-                    instant,
-                    current_scene,
-                )
+                if needs_llm_scene_update(
+                    instant, delta_chars_accumulated, deltas_since_llm
+                ):
+                    current_scene = await self._memory.update_scene_memory(
+                        instant,
+                        current_scene,
+                    )
+                    delta_chars_accumulated = 0
+                    deltas_since_llm = 0
+                else:
+                    current_scene = append_delta_to_scene(
+                        current_scene,
+                        instant.current,
+                    )
+                    delta_chars_accumulated += len(instant.current)
+                    deltas_since_llm += 1
 
         return results, current_scene if self._memory is not None else None
 

@@ -9,6 +9,12 @@ Topics: {topics}
 
 {previous_scene}
 
-Update the video description (max 200 words, English). This should be a short summary of the ENTIRE video so far: what the video is about, what has been covered, and where the teaching is heading. Focus on the big picture, not individual frames.
+Update the video description (max 200 words, English). Be SPECIFIC and CONCRETE — name exact topics, functions, code constructs, and tools that were shown. Avoid generic phrases like "essential skills", "foundational concepts", "comprehensive overview".
+
+Good example: "Python tutorial in PyCharm. Covered: dictionary comprehension to replace for-loops, function parameters with default values, return statements. Showed refactoring from `for k in dict: new[k] = transform(dict[k])` to `{k: transform(v) for k, v in dict.items()}`."
+
+Bad example: "This comprehensive course covers essential programming concepts and builds a solid foundation for development."
+
+Include: what specific topic is being taught, what specific code/examples were shown, what tools/IDE are used, what the instructor is currently explaining.
 
 Respond with the updated description only (plain text, no JSON).

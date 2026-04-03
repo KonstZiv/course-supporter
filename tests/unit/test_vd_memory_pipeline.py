@@ -5,10 +5,14 @@ from __future__ import annotations
 from course_supporter.vd.memory_pipeline import (
     MemoryPipeline,
     _compress_description,
+    append_delta_to_scene,
     build_instant_memory,
+    needs_llm_scene_update,
 )
 from course_supporter.vd.schemas import (
     EyesResult,
+    InstantMemory,
+    SceneMemory,
 )
 
 
@@ -118,6 +122,83 @@ class TestBuildInstantMemory:
         eyes = _make_eyes("f0", description="X", ts=42.5)
         im = build_instant_memory(eyes, None)
         assert im.timestamp_sec == 42.5
+
+
+def _make_instant(
+    *,
+    is_delta: bool = False,
+    current: str = "short",
+) -> InstantMemory:
+    return InstantMemory(
+        frame_id="f0",
+        scene_id=0,
+        timestamp_sec=0.0,
+        current=current,
+        previous="",
+        is_delta=is_delta,
+    )
+
+
+class TestNeedsLlmSceneUpdate:
+    """Test delta accumulation thresholds."""
+
+    def test_full_frame_always_needs_llm(self) -> None:
+        instant = _make_instant(is_delta=False)
+        assert needs_llm_scene_update(instant, 0, 0) is True
+
+    def test_short_delta_no_llm(self) -> None:
+        instant = _make_instant(is_delta=True, current="cursor moved")
+        assert needs_llm_scene_update(instant, 0, 0) is False
+
+    def test_accumulated_delta_over_threshold(self) -> None:
+        instant = _make_instant(is_delta=True, current="x" * 50)
+        # 60 accumulated + 50 new = 110 > 100
+        assert needs_llm_scene_update(instant, 60, 2) is True
+
+    def test_single_long_delta_triggers_llm(self) -> None:
+        instant = _make_instant(is_delta=True, current="x" * 200)
+        assert needs_llm_scene_update(instant, 0, 0) is True
+
+    def test_5th_consecutive_delta_triggers_llm(self) -> None:
+        instant = _make_instant(is_delta=True, current="tiny")
+        # 4 deltas already, this is the 5th
+        assert needs_llm_scene_update(instant, 20, 4) is True
+
+    def test_4th_delta_no_trigger(self) -> None:
+        instant = _make_instant(is_delta=True, current="tiny")
+        assert needs_llm_scene_update(instant, 20, 3) is False
+
+
+class TestAppendDeltaToScene:
+    """Test mechanical delta appending."""
+
+    def test_append_to_empty(self) -> None:
+        sm = SceneMemory(scene_id=0)
+        result = append_delta_to_scene(sm, "cursor moved")
+        assert "cursor moved" in result.summary
+        assert result.frames_seen == 1
+
+    def test_append_to_existing(self) -> None:
+        sm = SceneMemory(scene_id=0, summary="Code editor open", frames_seen=1)
+        result = append_delta_to_scene(sm, "line added")
+        assert result.summary == "Code editor open | line added"
+        assert result.frames_seen == 2
+
+    def test_preserves_fields(self) -> None:
+        sm = SceneMemory(
+            scene_id=5,
+            summary="Existing",
+            scene_type="screen_recording",
+            topics=["python"],
+            importance=4,
+            previous_scene_summary="prev",
+        )
+        result = append_delta_to_scene(sm, "delta")
+        assert result.scene_id == 5
+        assert result.scene_type == "screen_recording"
+        assert result.topics == ["python"]
+        assert result.importance == 4
+        assert result.previous_scene_summary == "prev"
 
 
 class TestParseSceneMemory:

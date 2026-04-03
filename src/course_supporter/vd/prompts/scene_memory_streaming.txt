@@ -14,10 +14,12 @@ Context from previous scene:
 
 Update your understanding of what is happening in THIS SCENE as a whole. Not just this frame — the overall picture. Consider: what is the instructor doing? What topic is being covered? What is the teaching flow?
 
+Be SPECIFIC — name exact functions, code constructs, variables, tools. Avoid generic phrases like "the instructor demonstrates coding concepts".
+
 Respond as JSON:
 {{
   "scene_type": "<screen_recording | slide | instructor | mixed | demo>",
-  "summary": "<English, 2-3 sentences — what is happening in this scene overall>",
+  "summary": "<English, 2-3 sentences — SPECIFIC: what exact topic, what exact code/example, what exact tool>",
   "topics": ["topic1", "topic2"],
   "importance": <1-5, how important is this scene for the course>
 }}

@@ -18,7 +18,7 @@ from pathlib import Path
 import structlog
 
 from course_supporter.vd.frame_sampler import FrameSampler
-from course_supporter.vd.memory_pipeline import MemoryPipeline
+from course_supporter.vd.memory_pipeline import _MAX_PREVIOUS_LEN, MemoryPipeline
 from course_supporter.vd.schemas import (
     SceneAnalysis,
     SceneMemory,
@@ -28,8 +28,6 @@ from course_supporter.vd.schemas import (
 from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
 logger = structlog.get_logger()
-
-_MAX_PREV_SCENE_SUMMARY_LEN = 300
 
 
 class VDPipeline:
@@ -96,9 +94,7 @@ class VDPipeline:
             scene_memory = SceneMemory(
                 scene_id=scene.scene_id,
                 previous_scene_summary=(
-                    previous_scene.summary[:_MAX_PREV_SCENE_SUMMARY_LEN]
-                    if previous_scene
-                    else ""
+                    previous_scene.summary[:_MAX_PREVIOUS_LEN] if previous_scene else ""
                 ),
             )
 

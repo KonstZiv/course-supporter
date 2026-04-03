@@ -91,7 +91,7 @@ class TestVDPipelineProcess:
         async def fake_analyze_scene(
             scene: Scene,
             frames: list[SampledFrame],
-            frame_dir: Path,
+            _frame_dir: Path,
             **kwargs: object,
         ) -> tuple[list[EyesResult], SceneMemory | None]:
             eyes = [
@@ -219,7 +219,7 @@ class TestVDPipelineProcess:
         async def no_memory_analyze(
             scene: Scene,
             frames: list[SampledFrame],
-            frame_dir: Path,
+            _frame_dir: Path,
             **kwargs: object,
         ) -> tuple[list[EyesResult], None]:
             eyes = [

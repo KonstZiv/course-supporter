@@ -138,14 +138,14 @@ class TestCreateProcessors:
         assert isinstance(processors[SourceType.WEB], WebProcessor)
 
     def test_video_processor_has_transcribe_func(self) -> None:
-        """VideoProcessor's WhisperVideoProcessor has injected transcribe."""
+        """VideoProcessor's STT processor has injected transcribe."""
         heavy = create_heavy_steps()
         processors = create_processors(heavy)
 
         video = processors[SourceType.VIDEO]
         assert isinstance(video, VideoProcessor)
-        assert isinstance(video._whisper, WhisperVideoProcessor)
-        assert video._whisper._transcribe_func is heavy.transcribe
+        assert isinstance(video._stt, WhisperVideoProcessor)
+        assert video._stt._transcribe_func is heavy.transcribe
 
     def test_presentation_processor_has_parse_pdf_func(self) -> None:
         """PresentationProcessor has injected parse_pdf_func."""

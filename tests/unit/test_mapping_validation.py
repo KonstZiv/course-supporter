@@ -73,7 +73,7 @@ def _multi_chunk_video_content(end_times: list[float]) -> str:
     chunks = []
     prev = 0.0
     for end in end_times:
-        chunks.append({"metadata": {"start_sec": prev, "end_sec": end}})
+        chunks.append({"start_sec": prev, "end_sec": end})
         prev = end
     return json.dumps({"metadata": {"strategy": "whisper"}, "chunks": chunks})
 
@@ -708,7 +708,7 @@ class TestContentValidationLevel2:
                 "metadata": {"strategy": "whisper"},
                 "chunks": [
                     {"text": "no metadata here"},
-                    {"metadata": {"start_sec": 0.0, "end_sec": 60.0}},
+                    {"start_sec": 0.0, "end_sec": 60.0},
                 ],
             }
         )

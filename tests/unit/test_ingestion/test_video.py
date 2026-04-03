@@ -10,7 +10,12 @@ from course_supporter.ingestion.video import (
     VideoProcessor,
     _timecode_to_seconds,
 )
-from course_supporter.models.source import ChunkType, SourceDocument, SourceType
+from course_supporter.models.source import (
+    ChunkType,
+    ContentChunk,
+    SourceDocument,
+    SourceType,
+)
 
 
 def _make_source(
@@ -55,8 +60,8 @@ class TestGeminiVideoProcessor:
 
         chunk = doc.chunks[0]
         assert chunk.chunk_type == ChunkType.TRANSCRIPT
-        assert chunk.metadata["start_sec"] == 90.0
-        assert chunk.metadata["end_sec"] == 120.0
+        assert chunk.start_sec == 90.0
+        assert chunk.end_sec == 120.0
 
     async def test_requires_router(self) -> None:
         """None router raises ProcessingError."""
@@ -106,8 +111,8 @@ class TestGeminiVideoProcessor:
         doc = await proc.process(_make_source(), router=router)
 
         assert len(doc.chunks) == 2
-        assert doc.chunks[0].metadata["start_sec"] == 0.0
-        assert doc.chunks[1].metadata == {}
+        assert doc.chunks[0].start_sec == 0.0
+        assert doc.chunks[1].start_sec is None
 
     async def test_empty_and_whitespace_lines_skipped(self) -> None:
         """Empty lines and whitespace-only lines produce no chunks."""
@@ -166,38 +171,34 @@ class TestGeminiVideoProcessor:
 
 
 class TestVideoProcessor:
-    async def test_delegates_to_gemini(self) -> None:
-        """VideoProcessor delegates to GeminiVideoProcessor."""
-        router = AsyncMock()
-        router.complete.return_value = MagicMock(
-            content="[0:00-0:05] Test",
-            tokens_in=50000,
+    async def test_stt_only_when_no_vd(self) -> None:
+        """VideoProcessor returns STT chunks when no VD pipeline."""
+        mock_stt = AsyncMock()
+        mock_stt.process.return_value = SourceDocument(
+            source_type=SourceType.VIDEO,
+            source_url="file:///v.mp4",
+            chunks=[
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text="Hello",
+                    start_sec=0.0,
+                    end_sec=5.0,
+                ),
+            ],
         )
 
-        proc = VideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        proc = VideoProcessor(stt=mock_stt)
+        doc = await proc.process(_make_source())
 
-        assert isinstance(doc, SourceDocument)
-        assert doc.source_type == SourceType.VIDEO
+        assert len(doc.chunks) == 1
+        assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
+        assert doc.metadata["strategy"] == "stt"
 
-    async def test_unsupported_format_not_caught(self) -> None:
-        """UnsupportedFormatError propagates without fallback attempt."""
-        router = AsyncMock()
-
-        proc = VideoProcessor()
+    async def test_unsupported_format(self) -> None:
+        """UnsupportedFormatError for non-video source."""
+        proc = VideoProcessor(stt=AsyncMock())
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
-            await proc.process(_make_source(source_type="text"), router=router)
-
-    async def test_fallback_no_whisper_re_raises(self) -> None:
-        """Re-raises if whisper is disabled and Gemini fails."""
-        router = AsyncMock()
-        router.complete.side_effect = RuntimeError("Gemini down")
-
-        proc = VideoProcessor(enable_whisper=False)
-        assert proc._whisper is None
-
-        with pytest.raises(RuntimeError, match="Gemini down"):
-            await proc.process(_make_source(), router=router)
+            await proc.process(_make_source(source_type="text"))
 
 
 class TestTimecodeToSeconds:

@@ -125,6 +125,8 @@ def _extract_video_duration_sec(doc: dict[str, Any]) -> float | None:
     """Extract video duration as max end_sec across all chunks.
 
     Returns None when no chunks contain end_sec (fallback: skip check).
+    Supports both top-level ``end_sec`` (new schema) and legacy
+    ``metadata.end_sec`` for backward compatibility with older records.
     """
     chunks = doc.get(_KEY_CHUNKS)
     if not isinstance(chunks, list) or not chunks:
@@ -133,10 +135,13 @@ def _extract_video_duration_sec(doc: dict[str, Any]) -> float | None:
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
-        meta = chunk.get(_KEY_METADATA)
-        if not isinstance(meta, dict):
-            continue
-        end_sec = meta.get(_KEY_END_SEC)
+        # New schema: end_sec is a top-level chunk field
+        end_sec = chunk.get(_KEY_END_SEC)
+        # Legacy fallback: end_sec inside metadata dict
+        if end_sec is None:
+            meta = chunk.get(_KEY_METADATA)
+            if isinstance(meta, dict):
+                end_sec = meta.get(_KEY_END_SEC)
         if isinstance(end_sec, int | float) and (max_end is None or end_sec > max_end):
             max_end = end_sec
     return max_end

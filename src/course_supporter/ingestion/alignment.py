@@ -248,21 +248,38 @@ class CrossModalAligner:
         stt_chunks: list[ContentChunk],
         vd_chunks: list[ContentChunk],
     ) -> list[AlignedSegment]:
-        """Phase 1: Match STT and VD chunks by temporal overlap."""
+        """Phase 1: Match STT and VD chunks by temporal overlap.
+
+        Pre-sorts STT by start_sec for efficient scanning.
+        """
+        # Pre-sort STT chunks by start time
+        sorted_stt = sorted(
+            (
+                s
+                for s in stt_chunks
+                if s.start_sec is not None and s.end_sec is not None
+            ),
+            key=lambda s: s.start_sec or 0.0,
+        )
+
         segments: list[AlignedSegment] = []
 
         for vd in vd_chunks:
             if vd.start_sec is None or vd.end_sec is None:
                 continue
 
-            # Find STT chunks that overlap with this VD scene (± window)
             vd_start = vd.start_sec - self._window
             vd_end = vd.end_sec + self._window
 
+            # Scan sorted STT — skip those that end before our window
             matching_stt: list[ContentChunk] = []
-            for stt in stt_chunks:
-                if stt.start_sec is None or stt.end_sec is None:
+            for stt in sorted_stt:
+                assert stt.start_sec is not None
+                assert stt.end_sec is not None
+                if stt.end_sec < vd_start:
                     continue
+                if stt.start_sec > vd_end:
+                    break
                 overlap = _temporal_overlap(
                     vd_start,
                     vd_end,
@@ -272,7 +289,6 @@ class CrossModalAligner:
                 if overlap >= self._min_overlap:
                     matching_stt.append(stt)
 
-            # Combine matched STT text
             stt_text = " ".join(s.text for s in matching_stt) if matching_stt else None
 
             segments.append(
@@ -358,9 +374,8 @@ class CrossModalAligner:
             return []
 
         all_intervals.sort()
-        max_time = max(end for _, end in all_intervals)
 
-        # Find gaps
+        # Find gaps between covered intervals
         gaps: list[CoverageGap] = []
         covered_until = 0.0
         for start, end in all_intervals:
@@ -373,16 +388,6 @@ class CrossModalAligner:
                     ),
                 )
             covered_until = max(covered_until, end)
-
-        # Check gap at the end
-        if max_time > covered_until + self._gap_threshold:
-            gaps.append(
-                CoverageGap(
-                    start_sec=covered_until,
-                    end_sec=max_time,
-                    gap_type="neither",
-                ),
-            )
 
         return gaps
 
@@ -400,13 +405,12 @@ class CrossModalAligner:
                 orphans.append(scene_id)
         return orphans
 
-    @staticmethod
     def _find_stt_orphans(
+        self,
         segments: list[AlignedSegment],
         stt_chunks: list[ContentChunk],
     ) -> list[int]:
         """Phase 4c: STT chunks with no VD match."""
-        # Collect time ranges covered by aligned segments
         covered: list[tuple[float, float]] = [
             (s.start_sec, s.end_sec) for s in segments
         ]
@@ -417,7 +421,7 @@ class CrossModalAligner:
                 continue
             matched = any(
                 _temporal_overlap(stt.start_sec, stt.end_sec, c_start, c_end)
-                >= _OVERLAP_MIN_SEC
+                >= self._min_overlap
                 for c_start, c_end in covered
             )
             if not matched:

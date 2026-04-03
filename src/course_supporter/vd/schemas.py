@@ -224,7 +224,7 @@ class SceneMemory(BaseModel):
     scene_id: int = Field(ge=0)
     summary: str = Field(
         default="",
-        description="Current understanding of the scene (Ukrainian).",
+        description="Current understanding of the scene (English).",
     )
     scene_type: str = Field(default="")
     topics: list[str] = Field(default_factory=list)
@@ -245,7 +245,7 @@ class VideoMemory(BaseModel):
 
     text: str = Field(
         default="",
-        description="Current video context (Ukrainian, <=200 words).",
+        description="Current video context (English, <=200 words).",
     )
     scenes_processed: int = Field(default=0, ge=0)
 

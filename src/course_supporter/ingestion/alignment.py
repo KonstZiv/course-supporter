@@ -13,6 +13,7 @@ import re
 
 import structlog
 
+from course_supporter.ingestion.stop_words import build_stop_words
 from course_supporter.models.source import ContentChunk
 from course_supporter.vd.schemas import (
     AlignedSegment,
@@ -29,144 +30,14 @@ _GAP_THRESHOLD_SEC = 30.0
 # Pattern to extract code-like identifiers (function names, variables, etc.)
 _IDENTIFIER_PATTERN = re.compile(r"\b[a-zA-Z_]\w*(?:\.\w+)*\b")
 
-# Common words to exclude from identifier matching
-_STOP_WORDS = frozenset(
-    {
-        "the",
-        "a",
-        "an",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "shall",
-        "can",
-        "must",
-        "not",
-        "no",
-        "and",
-        "or",
-        "but",
-        "if",
-        "then",
-        "else",
-        "for",
-        "in",
-        "on",
-        "at",
-        "to",
-        "from",
-        "with",
-        "by",
-        "of",
-        "that",
-        "this",
-        "it",
-        "its",
-        "we",
-        "you",
-        "he",
-        "she",
-        "they",
-        "them",
-        "our",
-        "your",
-        "my",
-        "his",
-        "her",
-        "their",
-        "what",
-        "which",
-        "who",
-        "how",
-        "when",
-        "where",
-        "why",
-        "all",
-        "each",
-        "every",
-        "both",
-        "few",
-        "more",
-        "most",
-        "other",
-        "some",
-        "such",
-        "than",
-        "too",
-        "very",
-        "just",
-        "about",
-        "above",
-        "after",
-        "before",
-        "between",
-        "into",
-        "through",
-        "during",
-        "without",
-        "again",
-        "further",
-        "once",
-        "here",
-        "there",
-        "so",
-        "up",
-        "out",
-        "only",
-        "also",
-        "now",
-        "new",
-        "one",
-        "two",
-        "three",
-        "first",
-        "true",
-        "false",
-        "none",
-        "null",
-        "return",
-        "import",
-        "class",
-        "def",
-        "self",
-        "print",
-        "type",
-        "list",
-        "dict",
-        "str",
-        "int",
-        "float",
-        "bool",
-        "function",
-        "method",
-        "variable",
-        "value",
-        "used",
-        "called",
-        "using",
-    }
-)
 
-
-def _extract_identifiers(text: str) -> set[str]:
+def _extract_identifiers(
+    text: str,
+    stop_words: frozenset[str],
+) -> set[str]:
     """Extract meaningful identifiers from text."""
     raw = _IDENTIFIER_PATTERN.findall(text)
-    return {w.lower() for w in raw if len(w) > 2 and w.lower() not in _STOP_WORDS}
+    return {w.lower() for w in raw if len(w) > 2 and w.lower() not in stop_words}
 
 
 def _temporal_overlap(
@@ -199,10 +70,16 @@ class CrossModalAligner:
         window_sec: float = _WINDOW_SEC,
         overlap_min_sec: float = _OVERLAP_MIN_SEC,
         gap_threshold_sec: float = _GAP_THRESHOLD_SEC,
+        natural_lang: str = "en",
+        programming_lang: str = "python",
     ) -> None:
         self._window = window_sec
         self._min_overlap = overlap_min_sec
         self._gap_threshold = gap_threshold_sec
+        self._stop_words = build_stop_words(
+            natural_lang=natural_lang,
+            programming_lang=programming_lang,
+        )
 
     def align(
         self,
@@ -303,8 +180,8 @@ class CrossModalAligner:
 
         return segments
 
-    @staticmethod
     def _semantic_link(
+        self,
         segments: list[AlignedSegment],
         stt_chunks: list[ContentChunk],
         vd_chunks: list[ContentChunk],
@@ -314,8 +191,8 @@ class CrossModalAligner:
             if not seg.stt_text or not seg.vd_summary:
                 continue
 
-            stt_ids = _extract_identifiers(seg.stt_text)
-            vd_ids = _extract_identifiers(seg.vd_summary)
+            stt_ids = _extract_identifiers(seg.stt_text, self._stop_words)
+            vd_ids = _extract_identifiers(seg.vd_summary, self._stop_words)
 
             if not stt_ids or not vd_ids:
                 continue
@@ -325,8 +202,8 @@ class CrossModalAligner:
             seg.semantic_overlap = len(common) / len(union) if union else 0.0
             seg.alignment_confidence = min(1.0, seg.semantic_overlap * 2)
 
-    @staticmethod
     def _detect_conflicts(
+        self,
         segments: list[AlignedSegment],
         stt_chunks: list[ContentChunk],
         vd_chunks: list[ContentChunk],
@@ -336,8 +213,8 @@ class CrossModalAligner:
             if not seg.stt_text or not seg.vd_summary:
                 continue
 
-            stt_ids = _extract_identifiers(seg.stt_text)
-            vd_ids = _extract_identifiers(seg.vd_summary)
+            stt_ids = _extract_identifiers(seg.stt_text, self._stop_words)
+            vd_ids = _extract_identifiers(seg.vd_summary, self._stop_words)
 
             # Identifiers in VD but not in STT could be misheard
             vd_only = vd_ids - stt_ids

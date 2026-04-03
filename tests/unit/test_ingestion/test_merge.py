@@ -267,3 +267,48 @@ class TestMergeStep:
         result = step.merge([_make_doc()], material_tree=None)
 
         assert result.material_tree == []
+
+    def test_visual_scene_chunks_pass_through(self) -> None:
+        """VISUAL_SCENE chunks from VD pipeline preserved in merge."""
+        step = MergeStep()
+        video = _make_doc(
+            SourceType.VIDEO,
+            chunks=[
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text="Hello world",
+                    index=0,
+                    start_sec=0.0,
+                    end_sec=10.0,
+                ),
+                ContentChunk(
+                    chunk_type=ChunkType.VISUAL_SCENE,
+                    text="Code editor with Python function",
+                    index=0,
+                    start_sec=0.0,
+                    end_sec=10.0,
+                    metadata={
+                        "scene_id": 0,
+                        "scene_type": "screen_recording",
+                        "importance": 4,
+                        "topics": ["python", "functions"],
+                    },
+                ),
+            ],
+        )
+        text = _make_doc(SourceType.TEXT)
+
+        result = step.merge([text, video])
+
+        # Video first (priority), both chunk types preserved
+        assert result.documents[0].source_type == SourceType.VIDEO
+        chunks = result.documents[0].chunks
+        assert len(chunks) == 2
+        types = {c.chunk_type for c in chunks}
+        assert ChunkType.TRANSCRIPT in types
+        assert ChunkType.VISUAL_SCENE in types
+
+        vd_chunk = next(c for c in chunks if c.chunk_type == ChunkType.VISUAL_SCENE)
+        assert vd_chunk.start_sec == 0.0
+        assert vd_chunk.metadata["scene_type"] == "screen_recording"
+        assert vd_chunk.metadata["topics"] == ["python", "functions"]

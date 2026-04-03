@@ -252,53 +252,18 @@ class TestVideoProcessorParallel:
             ],
         )
 
-        mock_vd = AsyncMock()
-        from course_supporter.vd.schemas import (
-            EyesResult,
-            Scene,
-            SceneAnalysis,
-            SceneMemory,
-            VDResult,
-            VideoMemory,
-        )
+        vd_chunks = [
+            ContentChunk(
+                chunk_type=ChunkType.VISUAL_SCENE,
+                text="Code editor with Python",
+                start_sec=0.0,
+                end_sec=10.0,
+                metadata={"scene_type": "screen_recording"},
+            ),
+        ]
 
-        mock_vd.process.return_value = VDResult(
-            scenes=[
-                SceneAnalysis(
-                    scene=Scene(
-                        scene_id=0,
-                        frame_ids=["f0"],
-                        start_sec=0.0,
-                        end_sec=10.0,
-                    ),
-                    eyes_results=[
-                        EyesResult(
-                            frame_id="f0",
-                            timestamp_sec=0.0,
-                            scene_id=0,
-                            response="test",
-                            n_images=1,
-                            latency_sec=1.0,
-                            input_tokens=100,
-                            output_tokens=50,
-                        ),
-                    ],
-                    scene_memory=SceneMemory(
-                        scene_id=0,
-                        summary="Code editor with Python",
-                        scene_type="screen_recording",
-                        topics=["python"],
-                        importance=4,
-                    ),
-                ),
-            ],
-            video_memory=VideoMemory(text="Python tutorial"),
-            frames_total=1,
-            frames_analyzed=1,
-            model="test",
-        )
-
-        proc = VideoProcessor(stt=mock_stt, vd_pipeline=mock_vd)
+        proc = VideoProcessor(stt=mock_stt, vd_pipeline=MagicMock())
+        proc._run_vd = AsyncMock(return_value=vd_chunks)  # type: ignore[method-assign]
         doc = await proc.process(_make_source())
 
         assert len(doc.chunks) == 2

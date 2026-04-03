@@ -424,10 +424,10 @@ class VideoProcessor(SourceProcessor):
     def __init__(
         self,
         *,
-        stt: WhisperVideoProcessor | None = None,
+        stt: WhisperVideoProcessor,
         vd_pipeline: VDPipeline | None = None,
     ) -> None:
-        self._stt = stt or WhisperVideoProcessor()
+        self._stt = stt
         self._vd = vd_pipeline
 
     async def process(
@@ -494,9 +494,10 @@ class VideoProcessor(SourceProcessor):
             raise ProcessingError(
                 f"VDPipeline requires a local file path, got URL: {url}"
             )
-        video_path = Path(
-            url.removeprefix("file://") if url.startswith("file://") else url
-        )
+        raw = url.removeprefix("file://") if url.startswith("file://") else url
+        video_path = Path(raw).resolve()  # noqa: ASYNC240
+        if not video_path.is_file():
+            raise ProcessingError(f"Video file not found: {video_path}")
 
         result = await self._vd.process(video_path)
         return self._vd_result_to_chunks(result)

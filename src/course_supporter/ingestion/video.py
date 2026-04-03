@@ -38,6 +38,8 @@ from course_supporter.models.source import (
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.storage.orm import MaterialEntry
+    from course_supporter.vd.pipeline import VDPipeline
+    from course_supporter.vd.schemas import VDResult
 
 logger = structlog.get_logger()
 
@@ -423,7 +425,7 @@ class VideoProcessor(SourceProcessor):
         self,
         *,
         stt: WhisperVideoProcessor | None = None,
-        vd_pipeline: object | None = None,
+        vd_pipeline: VDPipeline | None = None,
     ) -> None:
         self._stt = stt or WhisperVideoProcessor()
         self._vd = vd_pipeline
@@ -485,25 +487,26 @@ class VideoProcessor(SourceProcessor):
 
     async def _run_vd(self, source: MaterialEntry) -> list[ContentChunk]:
         """Run VD pipeline and convert result to ContentChunks."""
-        from course_supporter.vd.pipeline import VDPipeline
+        assert self._vd is not None  # guarded by caller
 
-        vd: VDPipeline = self._vd  # type: ignore[assignment]
+        url = source.source_url
+        if url.startswith(("http://", "https://")):
+            raise ProcessingError(
+                f"VDPipeline requires a local file path, got URL: {url}"
+            )
+        video_path = Path(
+            url.removeprefix("file://") if url.startswith("file://") else url
+        )
 
-        # VDPipeline needs a local file path
-        video_path = Path(source.source_url)
-        result = await vd.process(video_path)
-
+        result = await self._vd.process(video_path)
         return self._vd_result_to_chunks(result)
 
     @staticmethod
-    def _vd_result_to_chunks(result: object) -> list[ContentChunk]:
+    def _vd_result_to_chunks(result: VDResult) -> list[ContentChunk]:
         """Convert VDResult scenes to VISUAL_SCENE ContentChunks."""
-        from course_supporter.vd.schemas import VDResult
-
-        vd_result: VDResult = result  # type: ignore[assignment]
         chunks: list[ContentChunk] = []
 
-        for idx, analysis in enumerate(vd_result.scenes):
+        for idx, analysis in enumerate(result.scenes):
             sm = analysis.scene_memory
             chunks.append(
                 ContentChunk(

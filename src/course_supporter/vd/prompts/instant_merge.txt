@@ -1,7 +1,0 @@
-Below are text/code extractions from {n} consecutive frames of the same scene in a programming video. Frames show the same screen with small changes (typing, scrolling, output appearing).
-
-Merge into ONE complete text containing ALL code/text visible across all frames. Where frames overlap (same code with additions), produce the most complete version. Preserve exact formatting.
-
-{frame_texts}
-
-Respond with the merged text only. No JSON, no explanation.

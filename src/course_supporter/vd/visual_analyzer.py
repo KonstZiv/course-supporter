@@ -25,12 +25,16 @@ from typing import Any
 import structlog
 
 from course_supporter.key_pool import KeyPool
+from course_supporter.vd.memory_pipeline import MemoryPipeline, build_instant_memory
 from course_supporter.vd.schemas import (
     ChangeClass,
     DeltaStrategy,
     EyesResult,
+    InstantMemory,
     SampledFrame,
     Scene,
+    SceneMemory,
+    VideoMemory,
 )
 
 logger = structlog.get_logger()
@@ -86,8 +90,60 @@ def _is_conditional_delta(text: str) -> bool:
     return stripped.upper().startswith("CHANGES ONLY:")
 
 
+_CHANGE_CLASS_LABELS: dict[ChangeClass, str] = {
+    ChangeClass.FIRST: "FIRST frame",
+    ChangeClass.BOUNDARY: "HIGH change",
+    ChangeClass.MEDIUM: "MEDIUM change",
+    ChangeClass.LOW: "LOW change",
+}
+
+
+def _build_similarity_hint(frame: SampledFrame | None) -> str:
+    """Build a pixel-level similarity hint for the conditional prompt.
+
+    Returns an empty string when no frame metadata is available
+    (e.g. first frame or NONE strategy).
+    """
+    if frame is None:
+        return ""
+    similarity_pct = round((1.0 - frame.dhash_dist) * 100)
+    label = _CHANGE_CLASS_LABELS.get(frame.change_class, frame.change_class.value)
+    return (
+        f"Pixel-level similarity to previous frame: {similarity_pct}% ({label}). "
+        "Note: this metric can be noisy — minor object movement, camera shake, "
+        "or animation may inflate the change value. Use your own visual judgement "
+        "as the primary signal.\n\n"
+    )
+
+
+def _build_memory_context(
+    instant: InstantMemory | None,
+    scene_memory: SceneMemory,
+    video_memory: VideoMemory,
+) -> str:
+    """Build a context block from all three memory levels.
+
+    Formatted as a single block for the Eyes prompt.
+    Returns empty string when no memory data is available.
+    """
+    parts: list[str] = []
+
+    if video_memory.text:
+        parts.append(f"Video context:\n{video_memory.text}")
+
+    if scene_memory.summary:
+        parts.append(f"Current scene so far:\n{scene_memory.summary}")
+
+    if instant is not None and instant.previous:
+        parts.append(f"Previous frame:\n{instant.previous}")
+
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\n"
+
+
 class VisualAnalyzer:
-    """Per-frame Vision LLM analysis with context images.
+    """Per-frame Vision LLM analysis with context images and memory.
 
     Args:
         key_pool: Gemini API key pool for rotation.
@@ -96,6 +152,8 @@ class VisualAnalyzer:
         context_max_gap_sec: Max time gap for context images.
         max_context_images: Max number of previous frames as context.
         delta_strategy: How to handle frames similar to previous.
+        memory: Optional MemoryPipeline for streaming memory updates.
+            Injected separately so it can use a different model/provider.
     """
 
     def __init__(
@@ -107,12 +165,14 @@ class VisualAnalyzer:
         context_max_gap_sec: float = 7.0,
         max_context_images: int = 2,
         delta_strategy: DeltaStrategy = DeltaStrategy.CONDITIONAL,
+        memory: MemoryPipeline | None = None,
     ) -> None:
         self._key_pool = key_pool
         self._model = model
         self._context_max_gap = context_max_gap_sec
         self._max_ctx_images = max_context_images
         self._delta_strategy = delta_strategy
+        self._memory = memory
 
         total_rpm = rpm_per_key * len(key_pool)
         self._min_interval = 60.0 / total_rpm
@@ -125,21 +185,26 @@ class VisualAnalyzer:
         frames: list[SampledFrame],
         frame_dir: Path,
         *,
-        course_context: str = "",
-    ) -> list[EyesResult]:
-        """Analyze all frames in a scene sequentially.
+        video_memory: VideoMemory | None = None,
+        scene_memory: SceneMemory | None = None,
+    ) -> tuple[list[EyesResult], SceneMemory | None]:
+        """Analyze all frames in a scene with streaming memory.
 
         Args:
             scene: Scene metadata.
             frames: Frames belonging to this scene (ordered by time).
             frame_dir: Directory containing frame JPEG files.
-            course_context: Running course-level context text.
+            video_memory: Current video-level context.
+            scene_memory: Initial scene memory (carries previous scene info).
 
         Returns:
-            List of EyesResult, one per frame.
+            Tuple of (eyes_results, final_scene_memory).
+            scene_memory is None when no MemoryPipeline is injected.
         """
         results: list[EyesResult] = []
-        scene_ctx: list[dict[str, Any]] = []
+        instant: InstantMemory | None = None
+        current_scene = scene_memory or SceneMemory(scene_id=scene.scene_id)
+        current_video = video_memory or VideoMemory()
 
         for i, frame in enumerate(frames):
             # Select context images: previous frames within time gap
@@ -157,21 +222,22 @@ class VisualAnalyzer:
                 frame=frame,
                 context_frames=ctx_frames,
                 frame_dir=frame_dir,
-                course_context=course_context,
-                scene_context=scene_ctx,
+                instant=instant,
+                scene_memory=current_scene,
+                video_memory=current_video,
                 prev_result=prev_result if use_delta else None,
             )
             results.append(result)
 
-            # Update scene context for next frame
-            scene_ctx.append(
-                {
-                    "ts": frame.timestamp_sec,
-                    "desc": result.description,
-                }
-            )
+            # Update memory after each frame
+            instant = build_instant_memory(result, instant)
+            if self._memory is not None:
+                current_scene = await self._memory.update_scene_memory(
+                    instant,
+                    current_scene,
+                )
 
-        return results
+        return results, current_scene if self._memory is not None else None
 
     def _should_use_delta(
         self,
@@ -199,8 +265,9 @@ class VisualAnalyzer:
         frame: SampledFrame,
         context_frames: list[SampledFrame],
         frame_dir: Path,
-        course_context: str,
-        scene_context: list[dict[str, Any]],
+        instant: InstantMemory | None,
+        scene_memory: SceneMemory,
+        video_memory: VideoMemory,
         prev_result: EyesResult | None,
     ) -> EyesResult:
         """Analyze a single frame with Vision LLM."""
@@ -229,9 +296,11 @@ class VisualAnalyzer:
 
         # Build prompt text based on strategy
         prompt = self._build_prompt(
-            course_context,
-            scene_context,
-            prev_result,
+            instant=instant,
+            scene_memory=scene_memory,
+            video_memory=video_memory,
+            prev_result=prev_result,
+            frame=frame,
         )
         parts.append(genai.types.Part.from_text(text=prompt))
 
@@ -320,23 +389,15 @@ class VisualAnalyzer:
 
     def _build_prompt(
         self,
-        course_context: str,
-        scene_context: list[dict[str, Any]],
+        *,
+        instant: InstantMemory | None,
+        scene_memory: SceneMemory,
+        video_memory: VideoMemory,
         prev_result: EyesResult | None,
+        frame: SampledFrame | None = None,
     ) -> str:
-        """Build the appropriate prompt based on delta strategy."""
-        course_block = ""
-        if course_context:
-            course_block = (
-                f"Course context (what has been covered):\n{course_context}\n\n"
-            )
-
-        scene_block = ""
-        if scene_context:
-            items = "\n".join(
-                f"- {item['ts']:.0f}s: {item['desc']}" for item in scene_context[-5:]
-            )
-            scene_block = f"Previous frames in this scene:\n{items}\n\n"
+        """Build the appropriate prompt based on delta strategy and memory."""
+        context_block = _build_memory_context(instant, scene_memory, video_memory)
 
         # Choose template based on strategy and whether we have prev
         if prev_result is not None:
@@ -344,22 +405,24 @@ class VisualAnalyzer:
                 template = _load_prompt("eyes_v3_delta.txt")
                 return template.format(
                     previous_description=prev_result.response[:2000],
-                    course_context_block=course_block,
-                    scene_context_block=scene_block,
+                    course_context_block=context_block,
+                    scene_context_block="",
                 )
             if self._delta_strategy == DeltaStrategy.CONDITIONAL:
+                similarity_hint = _build_similarity_hint(frame)
                 template = _load_prompt("eyes_v3_conditional.txt")
                 return template.format(
                     previous_description=prev_result.response[:2000],
-                    course_context_block=course_block,
-                    scene_context_block=scene_block,
+                    similarity_hint=similarity_hint,
+                    course_context_block=context_block,
+                    scene_context_block="",
                 )
 
         # Full description (NONE strategy or first frame)
         template = _load_prompt("eyes_v3.txt")
         return template.format(
-            course_context_block=course_block,
-            scene_context_block=scene_block,
+            course_context_block=context_block,
+            scene_context_block="",
         )
 
     @staticmethod

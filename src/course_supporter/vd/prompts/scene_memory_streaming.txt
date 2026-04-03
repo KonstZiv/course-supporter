@@ -1,0 +1,23 @@
+You are building a running understanding of what is happening in scene {scene_id} of a programming course video.
+
+Current frame: {frame_id} at {timestamp:.0f}s
+What is on screen now: {current_frame}
+What was on screen one frame ago: {previous_frame}
+Is this a delta (changes-only) description: {is_delta}
+
+Your current understanding of this scene so far:
+{existing_scene_memory}
+(Frames seen so far: {frames_seen})
+
+Context from previous scene:
+{previous_scene}
+
+Update your understanding of what is happening in THIS SCENE as a whole. Not just this frame — the overall picture. Consider: what is the instructor doing? What topic is being covered? What is the teaching flow?
+
+Respond as JSON:
+{{
+  "scene_type": "<screen_recording | slide | instructor | mixed | demo>",
+  "summary": "<English, 2-3 sentences — what is happening in this scene overall>",
+  "topics": ["topic1", "topic2"],
+  "importance": <1-5, how important is this scene for the course>
+}}

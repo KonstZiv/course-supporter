@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from course_supporter.vd.schemas import ChangeClass, DeltaStrategy, EyesResult
+from course_supporter.vd.schemas import (
+    ChangeClass,
+    DeltaStrategy,
+    EyesResult,
+    FrameSource,
+    SampledFrame,
+    SceneMemory,
+    VideoMemory,
+)
 from course_supporter.vd.visual_analyzer import (
     VisualAnalyzer,
+    _build_memory_context,
+    _build_similarity_hint,
     _is_conditional_delta,
     _load_prompt,
     _parse_response,
@@ -91,38 +101,143 @@ class TestIsConditionalDelta:
         assert not _is_conditional_delta("The frame shows a code editor")
 
 
+def _make_frame(
+    *,
+    change_class: ChangeClass = ChangeClass.LOW,
+    dhash_dist: float = 0.07,
+) -> SampledFrame:
+    """Helper to create a SampledFrame for tests."""
+    return SampledFrame(
+        frame_id="frame_001_10s",
+        filename="frame_001.jpg",
+        timestamp_sec=10.0,
+        scene_id=0,
+        source=FrameSource.GOLDEN,
+        dhash="a" * 64,
+        dhash_dist=dhash_dist,
+        time_gap=2.0,
+        change_class=change_class,
+    )
+
+
+class TestBuildSimilarityHint:
+    """Test similarity hint generation."""
+
+    def test_none_frame_returns_empty(self) -> None:
+        assert _build_similarity_hint(None) == ""
+
+    def test_low_change_high_similarity(self) -> None:
+        frame = _make_frame(change_class=ChangeClass.LOW, dhash_dist=0.07)
+        hint = _build_similarity_hint(frame)
+        assert "93%" in hint
+        assert "LOW change" in hint
+        assert "noisy" in hint
+
+    def test_boundary_change_low_similarity(self) -> None:
+        frame = _make_frame(change_class=ChangeClass.BOUNDARY, dhash_dist=0.45)
+        hint = _build_similarity_hint(frame)
+        assert "55%" in hint
+        assert "HIGH change" in hint
+
+    def test_medium_change(self) -> None:
+        frame = _make_frame(change_class=ChangeClass.MEDIUM, dhash_dist=0.15)
+        hint = _build_similarity_hint(frame)
+        assert "85%" in hint
+        assert "MEDIUM change" in hint
+
+    def test_first_frame(self) -> None:
+        frame = _make_frame(change_class=ChangeClass.FIRST, dhash_dist=0.0)
+        hint = _build_similarity_hint(frame)
+        assert "100%" in hint
+        assert "FIRST frame" in hint
+
+
+def _empty_memory() -> tuple[SceneMemory, VideoMemory]:
+    """Create empty memory states for testing."""
+    return SceneMemory(scene_id=0), VideoMemory()
+
+
+class TestBuildMemoryContext:
+    """Test memory context block generation."""
+
+    def test_empty_memory(self) -> None:
+        sm, vm = _empty_memory()
+        assert _build_memory_context(None, sm, vm) == ""
+
+    def test_video_memory_only(self) -> None:
+        sm, _ = _empty_memory()
+        vm = VideoMemory(text="ESP32 programming course")
+        ctx = _build_memory_context(None, sm, vm)
+        assert "Video context:" in ctx
+        assert "ESP32 programming course" in ctx
+
+    def test_all_three_levels(self) -> None:
+        from course_supporter.vd.schemas import InstantMemory
+
+        instant = InstantMemory(
+            frame_id="f1",
+            scene_id=0,
+            timestamp_sec=10.0,
+            current="Code editor",
+            previous="Title slide",
+        )
+        sm = SceneMemory(scene_id=0, summary="Instructor writes code")
+        vm = VideoMemory(text="Python course")
+        ctx = _build_memory_context(instant, sm, vm)
+        assert "Video context:" in ctx
+        assert "Current scene so far:" in ctx
+        assert "Previous frame:" in ctx
+        assert "Title slide" in ctx
+
+    def test_no_previous_frame(self) -> None:
+        from course_supporter.vd.schemas import InstantMemory
+
+        instant = InstantMemory(
+            frame_id="f0",
+            scene_id=0,
+            timestamp_sec=0.0,
+            current="First frame",
+            previous="",
+        )
+        sm, vm = _empty_memory()
+        ctx = _build_memory_context(instant, sm, vm)
+        assert "Previous frame:" not in ctx
+
+
 class TestBuildPrompt:
-    """Test prompt assembly with context blocks and delta strategies."""
+    """Test prompt assembly with memory context and delta strategies."""
 
     def test_full_no_context(self) -> None:
         analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
         analyzer._delta_strategy = DeltaStrategy.NONE
-        prompt = analyzer._build_prompt("", [], None)
+        sm, vm = _empty_memory()
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=None,
+        )
         assert "## Scene Composition" in prompt
-        assert "Course context" not in prompt
 
-    def test_full_with_course_context(self) -> None:
+    def test_full_with_video_memory(self) -> None:
         analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
         analyzer._delta_strategy = DeltaStrategy.NONE
-        prompt = analyzer._build_prompt("Topics covered", [], None)
-        assert "Course context (what has been covered):" in prompt
-        assert "Topics covered" in prompt
-
-    def test_full_with_scene_context(self) -> None:
-        analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
-        analyzer._delta_strategy = DeltaStrategy.NONE
-        ctx = [
-            {"ts": 10.0, "desc": "Code editor"},
-            {"ts": 12.0, "desc": "New function"},
-        ]
-        prompt = analyzer._build_prompt("", ctx, None)
-        assert "Previous frames" in prompt
-        assert "10s: Code editor" in prompt
+        sm, _ = _empty_memory()
+        vm = VideoMemory(text="Topics covered so far")
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=None,
+        )
+        assert "Video context:" in prompt
+        assert "Topics covered so far" in prompt
 
     def test_explicit_delta_with_prev(self) -> None:
         """Explicit strategy uses delta prompt when prev_result given."""
         analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
         analyzer._delta_strategy = DeltaStrategy.EXPLICIT
+        sm, vm = _empty_memory()
         prev = EyesResult(
             frame_id="f0",
             timestamp_sec=0.0,
@@ -133,14 +248,20 @@ class TestBuildPrompt:
             input_tokens=100,
             output_tokens=50,
         )
-        prompt = analyzer._build_prompt("", [], prev)
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=prev,
+        )
         assert "ONLY what changed" in prompt
         assert "Full description here" in prompt
 
     def test_conditional_with_prev(self) -> None:
-        """Conditional strategy uses conditional prompt."""
+        """Conditional strategy includes similarity hint."""
         analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
         analyzer._delta_strategy = DeltaStrategy.CONDITIONAL
+        sm, vm = _empty_memory()
         prev = EyesResult(
             frame_id="f0",
             timestamp_sec=0.0,
@@ -151,26 +272,55 @@ class TestBuildPrompt:
             input_tokens=100,
             output_tokens=50,
         )
-        prompt = analyzer._build_prompt("", [], prev)
+        frame = _make_frame(change_class=ChangeClass.LOW, dhash_dist=0.05)
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=prev,
+            frame=frame,
+        )
         assert "CHANGES ONLY:" in prompt
         assert "Previous content" in prompt
+        assert "95%" in prompt
+        assert "LOW change" in prompt
+
+    def test_conditional_without_frame_still_works(self) -> None:
+        """Conditional prompt works when frame is not provided."""
+        analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
+        analyzer._delta_strategy = DeltaStrategy.CONDITIONAL
+        sm, vm = _empty_memory()
+        prev = EyesResult(
+            frame_id="f0",
+            timestamp_sec=0.0,
+            scene_id=0,
+            response="Previous content",
+            n_images=1,
+            latency_sec=1.0,
+            input_tokens=100,
+            output_tokens=50,
+        )
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=prev,
+        )
+        assert "CHANGES ONLY:" in prompt
+        assert "Pixel-level" not in prompt
 
     def test_none_strategy_ignores_prev(self) -> None:
         """NONE strategy always uses full prompt."""
         analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
         analyzer._delta_strategy = DeltaStrategy.NONE
-        # NONE strategy: prev_result is never passed to _build_prompt
-        prompt = analyzer._build_prompt("", [], None)
+        sm, vm = _empty_memory()
+        prompt = analyzer._build_prompt(
+            instant=None,
+            scene_memory=sm,
+            video_memory=vm,
+            prev_result=None,
+        )
         assert "## Scene Composition" in prompt
-
-    def test_scene_context_max_5(self) -> None:
-        analyzer = VisualAnalyzer.__new__(VisualAnalyzer)
-        analyzer._delta_strategy = DeltaStrategy.NONE
-        ctx = [{"ts": float(i), "desc": f"d{i}"} for i in range(10)]
-        prompt = analyzer._build_prompt("", ctx, None)
-        assert "d5" in prompt
-        assert "d9" in prompt
-        assert "d4" not in prompt
 
 
 class TestShouldUseDelta:

@@ -1,6 +1,8 @@
 You are analyzing a video frame. The LAST image is the MAIN frame to describe. Previous images (if any) are context — use them if something on the MAIN frame is occluded, has artifacts, or is low quality.
 
-{course_context_block}{scene_context_block}Describe EVERYTHING visible on the MAIN frame. This is raw data for further processing — be precise and complete.
+{course_context_block}{scene_context_block}Your primary source is the image itself — describe exactly what you see. The context above (if provided) is supporting information at different levels: the video context tells you what this video is about overall, the scene context tells you what is happening in the current scene, and the previous frame tells you what was just shown. Use this context to describe the frame with greater precision and detail — for example, to correctly name tools, identify programming languages, understand the purpose of UI elements, or recognize what step of a process is being shown.
+
+Describe EVERYTHING visible on the MAIN frame. This is raw data for further processing — be precise and complete.
 
 Respond in Markdown:
 

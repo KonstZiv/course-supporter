@@ -1,12 +1,13 @@
-"""Hierarchical memory pipeline: instant -> scene -> course.
+"""Hierarchical streaming memory pipeline: instant -> scene -> video.
 
-Three aggregation levels for VD pipeline output:
+Three aggregation levels, updated incrementally:
 
-1. **Instant Memory** — per-scene code-based text merge (no LLM).
-   Falls back to LLM merge when overlap detection fails.
-2. **Scene Memory** — per-scene LLM synthesis (type, summary, topics).
-3. **Course Memory** — running course context (<=200 words), updated
-   per scene, fed back into Eyes prompt for next scene.
+1. **Instant Memory** — per-frame rolling window (no LLM).
+   Current frame description + compressed previous frame.
+2. **Scene Memory** — per-scene rolling assessment (LLM, per frame).
+   What is happening in this scene overall. Updated with each frame.
+3. **Video Memory** — running video context (LLM, per scene).
+   Short description of the entire video. Updated once per scene.
 """
 
 from __future__ import annotations
@@ -21,135 +22,79 @@ import structlog
 
 from course_supporter.key_pool import KeyPool
 from course_supporter.vd.schemas import (
-    CourseMemory,
-    CourseMemorySnapshot,
     EyesResult,
     InstantMemory,
-    MergeMethod,
     Scene,
     SceneMemory,
+    VideoMemory,
 )
 
 logger = structlog.get_logger()
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_PROMPT_CACHE: dict[str, str] = {}
 
 
 def _load_template(name: str) -> str:
-    return (_PROMPTS_DIR / name).read_text()
+    if name not in _PROMPT_CACHE:
+        _PROMPT_CACHE[name] = (_PROMPTS_DIR / name).read_text()
+    return _PROMPT_CACHE[name]
 
 
 # ---------------------------------------------------------------------------
-# Text extraction and code-based merge
+# Instant Memory (no LLM)
 # ---------------------------------------------------------------------------
 
-
-def _extract_element_text(response: str) -> str:
-    """Extract text content from Eyes Markdown response.
-
-    Collects all content from ``## Element N`` sections.
-    """
-    lines: list[str] = []
-    in_element = False
-    for line in response.splitlines():
-        if line.startswith("## Element"):
-            in_element = True
-            continue
-        if line.startswith("## ") and in_element:
-            if "Element" not in line:
-                in_element = False
-                continue
-            continue
-        if in_element:
-            lines.append(line)
-
-    if lines:
-        return "\n".join(lines)
-    return response
+_MAX_PREVIOUS_LEN = 300
 
 
-def _merge_code_texts(base: str, new: str) -> str:
-    """Merge two code text extractions by finding line overlap.
-
-    Looks for the longest suffix of *base* that matches a prefix of
-    *new* (line-by-line, stripped), then concatenates without the
-    duplicate region.  If no overlap is found, joins with a separator.
-    """
-    base_lines = base.strip().splitlines()
-    new_lines = new.strip().splitlines()
-    if not new_lines:
-        return base
-    if not base_lines:
-        return new
-
-    best_overlap = 0
-    for overlap_len in range(1, min(len(base_lines), len(new_lines)) + 1):
-        if all(
-            b.strip() == n.strip()
-            for b, n in zip(
-                base_lines[-overlap_len:],
-                new_lines[:overlap_len],
-                strict=False,
-            )
-        ):
-            best_overlap = overlap_len
-
-    if best_overlap > 0:
-        return "\n".join(base_lines + new_lines[best_overlap:])
-    return base + "\n\n--- next frame ---\n\n" + new
+def _compress_description(text: str, max_len: int = _MAX_PREVIOUS_LEN) -> str:
+    """Compress a frame description to a short summary."""
+    # Take the first meaningful lines up to max_len
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    result: list[str] = []
+    total = 0
+    for line in lines:
+        if total + len(line) > max_len:
+            break
+        result.append(line)
+        total += len(line)
+    return " ".join(result) if result else text[:max_len]
 
 
 def build_instant_memory(
-    scene: Scene,
-    eyes_results: list[EyesResult],
+    eyes_result: EyesResult,
+    previous_instant: InstantMemory | None,
 ) -> InstantMemory:
-    """Merge frame-level texts into a single per-scene extraction.
+    """Build instant memory for a single frame.
 
-    Uses code-based overlap merge (no LLM).  Returns an
-    ``InstantMemory`` with ``method='single'`` or ``'code_diff'``.
-    The ``'code_diff_fallback'`` method is set when the merge
-    produces too many separators (caller may upgrade to LLM merge).
+    Rolling 2-frame window: current description + compressed previous.
     """
-    texts = [_extract_element_text(r.response) for r in eyes_results]
-
-    if len(texts) <= 1:
-        return InstantMemory(
-            scene_id=scene.scene_id,
-            merged_text=texts[0] if texts else "",
-            frame_count=len(texts),
-            method=MergeMethod.SINGLE,
-        )
-
-    merged = texts[0]
-    for t in texts[1:]:
-        merged = _merge_code_texts(merged, t)
-
-    separator_count = merged.count("--- next frame ---")
-    method = (
-        MergeMethod.CODE_DIFF_FALLBACK
-        if separator_count > len(texts) // 2
-        else MergeMethod.CODE_DIFF
-    )
+    previous = ""
+    if previous_instant is not None:
+        previous = _compress_description(previous_instant.current)
 
     return InstantMemory(
-        scene_id=scene.scene_id,
-        merged_text=merged,
-        frame_count=len(texts),
-        method=method,
+        frame_id=eyes_result.frame_id,
+        scene_id=eyes_result.scene_id,
+        timestamp_sec=eyes_result.timestamp_sec,
+        current=eyes_result.description,
+        previous=previous,
+        is_delta=eyes_result.is_delta,
     )
 
 
 # ---------------------------------------------------------------------------
-# MemoryPipeline (LLM-based scene + course synthesis)
+# MemoryPipeline (LLM-based scene + video memory)
 # ---------------------------------------------------------------------------
 
 
 class MemoryPipeline:
-    """Hierarchical memory: instant merge -> scene synthesis -> course context.
+    """Streaming memory: scene updates per frame, video updates per scene.
 
     Args:
         key_pool: Gemini API key pool for LLM calls.
-        model: Text LLM model (same as Eyes or cheaper).
+        model: Text LLM model identifier.
         rpm_per_key: Requests per minute per API key.
     """
 
@@ -167,141 +112,105 @@ class MemoryPipeline:
         self._last_call_time = 0.0
         self._lock = asyncio.Lock()
 
+    async def update_scene_memory(
+        self,
+        instant: InstantMemory,
+        scene_memory: SceneMemory,
+    ) -> SceneMemory:
+        """Update scene memory with a new frame observation.
+
+        Called once per frame within a scene. LLM synthesizes
+        what is happening in the scene overall, not just this frame.
+        """
+        template = _load_template("scene_memory_streaming.txt")
+        prompt = template.format(
+            scene_id=instant.scene_id,
+            frame_id=instant.frame_id,
+            timestamp=instant.timestamp_sec,
+            current_frame=instant.current,
+            previous_frame=instant.previous or "(first frame)",
+            is_delta=instant.is_delta,
+            existing_scene_memory=scene_memory.summary or "(first frame in scene)",
+            frames_seen=scene_memory.frames_seen,
+            previous_scene=scene_memory.previous_scene_summary
+            or "(first scene in video)",
+        )
+
+        raw = await self._call_llm(prompt)
+        return self._parse_scene_memory(
+            scene_id=instant.scene_id,
+            raw=raw,
+            frames_seen=scene_memory.frames_seen + 1,
+            previous_scene_summary=scene_memory.previous_scene_summary,
+        )
+
+    async def update_video_memory(
+        self,
+        scene_memory: SceneMemory,
+        video_memory: VideoMemory,
+        previous_scene: SceneMemory | None,
+    ) -> VideoMemory:
+        """Update video memory after a scene completes.
+
+        Called once per scene. LLM updates the running video
+        description based on the completed scene.
+        """
+        prev_scene_text = ""
+        if previous_scene is not None:
+            prev_scene_text = (
+                f"Previous scene (scene {previous_scene.scene_id}): "
+                f"{previous_scene.summary}"
+            )
+
+        template = _load_template("video_memory.txt")
+        prompt = template.format(
+            current_video_memory=video_memory.text or "(beginning of video)",
+            scene_id=scene_memory.scene_id,
+            scene_summary=scene_memory.summary,
+            scene_type=scene_memory.scene_type,
+            topics=", ".join(scene_memory.topics) if scene_memory.topics else "N/A",
+            previous_scene=prev_scene_text or "(first scene)",
+        )
+
+        new_text = await self._call_llm(prompt)
+        return VideoMemory(
+            text=new_text,
+            scenes_processed=video_memory.scenes_processed + 1,
+        )
+
     async def process_scene(
         self,
         scene: Scene,
         eyes_results: list[EyesResult],
-        course_memory: CourseMemory,
-    ) -> tuple[InstantMemory, SceneMemory, CourseMemory]:
-        """Run all three memory stages for one scene.
+        video_memory: VideoMemory,
+        previous_scene: SceneMemory | None = None,
+    ) -> tuple[SceneMemory, VideoMemory]:
+        """Process an entire scene: update scene memory per frame, then video.
+
+        Convenience method that runs the full streaming loop for one scene.
 
         Returns:
-            Tuple of (instant_memory, scene_memory, updated_course_memory).
+            Tuple of (final scene_memory, updated video_memory).
         """
-        # 1. Instant merge (code-based, no LLM)
-        instant = build_instant_memory(scene, eyes_results)
-
-        # 1b. LLM fallback if code merge failed
-        if instant.method == MergeMethod.CODE_DIFF_FALLBACK:
-            instant = await self._llm_merge(scene, eyes_results, instant)
-
-        # 2. Scene synthesis (LLM)
-        scene_mem = await self._synthesize_scene(
-            scene,
-            eyes_results,
-            instant,
-        )
-
-        # 3. Course memory update
-        updated_course = await self._update_course_memory(
-            scene,
-            scene_mem,
-            course_memory,
-        )
-
-        return instant, scene_mem, updated_course
-
-    async def _llm_merge(
-        self,
-        scene: Scene,
-        eyes_results: list[EyesResult],
-        fallback_instant: InstantMemory,
-    ) -> InstantMemory:
-        """Attempt LLM merge when code-based merge has too many separators."""
-        texts = [_extract_element_text(r.response) for r in eyes_results]
-        frame_texts = "\n\n".join(
-            f"Frame {j + 1} ({eyes_results[j].timestamp_sec:.0f}s):\n{t}"
-            for j, t in enumerate(texts)
-        )
-        template = _load_template("instant_merge.txt")
-        prompt = template.format(n=len(texts), frame_texts=frame_texts)
-
-        try:
-            result = await self._call_llm(prompt)
-            logger.info(
-                "instant_llm_merge",
-                scene_id=scene.scene_id,
-                frames=len(texts),
-            )
-            return InstantMemory(
-                scene_id=scene.scene_id,
-                merged_text=result,
-                frame_count=len(texts),
-                method=MergeMethod.LLM_MERGE,
-            )
-        except Exception:
-            logger.warning(
-                "instant_llm_merge_failed",
-                scene_id=scene.scene_id,
-            )
-            return fallback_instant
-
-    async def _synthesize_scene(
-        self,
-        scene: Scene,
-        eyes_results: list[EyesResult],
-        instant: InstantMemory,
-    ) -> SceneMemory:
-        """LLM synthesis: generate scene type, summary, topics."""
-        descriptions = "\n".join(
-            f"- {r.timestamp_sec:.0f}s: {r.description}" for r in eyes_results
-        )
-        template = _load_template("scene_memory.txt")
-        prompt = template.format(
+        scene_memory = SceneMemory(
             scene_id=scene.scene_id,
-            n=len(eyes_results),
-            ts_start=scene.start_sec,
-            ts_end=scene.end_sec,
-            descriptions=descriptions,
-            merged_text=instant.merged_text[:2000],
+            previous_scene_summary=(
+                _compress_description(previous_scene.summary) if previous_scene else ""
+            ),
+        )
+        instant: InstantMemory | None = None
+
+        for eyes in eyes_results:
+            instant = build_instant_memory(eyes, instant)
+            scene_memory = await self.update_scene_memory(instant, scene_memory)
+
+        updated_video = await self.update_video_memory(
+            scene_memory,
+            video_memory,
+            previous_scene,
         )
 
-        raw = await self._call_llm(prompt)
-        return self._parse_scene_memory(scene.scene_id, raw)
-
-    async def _update_course_memory(
-        self,
-        scene: Scene,
-        scene_mem: SceneMemory,
-        current: CourseMemory,
-    ) -> CourseMemory:
-        """Update running course context with new scene info."""
-        # Skip LLM for low-importance scenes — just append
-        if scene_mem.importance <= 2 and current.text:
-            short = scene_mem.summary[:80]
-            new_text = f"{current.text}\n+ scene {scene.scene_id}: {short}"
-            return CourseMemory(
-                text=new_text,
-                scenes_processed=current.scenes_processed + 1,
-                history=[
-                    *current.history,
-                    CourseMemorySnapshot(
-                        scene_id=scene.scene_id,
-                        context_snapshot=new_text[:500],
-                    ),
-                ],
-            )
-
-        topics = ", ".join(scene_mem.topics) if scene_mem.topics else "N/A"
-        template = _load_template("course_memory.txt")
-        prompt = template.format(
-            previous_context=current.text or "(beginning of video)",
-            scene_summary=scene_mem.summary,
-            topics=topics,
-        )
-
-        new_text = await self._call_llm(prompt)
-        return CourseMemory(
-            text=new_text,
-            scenes_processed=current.scenes_processed + 1,
-            history=[
-                *current.history,
-                CourseMemorySnapshot(
-                    scene_id=scene.scene_id,
-                    context_snapshot=new_text[:500],
-                ),
-            ],
-        )
+        return scene_memory, updated_video
 
     async def _call_llm(self, prompt: str) -> str:
         """Rate-limited text LLM call."""
@@ -331,7 +240,12 @@ class MemoryPipeline:
             return response.text or ""
 
     @staticmethod
-    def _parse_scene_memory(scene_id: int, raw: str) -> SceneMemory:
+    def _parse_scene_memory(
+        scene_id: int,
+        raw: str,
+        frames_seen: int,
+        previous_scene_summary: str,
+    ) -> SceneMemory:
         """Parse LLM response into SceneMemory.
 
         Expects JSON (possibly wrapped in ```json ... ```).
@@ -348,11 +262,12 @@ class MemoryPipeline:
             data: dict[str, Any] = json.loads(inner)
             return SceneMemory(
                 scene_id=scene_id,
-                scene_type=data.get("scene_type", "unknown"),
                 summary=data.get("summary", ""),
-                complete_text=data.get("complete_text", ""),
+                scene_type=data.get("scene_type", "unknown"),
                 topics=data.get("topics", []),
                 importance=min(max(data.get("importance", 3), 1), 5),
+                frames_seen=frames_seen,
+                previous_scene_summary=previous_scene_summary,
             )
         except (json.JSONDecodeError, ValueError):
             logger.warning(
@@ -361,6 +276,8 @@ class MemoryPipeline:
             )
             return SceneMemory(
                 scene_id=scene_id,
-                scene_type="unknown",
                 summary=raw[:200],
+                scene_type="unknown",
+                frames_seen=frames_seen,
+                previous_scene_summary=previous_scene_summary,
             )

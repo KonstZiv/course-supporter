@@ -3,14 +3,18 @@ You are analyzing a video frame. The LAST image is the MAIN frame to describe. P
 Previous frame description:
 {previous_description}
 
-{course_context_block}{scene_context_block}Compare the MAIN frame to the previous description above.
+{similarity_hint}{course_context_block}{scene_context_block}Your primary source is the image itself — describe exactly what you see. The context above (if provided) is supporting information: the video context tells you what this video is about overall, and the scene context tells you what is happening in the current scene. Use this context to describe the frame with greater precision — for example, to correctly name tools, identify what step of a process is shown, or understand the purpose of changes.
 
-If the frame is VERY SIMILAR (same layout, same content, minor changes like cursor movement or highlighting):
+Compare the MAIN frame to the previous description above.
+
+Decide whether the PRIMARY CONTENT AREA changed significantly. Ignore recurring UI chrome (navigation bars, course headers, sidebars, footers) — focus on the main content.
+
+If ≥70% of the primary content is the same (same text, same code, same diagram — only minor additions, highlights, or cursor movement):
 - Start your response with "CHANGES ONLY:"
 - Describe only what changed (new highlights, modified code lines, opened/closed panels)
 - Keep it concise
 
-If the frame is SIGNIFICANTLY DIFFERENT (new content, different layout, new slide):
+If the primary content is substantially new (new slide, different code, new diagram, different topic):
 - Provide a FULL description in this format:
 
 ## Scene Composition

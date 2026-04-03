@@ -6,14 +6,11 @@ from course_supporter.vd.schemas import (
     AlignedSegment,
     AlignmentReport,
     ChangeClass,
-    CourseMemory,
-    CourseMemorySnapshot,
     CoverageGap,
     EyesResult,
     FrameSamplingResult,
     FrameSource,
     InstantMemory,
-    MergeMethod,
     PiPMask,
     SampledFrame,
     SamplingParams,
@@ -21,6 +18,7 @@ from course_supporter.vd.schemas import (
     SceneAnalysis,
     SceneMemory,
     VDResult,
+    VideoMemory,
 )
 
 # ---------------------------------------------------------------------------
@@ -191,15 +189,27 @@ class TestEyesResult:
 class TestInstantMemory:
     """Test InstantMemory model."""
 
-    def test_methods(self) -> None:
-        for method in MergeMethod:
-            m = InstantMemory(
-                scene_id=0,
-                merged_text="test",
-                frame_count=1,
-                method=method,
-            )
-            assert m.method == method
+    def test_basic_creation(self) -> None:
+        im = InstantMemory(
+            frame_id="f0",
+            scene_id=0,
+            timestamp_sec=10.0,
+            current="Code editor with Python",
+        )
+        assert im.previous == ""
+        assert im.is_delta is False
+
+    def test_with_previous(self) -> None:
+        im = InstantMemory(
+            frame_id="f1",
+            scene_id=0,
+            timestamp_sec=12.0,
+            current="New function added",
+            previous="Code editor with Python",
+            is_delta=True,
+        )
+        assert im.previous == "Code editor with Python"
+        assert im.is_delta is True
 
 
 class TestSceneMemory:
@@ -222,6 +232,21 @@ class TestSceneMemory:
                 importance=6,
             )
 
+    def test_defaults(self) -> None:
+        sm = SceneMemory(scene_id=0)
+        assert sm.frames_seen == 0
+        assert sm.previous_scene_summary == ""
+        assert sm.topics == []
+
+
+class TestVideoMemory:
+    """Test VideoMemory model."""
+
+    def test_defaults(self) -> None:
+        vm = VideoMemory()
+        assert vm.text == ""
+        assert vm.scenes_processed == 0
+
 
 class TestVDResult:
     """Test VDResult model."""
@@ -243,12 +268,6 @@ class TestVDResult:
             input_tokens=100,
             output_tokens=50,
         )
-        instant = InstantMemory(
-            scene_id=0,
-            merged_text="code",
-            frame_count=1,
-            method=MergeMethod.SINGLE,
-        )
         scene_mem = SceneMemory(
             scene_id=0,
             scene_type="screen_recording",
@@ -257,12 +276,11 @@ class TestVDResult:
         analysis = SceneAnalysis(
             scene=scene,
             eyes_results=[eyes],
-            instant_memory=instant,
             scene_memory=scene_mem,
         )
         result = VDResult(
             scenes=[analysis],
-            course_memory=CourseMemory(text="ctx", scenes_processed=1),
+            video_memory=VideoMemory(text="ctx", scenes_processed=1),
             frames_total=1,
             frames_analyzed=1,
             model="gemini-3.1-flash-lite-preview",
@@ -273,7 +291,7 @@ class TestVDResult:
     def test_serialization_roundtrip(self) -> None:
         result = VDResult(
             scenes=[],
-            course_memory=CourseMemory(),
+            video_memory=VideoMemory(),
             frames_total=0,
             frames_analyzed=0,
             model="test-model",
@@ -314,10 +332,3 @@ class TestAlignmentSchemas:
         report = AlignmentReport()
         assert report.segments == []
         assert report.semantic_coverage == 0.0
-
-    def test_course_memory_snapshot(self) -> None:
-        snap = CourseMemorySnapshot(
-            scene_id=5,
-            context_snapshot="Topics covered so far...",
-        )
-        assert snap.scene_id == 5

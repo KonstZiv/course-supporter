@@ -7,7 +7,10 @@ from course_supporter.ingestion.alignment import (
     _extract_identifiers,
     _is_near_match,
 )
+from course_supporter.ingestion.stop_words import build_stop_words
 from course_supporter.models.source import ChunkType, ContentChunk
+
+_TEST_STOP = build_stop_words(natural_lang="en", programming_lang="python")
 
 
 def _stt(text: str, start: float, end: float, idx: int = 0) -> ContentChunk:
@@ -38,21 +41,24 @@ def _vd(
 
 class TestExtractIdentifiers:
     def test_extracts_function_names(self) -> None:
-        ids = _extract_identifiers("def calculate_total(items):")
+        ids = _extract_identifiers("def calculate_total(items):", _TEST_STOP)
         assert "calculate_total" in ids
         assert "items" in ids
 
     def test_excludes_stop_words(self) -> None:
-        ids = _extract_identifiers("the function is not very important")
+        ids = _extract_identifiers(
+            "the function is not very important",
+            _TEST_STOP,
+        )
         assert "function" not in ids
         assert "important" in ids
 
     def test_excludes_short(self) -> None:
-        ids = _extract_identifiers("a b cd")
+        ids = _extract_identifiers("a b cd", _TEST_STOP)
         assert len(ids) == 0
 
     def test_dotted_identifiers(self) -> None:
-        ids = _extract_identifiers("os.path.join works here")
+        ids = _extract_identifiers("os.path.join works here", _TEST_STOP)
         assert "os.path.join" in ids
 
 

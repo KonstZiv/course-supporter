@@ -15,6 +15,8 @@ import json
 from base64 import b64encode
 from pathlib import Path
 
+from _utils import find_frame
+
 OUT_PATH = Path("tmp/cp2-review.html")
 
 # All results to combine
@@ -63,16 +65,7 @@ def _frame_b64(img_path: Path) -> str:
 
 
 def _find_frame(video_dir: str, filename: str) -> Path | None:
-    frames_dir = Path(video_dir) / "frames"
-    direct = frames_dir / filename
-    if direct.exists():
-        return direct
-    for sub in frames_dir.iterdir():
-        if sub.is_dir():
-            candidate = sub / filename
-            if candidate.exists():
-                return candidate
-    return None
+    return find_frame(Path(video_dir) / "frames", filename)
 
 
 def _get_filename(r: dict) -> str:

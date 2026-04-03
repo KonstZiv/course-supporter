@@ -9,24 +9,12 @@ Usage:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-
-def _load_env() -> None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+from _utils import load_env
 
 
 def main() -> None:
-    _load_env()
+    load_env()
     raw = os.environ.get("GEMINI_API_KEY", "")
     keys = [k.strip() for k in raw.split(",") if k.strip()]
 

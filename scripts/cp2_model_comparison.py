@@ -14,8 +14,9 @@ import html
 import json
 import os
 import time
-from base64 import b64encode
 from pathlib import Path
+
+from _utils import load_env, thumb_b64
 
 MODELS = [
     "gemini-3.1-flash-lite-preview",
@@ -46,21 +47,8 @@ TEST_FRAMES = [
 OUT_DIR = Path("tmp/cp2-compare")
 
 
-def _load_env() -> None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
-
-
 def _get_keys() -> list[str]:
-    _load_env()
+    load_env()
     raw = os.environ.get("GEMINI_API_KEY", "")
     return list(dict.fromkeys(k.strip() for k in raw.split(",") if k.strip()))
 
@@ -72,20 +60,6 @@ def _get_frame_path(video_name: str, frame_index: int) -> Path:
     if frame_index >= len(frames):
         frame_index = len(frames) - 1
     return frames[frame_index]
-
-
-def _thumb_b64(img_path: Path, max_w: int = 400) -> str:
-    import io
-
-    from PIL import Image
-
-    img = Image.open(img_path)
-    ratio = max_w / img.width
-    new_size = (max_w, int(img.height * ratio))
-    img = img.resize(new_size, Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=80)
-    return b64encode(buf.getvalue()).decode()
 
 
 EYES_PROMPT = """\
@@ -201,7 +175,7 @@ def generate_html(
 
     for frame_key, label in frame_labels.items():
         fpath = frame_paths[frame_key]
-        b64 = _thumb_b64(fpath, 500)
+        b64 = thumb_b64(fpath, 500)
 
         a(f"<h2>{html.escape(label)}</h2>")
         a(f"<img src='data:image/jpeg;base64,{b64}'/>")

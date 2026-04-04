@@ -4,7 +4,7 @@ Two strategies:
 - GeminiVideoProcessor: Upload video to Gemini File API -> vision transcript
 - WhisperVideoProcessor: FFmpeg audio extraction -> Whisper (S1-013)
 
-VideoProcessor composes both with automatic fallback.
+VideoProcessor composes STT Router + VD Pipeline in parallel.
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ from course_supporter.models.source import (
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.storage.orm import MaterialEntry
+    from course_supporter.stt.router import STTRouter
+    from course_supporter.stt.schemas import STTResult
     from course_supporter.vd.pipeline import VDPipeline
     from course_supporter.vd.schemas import VDResult
 
@@ -61,6 +63,52 @@ Rules:
 _TIMECODE_PATTERN = re.compile(
     r"\[(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)"
 )
+
+
+async def _extract_audio_ffmpeg(video_path: str) -> str:
+    """Extract audio track from a local video file via FFmpeg.
+
+    Args:
+        video_path: Path to a local video file.
+
+    Returns:
+        Path to the extracted WAV audio file (caller must clean up).
+
+    Raises:
+        ProcessingError: If FFmpeg is not found or fails.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        audio_path = tmp.name
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            audio_path,
+            "-y",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            raise ProcessingError(
+                f"FFmpeg failed (code {process.returncode}): {stderr.decode()[:500]}"
+            )
+    except FileNotFoundError:
+        raise ProcessingError(
+            "FFmpeg not found. Install FFmpeg to process video files."
+        ) from None
+
+    return audio_path
 
 
 class GeminiVideoProcessor(SourceProcessor):
@@ -264,7 +312,7 @@ class WhisperVideoProcessor(SourceProcessor):
         finally:
             # Clean up temp audio file
             with contextlib.suppress(OSError):
-                Path(audio_path).unlink()  # noqa: ASYNC240
+                await asyncio.to_thread(Path(audio_path).unlink)
 
     async def _extract_audio(self, video_source: str) -> str:
         """Extract audio from a video file or URL.
@@ -286,44 +334,12 @@ class WhisperVideoProcessor(SourceProcessor):
         else:
             video_path = video_source
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            audio_path = tmp.name
-
         try:
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-i",
-                video_path,
-                "-vn",
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                audio_path,
-                "-y",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await process.communicate()
-
-            if process.returncode != 0:
-                raise ProcessingError(
-                    f"FFmpeg failed (code {process.returncode}): "
-                    f"{stderr.decode()[:500]}"
-                )
-        except FileNotFoundError:
-            raise ProcessingError(
-                "FFmpeg not found. Install FFmpeg to use WhisperVideoProcessor."
-            ) from None
+            return await _extract_audio_ffmpeg(video_path)
         finally:
-            # Clean up yt-dlp downloaded file
             if video_source.startswith(("http://", "https://")):
                 with contextlib.suppress(OSError):
-                    Path(video_path).unlink()  # noqa: ASYNC240
-
-        return audio_path
+                    await asyncio.to_thread(Path(video_path).unlink)
 
     async def _download_audio(self, url: str) -> str:
         """Download audio from a video URL using yt-dlp.
@@ -409,14 +425,22 @@ class WhisperVideoProcessor(SourceProcessor):
 class VideoProcessor(SourceProcessor):
     """Composite video processor: parallel STT + VD.
 
-    Runs audio transcription (STT) and visual description (VD) as
+    Runs audio transcription (STT Router) and visual description (VD) as
     independent parallel streams. Both produce ContentChunks with
     timestamps that can be aligned downstream (VD-007).
 
     Graceful degradation: if VD fails, STT-only result is returned.
 
+    Note:
+        Requires a **local file path** as ``source.source_url``.
+        Remote URLs (http/https) raise ``ProcessingError``.
+        For URL sources, resolve them to local files before calling
+        (e.g. via S3 pre-signed download in ``_resolve_s3_url``).
+        ``WhisperVideoProcessor`` still supports URLs via yt-dlp
+        and can be used as a fallback when no STTRouter is available.
+
     Args:
-        stt: STT processor (WhisperVideoProcessor or similar).
+        stt_router: STTRouter for audio transcription.
         vd_pipeline: Optional VDPipeline for visual analysis.
             When None, only STT chunks are produced.
     """
@@ -424,10 +448,10 @@ class VideoProcessor(SourceProcessor):
     def __init__(
         self,
         *,
-        stt: WhisperVideoProcessor,
+        stt_router: STTRouter,
         vd_pipeline: VDPipeline | None = None,
     ) -> None:
-        self._stt = stt
+        self._stt_router = stt_router
         self._vd = vd_pipeline
 
     async def process(
@@ -443,15 +467,18 @@ class VideoProcessor(SourceProcessor):
 
         logger.info("video_processor_start", source_url=source.source_url)
 
+        video_path = await self._resolve_local_path(source.source_url)
+
         # Launch STT and VD in parallel
-        stt_task = asyncio.create_task(
-            self._stt.process(source, router=router),
+        stt_task = asyncio.create_task(self._run_stt(video_path))
+        vd_task: asyncio.Task[list[ContentChunk]] | None = (
+            asyncio.create_task(self._run_vd(video_path))
+            if self._vd is not None
+            else None
         )
-        vd_task = self._run_vd(source) if self._vd is not None else None
 
         # Wait for STT (required)
-        stt_doc = await stt_task
-        stt_chunks = stt_doc.chunks
+        stt_chunks = await stt_task
 
         # Wait for VD (optional, graceful degradation)
         vd_chunks: list[ContentChunk] = []
@@ -485,37 +512,91 @@ class VideoProcessor(SourceProcessor):
             },
         )
 
-    async def _run_vd(self, source: MaterialEntry) -> list[ContentChunk]:
+    @staticmethod
+    async def _resolve_local_path(source_url: str) -> Path:
+        """Resolve source URL to a local file path.
+
+        Raises:
+            ProcessingError: If the source is a remote URL or file not found.
+        """
+        if source_url.startswith(("http://", "https://")):
+            raise ProcessingError(
+                f"VideoProcessor requires a local file path, got URL: {source_url}"
+            )
+        raw = (
+            source_url.removeprefix("file://")
+            if source_url.startswith("file://")
+            else source_url
+        )
+        video_path = await asyncio.to_thread(Path(raw).resolve)
+        is_file = await asyncio.to_thread(video_path.is_file)
+        if not is_file:
+            raise ProcessingError(f"Video file not found: {video_path}")
+        return video_path
+
+    async def _run_stt(self, video_path: Path) -> list[ContentChunk]:
+        """Extract audio and transcribe via STT Router."""
+        audio_path = await _extract_audio_ffmpeg(str(video_path))
+        try:
+            result = await self._stt_router.transcribe(
+                action="transcribe",
+                audio_path=audio_path,
+            )
+            return self._stt_result_to_chunks(result)
+        finally:
+            with contextlib.suppress(OSError):
+                await asyncio.to_thread(Path(audio_path).unlink)
+
+    @staticmethod
+    def _stt_result_to_chunks(result: STTResult) -> list[ContentChunk]:
+        """Convert STTResult segments to TRANSCRIPT ContentChunks."""
+        chunks: list[ContentChunk] = []
+        for idx, seg in enumerate(result.segments):
+            text = seg.text.strip()
+            if not text:
+                continue
+            chunks.append(
+                ContentChunk(
+                    chunk_type=ChunkType.TRANSCRIPT,
+                    text=text,
+                    index=idx,
+                    start_sec=round(seg.start_sec, 2),
+                    end_sec=round(seg.end_sec, 2),
+                ),
+            )
+        return chunks
+
+    async def _run_vd(self, video_path: Path) -> list[ContentChunk]:
         """Run VD pipeline and convert result to ContentChunks."""
         assert self._vd is not None  # guarded by caller
-
-        url = source.source_url
-        if url.startswith(("http://", "https://")):
-            raise ProcessingError(
-                f"VDPipeline requires a local file path, got URL: {url}"
-            )
-        raw = url.removeprefix("file://") if url.startswith("file://") else url
-        video_path = Path(raw).resolve()  # noqa: ASYNC240
-        if not video_path.is_file():
-            raise ProcessingError(f"Video file not found: {video_path}")
-
         result = await self._vd.process(video_path)
         return self._vd_result_to_chunks(result)
 
     @staticmethod
     def _vd_result_to_chunks(result: VDResult) -> list[ContentChunk]:
-        """Convert VDResult scenes to VISUAL_SCENE ContentChunks."""
+        """Convert VDResult scenes to VISUAL_SCENE ContentChunks.
+
+        Each scene covers the time from its first frame to the start
+        of the next scene.  For the last scene, end_sec is taken from
+        the scene's own end_sec (timestamp of its last frame).
+        """
+        scenes = result.scenes
         chunks: list[ContentChunk] = []
 
-        for idx, analysis in enumerate(result.scenes):
+        for idx, analysis in enumerate(scenes):
             sm = analysis.scene_memory
+            start = analysis.scene.start_sec
+            if idx + 1 < len(scenes):
+                end = scenes[idx + 1].scene.start_sec
+            else:
+                end = analysis.scene.end_sec
             chunks.append(
                 ContentChunk(
                     chunk_type=ChunkType.VISUAL_SCENE,
                     text=sm.summary,
                     index=idx,
-                    start_sec=analysis.scene.start_sec,
-                    end_sec=analysis.scene.end_sec,
+                    start_sec=start,
+                    end_sec=end,
                     metadata={
                         "scene_id": analysis.scene.scene_id,
                         "scene_type": sm.scene_type,

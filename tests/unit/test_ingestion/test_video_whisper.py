@@ -1,4 +1,4 @@
-"""Tests for WhisperVideoProcessor and VideoProcessor fallback."""
+"""Tests for WhisperVideoProcessor and VideoProcessor (STT Router)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +16,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.stt.schemas import STTResult, STTSegment
 
 
 def _make_source(
@@ -238,18 +239,12 @@ class TestVideoProcessorParallel:
 
     async def test_stt_plus_vd_parallel(self) -> None:
         """Both STT and VD produce chunks in one SourceDocument."""
-        mock_stt = AsyncMock()
-        mock_stt.process.return_value = SourceDocument(
-            source_type=SourceType.VIDEO,
-            source_url="file:///v.mp4",
-            chunks=[
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text="Hello world",
-                    start_sec=0.0,
-                    end_sec=10.0,
-                ),
-            ],
+        mock_router = AsyncMock()
+        mock_router.transcribe.return_value = STTResult(
+            text="Hello world",
+            segments=[STTSegment(start_sec=0.0, end_sec=10.0, text="Hello world")],
+            provider="mock",
+            model_id="mock-model",
         )
 
         vd_chunks = [
@@ -262,9 +257,18 @@ class TestVideoProcessorParallel:
             ),
         ]
 
-        proc = VideoProcessor(stt=mock_stt, vd_pipeline=MagicMock())
+        proc = VideoProcessor(stt_router=mock_router, vd_pipeline=MagicMock())
         proc._run_vd = AsyncMock(return_value=vd_chunks)  # type: ignore[method-assign]
-        doc = await proc.process(_make_source())
+
+        with (
+            patch(
+                "course_supporter.ingestion.video._extract_audio_ffmpeg",
+                return_value="/tmp/audio.wav",
+            ),
+            patch("pathlib.Path.unlink"),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            doc = await proc.process(_make_source())
 
         assert len(doc.chunks) == 2
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -276,25 +280,28 @@ class TestVideoProcessorParallel:
 
     async def test_vd_failure_graceful_degradation(self) -> None:
         """VD failure returns STT-only result."""
-        mock_stt = AsyncMock()
-        mock_stt.process.return_value = SourceDocument(
-            source_type=SourceType.VIDEO,
-            source_url="file:///v.mp4",
-            chunks=[
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text="Speech",
-                    start_sec=0.0,
-                    end_sec=5.0,
-                ),
-            ],
+        mock_router = AsyncMock()
+        mock_router.transcribe.return_value = STTResult(
+            text="Speech",
+            segments=[STTSegment(start_sec=0.0, end_sec=5.0, text="Speech")],
+            provider="mock",
+            model_id="mock-model",
         )
 
         mock_vd = AsyncMock()
         mock_vd.process.side_effect = RuntimeError("VD crashed")
 
-        proc = VideoProcessor(stt=mock_stt, vd_pipeline=mock_vd)
-        doc = await proc.process(_make_source())
+        proc = VideoProcessor(stt_router=mock_router, vd_pipeline=mock_vd)
+
+        with (
+            patch(
+                "course_supporter.ingestion.video._extract_audio_ffmpeg",
+                return_value="/tmp/audio.wav",
+            ),
+            patch("pathlib.Path.unlink"),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            doc = await proc.process(_make_source())
 
         assert len(doc.chunks) == 1
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -302,15 +309,25 @@ class TestVideoProcessorParallel:
 
     async def test_no_vd_pipeline(self) -> None:
         """Without VD pipeline, STT-only result."""
-        mock_stt = AsyncMock()
-        mock_stt.process.return_value = SourceDocument(
-            source_type=SourceType.VIDEO,
-            source_url="file:///v.mp4",
-            chunks=[],
+        mock_router = AsyncMock()
+        mock_router.transcribe.return_value = STTResult(
+            text="",
+            segments=[],
+            provider="mock",
+            model_id="mock-model",
         )
 
-        proc = VideoProcessor(stt=mock_stt, vd_pipeline=None)
-        doc = await proc.process(_make_source())
+        proc = VideoProcessor(stt_router=mock_router, vd_pipeline=None)
+
+        with (
+            patch(
+                "course_supporter.ingestion.video._extract_audio_ffmpeg",
+                return_value="/tmp/audio.wav",
+            ),
+            patch("pathlib.Path.unlink"),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            doc = await proc.process(_make_source())
 
         assert doc.metadata["strategy"] == "stt"
         assert doc.metadata["vd_scenes"] == 0

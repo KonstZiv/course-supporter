@@ -189,9 +189,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
 
     # --- Visual Description (VD) Pipeline ---
+    # Primary Vision LLM for per-frame analysis (VisualAnalyzer Eyes step).
     vd_model: str = "gemini-2.5-flash"
+    # Fallback model on 429 rate-limit (VisualAnalyzer + MemoryPipeline).
     vd_fallback_model: str = "gemini-3.1-flash-lite-preview"
+    # Max requests/min per Gemini key (rate limiter in VisualAnalyzer).
     vd_rpm_per_key: int = 5
+    # Enable VD pipeline in VideoProcessor (False = STT-only processing).
     vd_enabled: bool = True
 
     # --- Registries ---

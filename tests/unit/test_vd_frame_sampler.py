@@ -1,13 +1,21 @@
-"""Tests for VD frame sampler (pure logic, no FFmpeg/video needed)."""
+"""Tests for VD frame sampler."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from course_supporter.vd.frame_sampler import (
     FrameSampler,
+    _build_zones,
+    _ffmpeg_extract_fps,
+    _ffmpeg_extract_single,
     _FrameEntry,
     _FrameMetrics,
+    _get_video_resolution,
 )
 from course_supporter.vd.schemas import (
     ChangeClass,
@@ -307,3 +315,205 @@ class TestSegmentScenes:
 
         frames, _ = FrameSampler._segment_scenes(entries, p, None)
         assert frames[1].change_class == ChangeClass.MEDIUM
+
+
+# -- _build_zones ----------------------------------------------------------
+
+
+class TestBuildZones:
+    def test_eight_zones(self) -> None:
+        zones = _build_zones(1280, 720)
+        assert len(zones) == 8
+
+    def test_zone_names(self) -> None:
+        zones = _build_zones(1280, 720)
+        expected = {
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right",
+            "top_center",
+            "bottom_center",
+            "left_center",
+            "right_center",
+        }
+        assert set(zones.keys()) == expected
+
+    def test_zones_within_bounds(self) -> None:
+        w, h = 1280, 720
+        zones = _build_zones(w, h)
+        for rect in zones.values():
+            assert 0 <= rect.x1 < rect.x2 <= w
+            assert 0 <= rect.y1 < rect.y2 <= h
+
+
+# -- _ffmpeg_extract_fps (mocked subprocess) --------------------------------
+
+
+class TestFfmpegExtractFps:
+    async def test_success(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = Path(d) / "frames"
+            out_dir.mkdir()
+            # Create fake frame files that ffmpeg would produce
+            for i in range(3):
+                (out_dir / f"frame_{i + 1:06d}.jpg").write_bytes(b"img")
+
+            mock_proc = AsyncMock(returncode=0)
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+            with patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_proc,
+            ):
+                result = await _ffmpeg_extract_fps(
+                    Path("/fake/video.mp4"), 1.0, out_dir
+                )
+
+            assert len(result) == 3
+
+    async def test_ffmpeg_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            mock_proc = AsyncMock(returncode=1)
+            mock_proc.communicate = AsyncMock(return_value=(b"", b"Error"))
+
+            with (
+                patch(
+                    "asyncio.create_subprocess_exec",
+                    return_value=mock_proc,
+                ),
+                pytest.raises(RuntimeError, match="FFmpeg fps extraction"),
+            ):
+                await _ffmpeg_extract_fps(Path("/fake/video.mp4"), 1.0, Path(d))
+
+
+# -- _ffmpeg_extract_single (mocked subprocess) ----------------------------
+
+
+class TestFfmpegExtractSingle:
+    async def test_success(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "frame.jpg"
+
+            mock_proc = AsyncMock(returncode=0)
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.kill = MagicMock()
+
+            with patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_proc,
+            ):
+                output.write_bytes(b"img")  # simulate ffmpeg creating file
+                result = await _ffmpeg_extract_single(
+                    Path("/fake/video.mp4"), 10.0, output
+                )
+
+            assert result is True
+
+    async def test_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "frame.jpg"
+
+            mock_proc = AsyncMock(returncode=1)
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.kill = MagicMock()
+
+            with patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_proc,
+            ):
+                result = await _ffmpeg_extract_single(
+                    Path("/fake/video.mp4"), 10.0, output
+                )
+
+            assert result is False
+
+
+# -- _get_video_resolution (mocked ffprobe) --------------------------------
+
+
+class TestGetVideoResolution:
+    async def test_parses_resolution(self) -> None:
+        mock_proc = AsyncMock(returncode=0)
+        mock_proc.communicate = AsyncMock(return_value=(b"1280x720\n", b""))
+        mock_proc.kill = MagicMock()
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ):
+            w, h = await _get_video_resolution(Path("/fake/video.mp4"))
+
+        assert w == 1280
+        assert h == 720
+
+    async def test_invalid_output_raises(self) -> None:
+        mock_proc = AsyncMock(returncode=0)
+        mock_proc.communicate = AsyncMock(return_value=(b"invalid\n", b""))
+        mock_proc.kill = MagicMock()
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_proc,
+            ),
+            pytest.raises(RuntimeError, match="Cannot parse"),
+        ):
+            await _get_video_resolution(Path("/fake/video.mp4"))
+
+
+# -- FrameSampler.sample (integration, fully mocked) -----------------------
+
+
+class TestFrameSamplerSample:
+    async def test_sample_orchestration(self) -> None:
+        """Full sample() with all I/O mocked."""
+        with tempfile.TemporaryDirectory() as d:
+            frame_dir = Path(d)
+            # Create fake frame files
+            for i in range(5):
+                (frame_dir / f"frame_{i + 1:06d}.jpg").write_bytes(b"fake_img")
+
+            sampler = FrameSampler(SamplingParams(fps=1.0))
+
+            mock_hash = MagicMock()
+            mock_hash.__sub__ = MagicMock(return_value=0)
+            mock_hash.__str__ = MagicMock(return_value="abcd1234")
+
+            with (
+                patch(
+                    "course_supporter.vd.frame_sampler._get_video_resolution",
+                    new=AsyncMock(return_value=(1280, 720)),
+                ),
+                patch(
+                    "course_supporter.vd.frame_sampler._ffmpeg_extract_fps",
+                    new=AsyncMock(
+                        return_value=[
+                            frame_dir / f"frame_{i + 1:06d}.jpg" for i in range(5)
+                        ]
+                    ),
+                ),
+                patch(
+                    "course_supporter.vd.frame_sampler._detect_pip",
+                    return_value=None,
+                ),
+                patch(
+                    "course_supporter.vd.frame_sampler._compute_dhash",
+                    return_value=mock_hash,
+                ),
+                patch(
+                    "course_supporter.vd.frame_sampler._compare_frames",
+                    return_value=_FrameMetrics(
+                        dhash_dist=0.01,
+                        pixel_diff=0.01,
+                        color_hist=0.1,
+                        ssim=0.99,
+                        edge_diff=0.01,
+                    ),
+                ),
+            ):
+                result = await sampler.sample(Path("/fake/video.mp4"), frame_dir)
+
+            assert result.frames is not None
+            assert result.scenes is not None
+            assert len(result.scenes) >= 1

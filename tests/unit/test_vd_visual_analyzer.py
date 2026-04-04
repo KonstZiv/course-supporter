@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from course_supporter.vd.schemas import (
     ChangeClass,
     DeltaStrategy,
     EyesResult,
     FrameSource,
+    InstantMemory,
     SampledFrame,
+    Scene,
     SceneMemory,
     VideoMemory,
 )
@@ -16,8 +24,10 @@ from course_supporter.vd.visual_analyzer import (
     _build_memory_context,
     _build_similarity_hint,
     _is_conditional_delta,
+    _is_rate_limit,
     _load_prompt,
     _parse_response,
+    _retry_wait,
 )
 
 
@@ -103,14 +113,16 @@ class TestIsConditionalDelta:
 
 def _make_frame(
     *,
+    frame_id: str = "frame_001_10s",
+    ts: float = 10.0,
     change_class: ChangeClass = ChangeClass.LOW,
     dhash_dist: float = 0.07,
 ) -> SampledFrame:
     """Helper to create a SampledFrame for tests."""
     return SampledFrame(
-        frame_id="frame_001_10s",
-        filename="frame_001.jpg",
-        timestamp_sec=10.0,
+        frame_id=frame_id,
+        filename=f"{frame_id}.jpg",
+        timestamp_sec=ts,
         scene_id=0,
         source=FrameSource.GOLDEN,
         dhash="a" * 64,
@@ -172,7 +184,6 @@ class TestBuildMemoryContext:
         assert "ESP32 programming course" in ctx
 
     def test_all_three_levels(self) -> None:
-        from course_supporter.vd.schemas import InstantMemory
 
         instant = InstantMemory(
             frame_id="f1",
@@ -190,7 +201,6 @@ class TestBuildMemoryContext:
         assert "Title slide" in ctx
 
     def test_no_previous_frame(self) -> None:
-        from course_supporter.vd.schemas import InstantMemory
 
         instant = InstantMemory(
             frame_id="f0",
@@ -394,3 +404,218 @@ class TestShouldUseDelta:
             _make_frame(change_class=ChangeClass.BOUNDARY),
             self._make_prev(),
         )
+
+
+# -- Helper utilities for LLM-mocked tests --------------------------------
+
+
+@pytest.fixture()
+def mock_key_pool() -> MagicMock:
+    pool = MagicMock()
+    pool.__len__ = lambda _: 1
+    pool.next_key.return_value = MagicMock(get_secret_value=lambda: "fake-key")
+    return pool
+
+
+@pytest.fixture()
+def analyzer(mock_key_pool: MagicMock) -> VisualAnalyzer:
+    return VisualAnalyzer(mock_key_pool, rpm_per_key=999)
+
+
+# -- _is_rate_limit / _retry_wait -----------------------------------------
+
+
+class TestIsRateLimit:
+    def test_429_string(self) -> None:
+        assert _is_rate_limit(Exception("429 Resource exhausted"))
+
+    def test_resource_exhausted(self) -> None:
+        assert _is_rate_limit(Exception("RESOURCE_EXHAUSTED"))
+
+    def test_other_error(self) -> None:
+        assert not _is_rate_limit(Exception("500 Internal server error"))
+
+
+class TestRetryWait:
+    def test_extracts_retry_delay(self) -> None:
+        exc = Exception("Please retry in 12.5s")
+        wait = _retry_wait(exc, 0)
+        assert wait == pytest.approx(14.5)  # 12.5 + 2.0 buffer
+
+    def test_exponential_backoff(self) -> None:
+        exc = Exception("429 no retry hint")
+        w0 = _retry_wait(exc, 0)
+        w1 = _retry_wait(exc, 1)
+        assert w1 == pytest.approx(w0 * 2)
+
+
+# -- VisualAnalyzer.__init__ / model property ------------------------------
+
+
+class TestAnalyzerInit:
+    def test_model_property(self, analyzer: VisualAnalyzer) -> None:
+        assert analyzer.model == "gemini-2.5-flash"
+
+    def test_custom_model(self, mock_key_pool: MagicMock) -> None:
+        a = VisualAnalyzer(mock_key_pool, model="custom-model")
+        assert a.model == "custom-model"
+
+    def test_min_interval(self, mock_key_pool: MagicMock) -> None:
+        a = VisualAnalyzer(mock_key_pool, rpm_per_key=10)
+        assert a._min_interval == pytest.approx(6.0)
+
+
+# -- _find_frame -----------------------------------------------------------
+
+
+class TestFindFrame:
+    def test_direct_path(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "frame.jpg"
+            p.write_bytes(b"img")
+            assert VisualAnalyzer._find_frame(Path(d), "frame.jpg") == p
+
+    def test_subdir_path(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d) / "sub"
+            sub.mkdir()
+            p = sub / "frame.jpg"
+            p.write_bytes(b"img")
+            assert VisualAnalyzer._find_frame(Path(d), "frame.jpg") == p
+
+    def test_not_found_raises(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as d,
+            pytest.raises(FileNotFoundError),
+        ):
+            VisualAnalyzer._find_frame(Path(d), "missing.jpg")
+
+
+# -- _call_llm (mocked Gemini) --------------------------------------------
+
+
+class TestCallLlm:
+    async def test_success(self, analyzer: VisualAnalyzer) -> None:
+        mock_usage = MagicMock(prompt_token_count=100, candidates_token_count=50)
+        mock_response = MagicMock(text="LLM response", usage_metadata=mock_usage)
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+
+        with (
+            patch("google.genai.Client", return_value=mock_client),
+            patch("google.genai.types.Content"),
+        ):
+            result = await analyzer._call_llm([MagicMock()])
+
+        assert result["text"] == "LLM response"
+        assert result["input_tokens"] == 100
+        assert result["output_tokens"] == 50
+
+    async def test_rate_limit_retries(self, analyzer: VisualAnalyzer) -> None:
+        rate_err = Exception("429 Resource exhausted")
+        mock_usage = MagicMock(prompt_token_count=10, candidates_token_count=5)
+        mock_response = MagicMock(text="OK", usage_metadata=mock_usage)
+
+        call_count = 0
+
+        def side_effect(*_a: object, **_k: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise rate_err
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = side_effect
+
+        with (
+            patch("google.genai.Client", return_value=mock_client),
+            patch("google.genai.types.Content"),
+            patch("asyncio.sleep", new=AsyncMock()),
+        ):
+            result = await analyzer._call_llm([MagicMock()])
+
+        assert result["text"] == "OK"
+        assert call_count == 2
+
+
+# -- analyze_scene (fully mocked) -----------------------------------------
+
+
+def _mock_eyes_result(frame_id: str, ts: float = 0.0) -> EyesResult:
+    return EyesResult(
+        frame_id=frame_id,
+        timestamp_sec=ts,
+        scene_id=0,
+        response="## Scene Composition\n**Setting:** screen_recording",
+        n_images=1,
+        latency_sec=1.0,
+        input_tokens=100,
+        output_tokens=50,
+        description="Code editor",
+    )
+
+
+class TestAnalyzeScene:
+    async def test_single_frame_scene(self, analyzer: VisualAnalyzer) -> None:
+        scene = Scene(scene_id=0, frame_ids=["f0"], start_sec=0.0, end_sec=5.0)
+        frames = [_make_frame(frame_id="f0", ts=0.0)]
+
+        with patch.object(
+            analyzer,
+            "_analyze_frame",
+            new=AsyncMock(return_value=_mock_eyes_result("f0")),
+        ):
+            results, sm = await analyzer.analyze_scene(scene, frames, Path("/tmp"))
+
+        assert len(results) == 1
+        assert results[0].frame_id == "f0"
+        assert sm is None  # no memory pipeline
+
+    async def test_multi_frame_with_memory(self, mock_key_pool: MagicMock) -> None:
+        mock_memory = AsyncMock()
+        mock_memory.update_scene_memory = AsyncMock(
+            return_value=SceneMemory(scene_id=0, summary="Updated", frames_seen=1)
+        )
+        a = VisualAnalyzer(mock_key_pool, rpm_per_key=999, memory=mock_memory)
+        scene = Scene(
+            scene_id=0,
+            frame_ids=["f0", "f1"],
+            start_sec=0.0,
+            end_sec=10.0,
+        )
+        frames = [
+            _make_frame(frame_id="f0", ts=0.0),
+            _make_frame(frame_id="f1", ts=5.0),
+        ]
+
+        call_count = 0
+
+        async def mock_analyze(*_a: object, **_k: object) -> EyesResult:
+            nonlocal call_count
+            fid = frames[call_count].frame_id
+            call_count += 1
+            return _mock_eyes_result(fid)
+
+        with patch.object(a, "_analyze_frame", new=mock_analyze):
+            results, sm = await a.analyze_scene(scene, frames, Path("/tmp"))
+
+        assert len(results) == 2
+        assert sm is not None
+        assert mock_memory.update_scene_memory.await_count >= 1
+
+    async def test_returns_none_scene_memory_without_pipeline(
+        self, analyzer: VisualAnalyzer
+    ) -> None:
+        """Without MemoryPipeline, scene_memory is None."""
+        scene = Scene(scene_id=0, frame_ids=["f0"], start_sec=0.0, end_sec=5.0)
+        frames = [_make_frame(frame_id="f0", ts=0.0)]
+
+        with patch.object(
+            analyzer,
+            "_analyze_frame",
+            new=AsyncMock(return_value=_mock_eyes_result("f0")),
+        ):
+            _, sm = await analyzer.analyze_scene(scene, frames, Path("/tmp"))
+
+        assert sm is None

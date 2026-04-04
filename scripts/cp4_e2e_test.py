@@ -370,20 +370,27 @@ def run_alignment(
         for i, seg in enumerate(stt_data["segments"])
     ]
 
-    vd_chunks = [
-        ContentChunk(
-            chunk_type=ChunkType.VISUAL_SCENE,
-            text=scene["scene_memory"]["summary"],
-            index=i,
-            start_sec=scene["start_sec"],
-            end_sec=scene["end_sec"],
-            metadata={
-                "scene_id": scene["scene_id"],
-                "scene_type": scene["scene_memory"]["scene_type"],
-            },
+    vd_scenes = vd_data["scenes"]
+    vd_chunks: list[ContentChunk] = []
+    for i, scene in enumerate(vd_scenes):
+        start = scene["start_sec"]
+        if i + 1 < len(vd_scenes):
+            end = vd_scenes[i + 1]["start_sec"]
+        else:
+            end = scene["end_sec"]
+        vd_chunks.append(
+            ContentChunk(
+                chunk_type=ChunkType.VISUAL_SCENE,
+                text=scene["scene_memory"]["summary"],
+                index=i,
+                start_sec=start,
+                end_sec=end,
+                metadata={
+                    "scene_id": scene["scene_id"],
+                    "scene_type": scene["scene_memory"]["scene_type"],
+                },
+            )
         )
-        for i, scene in enumerate(vd_data["scenes"])
-    ]
 
     aligner = CrossModalAligner()
     report = aligner.align(stt_chunks, vd_chunks)
@@ -525,6 +532,13 @@ def generate_html(
     return "".join(p)
 
 
+def _scene_end(scenes: list[dict], idx: int) -> float:
+    """Effective end_sec: next scene's start or own end for last scene."""
+    if idx + 1 < len(scenes):
+        return scenes[idx + 1]["start_sec"]
+    return scenes[idx]["end_sec"]
+
+
 def _section_cp4(a, vd: dict) -> None:
     """Section 1: CP-4 — VD Pipeline Quality."""
     a("<h2>Section 1: CP-4 — VD Pipeline Quality</h2>")
@@ -559,12 +573,14 @@ def _section_cp4(a, vd: dict) -> None:
     # Timeline
     a("<h3>Timeline</h3>")
     a("<div class='timeline'>")
-    for s in vd["scenes"]:
+    scenes_list = vd["scenes"]
+    for si, s in enumerate(scenes_list):
         sm = s["scene_memory"]
         imp = sm["importance"]
         imp_color = "#e94560" if imp >= 4 else "#888"
+        end = _scene_end(scenes_list, si)
         a("<div class='timeline-row'>")
-        a(f"<span class='timeline-ts'>{s['start_sec']:.0f}-{s['end_sec']:.0f}s</span>")
+        a(f"<span class='timeline-ts'>{s['start_sec']:.0f}-{end:.0f}s</span>")
         a(
             f"<span class='timeline-type'>"
             f"<span class='badge badge-type'>{_esc(sm['scene_type'])}"
@@ -581,13 +597,14 @@ def _section_cp4(a, vd: dict) -> None:
 
     # Scene details
     a("<h3>Scene Details</h3>")
-    for s in vd["scenes"]:
+    for si, s in enumerate(scenes_list):
         sm = s["scene_memory"]
         n_delta = sum(1 for f in s["frames"] if f["is_delta"])
+        end = _scene_end(scenes_list, si)
 
         a("<div class='scene-block'>")
         a("<div class='scene-header'>")
-        a(f"<h3>Scene {s['scene_id']} ({s['start_sec']:.0f}-{s['end_sec']:.0f}s)</h3>")
+        a(f"<h3>Scene {s['scene_id']} ({s['start_sec']:.0f}-{end:.0f}s)</h3>")
         a(
             f"<span>"
             f"<span class='badge badge-type'>{_esc(sm['scene_type'])}</span> "
@@ -663,8 +680,11 @@ def _section_vd011(a, stt: dict, vd: dict, alignment: dict, total_time: float) -
     for seg in stt["segments"]:
         if seg["start_sec"] is not None and seg["end_sec"] is not None:
             intervals.append((seg["start_sec"], seg["end_sec"]))
-    for scene in vd["scenes"]:
-        intervals.append((scene["start_sec"], scene["end_sec"]))
+    vd_scenes = vd["scenes"]
+    for i, scene in enumerate(vd_scenes):
+        start = scene["start_sec"]
+        end = _scene_end(vd_scenes, i)
+        intervals.append((start, end))
 
     covered = _union_coverage(intervals)
     coverage_pct = round(100 * covered / stt_duration, 1) if stt_duration else 0
@@ -821,6 +841,223 @@ def _union_coverage(intervals: list[tuple[float, float]]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Interactive Viewer HTML
+# ---------------------------------------------------------------------------
+
+
+def generate_viewer_html(
+    stt_data: dict,
+    vd_data: dict,
+    video_rel_path: str,
+    video_name: str,
+) -> str:
+    """Generate interactive viewer: video + synced frame + STT."""
+    import json as _json
+
+    # Build flat frame list sorted by timestamp
+    frames_js: list[dict] = []
+    scenes = vd_data["scenes"]
+    for si, scene in enumerate(scenes):
+        scene_end = _scene_end(scenes, si)
+        sm = scene["scene_memory"]
+        for fr in scene["frames"]:
+            frames_js.append(
+                {
+                    "ts": fr["timestamp_sec"],
+                    "scene_start": scene["start_sec"],
+                    "scene_end": scene_end,
+                    "thumb": fr["thumb_b64"],
+                    "desc": fr["response"],
+                    "scene_summary": sm["summary"],
+                    "scene_type": sm["scene_type"],
+                    "scene_id": scene["scene_id"],
+                }
+            )
+    frames_js.sort(key=lambda f: f["ts"])
+
+    # STT segments
+    stt_js = [
+        {"start": s["start_sec"], "end": s["end_sec"], "text": s["text"]}
+        for s in stt_data["segments"]
+    ]
+
+    frames_json = _json.dumps(frames_js, ensure_ascii=False)
+    stt_json = _json.dumps(stt_js, ensure_ascii=False)
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>VD-011 Viewer: {_esc(video_name)}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #0a0a1a; color: #eee; font-family: system-ui, sans-serif; }}
+.container {{ display: grid; grid-template-columns: 1fr 1fr;
+             grid-template-rows: auto 1fr; height: 100vh; gap: 2px; }}
+.panel {{ background: #16213e; overflow: hidden; }}
+.panel-scroll {{ overflow-y: auto; padding: 12px; height: 100%; }}
+
+/* Video panel */
+#video-panel {{ padding: 4px; }}
+#video-panel video {{ width: 100%; border-radius: 4px; }}
+
+/* Frame panel */
+#frame-panel {{ padding: 4px; display: flex; flex-direction: column; }}
+#frame-panel img {{ width: 100%; border-radius: 4px; }}
+#frame-info {{ padding: 8px; font-size: 11px; color: #4ecca3; }}
+
+/* STT panel */
+#stt-panel {{ border-top: 2px solid #4ecca3; }}
+.stt-seg {{ padding: 6px 12px; border-bottom: 1px solid #1a2a4e;
+            font-size: 13px; line-height: 1.5; cursor: pointer;
+            transition: background 0.15s; }}
+.stt-seg:hover {{ background: #1a3a5a; }}
+.stt-seg.active {{ background: #0d3b66; border-left: 3px solid #4ecca3; }}
+.stt-ts {{ color: #4ecca3; font-family: monospace; font-size: 11px;
+           margin-right: 8px; display: inline-block; min-width: 90px; }}
+
+/* VD description panel */
+#vd-panel {{ border-top: 2px solid #e9a945; }}
+#scene-header {{ padding: 8px 12px; background: #0d2137;
+                 border-bottom: 1px solid #1a2a4e; }}
+#scene-header .badge {{ padding: 2px 8px; border-radius: 4px; font-size: 11px;
+                        font-weight: bold; background: #3a7bd5; color: #fff; }}
+#scene-summary {{ padding: 10px 12px; font-style: italic; color: #ccc;
+                  border-bottom: 1px solid #1a2a4e; font-size: 13px;
+                  line-height: 1.5; }}
+#frame-desc {{ padding: 12px; font-size: 12px; white-space: pre-wrap;
+               line-height: 1.5; }}
+#no-frame {{ padding: 40px; text-align: center; color: #666;
+             font-size: 16px; }}
+</style>
+</head><body>
+<div class="container">
+
+  <!-- Top-left: Video -->
+  <div class="panel" id="video-panel">
+    <video id="vid" controls preload="metadata">
+      <source src="{_esc(video_rel_path)}" type="video/mp4">
+    </video>
+  </div>
+
+  <!-- Top-right: VD Frame -->
+  <div class="panel" id="frame-panel">
+    <img id="frame-img" src="" alt="VD frame" style="display:none"/>
+    <div id="frame-info"></div>
+    <div id="no-frame">Play the video to see synced frames</div>
+  </div>
+
+  <!-- Bottom-left: STT transcript -->
+  <div class="panel" id="stt-panel">
+    <div class="panel-scroll" id="stt-scroll"></div>
+  </div>
+
+  <!-- Bottom-right: VD description -->
+  <div class="panel" id="vd-panel">
+    <div id="scene-header"></div>
+    <div id="scene-summary"></div>
+    <div class="panel-scroll">
+      <div id="frame-desc"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const FRAMES = {frames_json};
+const STT = {stt_json};
+
+const vid = document.getElementById('vid');
+const frameImg = document.getElementById('frame-img');
+const frameInfo = document.getElementById('frame-info');
+const noFrame = document.getElementById('no-frame');
+const sttScroll = document.getElementById('stt-scroll');
+const sceneHeader = document.getElementById('scene-header');
+const sceneSummary = document.getElementById('scene-summary');
+const frameDesc = document.getElementById('frame-desc');
+
+let curFrameIdx = -1;
+let curSttIdx = -1;
+
+// Build STT DOM
+STT.forEach((seg, i) => {{
+  const div = document.createElement('div');
+  div.className = 'stt-seg';
+  div.dataset.idx = i;
+  const mm1 = Math.floor(seg.start / 60);
+  const ss1 = Math.floor(seg.start % 60).toString().padStart(2, '0');
+  const mm2 = Math.floor(seg.end / 60);
+  const ss2 = Math.floor(seg.end % 60).toString().padStart(2, '0');
+  div.innerHTML = '<span class="stt-ts">' + mm1 + ':' + ss1 +
+    ' - ' + mm2 + ':' + ss2 + '</span>' + escHtml(seg.text);
+  div.addEventListener('click', () => {{ vid.currentTime = seg.start; }});
+  sttScroll.appendChild(div);
+}});
+
+function escHtml(t) {{
+  const d = document.createElement('div');
+  d.textContent = t;
+  return d.innerHTML;
+}}
+
+function findFrame(t) {{
+  let lo = 0, hi = FRAMES.length - 1, best = -1;
+  while (lo <= hi) {{
+    const mid = (lo + hi) >> 1;
+    if (FRAMES[mid].ts <= t) {{ best = mid; lo = mid + 1; }}
+    else {{ hi = mid - 1; }}
+  }}
+  return best;
+}}
+
+function findStt(t) {{
+  for (let i = 0; i < STT.length; i++) {{
+    if (t >= STT[i].start && t < STT[i].end) return i;
+  }}
+  return -1;
+}}
+
+vid.addEventListener('timeupdate', () => {{
+  const t = vid.currentTime;
+
+  // Update frame
+  const fi = findFrame(t);
+  if (fi !== curFrameIdx && fi >= 0) {{
+    curFrameIdx = fi;
+    const f = FRAMES[fi];
+    frameImg.src = 'data:image/jpeg;base64,' + f.thumb;
+    frameImg.style.display = 'block';
+    noFrame.style.display = 'none';
+    const mm = Math.floor(f.ts / 60);
+    const ss = Math.floor(f.ts % 60).toString().padStart(2, '0');
+    frameInfo.textContent = 'Frame @ ' + mm + ':' + ss +
+      ' | Scene ' + f.scene_id + ' (' + f.scene_type + ')';
+    sceneHeader.innerHTML = '<span class="badge">' +
+      escHtml(f.scene_type) + '</span> Scene ' + f.scene_id +
+      ' (' + Math.floor(f.scene_start) + '-' +
+      Math.floor(f.scene_end) + 's)';
+    sceneSummary.textContent = f.scene_summary;
+    frameDesc.textContent = f.desc;
+  }}
+
+  // Update STT
+  const si = findStt(t);
+  if (si !== curSttIdx) {{
+    if (curSttIdx >= 0) {{
+      const prev = sttScroll.children[curSttIdx];
+      if (prev) prev.classList.remove('active');
+    }}
+    curSttIdx = si;
+    if (si >= 0) {{
+      const el = sttScroll.children[si];
+      el.classList.add('active');
+      el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+    }}
+  }}
+}});
+</script>
+</body></html>"""
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -898,6 +1135,17 @@ async def main() -> None:
     html_path = OUT_DIR / f"e2e_report_{stem}{suffix}.html"
     html_path.write_text(html_content)
 
+    # --- Generate interactive viewer ---
+    video_rel = os.path.relpath(video_path, OUT_DIR)
+    viewer_content = generate_viewer_html(
+        stt_data=stt_data,
+        vd_data=vd_data,
+        video_rel_path=video_rel,
+        video_name=stem,
+    )
+    viewer_path = OUT_DIR / f"viewer_{stem}{suffix}.html"
+    viewer_path.write_text(viewer_content)
+
     # Save full result JSON
     full_result = {
         "video": str(video_path),
@@ -939,6 +1187,7 @@ async def main() -> None:
     )
     print(f"  Total: {total_time}s")
     print(f"\n  Report: file://{html_path.resolve()}")
+    print(f"  Viewer: file://{viewer_path.resolve()}")
     print(f"  Summary: {summary_path}")
 
 

@@ -574,18 +574,29 @@ class VideoProcessor(SourceProcessor):
 
     @staticmethod
     def _vd_result_to_chunks(result: VDResult) -> list[ContentChunk]:
-        """Convert VDResult scenes to VISUAL_SCENE ContentChunks."""
+        """Convert VDResult scenes to VISUAL_SCENE ContentChunks.
+
+        Each scene covers the time from its first frame to the start
+        of the next scene.  For the last scene, end_sec is taken from
+        the scene's own end_sec (timestamp of its last frame).
+        """
+        scenes = result.scenes
         chunks: list[ContentChunk] = []
 
-        for idx, analysis in enumerate(result.scenes):
+        for idx, analysis in enumerate(scenes):
             sm = analysis.scene_memory
+            start = analysis.scene.start_sec
+            if idx + 1 < len(scenes):
+                end = scenes[idx + 1].scene.start_sec
+            else:
+                end = analysis.scene.end_sec
             chunks.append(
                 ContentChunk(
                     chunk_type=ChunkType.VISUAL_SCENE,
                     text=sm.summary,
                     index=idx,
-                    start_sec=analysis.scene.start_sec,
-                    end_sec=analysis.scene.end_sec,
+                    start_sec=start,
+                    end_sec=end,
                     metadata={
                         "scene_id": analysis.scene.scene_id,
                         "scene_type": sm.scene_type,

@@ -11,7 +11,7 @@ Topics: {topics}
 
 Update the video description (max 200 words, English). Be SPECIFIC and CONCRETE — name exact topics, functions, code constructs, and tools that were shown. Avoid generic phrases like "essential skills", "foundational concepts", "comprehensive overview".
 
-Good example: "Python tutorial in PyCharm. Covered: dictionary comprehension to replace for-loops, function parameters with default values, return statements. Showed refactoring from `for k in dict: new[k] = transform(dict[k])` to `{k: transform(v) for k, v in dict.items()}`."
+Good example: "Python tutorial in PyCharm. Covered: dictionary comprehension to replace for-loops, function parameters with default values, return statements. Showed refactoring from `for k in dict: new[k] = transform(dict[k])` to `{{k: transform(v) for k, v in dict.items()}}`."
 
 Bad example: "This comprehensive course covers essential programming concepts and builds a solid foundation for development."
 

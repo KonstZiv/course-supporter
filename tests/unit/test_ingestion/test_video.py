@@ -1,6 +1,6 @@
 """Tests for GeminiVideoProcessor and VideoProcessor."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -12,10 +12,10 @@ from course_supporter.ingestion.video import (
 )
 from course_supporter.models.source import (
     ChunkType,
-    ContentChunk,
     SourceDocument,
     SourceType,
 )
+from course_supporter.stt.schemas import STTResult, STTSegment
 
 
 def _make_source(
@@ -170,25 +170,42 @@ class TestGeminiVideoProcessor:
             await proc.process(_make_source(), router=router)
 
 
+def _mock_stt_router(
+    segments: list[STTSegment] | None = None,
+) -> AsyncMock:
+    """Create a mock STTRouter returning STTResult."""
+    if segments is None:
+        segments = [
+            STTSegment(start_sec=0.0, end_sec=10.0, text="Hello"),
+            STTSegment(start_sec=10.0, end_sec=20.0, text="World"),
+        ]
+    router = AsyncMock()
+    router.transcribe.return_value = STTResult(
+        text=" ".join(s.text for s in segments),
+        segments=segments,
+        provider="mock",
+        model_id="mock-model",
+    )
+    return router
+
+
 class TestVideoProcessor:
     async def test_stt_only_when_no_vd(self) -> None:
         """VideoProcessor returns STT chunks when no VD pipeline."""
-        mock_stt = AsyncMock()
-        mock_stt.process.return_value = SourceDocument(
-            source_type=SourceType.VIDEO,
-            source_url="file:///v.mp4",
-            chunks=[
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text="Hello",
-                    start_sec=0.0,
-                    end_sec=5.0,
-                ),
-            ],
+        mock_router = _mock_stt_router(
+            [STTSegment(start_sec=0.0, end_sec=5.0, text="Hello")]
         )
+        proc = VideoProcessor(stt_router=mock_router)
 
-        proc = VideoProcessor(stt=mock_stt)
-        doc = await proc.process(_make_source())
+        with (
+            patch(
+                "course_supporter.ingestion.video._extract_audio_ffmpeg",
+                return_value="/tmp/audio.wav",
+            ),
+            patch("pathlib.Path.unlink"),
+            patch("pathlib.Path.is_file", return_value=True),
+        ):
+            doc = await proc.process(_make_source())
 
         assert len(doc.chunks) == 1
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -196,9 +213,15 @@ class TestVideoProcessor:
 
     async def test_unsupported_format(self) -> None:
         """UnsupportedFormatError for non-video source."""
-        proc = VideoProcessor(stt=AsyncMock())
+        proc = VideoProcessor(stt_router=AsyncMock())
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
             await proc.process(_make_source(source_type="text"))
+
+    async def test_url_source_rejected(self) -> None:
+        """Remote URL raises ProcessingError (local files only)."""
+        proc = VideoProcessor(stt_router=AsyncMock())
+        with pytest.raises(ProcessingError, match="requires a local file path"):
+            await proc.process(_make_source(url="https://example.com/v.mp4"))
 
 
 class TestTimecodeToSeconds:

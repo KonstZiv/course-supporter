@@ -17,6 +17,7 @@ from course_supporter.ingestion.text import TextProcessor
 from course_supporter.ingestion.video import VideoProcessor, WhisperVideoProcessor
 from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
+from course_supporter.stt.router import STTRouter
 
 
 class TestCreateHeavySteps:
@@ -100,7 +101,8 @@ class TestCreateProcessors:
     def test_returns_all_source_types(self) -> None:
         """Dict contains all four SourceType keys."""
         heavy = create_heavy_steps()
-        processors = create_processors(heavy)
+        mock_router = AsyncMock(spec=STTRouter)
+        processors = create_processors(heavy, stt_router=mock_router)
 
         assert set(processors.keys()) == {
             SourceType.VIDEO,
@@ -109,12 +111,24 @@ class TestCreateProcessors:
             SourceType.WEB,
         }
 
-    def test_video_processor_type(self) -> None:
-        """VIDEO maps to VideoProcessor."""
+    def test_video_processor_with_stt_router(self) -> None:
+        """VIDEO maps to VideoProcessor when stt_router is provided."""
+        heavy = create_heavy_steps()
+        mock_router = AsyncMock(spec=STTRouter)
+        processors = create_processors(heavy, stt_router=mock_router)
+
+        video = processors[SourceType.VIDEO]
+        assert isinstance(video, VideoProcessor)
+        assert video._stt_router is mock_router
+
+    def test_video_processor_fallback_to_whisper(self) -> None:
+        """VIDEO maps to WhisperVideoProcessor when no stt_router."""
         heavy = create_heavy_steps()
         processors = create_processors(heavy)
 
-        assert isinstance(processors[SourceType.VIDEO], VideoProcessor)
+        video = processors[SourceType.VIDEO]
+        assert isinstance(video, WhisperVideoProcessor)
+        assert video._transcribe_func is heavy.transcribe
 
     def test_presentation_processor_type(self) -> None:
         """PRESENTATION maps to PresentationProcessor."""
@@ -136,16 +150,6 @@ class TestCreateProcessors:
         processors = create_processors(heavy)
 
         assert isinstance(processors[SourceType.WEB], WebProcessor)
-
-    def test_video_processor_has_transcribe_func(self) -> None:
-        """VideoProcessor's STT processor has injected transcribe."""
-        heavy = create_heavy_steps()
-        processors = create_processors(heavy)
-
-        video = processors[SourceType.VIDEO]
-        assert isinstance(video, VideoProcessor)
-        assert isinstance(video._stt, WhisperVideoProcessor)
-        assert video._stt._transcribe_func is heavy.transcribe
 
     def test_presentation_processor_has_parse_pdf_func(self) -> None:
         """PresentationProcessor has injected parse_pdf_func."""

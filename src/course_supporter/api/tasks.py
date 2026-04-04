@@ -141,7 +141,12 @@ async def arq_ingest_material(
 
     heavy = create_heavy_steps(router=router)
     vd = create_vd_pipeline()
-    processors = create_processors(heavy, vd_pipeline=vd)
+
+    from course_supporter.config import get_settings
+    from course_supporter.stt.setup import create_stt_router
+
+    stt_router = create_stt_router(get_settings(), session_factory)
+    processors = create_processors(heavy, vd_pipeline=vd, stt_router=stt_router)
     s3: S3Client | None = ctx.get("s3_client")
 
     async with session_factory() as session:

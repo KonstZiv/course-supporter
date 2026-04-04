@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from course_supporter.config import Settings
     from course_supporter.ingestion.base import SourceProcessor
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.stt.router import STTRouter
     from course_supporter.vd.pipeline import VDPipeline
 
 
@@ -147,21 +148,33 @@ def create_processors(
     heavy: HeavySteps,
     *,
     vd_pipeline: VDPipeline | None = None,
+    stt_router: STTRouter | None = None,
 ) -> dict[SourceType, SourceProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
         heavy: Bundle of heavy step callables.
         vd_pipeline: Optional VDPipeline for video visual analysis.
+        stt_router: Optional STTRouter for video transcription.
+            When provided, VideoProcessor uses STTRouter instead of Whisper.
+            When None, falls back to WhisperVideoProcessor.
 
     Returns:
         Mapping from SourceType to fully-wired processor instances.
     """
-    return {
-        SourceType.VIDEO: VideoProcessor(
-            stt=WhisperVideoProcessor(transcribe_func=heavy.transcribe),
+    video_processor: SourceProcessor
+    if stt_router is not None:
+        video_processor = VideoProcessor(
+            stt_router=stt_router,
             vd_pipeline=vd_pipeline,
-        ),
+        )
+    else:
+        video_processor = WhisperVideoProcessor(
+            transcribe_func=heavy.transcribe,
+        )
+
+    return {
+        SourceType.VIDEO: video_processor,
         SourceType.PRESENTATION: PresentationProcessor(
             parse_pdf_func=heavy.parse_pdf,
             describe_slides_func=heavy.describe_slides,

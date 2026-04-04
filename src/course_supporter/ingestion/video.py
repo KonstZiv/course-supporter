@@ -312,7 +312,7 @@ class WhisperVideoProcessor(SourceProcessor):
         finally:
             # Clean up temp audio file
             with contextlib.suppress(OSError):
-                Path(audio_path).unlink()  # noqa: ASYNC240
+                await asyncio.to_thread(Path(audio_path).unlink)
 
     async def _extract_audio(self, video_source: str) -> str:
         """Extract audio from a video file or URL.
@@ -339,7 +339,7 @@ class WhisperVideoProcessor(SourceProcessor):
         finally:
             if video_source.startswith(("http://", "https://")):
                 with contextlib.suppress(OSError):
-                    Path(video_path).unlink()  # noqa: ASYNC240
+                    await asyncio.to_thread(Path(video_path).unlink)
 
     async def _download_audio(self, url: str) -> str:
         """Download audio from a video URL using yt-dlp.
@@ -459,7 +459,7 @@ class VideoProcessor(SourceProcessor):
 
         logger.info("video_processor_start", source_url=source.source_url)
 
-        video_path = self._resolve_local_path(source.source_url)
+        video_path = await self._resolve_local_path(source.source_url)
 
         # Launch STT and VD in parallel
         stt_task = asyncio.create_task(self._run_stt(video_path))
@@ -505,7 +505,7 @@ class VideoProcessor(SourceProcessor):
         )
 
     @staticmethod
-    def _resolve_local_path(source_url: str) -> Path:
+    async def _resolve_local_path(source_url: str) -> Path:
         """Resolve source URL to a local file path.
 
         Raises:
@@ -520,8 +520,9 @@ class VideoProcessor(SourceProcessor):
             if source_url.startswith("file://")
             else source_url
         )
-        video_path = Path(raw).resolve()
-        if not video_path.is_file():
+        video_path = await asyncio.to_thread(Path(raw).resolve)
+        is_file = await asyncio.to_thread(video_path.is_file)
+        if not is_file:
             raise ProcessingError(f"Video file not found: {video_path}")
         return video_path
 
@@ -536,7 +537,7 @@ class VideoProcessor(SourceProcessor):
             return self._stt_result_to_chunks(result)
         finally:
             with contextlib.suppress(OSError):
-                Path(audio_path).unlink()  # noqa: ASYNC240
+                await asyncio.to_thread(Path(audio_path).unlink)
 
     @staticmethod
     def _stt_result_to_chunks(result: STTResult) -> list[ContentChunk]:

@@ -16,6 +16,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.stt.schemas import STTResult, STTSegment
 
 
 def _make_source(
@@ -238,8 +239,6 @@ class TestVideoProcessorParallel:
 
     async def test_stt_plus_vd_parallel(self) -> None:
         """Both STT and VD produce chunks in one SourceDocument."""
-        from course_supporter.stt.schemas import STTResult, STTSegment
-
         mock_router = AsyncMock()
         mock_router.transcribe.return_value = STTResult(
             text="Hello world",
@@ -281,8 +280,6 @@ class TestVideoProcessorParallel:
 
     async def test_vd_failure_graceful_degradation(self) -> None:
         """VD failure returns STT-only result."""
-        from course_supporter.stt.schemas import STTResult, STTSegment
-
         mock_router = AsyncMock()
         mock_router.transcribe.return_value = STTResult(
             text="Speech",
@@ -312,8 +309,6 @@ class TestVideoProcessorParallel:
 
     async def test_no_vd_pipeline(self) -> None:
         """Without VD pipeline, STT-only result."""
-        from course_supporter.stt.schemas import STTResult
-
         mock_router = AsyncMock()
         mock_router.transcribe.return_value = STTResult(
             text="",

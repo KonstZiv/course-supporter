@@ -431,6 +431,14 @@ class VideoProcessor(SourceProcessor):
 
     Graceful degradation: if VD fails, STT-only result is returned.
 
+    Note:
+        Requires a **local file path** as ``source.source_url``.
+        Remote URLs (http/https) raise ``ProcessingError``.
+        For URL sources, resolve them to local files before calling
+        (e.g. via S3 pre-signed download in ``_resolve_s3_url``).
+        ``WhisperVideoProcessor`` still supports URLs via yt-dlp
+        and can be used as a fallback when no STTRouter is available.
+
     Args:
         stt_router: STTRouter for audio transcription.
         vd_pipeline: Optional VDPipeline for visual analysis.

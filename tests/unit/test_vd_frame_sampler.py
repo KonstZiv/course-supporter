@@ -397,7 +397,6 @@ class TestFfmpegExtractSingle:
 
             mock_proc = AsyncMock(returncode=0)
             mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_proc.kill = MagicMock()
 
             with patch(
                 "asyncio.create_subprocess_exec",
@@ -416,7 +415,6 @@ class TestFfmpegExtractSingle:
 
             mock_proc = AsyncMock(returncode=1)
             mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-            mock_proc.kill = MagicMock()
 
             with patch(
                 "asyncio.create_subprocess_exec",
@@ -467,7 +465,8 @@ class TestGetVideoResolution:
 
 class TestFrameSamplerSample:
     async def test_sample_orchestration(self) -> None:
-        """Full sample() with all I/O mocked."""
+        """Verify FrameSampler.sample orchestrates resolution, extraction,
+        PiP, dedup, and segmentation with all I/O mocked."""
         with tempfile.TemporaryDirectory() as d:
             frame_dir = Path(d)
             # Create fake frame files

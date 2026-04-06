@@ -22,7 +22,7 @@ system_prompt: |
 
   - **title**: the topic/title of the material
   - **duration_sec**: total duration in seconds
-  - **language**: presentation language code (uk, en, de, sr, ...)
+  - **language**: ISO 639-1 language code inferred from narration (uk, en, de, sr, ...)
   - **source_type**: video / lecture / screencast / presentation
   - **presenter**: who the presenter is, their delivery style, notable mannerisms
   - **summary**: 2-3 sentences for quick orientation

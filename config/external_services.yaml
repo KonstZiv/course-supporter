@@ -165,7 +165,7 @@ actions:
     strategy: default
     requires: [structured_output]
     chain:
-      default: [gemini-2.5-flash, deepseek-chat]
+      default: [deepseek-chat, claude-sonnet-4-20250514]
       quality: [claude-sonnet-4-20250514, gemini-2.5-pro]
       budget: [deepseek-chat]
       # Per-model chains for A/B spike testing

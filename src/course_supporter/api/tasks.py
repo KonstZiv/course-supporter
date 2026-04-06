@@ -248,24 +248,36 @@ def _collect_ready_documents(
 def _collect_outline_context(
     flat_nodes: list[MaterialNode],
 ) -> str | None:
-    """Concatenate outline_content from READY entries, if any exist.
+    """Collect outline_content from READY entries, if any exist.
 
-    Returns a single JSON array string with all MaterialOutline JSONs,
-    or None if no outlines are available (fallback to raw SourceDocuments).
+    Parses each outline JSON to ensure validity, then serializes
+    as a single object (one outline) or JSON array (multiple).
+    Returns None if no outlines are available.
     """
+    import json
+
+    import structlog
+
     from course_supporter.storage.orm import MaterialState
 
-    outlines: list[str] = []
+    log = structlog.get_logger()
+    parsed: list[dict[str, object]] = []
     for node in flat_nodes:
         for entry in node.materials:
             if entry.state == MaterialState.READY and entry.outline_content:
-                outlines.append(entry.outline_content)
+                try:
+                    parsed.append(json.loads(entry.outline_content))
+                except json.JSONDecodeError:
+                    log.warning(
+                        "invalid_outline_content",
+                        entry_id=str(entry.id),
+                    )
 
-    if not outlines:
+    if not parsed:
         return None
-    if len(outlines) == 1:
-        return outlines[0]
-    return "[" + ", ".join(outlines) + "]"
+    if len(parsed) == 1:
+        return json.dumps(parsed[0], ensure_ascii=False)
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 def _collect_validated_mappings(

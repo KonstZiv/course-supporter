@@ -58,6 +58,7 @@ def _make_entry(
     )
     entry.filename = filename
     entry.source_url = source_url
+    entry.outline_content = None
     return entry
 
 

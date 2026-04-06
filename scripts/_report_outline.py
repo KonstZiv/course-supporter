@@ -17,42 +17,91 @@ MODELS = [
 ]
 
 CSS = """
-body { font-family: system-ui, sans-serif; margin: 0; padding: 20px;
-       background: #0a0a1a; color: #eee; max-width: 1800px; margin: 0 auto; line-height: 1.5; }
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0 auto; padding: 20px;
+  background: #0a0a1a; color: #eee;
+  max-width: 1800px; line-height: 1.5;
+}
 h1 { color: #e94560; margin-bottom: 4px; }
-h2 { color: #4ecca3; border-bottom: 2px solid #4ecca3; padding: 8px 0; margin-top: 40px; }
+h2 {
+  color: #4ecca3;
+  border-bottom: 2px solid #4ecca3;
+  padding: 8px 0; margin-top: 40px;
+}
 h3 { color: #e9a945; margin-top: 24px; }
 h4 { color: #7ec8e3; margin-top: 16px; margin-bottom: 8px; }
 .subtitle { color: #888; margin-top: 0; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-         gap: 10px; margin: 16px 0; }
-.stat-card { background: #16213e; border-radius: 8px; padding: 12px; text-align: center; }
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin: 16px 0;
+}
+.stat-card {
+  background: #16213e; border-radius: 8px;
+  padding: 12px; text-align: center;
+}
 .stat-value { font-size: 24px; font-weight: bold; color: #4ecca3; }
 .stat-label { font-size: 11px; color: #888; margin-top: 4px; }
-.model-block { background: #16213e; border-radius: 8px; padding: 16px; margin: 12px 0; }
-.section-block { background: #1a1a2e; border-radius: 6px; padding: 12px; margin: 8px 0;
-                 border-left: 3px solid #4ecca3; }
-.code-block { background: #0d1117; border-radius: 4px; padding: 10px; margin: 6px 0;
-              font-family: 'SF Mono', Monaco, monospace; font-size: 13px; white-space: pre-wrap;
-              overflow-x: auto; color: #c9d1d9; }
-.narration { background: #1e2d3d; border-radius: 4px; padding: 10px; margin: 6px 0;
-             line-height: 1.6; white-space: pre-wrap; }
-.screen { background: #1d2d1d; border-radius: 4px; padding: 10px; margin: 6px 0;
-          line-height: 1.5; white-space: pre-wrap; color: #a8d8a8; }
+.model-block {
+  background: #16213e; border-radius: 8px;
+  padding: 16px; margin: 12px 0;
+}
+.section-block {
+  background: #1a1a2e; border-radius: 6px;
+  padding: 12px; margin: 8px 0;
+  border-left: 3px solid #4ecca3;
+}
+.code-block {
+  background: #0d1117; border-radius: 4px;
+  padding: 10px; margin: 6px 0;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 13px; white-space: pre-wrap;
+  overflow-x: auto; color: #c9d1d9;
+}
+.narration {
+  background: #1e2d3d; border-radius: 4px;
+  padding: 10px; margin: 6px 0;
+  line-height: 1.6; white-space: pre-wrap;
+}
+.screen {
+  background: #1d2d1d; border-radius: 4px;
+  padding: 10px; margin: 6px 0;
+  line-height: 1.5; white-space: pre-wrap; color: #a8d8a8;
+}
 .concepts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-.concept-tag { background: #3a7bd5; color: #fff; padding: 2px 8px; border-radius: 4px;
-               font-size: 12px; }
-.raw-block { background: #1a1a1a; border-radius: 6px; padding: 12px; margin: 8px 0;
-             border-left: 3px solid #e94560; }
-.raw-text { font-size: 13px; color: #ccc; white-space: pre-wrap; line-height: 1.5; }
-.time-badge { background: #333; color: #4ecca3; padding: 1px 6px; border-radius: 3px;
-              font-size: 11px; font-family: monospace; }
+.concept-tag {
+  background: #3a7bd5; color: #fff;
+  padding: 2px 8px; border-radius: 4px; font-size: 12px;
+}
+.raw-block {
+  background: #1a1a1a; border-radius: 6px;
+  padding: 12px; margin: 8px 0;
+  border-left: 3px solid #e94560;
+}
+.raw-text {
+  font-size: 13px; color: #ccc;
+  white-space: pre-wrap; line-height: 1.5;
+}
+.time-badge {
+  background: #333; color: #4ecca3;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 11px; font-family: monospace;
+}
 table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+th, td {
+  padding: 8px 12px; text-align: left;
+  border-bottom: 1px solid #333;
+}
 th { background: #16213e; color: #4ecca3; }
 td { vertical-align: top; }
-.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 900px) { .compare-grid { grid-template-columns: 1fr; } }
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr; gap: 16px;
+}
+@media (max-width: 900px) {
+  .compare-grid { grid-template-columns: 1fr; }
+}
 """
 
 
@@ -100,9 +149,10 @@ def generate_report(vid_slug: str, video_title: str, report_name: str) -> None:
 
     parts.append("<h3>STT Transcript (raw)</h3>")
     for seg in stt["segments"]:
+        t0, t1 = seg["start_sec"], seg["end_sec"]
         parts.append(
             f'<div class="raw-block">'
-            f'<span class="time-badge">{seg["start_sec"]:.1f}s – {seg["end_sec"]:.1f}s</span>'
+            f'<span class="time-badge">{t0:.1f}s – {t1:.1f}s</span>'
             f'<div class="raw-text">{esc(seg["text"])}</div></div>'
         )
 
@@ -202,9 +252,8 @@ def generate_report(vid_slug: str, video_title: str, report_name: str) -> None:
             continue
         o = outlines[m]
         ol = o["outline"]
-        parts.append(
-            f"<h3>{esc(o['model_label'])} — {len(ol.get('sections', []))} section(s)</h3>"
-        )
+        n_sec = len(ol.get("sections", []))
+        parts.append(f"<h3>{esc(o['model_label'])} — {n_sec} section(s)</h3>")
         parts.append('<div class="model-block">')
 
         for i, sec in enumerate(ol.get("sections", [])):

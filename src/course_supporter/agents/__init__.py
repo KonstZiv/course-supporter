@@ -1,6 +1,7 @@
 """Agents for course structure generation."""
 
 from course_supporter.agents.architect import ArchitectAgent, PreparedPrompt
+from course_supporter.agents.outline import OutlineAgent, OutlineResult
 from course_supporter.agents.prompt_loader import (
     PromptData,
     format_user_prompt,
@@ -9,6 +10,8 @@ from course_supporter.agents.prompt_loader import (
 
 __all__ = [
     "ArchitectAgent",
+    "OutlineAgent",
+    "OutlineResult",
     "PreparedPrompt",
     "PromptData",
     "format_user_prompt",

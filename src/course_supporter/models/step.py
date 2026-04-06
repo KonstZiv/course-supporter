@@ -117,6 +117,9 @@ class StepInput:
     children_snapshots: list[ChildSnapshotContext] = field(default_factory=list)
     slide_timecode_refs: list[SlideTimecodeRef] = field(default_factory=list)
 
+    # MaterialOutline JSON (preferred over raw materials when available)
+    outline_context: str | None = None
+
 
 @dataclass(frozen=True)
 class StepOutput:

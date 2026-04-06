@@ -47,6 +47,7 @@ def _make_entry(
     *,
     state: str = "ready",
     processed_content: str | None = None,
+    outline_content: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialEntry."""
     entry = MagicMock()
@@ -54,6 +55,7 @@ def _make_entry(
     entry.processed_content = processed_content or (
         '{"source_type": "text", "source_url": "file:///test.md"}'
     )
+    entry.outline_content = outline_content
     return entry
 
 

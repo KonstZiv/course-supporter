@@ -399,6 +399,52 @@ class TestEnsureRawHash:
             await repo.ensure_raw_hash(uuid.uuid4(), raw_bytes=b"data")
 
 
+class TestSaveOutline:
+    """MaterialEntryRepository.save_outline tests."""
+
+    async def test_saves_outline_json(self) -> None:
+        """Sets outline_content and flushes."""
+        entry = _mock_entry(processed_content='{"chunks": []}')
+        session = AsyncMock()
+        session.get.return_value = entry
+
+        repo = MaterialEntryRepository(session)
+        result = await repo.save_outline(
+            entry.id,
+            outline_json='{"title": "Python Basics"}',
+        )
+
+        assert result.outline_content == '{"title": "Python Basics"}'
+        session.flush.assert_awaited()
+
+    async def test_not_found(self) -> None:
+        """ValueError if entry doesn't exist."""
+        session = AsyncMock()
+        session.get.return_value = None
+
+        repo = MaterialEntryRepository(session)
+        with pytest.raises(ValueError, match="not found"):
+            await repo.save_outline(
+                uuid.uuid4(),
+                outline_json='{"title": "x"}',
+            )
+
+    async def test_overwrites_existing_outline(self) -> None:
+        """Calling save_outline twice overwrites previous value."""
+        entry = _mock_entry()
+        entry.outline_content = '{"title": "old"}'
+        session = AsyncMock()
+        session.get.return_value = entry
+
+        repo = MaterialEntryRepository(session)
+        result = await repo.save_outline(
+            entry.id,
+            outline_json='{"title": "new"}',
+        )
+
+        assert result.outline_content == '{"title": "new"}'
+
+
 class TestDelete:
     """MaterialEntryRepository.delete tests."""
 

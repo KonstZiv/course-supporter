@@ -1,5 +1,6 @@
 """Tests for ArchitectAgent."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -417,3 +418,113 @@ class TestRunWithMetadata:
         # Verify the prompt contained the existing structure
         call_kwargs = mock_router.complete_structured.call_args.kwargs
         assert "Existing Module" in call_kwargs["prompt"]
+
+
+class TestOutlineContext:
+    """Tests for outline_context fallback in _prepare_prompts."""
+
+    # Schema-valid outline JSON for realistic test data
+    _SAMPLE_OUTLINE = json.dumps(
+        {
+            "title": "Outline Test",
+            "duration_sec": 60.0,
+            "language": "en",
+            "source_type": "video",
+            "presenter": {
+                "description": "Instructor",
+                "style": "practical",
+                "delivery_notes": "Moderate pace.",
+            },
+            "summary": "A test outline.",
+            "topics": ["testing"],
+            "tools": ["pytest"],
+            "target_audience": "Developers",
+            "prerequisites": [],
+            "sections": [
+                {
+                    "start_sec": 0.0,
+                    "end_sec": 60.0,
+                    "title": "Intro",
+                    "narration": "Welcome to the course.",
+                    "screen_content": "Title slide.",
+                    "code_snippets": [],
+                    "key_concepts": ["testing"],
+                }
+            ],
+        }
+    )
+
+    def test_uses_outline_when_provided(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """_prepare_prompts uses outline_context as {context} when provided."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            prepared = agent._prepare_prompts(
+                sample_context, outline_context=self._SAMPLE_OUTLINE
+            )
+
+        assert "Outline Test" in prepared.user_prompt
+        # Raw SourceDocument URL should NOT be in prompt
+        assert "file:///test.md" not in prepared.user_prompt
+
+    def test_falls_back_to_context_when_no_outline(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """_prepare_prompts uses CourseContext when outline_context is None."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            prepared = agent._prepare_prompts(sample_context, outline_context=None)
+
+        # Falls back to raw SourceDocument
+        assert "file:///test.md" in prepared.user_prompt
+
+    @pytest.mark.asyncio
+    async def test_run_with_outline_context(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """run() passes outline_context through to the prompt."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            await agent.run(sample_context, outline_context=self._SAMPLE_OUTLINE)
+
+        call_kwargs = mock_router.complete_structured.call_args.kwargs
+        assert "Outline Test" in call_kwargs["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_run_with_metadata_passes_outline(
+        self,
+        mock_router: AsyncMock,
+        sample_context: CourseContext,
+        prompt_data: PromptData,
+    ) -> None:
+        """run_with_metadata passes outline_context through."""
+        with patch(
+            "course_supporter.agents.architect.load_prompt",
+            return_value=prompt_data,
+        ):
+            agent = ArchitectAgent(mock_router)
+            await agent.run_with_metadata(
+                sample_context, outline_context=self._SAMPLE_OUTLINE
+            )
+
+        call_kwargs = mock_router.complete_structured.call_args.kwargs
+        assert "Outline Test" in call_kwargs["prompt"]

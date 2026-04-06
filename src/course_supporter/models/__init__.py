@@ -13,6 +13,12 @@ from course_supporter.models.course import (
     SlideVideoMapEntry,
     WebReference,
 )
+from course_supporter.models.outline import (
+    CodeSnippet,
+    MaterialOutline,
+    OutlineSection,
+    PresenterInfo,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -22,14 +28,18 @@ from course_supporter.models.source import (
 
 __all__ = [
     "ChunkType",
+    "CodeSnippet",
     "ConceptOutput",
     "ContentChunk",
     "CourseContext",
     "CourseStructure",
     "ExerciseOutput",
     "LessonOutput",
+    "MaterialOutline",
     "ModuleDifficulty",
     "ModuleOutput",
+    "OutlineSection",
+    "PresenterInfo",
     "SlideRange",
     "SlideTimecodeRef",
     "SlideVideoMapEntry",

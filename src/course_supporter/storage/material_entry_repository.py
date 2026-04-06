@@ -221,6 +221,30 @@ class MaterialEntryRepository:
             await self._session.flush()
         return entry
 
+    async def save_outline(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        outline_json: str,
+    ) -> MaterialEntry:
+        """Save MaterialOutline JSON for a processed entry.
+
+        Stores the lossless restructured outline alongside the raw
+        processed_content. Does not invalidate fingerprints — the
+        outline is a derivative, not a source of identity.
+
+        Args:
+            entry_id: Entry to update.
+            outline_json: Serialized MaterialOutline JSON.
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.outline_content = outline_json
+        await self._session.flush()
+        return entry
+
     async def delete(self, entry_id: uuid.UUID) -> None:
         """Delete an entry and invalidate parent node fingerprints.
 

@@ -245,6 +245,29 @@ def _collect_ready_documents(
     return documents
 
 
+def _collect_outline_context(
+    flat_nodes: list[MaterialNode],
+) -> str | None:
+    """Concatenate outline_content from READY entries, if any exist.
+
+    Returns a single JSON array string with all MaterialOutline JSONs,
+    or None if no outlines are available (fallback to raw SourceDocuments).
+    """
+    from course_supporter.storage.orm import MaterialState
+
+    outlines: list[str] = []
+    for node in flat_nodes:
+        for entry in node.materials:
+            if entry.state == MaterialState.READY and entry.outline_content:
+                outlines.append(entry.outline_content)
+
+    if not outlines:
+        return None
+    if len(outlines) == 1:
+        return outlines[0]
+    return "[" + ", ".join(outlines) + "]"
+
+
 def _collect_validated_mappings(
     flat_nodes: list[MaterialNode],
 ) -> list[SlideTimecodeRef]:
@@ -330,6 +353,7 @@ async def arq_generate_structure(
 
             # Collect data for generation
             documents = _collect_ready_documents(flat_nodes)
+            outline_context = _collect_outline_context(flat_nodes)
             mappings = _collect_validated_mappings(flat_nodes)
 
             # Build tree summary for LLM context
@@ -377,7 +401,9 @@ async def arq_generate_structure(
             )
             agent = ArchitectAgent(router, mode=mode)
             gen_result = await agent.run_with_metadata(
-                context, existing_structure=existing_structure
+                context,
+                existing_structure=existing_structure,
+                outline_context=outline_context,
             )
 
             # Persist LLM metadata as ExternalServiceCall
@@ -621,6 +647,7 @@ def _build_step_input(
     parent_context: NodeSummary | None = None,
     sibling_summaries: list[NodeSummary] | None = None,
     children_snapshots: list[ChildSnapshotContext] | None = None,
+    outline_context: str | None = None,
 ) -> StepInput:
     """Assemble StepInput from collected tree data.
 
@@ -647,6 +674,7 @@ def _build_step_input(
         material_tree=tree_summary,
         slide_timecode_refs=mappings,
         children_snapshots=children_snapshots or [],
+        outline_context=outline_context,
     )
 
 
@@ -810,9 +838,11 @@ async def arq_execute_step(
                 # Parent may have no own materials — that's OK when
                 # children snapshots provide the context.
                 documents = _collect_ready_documents([target_node], allow_empty=True)
+                outline_ctx = _collect_outline_context([target_node])
             else:
                 # Leaf node (or children without snapshots): all subtree materials
                 documents = _collect_ready_documents(flat_nodes)
+                outline_ctx = _collect_outline_context(flat_nodes)
 
             mappings = _collect_validated_mappings(flat_nodes)
 
@@ -872,6 +902,7 @@ async def arq_execute_step(
                 parent_context=parent_context,
                 sibling_summaries=sibling_sums,
                 children_snapshots=children_snap,
+                outline_context=outline_ctx,
             )
 
             agent: ArchitectAgent | ReconcileAgent | RefineAgent

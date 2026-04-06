@@ -256,6 +256,10 @@ class MaterialEntry(Base):
     )
     processed_content: Mapped[str | None] = mapped_column(Text)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outline_content: Mapped[str | None] = mapped_column(
+        Text,
+        comment="MaterialOutline JSON (lossless restructuring of processed_content)",
+    )
 
     # ── Pending "receipt" ──
     job_id: Mapped[uuid.UUID | None] = mapped_column(

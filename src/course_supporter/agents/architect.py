@@ -121,6 +121,7 @@ class ArchitectAgent:
         context: CourseContext,
         *,
         existing_structure: str | None = None,
+        outline_context: str | None = None,
     ) -> CourseStructure:
         """Generate course structure from materials.
 
@@ -129,6 +130,7 @@ class ArchitectAgent:
         Args:
             context: Unified course context from ingestion pipeline.
             existing_structure: Serialized existing tree for guided mode.
+            outline_context: MaterialOutline JSON (preferred over raw context).
 
         Returns:
             Validated CourseStructure from LLM.
@@ -137,7 +139,11 @@ class ArchitectAgent:
             AllModelsFailedError: If all models in all strategies fail.
             FileNotFoundError: If prompt file not found.
         """
-        prepared = self._prepare_prompts(context, existing_structure=existing_structure)
+        prepared = self._prepare_prompts(
+            context,
+            existing_structure=existing_structure,
+            outline_context=outline_context,
+        )
         structure, _response = await self._generate(
             prepared, documents_count=len(context.documents)
         )
@@ -150,6 +156,7 @@ class ArchitectAgent:
         existing_structure: str | None = None,
         children_context: str = "",
         children_snapshots: str = "",
+        outline_context: str | None = None,
     ) -> GenerationResult:
         """Generate course structure with full LLM metadata.
 
@@ -161,6 +168,7 @@ class ArchitectAgent:
             existing_structure: Serialized existing tree for guided mode.
             children_context: Formatted children summaries for per-node DAG.
             children_snapshots: Formatted child snapshots for context compression.
+            outline_context: MaterialOutline JSON (preferred over raw context).
 
         Returns:
             GenerationResult with structure, prompt_version, and LLMResponse.
@@ -174,6 +182,7 @@ class ArchitectAgent:
             existing_structure=existing_structure,
             children_context=children_context,
             children_snapshots=children_snapshots,
+            outline_context=outline_context,
         )
         structure, response = await self._generate(
             prepared, documents_count=len(context.documents)
@@ -191,6 +200,7 @@ class ArchitectAgent:
         existing_structure: str | None = None,
         children_context: str = "",
         children_snapshots: str = "",
+        outline_context: str | None = None,
     ) -> PreparedPrompt:
         """Step 1: Load prompt template and format with context.
 
@@ -199,11 +209,17 @@ class ArchitectAgent:
         - If ``node_position`` is set, uses v2 split prompts.
         - Otherwise falls back to v1 single-file prompts by mode.
 
+        When ``outline_context`` is provided (MaterialOutline JSON from
+        the outline pipeline), it is used as the ``{context}`` placeholder
+        instead of the raw CourseContext. This gives the LLM structured,
+        noise-free input. Falls back to raw CourseContext when None.
+
         Args:
             context: Course context to serialize into the prompt.
             existing_structure: Serialized existing tree for guided mode.
             children_context: Formatted children summaries for per-node DAG.
             children_snapshots: Formatted child snapshots for context compression.
+            outline_context: MaterialOutline JSON (preferred over raw context).
 
         Returns:
             PreparedPrompt with system prompt, formatted user prompt,
@@ -231,9 +247,12 @@ class ArchitectAgent:
         kwargs["children_context"] = children_context
         kwargs["children_snapshots"] = children_snapshots
 
+        # Prefer structured outline over raw SourceDocument chunks
+        context_json = outline_context or context.model_dump_json()
+
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
-            context.model_dump_json(),
+            context_json,
             **kwargs,
         )
         return PreparedPrompt(
@@ -327,6 +346,7 @@ class ArchitectAgent:
             existing_structure=step_input.existing_structure,
             children_context=children_context,
             children_snapshots=children_snapshots,
+            outline_context=step_input.outline_context,
         )
         return StepOutput(
             structure=gen_result.structure,

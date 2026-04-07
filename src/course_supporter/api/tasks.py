@@ -1065,7 +1065,7 @@ async def arq_execute_methodist_step(
     job_id: str,
     materialnode_id: str,
     editable_id: str,
-    pass_type: str,
+    pass_type: Literal["bottom_up", "top_down"] = "bottom_up",  # noqa: S107
 ) -> None:
     """ARQ task: execute a Methodist step for a single editable node.
 

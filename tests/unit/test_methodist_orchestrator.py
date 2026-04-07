@@ -168,3 +168,44 @@ class TestTriggerMethodist:
         assert len(plan.bottom_up_jobs) == 3
         assert len(plan.top_down_jobs) == 1
         assert plan.estimated_llm_calls == 4
+
+    async def test_deep_tree(self) -> None:
+        """Root → C1 → GC1 + C2: 4 bottom-up + 2 top-down."""
+        redis = AsyncMock()
+        session = AsyncMock()
+        mn_id = uuid.uuid4()
+
+        root = _mock_editable(title="Root")
+        c1 = _mock_editable(parent_id=root.id, title="C1")
+        c2 = _mock_editable(parent_id=root.id, title="C2")
+        gc1 = _mock_editable(parent_id=c1.id, title="GC1")
+
+        async def _fake_enqueue(**kwargs: object) -> MagicMock:
+            j = MagicMock()
+            j.id = uuid.uuid4()
+            return j
+
+        with (
+            patch(
+                "course_supporter.storage.editable_repository.EditableRepository",
+            ) as mock_repo_cls,
+            patch(
+                "course_supporter.methodist_orchestrator._enqueue_methodist_step",
+                side_effect=_fake_enqueue,
+            ),
+        ):
+            mock_repo_cls.return_value.get_tree = AsyncMock(
+                return_value=[root, c1, c2, gc1],
+            )
+            plan = await trigger_methodist(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                materialnode_id=mn_id,
+            )
+
+        # 4 bottom-up (gc1, c1, c2, root)
+        # 2 top-down (root has children, c1 has children)
+        assert len(plan.bottom_up_jobs) == 4
+        assert len(plan.top_down_jobs) == 2
+        assert plan.estimated_llm_calls == 6

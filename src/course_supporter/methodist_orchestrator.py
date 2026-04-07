@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 from arq.connections import ArqRedis
@@ -222,7 +222,7 @@ async def _enqueue_methodist_step(
     tenant_id: uuid.UUID,
     materialnode_id: uuid.UUID,
     editable_id: uuid.UUID,
-    pass_type: str,
+    pass_type: Literal["bottom_up", "top_down"],
     depends_on: list[str] | None = None,
 ) -> Job:
     """Create a Job record and enqueue a Methodist step to ARQ."""

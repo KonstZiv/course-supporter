@@ -50,13 +50,12 @@ async def _require_node_for_tenant(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     node_id: uuid.UUID,
-) -> object:
+) -> None:
     """Verify the node exists and belongs to the tenant."""
     repo = MaterialNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
-    return node
 
 
 @router.post("/nodes/{node_id}/methodist", status_code=202)

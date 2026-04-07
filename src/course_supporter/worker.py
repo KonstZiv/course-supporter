@@ -15,6 +15,7 @@ import structlog
 from arq.connections import RedisSettings
 
 from course_supporter.api.tasks import (
+    arq_execute_methodist_step,
     arq_execute_step,
     arq_generate_structure,
     arq_ingest_material,
@@ -104,6 +105,7 @@ class WorkerSettings:
         arq_generate_structure,
         arq_execute_step,
         arq_reconcile_preview,
+        arq_execute_methodist_step,
     ]
     on_startup = startup
     on_shutdown = shutdown

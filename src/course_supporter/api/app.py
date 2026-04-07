@@ -23,6 +23,7 @@ from course_supporter.api.routes.editable import router as editable_router
 from course_supporter.api.routes.generation import router as generation_router
 from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.materials import router as materials_router
+from course_supporter.api.routes.methodist import router as methodist_router
 from course_supporter.api.routes.nodes import router as nodes_router
 from course_supporter.api.routes.reconciliation import router as reconciliation_router
 from course_supporter.api.routes.reports import router as reports_router
@@ -229,6 +230,7 @@ async def unhandled_exception_handler(
 
 app.include_router(editable_router, prefix="/api/v1")
 app.include_router(generation_router, prefix="/api/v1")
+app.include_router(methodist_router, prefix="/api/v1")
 app.include_router(reconciliation_router, prefix="/api/v1")
 app.include_router(nodes_router, prefix="/api/v1")
 app.include_router(materials_router, prefix="/api/v1")

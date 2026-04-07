@@ -235,6 +235,17 @@ class MaterialEntry(Base):
             create_type=False,
         )
     )
+    material_role: Mapped[str] = mapped_column(
+        Enum(
+            "educational",
+            "methodological",
+            name="material_role_enum",
+            create_type=False,
+        ),
+        default="educational",
+        server_default="educational",
+        comment="Role: educational (content) or methodological (intent)",
+    )
     order: Mapped[int] = mapped_column(Integer, default=0)
 
     # ── Raw layer ──
@@ -567,6 +578,20 @@ class StructureNodeEditable(Base):
     slide_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     web_references: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
+    # ── Section 6: Methodist output (Layer 3) ──
+    methodological_content: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="MethodistNodeOutput JSON (structured Layer 3)",
+    )
+    methodological_markdown: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Rendered Markdown for author review",
+    )
+    methodist_call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_service_calls.id", ondelete="SET NULL"),
+        comment="FK to ExternalServiceCall that produced Methodist output",
+    )
+
     # ── Edit tracking ──
     edited_fields: Mapped[list[str]] = mapped_column(
         JSONB,
@@ -590,6 +615,9 @@ class StructureNodeEditable(Base):
     )
     source_snapshot: Mapped["StructureSnapshot | None"] = relationship(
         foreign_keys=[source_snapshot_id],
+    )
+    methodist_call: Mapped["ExternalServiceCall | None"] = relationship(
+        foreign_keys=[methodist_call_id],
     )
     parent: Mapped["StructureNodeEditable | None"] = relationship(
         back_populates="children",

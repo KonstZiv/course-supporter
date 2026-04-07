@@ -58,6 +58,7 @@ def _make_entry(
     entry.materialnode_id = materialnode_id or uuid.uuid4()
     entry.state = state
     entry.source_type = source_type
+    entry.material_role = "educational"
     entry.source_url = source_url
     entry.job_id = job_id
     return entry

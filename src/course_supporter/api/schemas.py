@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
-from course_supporter.models.source import SourceType
+from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.storage.orm import GenerationMode, MappingValidationState
 
 # --- Slide-Video Mapping ---
@@ -371,6 +371,9 @@ class MaterialEntrySummaryResponse(BaseModel):
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
     )
+    material_role: str = Field(
+        description="Role: ``educational`` or ``methodological``."
+    )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
     order: int = Field(description="0-based position among sibling materials.")
@@ -434,6 +437,14 @@ class MaterialEntryCreateRequest(BaseModel):
         ),
         examples=["video", "presentation", "text", "web"],
     )
+    material_role: MaterialRole = Field(
+        default=MaterialRole.EDUCATIONAL,
+        description=(
+            "Role of the material: ``educational`` (delivers content to students) "
+            "or ``methodological`` (declares course intent/goals)."
+        ),
+        examples=["educational", "methodological"],
+    )
     source_url: str = Field(
         ...,
         max_length=2000,
@@ -459,6 +470,9 @@ class MaterialEntryResponse(BaseModel):
     )
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    material_role: str = Field(
+        description="Role: ``educational`` or ``methodological``."
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
@@ -494,6 +508,9 @@ class MaterialEntryCreateResponse(BaseModel):
     )
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
+    )
+    material_role: str = Field(
+        description="Role: ``educational`` or ``methodological``."
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
@@ -815,6 +832,13 @@ class ConfirmUploadRequest(BaseModel):
     )
     source_type: SourceType = Field(
         description="Material type (video, presentation, text).",
+    )
+    material_role: MaterialRole = Field(
+        default=MaterialRole.EDUCATIONAL,
+        description=(
+            "Role: ``educational`` (delivers content) "
+            "or ``methodological`` (declares course intent)."
+        ),
     )
     filename: str | None = Field(
         default=None,

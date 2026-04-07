@@ -46,6 +46,7 @@ def _mock_entry(
     entry_id: uuid.UUID | None = None,
     node_id: uuid.UUID | None = None,
     source_type: str = "text",
+    material_role: str = "educational",
     source_url: str = "https://example.com/doc.md",
     filename: str | None = None,
     order: int = 0,
@@ -58,6 +59,7 @@ def _mock_entry(
     entry.id = entry_id or uuid.uuid4()
     entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
+    entry.material_role = material_role
     entry.source_url = source_url
     entry.filename = filename
     entry.order = order

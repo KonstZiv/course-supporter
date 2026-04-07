@@ -49,6 +49,7 @@ def _make_entry_mock(
     entry.id = entry_id
     entry.materialnode_id = node_id
     entry.source_type = source_type
+    entry.material_role = "educational"
     entry.processed_content = processed_content
     entry.state = state
     entry.filename = None

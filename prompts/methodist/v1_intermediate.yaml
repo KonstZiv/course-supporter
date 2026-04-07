@@ -1,0 +1,45 @@
+version: "v1_methodist_intermediate"
+
+user_prompt_template: |
+  ## Target Node
+
+  - **Title:** {node_title}
+  - **Description:** {node_description}
+  - **Type:** {node_type}
+  - **Position:** Intermediate node (has children)
+
+  {material_roles}
+
+  ## Source Materials (Layer 2 Outlines)
+
+  {context}
+
+  ## Current Structure Metadata
+
+  {structure_context}
+
+  {parent_context}
+
+  {sibling_context}
+
+  {children_context}
+
+  ## Task
+
+  Generate a complete MethodistNodeOutput for this **intermediate** node.
+
+  As an intermediate node, you aggregate and contextualize children:
+  1. Learning objectives should encompass all children's objectives
+  2. Key concepts: include concepts that span multiple children, plus
+     relationships between concepts from different children
+  3. Common misconceptions at this aggregation level
+  4. Assignment recommendations: suggest integrative tasks that combine
+     knowledge from multiple children (prefer task or project level)
+  5. Gaps: check that the children collectively cover this node's scope.
+     Flag if important subtopics are missing across children.
+  6. Contradictions: check for terminology or factual inconsistencies
+     between children and between this node and its siblings.
+  7. Prerequisites: verify all prerequisites of children are satisfied
+     by earlier nodes in the course.
+
+  Return ONLY valid JSON.

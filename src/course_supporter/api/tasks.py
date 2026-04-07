@@ -1205,10 +1205,8 @@ async def arq_execute_methodist_step(
                     node_id=ed.id,
                     title=ed.title,
                     summary=ed.description or "",
-                    core_concepts=[
-                        c.get("name", "") if isinstance(c, dict) else str(c)
-                        for c in (ed.key_concepts or [])
-                    ],
+                    # key_concepts is JSONB list[dict[str, str]] per ORM schema
+                    core_concepts=[c.get("name", "") for c in (ed.key_concepts or [])],
                     mentioned_concepts=[],
                     structure_snapshot_id=ed.source_snapshot_id,
                 )

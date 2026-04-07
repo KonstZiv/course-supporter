@@ -45,7 +45,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
-from course_supporter.models.source import SourceType
+from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import MaterialEntry
@@ -108,6 +108,13 @@ async def create_material(
         SourceType,
         Form(description="Material type: video, presentation, text, or web."),
     ],
+    material_role: Annotated[
+        MaterialRole,
+        Form(
+            description="Role: educational (delivers content) "
+            "or methodological (declares course intent).",
+        ),
+    ] = MaterialRole.EDUCATIONAL,
     source_url: Annotated[
         str | None,
         Form(description="URL to the source material. Required if no file."),
@@ -188,6 +195,7 @@ async def create_material(
         source_type=source_type,
         source_url=actual_url,
         filename=actual_filename,
+        material_role=material_role,
     )
 
     job = await enqueue_ingestion(
@@ -310,6 +318,7 @@ async def confirm_upload(
         source_type=body.source_type,
         source_url=s3_url,
         filename=actual_filename,
+        material_role=body.material_role,
     )
 
     job = await enqueue_ingestion(

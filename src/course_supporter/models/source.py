@@ -16,6 +16,13 @@ class SourceType(StrEnum):
     WEB = "web"
 
 
+class MaterialRole(StrEnum):
+    """Role of a material in the course. Mirrors ORM material_role_enum."""
+
+    EDUCATIONAL = "educational"
+    METHODOLOGICAL = "methodological"
+
+
 class ChunkType(StrEnum):
     """Types of content chunks produced by processors."""
 

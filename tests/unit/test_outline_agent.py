@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.agents.outline import (
-    OUTLINE_PROMPT_PATH,
     OutlineAgent,
     OutlineResult,
     PreparedOutlinePrompt,
@@ -43,8 +42,8 @@ def _sample_outline() -> MaterialOutline:
                 start_sec=0.0,
                 end_sec=120.0,
                 title="Introduction",
-                narration="Welcome to the course.",
-                screen_content="Title slide.",
+                content="Welcome to the course.",
+                visual_content="Title slide.",
                 code_snippets=[],
                 key_concepts=["Python"],
             ),
@@ -97,7 +96,7 @@ class TestOutlineAgentInit:
         assert agent._strategy == "default"
         assert agent._temperature == 0.0
         assert agent._max_tokens is None
-        assert agent._prompt_path == OUTLINE_PROMPT_PATH
+        assert agent._prompt_path is None
 
     def test_custom_params(self, mock_router: AsyncMock) -> None:
         """OutlineAgent accepts custom parameters."""

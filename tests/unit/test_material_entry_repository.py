@@ -44,6 +44,7 @@ def _mock_entry(
     entry.id = entry_id or uuid.uuid4()
     entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
+    entry.material_role = "educational"
     entry.source_url = source_url
     entry.filename = filename
     entry.order = order

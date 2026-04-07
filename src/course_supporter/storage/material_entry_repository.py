@@ -29,6 +29,7 @@ class MaterialEntryRepository:
         source_type: str,
         source_url: str,
         filename: str | None = None,
+        material_role: str = "educational",
     ) -> MaterialEntry:
         """Create a new material entry with auto-incremented order.
 
@@ -37,6 +38,7 @@ class MaterialEntryRepository:
             source_type: One of video, presentation, text, web.
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
+            material_role: Role: educational or methodological.
 
         Returns:
             The newly created MaterialEntry.
@@ -47,6 +49,7 @@ class MaterialEntryRepository:
             source_type=source_type,
             source_url=source_url,
             filename=filename,
+            material_role=material_role,
             order=next_order,
         )
         self._session.add(entry)

@@ -8,6 +8,7 @@ import structlog
 
 from course_supporter.agents.prompt_loader import format_user_prompt, load_prompt
 from course_supporter.models.outline import MaterialOutline
+from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
@@ -16,7 +17,16 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-OUTLINE_PROMPT_PATH = "prompts/outline/v1.yaml"
+# Per-type prompt paths
+OUTLINE_PROMPT_PATHS: dict[str, str] = {
+    SourceType.VIDEO: "prompts/outline/v1_video.yaml",
+    SourceType.PRESENTATION: "prompts/outline/v1_presentation.yaml",
+    SourceType.TEXT: "prompts/outline/v1_text.yaml",
+    SourceType.WEB: "prompts/outline/v1_web.yaml",
+}
+
+# Legacy default (backward compat)
+OUTLINE_PROMPT_PATH = "prompts/outline/v1_video.yaml"
 
 
 class OutlineResult(NamedTuple):
@@ -42,8 +52,9 @@ class PreparedOutlinePrompt(NamedTuple):
 class OutlineAgent:
     """Generates a structured MaterialOutline from a single SourceDocument.
 
-    Performs lossless restructuring of raw ingestion output (STT + VD chunks)
-    into a navigable outline with thematic sections. Uses ModelRouter with
+    Performs lossless restructuring of raw ingestion output into
+    a navigable outline with thematic sections. Selects prompt
+    template based on source type. Uses ModelRouter with
     action='material_outline' for LLM calls.
 
     Args:
@@ -67,7 +78,7 @@ class OutlineAgent:
         self._strategy = strategy
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._prompt_path = prompt_path or OUTLINE_PROMPT_PATH
+        self._prompt_path = prompt_path
 
     async def run(self, source_doc: SourceDocument) -> MaterialOutline:
         """Generate outline from source document.
@@ -90,7 +101,10 @@ class OutlineAgent:
         )
         return outline
 
-    async def run_with_metadata(self, source_doc: SourceDocument) -> OutlineResult:
+    async def run_with_metadata(
+        self,
+        source_doc: SourceDocument,
+    ) -> OutlineResult:
         """Generate outline with full LLM metadata.
 
         Same pipeline as :meth:`run` but returns prompt version and
@@ -116,21 +130,39 @@ class OutlineAgent:
             response=response,
         )
 
-    def _prepare_prompt(self, source_doc: SourceDocument) -> PreparedOutlinePrompt:
+    def _resolve_prompt_path(self, source_type: str) -> str:
+        """Select prompt template path based on source type.
+
+        Falls back to video prompt for unknown source types.
+        """
+        if self._prompt_path:
+            return self._prompt_path
+        return OUTLINE_PROMPT_PATHS.get(
+            source_type,
+            OUTLINE_PROMPT_PATH,
+        )
+
+    def _prepare_prompt(
+        self,
+        source_doc: SourceDocument,
+    ) -> PreparedOutlinePrompt:
         """Step 1: Load prompt template and format with source document.
+
+        Selects prompt based on source_type unless overridden.
 
         Args:
             source_doc: Source document to serialize into the prompt.
 
         Returns:
-            PreparedOutlinePrompt with system prompt, formatted user prompt,
-            and prompt version.
+            PreparedOutlinePrompt with system prompt, formatted user
+            prompt, and prompt version.
 
         Raises:
             FileNotFoundError: If prompt YAML file not found.
             ValidationError: If YAML missing required keys.
         """
-        prompt_data = load_prompt(self._prompt_path)
+        prompt_path = self._resolve_prompt_path(source_doc.source_type)
+        prompt_data = load_prompt(prompt_path)
         user_prompt = format_user_prompt(
             prompt_data.user_prompt_template,
             source_doc.model_dump_json(),
@@ -161,7 +193,10 @@ class OutlineAgent:
         """
         from course_supporter.llm.router import estimate_tokens
 
-        estimated = estimate_tokens(prepared.user_prompt, prepared.system_prompt)
+        estimated = estimate_tokens(
+            prepared.user_prompt,
+            prepared.system_prompt,
+        )
         logger.info(
             "outline_agent_generating",
             strategy=self._strategy,

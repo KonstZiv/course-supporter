@@ -1065,7 +1065,7 @@ async def arq_execute_methodist_step(
     job_id: str,
     materialnode_id: str,
     editable_id: str,
-    pass_type: Literal["bottom_up", "top_down"] = "bottom_up",  # noqa: S107
+    phase: Literal["bottom_up", "top_down"] = "bottom_up",
 ) -> None:
     """ARQ task: execute a Methodist step for a single editable node.
 
@@ -1078,7 +1078,7 @@ async def arq_execute_methodist_step(
         job_id: Job UUID as string.
         materialnode_id: Root MaterialNode UUID as string.
         editable_id: StructureNodeEditable UUID to process.
-        pass_type: 'bottom_up' or 'top_down'.
+        phase: 'bottom_up' or 'top_down'.
     """
     import json
 
@@ -1107,7 +1107,7 @@ async def arq_execute_methodist_step(
     log = structlog.get_logger().bind(
         job_id=job_id,
         editable_id=editable_id,
-        pass_type=pass_type,
+        phase=phase,
     )
     log.info("methodist_step_started")
 

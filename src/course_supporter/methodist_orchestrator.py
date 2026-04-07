@@ -164,7 +164,7 @@ async def trigger_methodist(
             tenant_id=tenant_id,
             materialnode_id=materialnode_id,
             editable_id=nid,
-            pass_type="bottom_up",  # noqa: S106
+            phase="bottom_up",
             depends_on=deps if deps else None,
         )
         node_bu_jobs[nid] = job
@@ -195,7 +195,7 @@ async def trigger_methodist(
             tenant_id=tenant_id,
             materialnode_id=materialnode_id,
             editable_id=nid,
-            pass_type="top_down",  # noqa: S106
+            phase="top_down",
             depends_on=deps if deps else None,
         )
         node_td_jobs[nid] = job
@@ -222,7 +222,7 @@ async def _enqueue_methodist_step(
     tenant_id: uuid.UUID,
     materialnode_id: uuid.UUID,
     editable_id: uuid.UUID,
-    pass_type: Literal["bottom_up", "top_down"],
+    phase: Literal["bottom_up", "top_down"],
     depends_on: list[str] | None = None,
 ) -> Job:
     """Create a Job record and enqueue a Methodist step to ARQ."""
@@ -230,7 +230,7 @@ async def _enqueue_methodist_step(
 
     log = structlog.get_logger().bind(
         editable_id=str(editable_id),
-        pass_type=pass_type,
+        phase=phase,
     )
     repo = JobRepository(session)
 
@@ -241,12 +241,12 @@ async def _enqueue_methodist_step(
     job = await repo.create(
         tenant_id=tenant_id,
         materialnode_id=materialnode_id,
-        job_type=f"methodist_{pass_type}",
+        job_type=f"methodist_{phase}",
         depends_on=validated_deps,
         input_params={
             "materialnode_id": str(materialnode_id),
             "editable_id": str(editable_id),
-            "pass_type": pass_type,
+            "phase": phase,
         },
     )
 
@@ -255,7 +255,7 @@ async def _enqueue_methodist_step(
         str(job.id),
         str(materialnode_id),
         str(editable_id),
-        pass_type,
+        phase,
     )
 
     if arq_job is not None:

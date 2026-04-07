@@ -54,6 +54,15 @@ class MethodistAgent:
     to produce per-node methodological documents with gap analysis,
     contradiction detection, and assignment recommendations.
 
+    All context strings (outline_context, structure_context, etc.) are
+    assembled internally from trusted DB sources by the orchestrator.
+    No user-supplied text is injected into prompts without prior
+    processing through the ingestion pipeline.
+
+    LLM errors (network, rate limits, invalid responses) are handled
+    by ModelRouter with retry/fallback logic. On exhaustion,
+    AllModelsFailedError propagates to the caller.
+
     Args:
         router: ModelRouter instance for LLM calls.
         strategy: Routing strategy ('default', 'quality', 'budget').

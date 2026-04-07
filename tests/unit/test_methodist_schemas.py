@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from course_supporter.models.methodist import (
     AssignmentRecommendation,
@@ -129,5 +130,5 @@ class TestMethodistNodeOutput:
         assert restored.learning_objectives == output.learning_objectives
 
     def test_missing_required_fields_raises(self) -> None:
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(ValidationError):
             MethodistNodeOutput()  # type: ignore[call-arg]

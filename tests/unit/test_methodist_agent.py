@@ -15,6 +15,7 @@ from course_supporter.agents.methodist import (
     format_methodist_siblings,
 )
 from course_supporter.agents.prompt_loader import PromptData
+from course_supporter.llm.router import AllModelsFailedError
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.models.methodist import MethodistNodeOutput
 
@@ -145,3 +146,128 @@ class TestFormatHelpers:
         assert "educational" in result
         assert "methodological" in result
         assert "Lecture 1" in result
+
+
+class TestMethodistAgentErrorHandling:
+    """Verify that LLM API errors propagate correctly."""
+
+    async def test_all_models_failed_propagates(
+        self,
+        mock_router: AsyncMock,
+    ) -> None:
+        """AllModelsFailedError from ModelRouter propagates to caller."""
+        mock_router.complete_structured = AsyncMock(
+            side_effect=AllModelsFailedError(
+                "methodist",
+                ["default"],
+                [("deepseek-chat", "rate limit exceeded")],
+            ),
+        )
+        agent = MethodistAgent(mock_router)
+
+        with (
+            patch(
+                "course_supporter.agents.methodist.load_split_prompt",
+                return_value=_sample_prompt_data(),
+            ),
+            pytest.raises(AllModelsFailedError, match="methodist"),
+        ):
+            await agent.run(
+                node_title="Node",
+                node_description="Desc",
+                node_type="lesson",
+                node_position="leaf",
+                outline_context="{}",
+                structure_context="{}",
+            )
+
+    async def test_network_error_propagates(
+        self,
+        mock_router: AsyncMock,
+    ) -> None:
+        """Network/connection errors propagate to caller."""
+        mock_router.complete_structured = AsyncMock(
+            side_effect=ConnectionError("network unreachable"),
+        )
+        agent = MethodistAgent(mock_router)
+
+        with (
+            patch(
+                "course_supporter.agents.methodist.load_split_prompt",
+                return_value=_sample_prompt_data(),
+            ),
+            pytest.raises(ConnectionError),
+        ):
+            await agent.run(
+                node_title="Node",
+                node_description="Desc",
+                node_type="lesson",
+                node_position="leaf",
+                outline_context="{}",
+                structure_context="{}",
+            )
+
+
+class TestMethodistPromptSanitization:
+    """Verify that context data is passed through to prompts safely."""
+
+    async def test_special_chars_in_context_do_not_break_prompt(
+        self,
+        mock_router: AsyncMock,
+    ) -> None:
+        """Context with braces, quotes, newlines doesn't break formatting."""
+        mock_router.complete_structured = AsyncMock(
+            return_value=(_sample_output(), _sample_response()),
+        )
+        agent = MethodistAgent(mock_router)
+
+        malicious_context = (
+            '{"title": "Test {injection}", '
+            '"desc": "line1\\nline2", '
+            '"quote": "it\'s a \\"test\\""}'
+        )
+
+        with patch(
+            "course_supporter.agents.methodist.load_split_prompt",
+            return_value=_sample_prompt_data(),
+        ):
+            output = await agent.run(
+                node_title='Node with "quotes" & {braces}',
+                node_description="Desc with\nnewlines",
+                node_type="lesson",
+                node_position="leaf",
+                outline_context=malicious_context,
+                structure_context="{}",
+            )
+
+        assert isinstance(output, MethodistNodeOutput)
+        # Verify the router was called (prompt was constructed)
+        mock_router.complete_structured.assert_called_once()
+
+    async def test_prompt_contains_context(
+        self,
+        mock_router: AsyncMock,
+    ) -> None:
+        """Verify prepared prompt includes the provided context data."""
+        agent = MethodistAgent(mock_router)
+        prompt_data = _sample_prompt_data()
+
+        with patch(
+            "course_supporter.agents.methodist.load_split_prompt",
+            return_value=prompt_data,
+        ):
+            prepared = agent._prepare_prompts(
+                node_title="Django Models",
+                node_description="Intro to models",
+                node_type="lesson",
+                node_position="leaf",
+                outline_context='{"sections": []}',
+                structure_context='{"modules": []}',
+                parent_context="",
+                sibling_context="",
+                children_context="",
+                material_roles="",
+            )
+
+        assert "Django Models" in prepared.user_prompt
+        assert prepared.prompt_version == "v1_methodist_leaf"

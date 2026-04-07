@@ -35,7 +35,11 @@ if TYPE_CHECKING:
         StepOutput,
         StepType,
     )
-    from course_supporter.storage.orm import MaterialNode, StructureSnapshot
+    from course_supporter.storage.orm import (
+        MaterialNode,
+        StructureNodeEditable,
+        StructureSnapshot,
+    )
     from course_supporter.storage.s3 import S3Client
 
 
@@ -1053,3 +1057,234 @@ async def arq_reconcile_preview(
                 )
                 await err_session.commit()
             log.error("reconcile_preview_failed", error=str(exc))
+
+
+async def arq_execute_methodist_step(
+    ctx: dict[str, Any],
+    job_id: str,
+    materialnode_id: str,
+    editable_id: str,
+    phase: Literal["bottom_up", "top_down"] = "bottom_up",
+) -> None:
+    """ARQ task: execute a Methodist step for a single editable node.
+
+    Loads the editable node's context (outline, structure metadata,
+    sliding window), runs MethodistAgent, and persists output
+    (JSONB + Markdown) on the StructureNodeEditable.
+
+    Args:
+        ctx: ARQ worker context (session_factory, model_router).
+        job_id: Job UUID as string.
+        materialnode_id: Root MaterialNode UUID as string.
+        editable_id: StructureNodeEditable UUID to process.
+        phase: 'bottom_up' or 'top_down'.
+    """
+    import json
+
+    from course_supporter.agents.methodist import (
+        MethodistAgent,
+        format_material_roles,
+        format_methodist_children,
+        format_methodist_parent,
+        format_methodist_siblings,
+    )
+    from course_supporter.storage.job_repository import JobRepository
+    from course_supporter.storage.material_entry_repository import (
+        MaterialEntryRepository,
+    )
+    from course_supporter.storage.material_node_repository import (
+        MaterialNodeRepository,
+    )
+
+    jid = uuid.UUID(job_id)
+    mn_id = uuid.UUID(materialnode_id)
+    ed_id = uuid.UUID(editable_id)
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    router: ModelRouter = ctx["model_router"]
+
+    log = structlog.get_logger().bind(
+        job_id=job_id,
+        editable_id=editable_id,
+        phase=phase,
+    )
+    log.info("methodist_step_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        try:
+            await job_repo.update_status(jid, "active")
+            await session.commit()
+
+            # 1. Load editable node and its tree
+            editable_repo = EditableRepository(session)
+            target = await editable_repo.get_by_id(ed_id)
+            if target is None:
+                msg = f"Editable node {ed_id} not found"
+                raise ValueError(msg)
+
+            all_editables = await editable_repo.get_tree(mn_id)
+
+            # Build editable lookup and relationships
+            ed_map = {ed.id: ed for ed in all_editables}
+            children = [ed for ed in all_editables if ed.parent_editable_id == ed_id]
+            siblings = [
+                ed
+                for ed in all_editables
+                if ed.parent_editable_id == target.parent_editable_id and ed.id != ed_id
+            ]
+            parent = (
+                ed_map.get(target.parent_editable_id)
+                if target.parent_editable_id
+                else None
+            )
+
+            # 2. Determine node position
+            is_root = target.parent_editable_id is None
+            has_children = bool(children)
+            node_position: Literal["leaf", "intermediate", "root"]
+            if is_root:
+                node_position = "root"
+            elif has_children:
+                node_position = "intermediate"
+            else:
+                node_position = "leaf"
+
+            # 3. Collect outline context from MaterialEntries
+            node_repo = MaterialNodeRepository(session)
+            mat_node = await node_repo.get_by_id(mn_id)
+            outline_ctx = ""
+            material_roles_info: list[tuple[str, str, str]] = []
+            if mat_node is not None:
+                entry_repo = MaterialEntryRepository(session)
+                entries = await entry_repo.get_for_node(mn_id)
+                outlines = []
+                for entry in entries:
+                    material_roles_info.append(
+                        (
+                            entry.filename or entry.source_url,
+                            entry.source_type,
+                            entry.material_role,
+                        )
+                    )
+                    if entry.outline_content:
+                        try:
+                            outlines.append(
+                                json.loads(entry.outline_content),
+                            )
+                        except json.JSONDecodeError:
+                            log.warning(
+                                "malformed_outline_content",
+                                entry_id=str(entry.id),
+                            )
+                if outlines:
+                    outline_ctx = json.dumps(
+                        outlines,
+                        ensure_ascii=False,
+                    )
+
+            # 4. Build structure context from target editable
+            structure_ctx = json.dumps(
+                {
+                    "title": target.title,
+                    "description": target.description,
+                    "node_type": target.node_type,
+                    "learning_goal": target.learning_goal,
+                    "key_concepts": target.key_concepts,
+                    "common_mistakes": target.common_mistakes,
+                    "success_criteria": target.success_criteria,
+                },
+                ensure_ascii=False,
+            )
+
+            # 5. Build sliding window context
+            def _node_summary(
+                ed: StructureNodeEditable,
+            ) -> NodeSummary:
+                return NodeSummary(
+                    node_id=ed.id,
+                    title=ed.title,
+                    summary=ed.description or "",
+                    # key_concepts is JSONB list[dict[str, str]] per ORM schema
+                    core_concepts=[c.get("name", "") for c in (ed.key_concepts or [])],
+                    mentioned_concepts=[],
+                    structure_snapshot_id=ed.source_snapshot_id,
+                )
+
+            parent_ctx = format_methodist_parent(
+                _node_summary(parent) if parent else None,
+            )
+            sibling_ctx = format_methodist_siblings(
+                [_node_summary(s) for s in siblings],
+            )
+            children_ctx = format_methodist_children(
+                [_node_summary(c) for c in children],
+            )
+            roles_ctx = format_material_roles(material_roles_info)
+
+            # 6. Run Methodist agent
+            agent = MethodistAgent(router)
+            result = await agent.run_with_metadata(
+                node_title=target.title,
+                node_description=target.description or "",
+                node_type=target.node_type,
+                node_position=node_position,
+                outline_context=outline_ctx or "{}",
+                structure_context=structure_ctx,
+                parent_context=parent_ctx,
+                sibling_context=sibling_ctx,
+                children_context=children_ctx,
+                material_roles=roles_ctx,
+            )
+
+            # 7. Persist output on editable node
+            from course_supporter.storage.orm import ExternalServiceCall
+
+            esc = ExternalServiceCall(
+                tenant_id=mat_node.tenant_id if mat_node else None,
+                job_id=jid,
+                action="methodist",
+                strategy="default",
+                provider=result.response.provider,
+                model_id=result.response.model_id,
+                prompt_ref=result.prompt_version,
+                unit_type="tokens",
+                unit_in=result.response.tokens_in,
+                unit_out=result.response.tokens_out,
+                latency_ms=result.response.latency_ms,
+                cost_usd=result.response.cost_usd,
+                success=True,
+            )
+            session.add(esc)
+            await session.flush()
+
+            target.methodological_content = result.output.model_dump(mode="json")
+            target.methodological_markdown = result.output.rendered_markdown
+            target.methodist_call_id = esc.id
+
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            log.info(
+                "methodist_step_done",
+                model=result.response.model_id,
+                objectives=len(result.output.learning_objectives),
+                gaps=len(result.output.gaps),
+            )
+
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_repo = JobRepository(err_session)
+                await err_repo.update_status(
+                    jid,
+                    "failed",
+                    error_message=str(exc),
+                )
+                cascaded = await err_repo.propagate_failure(jid)
+                await err_session.commit()
+            if cascaded:
+                log.info(
+                    "cascading_failure_propagated",
+                    failed_count=len(cascaded),
+                )
+            log.error("methodist_step_failed", error=str(exc))

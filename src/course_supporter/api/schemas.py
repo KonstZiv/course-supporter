@@ -611,6 +611,44 @@ class GenerationPlanResponse(BaseModel):
     )
 
 
+class MethodistPlanResponse(BaseModel):
+    """Response for POST /nodes/{node_id}/methodist."""
+
+    bottom_up_jobs: list[JobResponse] = Field(
+        default_factory=list,
+        description="Per-node Methodist jobs in bottom-up order.",
+    )
+    top_down_jobs: list[JobResponse] = Field(
+        default_factory=list,
+        description="Per-node consistency jobs in top-down order.",
+    )
+    estimated_llm_calls: int = Field(
+        default=0,
+        description="Total LLM calls expected.",
+    )
+
+
+class MethodistNodeResponse(BaseModel):
+    """Methodist output for a single editable node."""
+
+    editable_id: uuid.UUID = Field(
+        description="StructureNodeEditable UUID.",
+    )
+    node_type: str = Field(description="Node type.")
+    title: str = Field(description="Node title.")
+    methodological_content: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured MethodistNodeOutput JSON.",
+    )
+    methodological_markdown: str | None = Field(
+        default=None,
+        description="Rendered Markdown for author.",
+    )
+    has_methodist_output: bool = Field(
+        description="Whether Methodist has been run for this node.",
+    )
+
+
 class ServiceCallSummary(BaseModel):
     """LLM metadata from the linked ExternalServiceCall."""
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -1169,9 +1168,14 @@ async def arq_execute_methodist_step(
                         )
                     )
                     if entry.outline_content:
-                        with contextlib.suppress(json.JSONDecodeError):
+                        try:
                             outlines.append(
                                 json.loads(entry.outline_content),
+                            )
+                        except json.JSONDecodeError:
+                            log.warning(
+                                "malformed_outline_content",
+                                entry_id=str(entry.id),
                             )
                 if outlines:
                     outline_ctx = json.dumps(

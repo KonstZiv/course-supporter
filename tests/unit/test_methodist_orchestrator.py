@@ -136,11 +136,7 @@ class TestTriggerMethodist:
         c1 = _mock_editable(parent_id=root.id, title="C1")
         c2 = _mock_editable(parent_id=root.id, title="C2")
 
-        job_counter = 0
-
         async def _fake_enqueue(**kwargs: object) -> MagicMock:
-            nonlocal job_counter
-            job_counter += 1
             j = MagicMock()
             j.id = uuid.uuid4()
             return j

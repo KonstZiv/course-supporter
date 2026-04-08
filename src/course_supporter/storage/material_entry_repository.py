@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.models.source import MaterialRole
 from course_supporter.storage.orm import MaterialEntry, MaterialNode
 
 
@@ -245,6 +246,22 @@ class MaterialEntryRepository:
         """
         entry = await self._require(entry_id)
         entry.outline_content = outline_json
+        await self._session.flush()
+        return entry
+
+    async def update_material_role(
+        self,
+        entry: MaterialEntry,
+        *,
+        material_role: MaterialRole,
+    ) -> MaterialEntry:
+        """Update the material_role field on an already-loaded entry.
+
+        Args:
+            entry: Entry ORM model to update.
+            material_role: New role (MaterialRole.EDUCATIONAL or METHODOLOGICAL).
+        """
+        entry.material_role = material_role.value
         await self._session.flush()
         return entry
 

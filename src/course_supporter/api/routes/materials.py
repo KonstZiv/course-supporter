@@ -33,6 +33,7 @@ from course_supporter.api.schemas import (
     ConfirmUploadRequest,
     MaterialEntryCreateResponse,
     MaterialEntryResponse,
+    MaterialEntryUpdateRequest,
     PresignedUrlRequest,
     PresignedUrlResponse,
 )
@@ -375,6 +376,36 @@ async def get_material(
     node_repo = MaterialNodeRepository(session)
     entry = await _require_material_for_tenant(
         entry_repo, node_repo, entry_id, tenant.tenant_id
+    )
+    return MaterialEntryResponse.model_validate(entry)
+
+
+@router.patch("/materials/{entry_id}")
+async def update_material(
+    entry_id: uuid.UUID,
+    body: MaterialEntryUpdateRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> MaterialEntryResponse:
+    """Update material metadata (currently only material_role).
+
+    Toggles between ``educational`` and ``methodological`` roles.
+    """
+    entry_repo = MaterialEntryRepository(session)
+    node_repo = MaterialNodeRepository(session)
+    entry = await _require_material_for_tenant(
+        entry_repo, node_repo, entry_id, tenant.tenant_id
+    )
+
+    entry = await entry_repo.update_material_role(
+        entry, material_role=body.material_role
+    )
+    await session.commit()
+
+    logger.info(
+        "material_role_updated",
+        entry_id=str(entry_id),
+        material_role=body.material_role,
     )
     return MaterialEntryResponse.model_validate(entry)
 

@@ -459,6 +459,14 @@ class MaterialEntryCreateRequest(BaseModel):
     )
 
 
+class MaterialEntryUpdateRequest(BaseModel):
+    """Request body for PATCH /materials/{entry_id}."""
+
+    material_role: MaterialRole = Field(
+        description="New role: ``educational`` or ``methodological``."
+    )
+
+
 class MaterialEntryResponse(BaseModel):
     """Response schema for a single material entry."""
 

@@ -248,6 +248,26 @@ class MaterialEntryRepository:
         await self._session.flush()
         return entry
 
+    async def update_material_role(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        material_role: str,
+    ) -> MaterialEntry:
+        """Update the material_role field on an entry.
+
+        Args:
+            entry_id: Entry to update.
+            material_role: New role ('educational' or 'methodological').
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.material_role = material_role
+        await self._session.flush()
+        return entry
+
     async def delete(self, entry_id: uuid.UUID) -> None:
         """Delete an entry and invalidate parent node fingerprints.
 

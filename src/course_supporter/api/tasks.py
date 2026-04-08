@@ -1288,3 +1288,76 @@ async def arq_execute_methodist_step(
                     failed_count=len(cascaded),
                 )
             log.error("methodist_step_failed", error=str(exc))
+
+
+async def arq_process_homework(
+    ctx: dict[str, Any],
+    job_id: str,
+    submission_id: str,
+) -> None:
+    """ARQ task: process a homework submission.
+
+    Orchestrates the full homework pipeline:
+    safety check → task matching → Mentor review → webhook delivery.
+
+    Currently a stub — transitions to safety_check and completes.
+    Actual processing logic will be added in HW-004..007.
+
+    Args:
+        ctx: ARQ worker context (session_factory, model_router).
+        job_id: Job UUID as string.
+        submission_id: HomeworkSubmission UUID as string.
+    """
+    from course_supporter.storage.homework_repository import HomeworkRepository
+    from course_supporter.storage.job_repository import JobRepository
+
+    jid = uuid.UUID(job_id)
+    sid = uuid.UUID(submission_id)
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+
+    log = structlog.get_logger().bind(
+        job_id=job_id,
+        submission_id=submission_id,
+    )
+    log.info("homework_processing_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        hw_repo = HomeworkRepository(session)
+        try:
+            await job_repo.update_status(jid, "active")
+            await hw_repo.update_status(sid, "safety_check")
+            await session.commit()
+
+            # TODO(HW-004): Safety check
+            # TODO(HW-005): Task matching
+            # TODO(HW-006): Mentor review
+            # TODO(HW-007): Webhook delivery
+
+            # Stub: mark as completed for now
+            await hw_repo.update_status(sid, "matching")
+            await hw_repo.update_status(sid, "matched")
+            await hw_repo.update_status(sid, "reviewing")
+            await hw_repo.update_status(sid, "completed")
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            log.info("homework_processing_done")
+
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_job_repo = JobRepository(err_session)
+                err_hw_repo = HomeworkRepository(err_session)
+                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
+                try:
+                    await err_hw_repo.update_status(
+                        sid, "failed", error_message=str(exc)
+                    )
+                except ValueError as status_exc:
+                    log.warning(
+                        "homework_status_update_skipped",
+                        reason=str(status_exc),
+                    )
+                await err_session.commit()
+            log.error("homework_processing_failed", error=str(exc))

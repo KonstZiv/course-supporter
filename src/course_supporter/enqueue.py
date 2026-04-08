@@ -285,3 +285,53 @@ async def enqueue_step(
         arq_job_id=arq_job.job_id if arq_job else None,
     )
     return job
+
+
+async def enqueue_homework(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    submission_id: uuid.UUID,
+) -> Job:
+    """Create a Job record and enqueue homework processing.
+
+    Enqueues to the separate ``homework`` ARQ queue.
+    The caller is responsible for committing the session.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: Active DB session (caller controls transaction).
+        tenant_id: Owning tenant UUID.
+        submission_id: HomeworkSubmission to process.
+
+    Returns:
+        The created Job with ``arq_job_id`` set.
+    """
+    log = structlog.get_logger().bind(submission_id=str(submission_id))
+    repo = JobRepository(session)
+
+    job = await repo.create(
+        tenant_id=tenant_id,
+        job_type="homework",
+        input_params={
+            "submission_id": str(submission_id),
+        },
+    )
+
+    arq_job = await redis.enqueue_job(
+        "arq_process_homework",
+        str(job.id),
+        str(submission_id),
+        _queue_name="homework",
+    )
+
+    if arq_job is not None:
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    log.info(
+        "homework_job_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job

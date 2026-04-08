@@ -19,6 +19,7 @@ from course_supporter.api.tasks import (
     arq_execute_step,
     arq_generate_structure,
     arq_ingest_material,
+    arq_process_homework,
     arq_reconcile_preview,
 )
 from course_supporter.config import get_settings
@@ -110,6 +111,34 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
 
+    max_jobs: int = _settings.worker_max_jobs
+    job_timeout: int = _settings.worker_job_timeout
+    max_tries: int = _settings.worker_max_tries
+
+    keep_result: int = 3600
+    poll_delay: float = 0.5
+
+
+class HomeworkWorkerSettings:
+    """ARQ worker settings for the homework queue.
+
+    Run with::
+
+        arq course_supporter.worker.HomeworkWorkerSettings
+    """
+
+    _settings = get_settings()
+
+    redis_settings: RedisSettings = RedisSettings.from_dsn(
+        _settings.redis_url,
+    )
+    functions: ClassVar[list[Any]] = [
+        arq_process_homework,
+    ]
+    on_startup = startup
+    on_shutdown = shutdown
+
+    queue_name: str = "homework"
     max_jobs: int = _settings.worker_max_jobs
     job_timeout: int = _settings.worker_job_timeout
     max_tries: int = _settings.worker_max_tries

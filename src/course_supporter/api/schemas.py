@@ -537,6 +537,24 @@ class MaterialEntryCreateResponse(BaseModel):
     created_at: datetime = Field(description="When this entry was created.")
 
 
+# --- Homework ---
+
+
+class HomeworkSubmitResponse(BaseModel):
+    """Response for POST /homework/submit (202 Accepted)."""
+
+    submission_id: uuid.UUID = Field(
+        description="Unique ID of the created homework submission."
+    )
+    student_id: uuid.UUID = Field(
+        description="Student record ID (created or existing)."
+    )
+    status: str = Field(description="Initial status: ``received``.")
+    job_id: uuid.UUID = Field(
+        description="Background job ID for tracking processing progress."
+    )
+
+
 # --- Jobs ---
 
 

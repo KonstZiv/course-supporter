@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import Student
@@ -43,14 +44,22 @@ class StudentRepository:
         if existing is not None:
             return existing, False
 
-        student = Student(
-            tenant_id=tenant_id,
-            external_id=external_id,
-            metadata_=metadata,
-        )
-        self._session.add(student)
-        await self._session.flush()
-        return student, True
+        try:
+            async with self._session.begin_nested():
+                student = Student(
+                    tenant_id=tenant_id,
+                    external_id=external_id,
+                    metadata_=metadata,
+                )
+                self._session.add(student)
+                await self._session.flush()
+                return student, True
+        except IntegrityError:
+            # Concurrent insert won the race — fetch the winner
+            existing = await self.get_by_external_id(tenant_id, external_id)
+            if existing is None:
+                raise  # Unexpected integrity error, not a duplicate
+            return existing, False
 
     async def get_by_id(self, student_id: uuid.UUID) -> Student | None:
         """Get a student by primary key."""

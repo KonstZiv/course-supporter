@@ -8,6 +8,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import HomeworkSubmission
@@ -139,19 +140,10 @@ class HomeworkRepository:
         Raises:
             ValueError: If submission not found or transition invalid.
         """
-        submission = await self.get_by_id(submission_id)
-        if submission is None:
-            msg = f"HomeworkSubmission {submission_id} not found"
-            raise ValueError(msg)
-
-        allowed = HOMEWORK_TRANSITIONS.get(submission.status, set())
-        if status not in allowed:
-            msg = (
-                f"Invalid homework status transition: "
-                f"'{submission.status}' → '{status}'. "
-                f"Allowed: {allowed or 'none (terminal state)'}"
-            )
-            raise ValueError(msg)
+        # Compute valid source statuses for the target atomically
+        valid_sources = [
+            src for src, targets in HOMEWORK_TRANSITIONS.items() if status in targets
+        ]
 
         now = now or datetime.now(UTC)
         values: dict[str, object] = {"status": status}
@@ -162,13 +154,31 @@ class HomeworkRepository:
         if status == "delivered":
             values["webhook_delivered_at"] = now
 
+        # Atomic UPDATE: only transitions from a valid source status
         stmt = (
             update(HomeworkSubmission)
-            .where(HomeworkSubmission.id == submission_id)
+            .where(
+                HomeworkSubmission.id == submission_id,
+                HomeworkSubmission.status.in_(valid_sources),
+            )
             .values(**values)
         )
-        await self._session.execute(stmt)
+        result: CursorResult[Any] = await self._session.execute(stmt)  # type: ignore[assignment]
         await self._session.flush()
+
+        if result.rowcount == 0:
+            # Distinguish "not found" from "invalid transition"
+            existing = await self.get_by_id(submission_id)
+            if existing is None:
+                msg = f"HomeworkSubmission {submission_id} not found"
+                raise ValueError(msg)
+            allowed = HOMEWORK_TRANSITIONS.get(existing.status, set())
+            msg = (
+                f"Invalid homework status transition: "
+                f"'{existing.status}' → '{status}'. "
+                f"Allowed: {allowed or 'none (terminal state)'}"
+            )
+            raise ValueError(msg)
 
         updated = await self.get_by_id(submission_id)
         if updated is None:

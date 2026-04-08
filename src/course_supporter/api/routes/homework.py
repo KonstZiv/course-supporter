@@ -128,7 +128,7 @@ async def submit_homework(
 
     # --- Validate webhook URL (SSRF protection) ---
     if webhook_url is not None:
-        validate_webhook_url(webhook_url)
+        await validate_webhook_url(webhook_url)
 
     # --- Verify nodes belong to tenant ---
     node_repo = MaterialNodeRepository(session)

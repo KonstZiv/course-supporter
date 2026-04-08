@@ -6,6 +6,7 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 
 # Private/reserved IP ranges that must be blocked
@@ -23,13 +24,15 @@ _BLOCKED_NETWORKS = [
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
 
-def validate_webhook_url(url: str) -> str:
+async def validate_webhook_url(url: str) -> str:
     """Validate a webhook URL against SSRF risks.
 
     Checks:
-    - Scheme must be https (or http for local dev with explicit flag)
+    - Scheme must be https (or http for local dev)
     - Hostname must not resolve to private/reserved IPs
     - Hostname must not be in blocked list (localhost, metadata endpoints)
+
+    DNS resolution runs in a thread to avoid blocking the event loop.
 
     Args:
         url: The webhook URL to validate.
@@ -67,9 +70,11 @@ def validate_webhook_url(url: str) -> str:
             detail=f"Webhook URL hostname '{hostname}' is not allowed.",
         )
 
-    # Resolve hostname and check against blocked networks
+    # Resolve hostname in a thread to avoid blocking the event loop
     try:
-        addr_infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+        addr_infos = await anyio.to_thread.run_sync(
+            lambda: socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+        )
     except socket.gaierror:
         raise HTTPException(  # noqa: B904
             status_code=422,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -1351,9 +1350,14 @@ async def arq_process_homework(
                 err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
                 await err_job_repo.update_status(jid, "failed", error_message=str(exc))
-                with contextlib.suppress(ValueError):
+                try:
                     await err_hw_repo.update_status(
                         sid, "failed", error_message=str(exc)
+                    )
+                except ValueError as status_exc:
+                    log.warning(
+                        "homework_status_update_skipped",
+                        reason=str(status_exc),
                     )
                 await err_session.commit()
             log.error("homework_processing_failed", error=str(exc))

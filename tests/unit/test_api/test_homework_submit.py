@@ -292,6 +292,43 @@ class TestSubmitHomework:
         assert resp.status_code == 422
         assert "not allowed" in resp.json()["detail"]
 
+    async def test_oversized_file_after_upload_returns_422(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """File exceeding 10 MB after upload returns 422 and cleans up S3."""
+        oversized_bytes = 11 * 1024 * 1024
+        mock_s3.upload_smart = AsyncMock(
+            return_value=("http://s3/key/big.py", oversized_bytes)
+        )
+
+        with (
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                side_effect=[
+                    _mock_node(node_id=course_node_id),
+                    _mock_node(
+                        node_id=node_id,
+                        parent_materialnode_id=course_node_id,
+                    ),
+                ],
+            ),
+        ):
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(course_node_id=course_node_id, node_id=node_id),
+                files={
+                    "file": ("big.py", io.BytesIO(b"x"), "text/x-python"),
+                },
+            )
+        assert resp.status_code == 422
+        assert "too large" in resp.json()["detail"].lower()
+        mock_s3.delete_object.assert_awaited_once()
+
 
 class TestSubmitHomeworkOpenAPI:
     """Regression: ensure submit endpoint accepts multipart/form-data."""

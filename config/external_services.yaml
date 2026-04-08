@@ -188,6 +188,12 @@ actions:
     chain:
       default: [deepseek-chat, gemini-2.5-flash]
 
+  task_matching:
+    strategy: default
+    requires: [structured_output]
+    chain:
+      default: [deepseek-chat, gemini-2.5-flash]
+
   describe_slides:
     strategy: default
     requires: [vision]

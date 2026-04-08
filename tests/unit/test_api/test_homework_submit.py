@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
@@ -157,17 +158,21 @@ class TestSubmitHomework:
         submission = _mock_submission(student_id=student.id)
         job = _mock_job()
 
+        def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
+            if requested_id == course_node_id:
+                return _mock_node(node_id=course_node_id)
+            if requested_id == node_id:
+                return _mock_node(
+                    node_id=node_id,
+                    parent_materialnode_id=course_node_id,
+                )
+            return None
+
         with (
             patch.object(
                 MaterialNodeRepository,
                 "get_by_id",
-                side_effect=[
-                    _mock_node(node_id=course_node_id),  # course root
-                    _mock_node(
-                        node_id=node_id,
-                        parent_materialnode_id=course_node_id,
-                    ),
-                ],
+                side_effect=get_node_by_id,
             ),
             patch.object(
                 StudentRepository,
@@ -279,16 +284,26 @@ class TestSubmitHomework:
         course_node_id: uuid.UUID,
         node_id: uuid.UUID,
     ) -> None:
-        """Webhook URL targeting private IP rejected."""
-        resp = await client.post(
-            "/api/v1/homework/submit",
-            data=_submit_form(
-                course_node_id=course_node_id,
-                node_id=node_id,
-                webhook_url="https://localhost/hook",
-            ),
-            files={"file": ("solution.py", io.BytesIO(b"x=1"), "text/x-python")},
-        )
+        """Webhook URL targeting private IP rejected (mocked validator)."""
+        with patch(
+            "course_supporter.api.routes.homework.validate_webhook_url",
+            side_effect=HTTPException(status_code=422, detail="SSRF: not allowed"),
+        ):
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(
+                    course_node_id=course_node_id,
+                    node_id=node_id,
+                    webhook_url="https://evil.internal/hook",
+                ),
+                files={
+                    "file": (
+                        "solution.py",
+                        io.BytesIO(b"x=1"),
+                        "text/x-python",
+                    )
+                },
+            )
         assert resp.status_code == 422
         assert "not allowed" in resp.json()["detail"]
 

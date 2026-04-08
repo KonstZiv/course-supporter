@@ -563,3 +563,98 @@ class TestRetryMaterial:
         with patch.object(MaterialEntryRepository, "get_by_id", return_value=None):
             resp = await client.post(f"/api/v1/materials/{uuid.uuid4()}/retry")
         assert resp.status_code == 404
+
+
+class TestUpdateMaterial:
+    """PATCH /api/v1/materials/{mid}"""
+
+    async def test_updates_role_to_methodological(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Successful role update returns 200 with new role."""
+        entry = _mock_entry(node_id=node_id, material_role="educational")
+        updated = _mock_entry(node_id=node_id, material_role="methodological")
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                MaterialEntryRepository,
+                "update_material_role",
+                return_value=updated,
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={"material_role": "methodological"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["material_role"] == "methodological"
+
+    async def test_updates_role_to_educational(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Toggle back to educational."""
+        entry = _mock_entry(node_id=node_id, material_role="methodological")
+        updated = _mock_entry(node_id=node_id, material_role="educational")
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                MaterialEntryRepository,
+                "update_material_role",
+                return_value=updated,
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={"material_role": "educational"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["material_role"] == "educational"
+
+    async def test_invalid_role_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Invalid material_role value returns 422."""
+        resp = await client.patch(
+            f"/api/v1/materials/{uuid.uuid4()}",
+            json={"material_role": "invalid"},
+        )
+        assert resp.status_code == 422
+
+    async def test_not_found_returns_404(self, client: AsyncClient) -> None:
+        """Non-existent material returns 404."""
+        with patch.object(MaterialEntryRepository, "get_by_id", return_value=None):
+            resp = await client.patch(
+                f"/api/v1/materials/{uuid.uuid4()}",
+                json={"material_role": "methodological"},
+            )
+        assert resp.status_code == 404
+
+    async def test_wrong_tenant_returns_404(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Material belonging to another tenant returns 404."""
+        entry = _mock_entry(node_id=node_id)
+        other_tenant = uuid.uuid4()
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id, tenant_id=other_tenant),
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={"material_role": "methodological"},
+            )
+        assert resp.status_code == 404

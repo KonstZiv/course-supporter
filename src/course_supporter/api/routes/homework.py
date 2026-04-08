@@ -128,7 +128,7 @@ async def submit_homework(
 
     # --- Validate webhook URL (SSRF protection) ---
     if webhook_url is not None:
-        await validate_webhook_url(webhook_url)
+        webhook_url = await validate_webhook_url(webhook_url)
 
     # --- Verify nodes belong to tenant ---
     node_repo = MaterialNodeRepository(session)
@@ -179,43 +179,49 @@ async def submit_homework(
         content_type=content_type,
     )
 
-    # --- Get or create student ---
-    student_repo = StudentRepository(session)
-    student, created = await student_repo.get_or_create(
-        tenant_id=tenant.tenant_id,
-        external_id=student_external_id,
-    )
-    if created:
-        logger.info(
-            "student_created",
-            student_id=str(student.id),
+    # --- Create DB records (clean up S3 on failure) ---
+    try:
+        # Get or create student
+        student_repo = StudentRepository(session)
+        student, created = await student_repo.get_or_create(
+            tenant_id=tenant.tenant_id,
             external_id=student_external_id,
         )
+        if created:
+            logger.info(
+                "student_created",
+                student_id=str(student.id),
+                external_id=student_external_id,
+            )
 
-    # --- Create submission ---
-    hw_repo = HomeworkRepository(session)
-    submission = await hw_repo.create(
-        tenant_id=tenant.tenant_id,
-        student_id=student.id,
-        course_node_id=course_node_id,
-        node_id=node_id,
-        file_url=s3_url,
-        file_type=content_type,
-        original_filename=file.filename,
-        task_hint_id=task_id,
-        webhook_url=webhook_url,
-    )
+        # Create submission
+        hw_repo = HomeworkRepository(session)
+        submission = await hw_repo.create(
+            tenant_id=tenant.tenant_id,
+            student_id=student.id,
+            course_node_id=course_node_id,
+            node_id=node_id,
+            file_url=s3_url,
+            file_type=content_type,
+            original_filename=file.filename,
+            task_hint_id=task_id,
+            webhook_url=webhook_url,
+        )
 
-    # --- Enqueue processing ---
-    job = await enqueue_homework(
-        redis=arq,
-        session=session,
-        tenant_id=tenant.tenant_id,
-        submission_id=submission.id,
-    )
+        # Enqueue processing
+        job = await enqueue_homework(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            submission_id=submission.id,
+        )
 
-    await hw_repo.set_job_id(submission.id, job.id)
-    await session.commit()
+        await hw_repo.set_job_id(submission.id, job.id)
+        await session.commit()
+    except Exception:
+        # Clean up orphaned S3 file if DB operations fail
+        await s3.delete_object(key)
+        raise
 
     logger.info(
         "homework_submitted",

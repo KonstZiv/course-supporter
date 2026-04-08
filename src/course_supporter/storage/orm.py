@@ -50,6 +50,11 @@ class Tenant(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    webhook_url: Mapped[str | None] = mapped_column(
+        String(2000),
+        comment="Default webhook URL for homework submission results",
+    )
+
     # Relationships
     api_keys: Mapped[list["APIKey"]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
@@ -882,3 +887,167 @@ class ExternalServiceCall(Base):
     # Relationships
     tenant: Mapped["Tenant | None"] = relationship()
     job: Mapped["Job | None"] = relationship()
+
+
+# ──────────────────────────────────────────────
+# Homework Submissions
+# ──────────────────────────────────────────────
+
+
+class HomeworkStatus(StrEnum):
+    """Homework submission lifecycle states."""
+
+    RECEIVED = "received"
+    SAFETY_CHECK = "safety_check"
+    MATCHING = "matching"
+    MATCHED = "matched"
+    REVIEWING = "reviewing"
+    COMPLETED = "completed"
+    DELIVERED = "delivered"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class Student(Base):
+    __tablename__ = "students"
+    __table_args__ = (
+        Index("uq_student_tenant_external", "tenant_id", "external_id", unique=True),
+        {"comment": "External students submitting homework"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    external_id: Mapped[str] = mapped_column(
+        String(200),
+        comment="Student identifier from the caller's system",
+    )
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata",
+        JSONB,
+        comment="Arbitrary caller-provided metadata about the student",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant: Mapped["Tenant"] = relationship()
+    submissions: Mapped[list["HomeworkSubmission"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"Student(id={self.id!r}, tenant_id={self.tenant_id!r}, "
+            f"external_id={self.external_id!r})"
+        )
+
+
+class HomeworkSubmission(Base):
+    __tablename__ = "homework_submissions"
+    __table_args__ = {
+        "comment": "Homework submissions from external systems for Mentor review",
+    }
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), index=True
+    )
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Root MaterialNode representing the course",
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Specific course node the submission targets",
+    )
+    task_hint_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        comment="Optional task ID hint from the caller (not FK, validated in app)",
+    )
+    matched_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("structure_nodes_editable.id", ondelete="SET NULL"),
+        index=True,
+        comment="Matched editable node after task identification",
+    )
+
+    # File
+    file_url: Mapped[str] = mapped_column(
+        String(2000), comment="S3/B2 path to the uploaded file"
+    )
+    file_type: Mapped[str] = mapped_column(
+        String(50), comment="MIME type of the uploaded file"
+    )
+    original_filename: Mapped[str | None] = mapped_column(String(500))
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="received",
+        index=True,
+        comment="Lifecycle: received → safety_check → matching → matched "
+        "→ reviewing → completed → delivered | rejected | failed",
+    )
+
+    # Results (JSONB)
+    safety_result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="Safety check result (safe, reason, flags)"
+    )
+    match_result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Task matching result (matched_node_id, task_type, confidence)",
+    )
+    review_result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Mentor review result (score, passed, feedback_sections)",
+    )
+    review_markdown: Mapped[str | None] = mapped_column(
+        Text, comment="Rendered Markdown of the Mentor review"
+    )
+
+    # Webhook
+    webhook_url: Mapped[str | None] = mapped_column(
+        String(2000),
+        comment="Per-submission webhook URL override (falls back to tenant default)",
+    )
+    webhook_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # Error & tracking
+    error_message: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant: Mapped["Tenant"] = relationship()
+    student: Mapped["Student"] = relationship(back_populates="submissions")
+    course_node: Mapped["MaterialNode"] = relationship(foreign_keys=[course_node_id])
+    node: Mapped["MaterialNode"] = relationship(foreign_keys=[node_id])
+    matched_task: Mapped["StructureNodeEditable | None"] = relationship()
+    job: Mapped["Job | None"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"HomeworkSubmission(id={self.id!r}, status={self.status!r}, "
+            f"student_id={self.student_id!r})"
+        )

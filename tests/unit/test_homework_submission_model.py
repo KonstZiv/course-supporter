@@ -63,6 +63,26 @@ class TestHomeworkSubmissionModel:
         assert sub.task_hint_id == task_hint
         assert sub.webhook_url == webhook
 
+    def test_jsonb_fields_round_trip(self) -> None:
+        """JSONB result fields accept and return dicts."""
+        safety = {"safe": True, "flags": []}
+        match = {"matched_node_id": "abc", "confidence": 0.95}
+        review = {"score": 85, "passed": True, "sections": ["good"]}
+        sub = HomeworkSubmission(
+            tenant_id=_uuid7(),
+            student_id=_uuid7(),
+            course_node_id=_uuid7(),
+            node_id=_uuid7(),
+            file_url="s3://bucket/file.py",
+            file_type="text/x-python",
+            safety_result=safety,
+            match_result=match,
+            review_result=review,
+        )
+        assert sub.safety_result == safety
+        assert sub.match_result == match
+        assert sub.review_result == review
+
     def test_file_url_max_length(self) -> None:
         """file_url column accepts up to 2000 chars."""
         col = HomeworkSubmission.__table__.c.file_url
@@ -245,14 +265,12 @@ class TestHomeworkStatusEnum:
 
     def test_any_active_state_can_fail(self) -> None:
         """All non-terminal states can transition to failed."""
-        non_terminal = {
-            "received",
-            "safety_check",
-            "matching",
-            "matched",
-            "reviewing",
-            "completed",
+        excluded = {
+            HomeworkStatus.DELIVERED.value,
+            HomeworkStatus.REJECTED.value,
+            HomeworkStatus.FAILED.value,
         }
+        non_terminal = {s.value for s in HomeworkStatus if s.value not in excluded}
         for state in non_terminal:
             assert "failed" in HOMEWORK_TRANSITIONS[state], (
                 f"State '{state}' should be able to transition to 'failed'"

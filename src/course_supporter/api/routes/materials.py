@@ -398,7 +398,7 @@ async def update_material(
     )
 
     entry = await entry_repo.update_material_role(
-        entry.id, material_role=body.material_role
+        entry, material_role=body.material_role
     )
     await session.commit()
 

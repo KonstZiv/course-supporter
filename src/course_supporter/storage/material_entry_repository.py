@@ -251,20 +251,16 @@ class MaterialEntryRepository:
 
     async def update_material_role(
         self,
-        entry_id: uuid.UUID,
+        entry: MaterialEntry,
         *,
         material_role: MaterialRole,
     ) -> MaterialEntry:
-        """Update the material_role field on an entry.
+        """Update the material_role field on an already-loaded entry.
 
         Args:
-            entry_id: Entry to update.
+            entry: Entry ORM model to update.
             material_role: New role (MaterialRole.EDUCATIONAL or METHODOLOGICAL).
-
-        Raises:
-            ValueError: If entry not found.
         """
-        entry = await self._require(entry_id)
         entry.material_role = material_role.value
         await self._session.flush()
         return entry

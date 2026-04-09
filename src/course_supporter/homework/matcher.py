@@ -209,7 +209,7 @@ class TaskMatcher:
             tasks_count=str(len(task_nodes)),
         )
 
-        raw_result, response = await router.complete_structured(
+        match_data, response = await router.complete_structured(
             action="task_matching",
             prompt=user_prompt,
             response_schema=LLMMatchResponse,
@@ -225,4 +225,4 @@ class TaskMatcher:
             cost_usd=response.cost_usd,
         )
 
-        return cast(LLMMatchResponse, raw_result)
+        return cast(LLMMatchResponse, match_data)

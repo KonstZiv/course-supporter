@@ -148,7 +148,7 @@ class SafetyChecker:
             outline_summary=course_context.outline_summary,
         )
 
-        raw_verdict, response = await router.complete_structured(
+        verdict_data, response = await router.complete_structured(
             action="safety_check",
             prompt=user_prompt,
             response_schema=SafetyVerdict,
@@ -164,4 +164,4 @@ class SafetyChecker:
             cost_usd=response.cost_usd,
         )
 
-        return cast(SafetyVerdict, raw_verdict)
+        return cast(SafetyVerdict, verdict_data)

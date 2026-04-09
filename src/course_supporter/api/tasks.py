@@ -1374,6 +1374,17 @@ async def arq_process_homework(
                 course_node = await node_repo.get_by_id(submission.course_node_id)
                 target_node = await node_repo.get_by_id(submission.node_id)
 
+                if not course_node:
+                    log.warning(
+                        "course_node_not_found",
+                        course_node_id=str(submission.course_node_id),
+                    )
+                if not target_node:
+                    log.warning(
+                        "target_node_not_found",
+                        node_id=str(submission.node_id),
+                    )
+
                 course_ctx = CourseContext(
                     course_title=course_node.title if course_node else "",
                     course_description=(

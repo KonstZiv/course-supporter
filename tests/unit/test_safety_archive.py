@@ -36,12 +36,14 @@ class TestSingleFile:
         assert result.files[0].filename == "solution.py"
         assert "x = 1" in result.files[0].content
 
-    async def test_read_latin1_file(self, tmp_dir: Path) -> None:
-        """Reads a file with latin-1 encoding."""
+    async def test_read_non_utf8_file_uses_replacement(self, tmp_dir: Path) -> None:
+        """Non-UTF-8 bytes are replaced rather than decoded as latin-1."""
         f = tmp_dir / "notes.txt"
-        f.write_bytes("café résumé".encode("latin-1"))
+        f.write_bytes("caf\xe9 r\xe9sum\xe9".encode("latin-1"))
         result = await extract_submission_content(f)
-        assert result.files[0].content == "café résumé"
+        # latin-1 bytes are not silently decoded; invalid bytes become U+FFFD
+        assert "caf" in result.files[0].content
+        assert "\ufffd" in result.files[0].content
 
 
 class TestZipExtraction:

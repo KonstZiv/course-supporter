@@ -69,7 +69,7 @@ class ArchiveExtractionError(Exception):
 
 def _read_text_file(path: Path) -> str:
     """Read a file as text, trying common encodings."""
-    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+    for encoding in ("utf-8", "utf-8-sig"):
         try:
             return path.read_text(encoding=encoding)
         except (UnicodeDecodeError, ValueError):
@@ -271,7 +271,7 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
                     )
 
                 # Decode text
-                for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+                for encoding in ("utf-8", "utf-8-sig"):
                     try:
                         text = raw.decode(encoding)
                         break
@@ -320,7 +320,7 @@ def _extract_gz(file_path: Path) -> SubmissionContent:
 
         # Determine inner filename (strip .gz)
         inner_name = file_path.stem
-        for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+        for encoding in ("utf-8", "utf-8-sig"):
             try:
                 text = raw.decode(encoding)
                 break

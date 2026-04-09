@@ -67,14 +67,19 @@ class ArchiveExtractionError(Exception):
     """Raised when archive extraction fails or violates safety limits."""
 
 
-def _read_text_file(path: Path) -> str:
-    """Read a file as text, trying common encodings."""
+def _decode_bytes(raw: bytes) -> str:
+    """Decode raw bytes to text, trying common encodings."""
     for encoding in ("utf-8", "utf-8-sig"):
         try:
-            return path.read_text(encoding=encoding)
+            return raw.decode(encoding)
         except (UnicodeDecodeError, ValueError):
             continue
-    return path.read_text(encoding="utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
+def _read_text_file(path: Path) -> str:
+    """Read a file as text, trying common encodings."""
+    return _decode_bytes(path.read_bytes())
 
 
 def _is_text_file(filename: str) -> bool:
@@ -270,15 +275,7 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
                         },
                     )
 
-                # Decode text
-                for encoding in ("utf-8", "utf-8-sig"):
-                    try:
-                        text = raw.decode(encoding)
-                        break
-                    except (UnicodeDecodeError, ValueError):
-                        continue
-                else:
-                    text = raw.decode("utf-8", errors="replace")
+                text = _decode_bytes(raw)
 
                 files.append(
                     FileContent(
@@ -320,14 +317,7 @@ def _extract_gz(file_path: Path) -> SubmissionContent:
 
         # Determine inner filename (strip .gz)
         inner_name = file_path.stem
-        for encoding in ("utf-8", "utf-8-sig"):
-            try:
-                text = raw.decode(encoding)
-                break
-            except (UnicodeDecodeError, ValueError):
-                continue
-        else:
-            text = raw.decode("utf-8", errors="replace")
+        text = _decode_bytes(raw)
 
         fc = FileContent(filename=inner_name, content=text, size=len(raw))
         return SubmissionContent(files=[fc], total_size=fc.size)

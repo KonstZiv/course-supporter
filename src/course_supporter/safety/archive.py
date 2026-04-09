@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import gzip
+import stat
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+import anyio
 import structlog
 
 from course_supporter.config import get_settings
 from course_supporter.models.safety import FileContent, SubmissionContent
+from course_supporter.safety.exceptions import (
+    ArchiveBombError,
+    SecurityWarning,
+    SymlinkViolationError,
+)
 
 logger = structlog.get_logger()
 
@@ -75,6 +82,25 @@ def _is_text_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in _TEXT_EXTENSIONS
 
 
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    """Check if a ZIP entry is a symbolic link (Unix external attributes)."""
+    return stat.S_ISLNK(info.external_attr >> 16)
+
+
+def _sanitize_filename(raw_name: str) -> str | None:
+    """Sanitize an archive entry filename, stripping path traversal.
+
+    Returns None if the name is unsafe and should be skipped entirely
+    (e.g. resolves to empty or tries absolute path).
+    """
+    parts = PurePosixPath(raw_name).parts
+    # Strip leading "/" and all ".." components
+    clean_parts = [p for p in parts if p not in ("/", "..")]
+    if not clean_parts:
+        return None
+    return str(PurePosixPath(*clean_parts))
+
+
 async def extract_submission_content(file_path: Path) -> SubmissionContent:
     """Extract text content from a submission file or archive.
 
@@ -94,13 +120,20 @@ async def extract_submission_content(file_path: Path) -> SubmissionContent:
     Raises:
         ArchiveExtractionError: If extraction fails or limits exceeded.
     """
+    if await anyio.Path(file_path).is_symlink():
+        msg = f"Refusing to process symlink: {file_path.name}"
+        raise SymlinkViolationError(
+            msg,
+            details={"filename": file_path.name, "target": str(file_path)},
+        )
+
     suffix = file_path.suffix.lower()
 
     if suffix == ".zip":
-        return _extract_zip(file_path)
+        return await anyio.to_thread.run_sync(_extract_zip, file_path)
     if suffix == ".gz":
-        return _extract_gz(file_path)
-    return _read_single_file(file_path)
+        return await anyio.to_thread.run_sync(_extract_gz, file_path)
+    return await anyio.to_thread.run_sync(_read_single_file, file_path)
 
 
 def _read_single_file(file_path: Path) -> SubmissionContent:
@@ -123,9 +156,11 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
 
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
+            warnings: list[SecurityWarning] = []
+
             # Check for nested archives
             for info in zf.infolist():
-                nested_suffix = Path(info.filename).suffix.lower()
+                nested_suffix = PurePosixPath(info.filename).suffix.lower()
                 if (
                     nested_suffix in (".zip", ".gz", ".tar", ".bz2", ".xz")
                     and max_nesting < 2
@@ -134,15 +169,40 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
                         f"Nested archive detected: {info.filename}. "
                         f"Max nesting depth: {max_nesting}"
                     )
-                    raise ArchiveExtractionError(msg)
+                    raise ArchiveBombError(
+                        msg,
+                        details={
+                            "nested_file": info.filename,
+                            "max_nesting": max_nesting,
+                        },
+                    )
 
-            infos = [i for i in zf.infolist() if not i.is_dir()]
+            # Filter symlinks and collect warnings
+            all_entries = [i for i in zf.infolist() if not i.is_dir()]
+            infos: list[zipfile.ZipInfo] = []
+            for entry in all_entries:
+                if _is_zip_symlink(entry):
+                    warnings.append(
+                        SecurityWarning(
+                            violation_type="symlink",
+                            message=f"Symlink entry skipped: {entry.filename}",
+                            raw_filename=entry.filename,
+                        )
+                    )
+                    continue
+                infos.append(entry)
 
             if len(infos) > max_files:
                 msg = (
                     f"Archive contains {len(infos)} files, maximum allowed: {max_files}"
                 )
-                raise ArchiveExtractionError(msg)
+                raise ArchiveBombError(
+                    msg,
+                    details={
+                        "file_count": len(infos),
+                        "max_files": max_files,
+                    },
+                )
 
             # Check total uncompressed size
             total_uncompressed = sum(i.file_size for i in infos)
@@ -151,16 +211,46 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
                     f"Archive uncompressed size ({total_uncompressed} bytes) "
                     f"exceeds limit ({max_bytes} bytes)"
                 )
-                raise ArchiveExtractionError(msg)
+                raise ArchiveBombError(
+                    msg,
+                    details={
+                        "uncompressed_bytes": total_uncompressed,
+                        "max_bytes": max_bytes,
+                    },
+                )
 
             files: list[FileContent] = []
             total_size = 0
 
             for info in infos:
-                if not _is_text_file(info.filename):
+                safe_name = _sanitize_filename(info.filename)
+                if safe_name is None:
+                    warnings.append(
+                        SecurityWarning(
+                            violation_type="path_traversal",
+                            message=(f"Entry resolves to empty path: {info.filename}"),
+                            raw_filename=info.filename,
+                        )
+                    )
+                    continue
+
+                if safe_name != info.filename:
+                    warnings.append(
+                        SecurityWarning(
+                            violation_type="path_traversal",
+                            message=(
+                                f"Path traversal sanitized: "
+                                f"{info.filename} -> {safe_name}"
+                            ),
+                            raw_filename=info.filename,
+                            filename=safe_name,
+                        )
+                    )
+
+                if not _is_text_file(safe_name):
                     logger.debug(
                         "skipping_non_text_file",
-                        filename=info.filename,
+                        filename=safe_name,
                     )
                     continue
 
@@ -172,7 +262,13 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
                         f"Cumulative extracted size ({total_size} bytes) "
                         f"exceeds limit ({max_bytes} bytes)"
                     )
-                    raise ArchiveExtractionError(msg)
+                    raise ArchiveBombError(
+                        msg,
+                        details={
+                            "cumulative_bytes": total_size,
+                            "max_bytes": max_bytes,
+                        },
+                    )
 
                 # Decode text
                 for encoding in ("utf-8", "utf-8-sig", "latin-1"):
@@ -186,13 +282,17 @@ def _extract_zip(file_path: Path) -> SubmissionContent:
 
                 files.append(
                     FileContent(
-                        filename=info.filename,
+                        filename=safe_name,
                         content=text,
                         size=len(raw),
                     )
                 )
 
-            return SubmissionContent(files=files, total_size=total_size)
+            return SubmissionContent(
+                files=files,
+                total_size=total_size,
+                security_warnings=warnings,
+            )
 
     except zipfile.BadZipFile as exc:
         msg = f"Invalid ZIP file: {exc}"
@@ -210,7 +310,13 @@ def _extract_gz(file_path: Path) -> SubmissionContent:
 
         if len(raw) > max_bytes:
             msg = f"Decompressed size exceeds limit ({max_bytes} bytes)"
-            raise ArchiveExtractionError(msg)
+            raise ArchiveBombError(
+                msg,
+                details={
+                    "decompressed_bytes": len(raw),
+                    "max_bytes": max_bytes,
+                },
+            )
 
         # Determine inner filename (strip .gz)
         inner_name = file_path.stem

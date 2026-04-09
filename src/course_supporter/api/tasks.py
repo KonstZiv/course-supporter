@@ -1309,6 +1309,10 @@ async def arq_process_homework(
     from course_supporter.models.safety import CourseContext
     from course_supporter.safety.archive import extract_submission_content
     from course_supporter.safety.checker import SafetyChecker
+    from course_supporter.safety.exceptions import (
+        SecurityContext,
+        SecurityViolationError,
+    )
     from course_supporter.storage.editable_repository import EditableRepository
     from course_supporter.storage.homework_repository import HomeworkRepository
     from course_supporter.storage.job_repository import JobRepository
@@ -1340,6 +1344,19 @@ async def arq_process_homework(
                 msg = f"HomeworkSubmission {sid} not found"
                 raise ValueError(msg)
 
+            # Enrich logger with tenant/student context
+            log = log.bind(
+                tenant_id=str(submission.tenant_id),
+                student_id=str(submission.student_id),
+                file_url=submission.file_url,
+            )
+            sec_ctx = SecurityContext(
+                tenant_id=submission.tenant_id,
+                student_id=submission.student_id,
+                submission_id=sid,
+                file_url=submission.file_url,
+            )
+
             await job_repo.update_status(jid, "active")
             await hw_repo.update_status(sid, "safety_check")
             await session.commit()
@@ -1352,92 +1369,143 @@ async def arq_process_homework(
 
             file_path = await s3.download_file(s3_key)
             log.info("homework_file_downloaded", path=str(file_path))
+            try:
+                # Build course context for safety + matching
+                course_node = await node_repo.get_by_id(submission.course_node_id)
+                target_node = await node_repo.get_by_id(submission.node_id)
 
-            # Build course context for safety + matching
-            course_node = await node_repo.get_by_id(submission.course_node_id)
-            target_node = await node_repo.get_by_id(submission.node_id)
-
-            course_ctx = CourseContext(
-                course_title=course_node.title if course_node else "",
-                course_description=course_node.description or "" if course_node else "",
-                node_title=target_node.title if target_node else "",
-                node_description=target_node.description or "" if target_node else "",
-            )
-
-            # Extract content (handles archives)
-            content = await extract_submission_content(file_path)
-            log.info(
-                "homework_content_extracted",
-                files=len(content.files),
-                total_size=content.total_size,
-            )
-
-            # Safety check
-            checker = SafetyChecker()
-            safety_result = await checker.check(file_path, course_ctx, router)
-            await hw_repo.store_safety_result(
-                sid, safety_result.model_dump(mode="json")
-            )
-            await session.commit()
-
-            if not safety_result.safe:
-                await hw_repo.update_status(
-                    sid, "rejected", error_message=safety_result.reason
+                course_ctx = CourseContext(
+                    course_title=course_node.title if course_node else "",
+                    course_description=(
+                        course_node.description or "" if course_node else ""
+                    ),
+                    node_title=target_node.title if target_node else "",
+                    node_description=(
+                        target_node.description or "" if target_node else ""
+                    ),
                 )
+
+                # Extract content (handles archives)
+                content = await extract_submission_content(file_path)
+
+                # Log non-fatal security warnings at WARNING level
+                for sw in content.security_warnings:
+                    log.warning(
+                        "security_warning",
+                        **sw.as_log_dict(),
+                    )
+
+                log.info(
+                    "homework_content_extracted",
+                    files=len(content.files),
+                    total_size=content.total_size,
+                    security_warnings=len(content.security_warnings),
+                )
+
+                # Safety check
+                checker = SafetyChecker()
+                safety_result = await checker.check(file_path, course_ctx, router)
+                await hw_repo.store_safety_result(
+                    sid, safety_result.model_dump(mode="json")
+                )
+                await session.commit()
+
+                if not safety_result.safe:
+                    await hw_repo.update_status(
+                        sid, "rejected", error_message=safety_result.reason
+                    )
+                    await job_repo.update_status(jid, "complete")
+                    await session.commit()
+                    log.warning(
+                        "homework_rejected_safety",
+                        reason=safety_result.reason,
+                        flags=safety_result.flags,
+                    )
+                    return
+
+                # --- HW-005: Task matching ---
+                await hw_repo.update_status(sid, "matching")
+                await session.commit()
+
+                editable_repo = EditableRepository(session)
+                editable_nodes = await editable_repo.get_tree(
+                    submission.course_node_id,
+                )
+
+                matcher = TaskMatcher()
+                try:
+                    match_result = await matcher.match(
+                        content,
+                        editable_nodes,
+                        router,
+                        task_hint_id=submission.task_hint_id,
+                    )
+                except TaskMatchError as exc:
+                    await hw_repo.update_status(
+                        sid,
+                        "failed",
+                        error_message=str(exc),
+                    )
+                    await job_repo.update_status(
+                        jid,
+                        "complete",
+                        error_message=str(exc),
+                    )
+                    await session.commit()
+                    log.warning("homework_matching_failed", error=str(exc))
+                    return
+
+                await hw_repo.store_match_result(
+                    sid,
+                    result=match_result.model_dump(mode="json"),
+                    matched_task_id=match_result.primary_task_id,
+                )
+                await hw_repo.update_status(sid, "matched")
+                await session.commit()
+
+                log.info(
+                    "homework_matched",
+                    primary_task=match_result.matches[0].task_title,
+                    matches_count=len(match_result.matches),
+                )
+
+                # TODO(HW-006): Mentor review
+                # TODO(HW-007): Webhook delivery
+
+                # Stub: mark as completed for now
+                await hw_repo.update_status(sid, "reviewing")
+                await hw_repo.update_status(sid, "completed")
                 await job_repo.update_status(jid, "complete")
                 await session.commit()
-                log.warning(
-                    "homework_rejected_safety",
-                    reason=safety_result.reason,
-                    flags=safety_result.flags,
-                )
-                return
+                log.info("homework_processing_done")
+            finally:
+                if file_path.exists():
+                    file_path.unlink()
+                    log.debug("homework_temp_file_cleaned", path=str(file_path))
 
-            # --- HW-005: Task matching ---
-            await hw_repo.update_status(sid, "matching")
-            await session.commit()
-
-            editable_repo = EditableRepository(session)
-            editable_nodes = await editable_repo.get_tree(submission.course_node_id)
-
-            matcher = TaskMatcher()
-            try:
-                match_result = await matcher.match(
-                    content,
-                    editable_nodes,
-                    router,
-                    task_hint_id=submission.task_hint_id,
-                )
-            except TaskMatchError as exc:
-                await hw_repo.update_status(sid, "failed", error_message=str(exc))
-                await job_repo.update_status(jid, "complete", error_message=str(exc))
-                await session.commit()
-                log.warning("homework_matching_failed", error=str(exc))
-                return
-
-            await hw_repo.store_match_result(
-                sid,
-                result=match_result.model_dump(mode="json"),
-                matched_task_id=match_result.primary_task_id,
+        except SecurityViolationError as exc:
+            exc.enrich(sec_ctx)
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_job_repo = JobRepository(err_session)
+                err_hw_repo = HomeworkRepository(err_session)
+                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
+                try:
+                    await err_hw_repo.update_status(
+                        sid,
+                        "rejected",
+                        error_message=str(exc),
+                    )
+                except ValueError as status_exc:
+                    log.warning(
+                        "homework_status_update_skipped",
+                        reason=str(status_exc),
+                    )
+                await err_session.commit()
+            log.warning(
+                "security_violation",
+                **exc.as_log_dict(),
             )
-            await hw_repo.update_status(sid, "matched")
-            await session.commit()
-
-            log.info(
-                "homework_matched",
-                primary_task=match_result.matches[0].task_title,
-                matches_count=len(match_result.matches),
-            )
-
-            # TODO(HW-006): Mentor review
-            # TODO(HW-007): Webhook delivery
-
-            # Stub: mark as completed for now
-            await hw_repo.update_status(sid, "reviewing")
-            await hw_repo.update_status(sid, "completed")
-            await job_repo.update_status(jid, "complete")
-            await session.commit()
-            log.info("homework_processing_done")
 
         except Exception as exc:
             await session.rollback()

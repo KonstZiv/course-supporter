@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import gzip
+import stat
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from course_supporter.safety.archive import (
-    ArchiveExtractionError,
+    _sanitize_filename,
     extract_submission_content,
+)
+from course_supporter.safety.exceptions import (
+    ArchiveBombError,
+    SymlinkViolationError,
 )
 
 
@@ -36,7 +41,7 @@ class TestSingleFile:
         f = tmp_dir / "notes.txt"
         f.write_bytes("café résumé".encode("latin-1"))
         result = await extract_submission_content(f)
-        assert "caf" in result.files[0].content
+        assert result.files[0].content == "café résumé"
 
 
 class TestZipExtraction:
@@ -74,7 +79,7 @@ class TestZipExtraction:
         with zipfile.ZipFile(outer, "w") as zf:
             zf.write(inner, "inner.zip")
 
-        with pytest.raises(ArchiveExtractionError, match="Nested archive"):
+        with pytest.raises(ArchiveBombError, match="Nested archive"):
             await extract_submission_content(outer)
 
     async def test_too_many_files_rejected(
@@ -95,8 +100,10 @@ class TestZipExtraction:
             for i in range(5):
                 zf.writestr(f"file{i}.py", f"x = {i}")
 
-        with pytest.raises(ArchiveExtractionError, match="files"):
+        with pytest.raises(ArchiveBombError, match="files") as exc_info:
             await extract_submission_content(zpath)
+        assert exc_info.value.details["file_count"] == 5
+        assert exc_info.value.details["max_files"] == 2
 
     async def test_oversized_uncompressed_rejected(
         self, tmp_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -115,7 +122,7 @@ class TestZipExtraction:
         with zipfile.ZipFile(zpath, "w") as zf:
             zf.writestr("big.py", "x" * (2 * 1024 * 1024))  # 2 MB
 
-        with pytest.raises(ArchiveExtractionError, match="exceeds limit"):
+        with pytest.raises(ArchiveBombError, match="exceeds limit"):
             await extract_submission_content(zpath)
 
 
@@ -150,8 +157,89 @@ class TestGzExtraction:
         with gzip.open(gz_path, "wb") as f:
             f.write(b"x" * (2 * 1024 * 1024))
 
-        with pytest.raises(ArchiveExtractionError, match="exceeds limit"):
+        with pytest.raises(ArchiveBombError, match="exceeds limit"):
             await extract_submission_content(gz_path)
+
+
+class TestSymlinkProtection:
+    """Symlink attack prevention."""
+
+    async def test_reject_symlink_input(self, tmp_dir: Path) -> None:
+        """Input file that is a symlink is rejected."""
+        real = tmp_dir / "real.py"
+        real.write_text("x = 1", encoding="utf-8")
+        link = tmp_dir / "link.py"
+        link.symlink_to(real)
+
+        with pytest.raises(SymlinkViolationError, match="symlink") as exc_info:
+            await extract_submission_content(link)
+        assert exc_info.value.violation_type == "symlink"
+        assert exc_info.value.details["filename"] == "link.py"
+
+    async def test_zip_symlink_entries_skipped_with_warning(
+        self,
+        tmp_dir: Path,
+    ) -> None:
+        """ZIP symlink entries are skipped and produce security warnings."""
+        zpath = tmp_dir / "hw.zip"
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr("real.py", "x = 1")
+            symlink_info = zipfile.ZipInfo("evil.py")
+            symlink_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(symlink_info, "/etc/passwd")
+
+        result = await extract_submission_content(zpath)
+        assert len(result.files) == 1
+        assert result.files[0].filename == "real.py"
+        assert len(result.security_warnings) == 1
+        assert result.security_warnings[0].violation_type == "symlink"
+        assert result.security_warnings[0].raw_filename == "evil.py"
+
+
+class TestPathSanitization:
+    """Zip Slip and path traversal prevention."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("main.py", "main.py"),
+            ("src/utils.py", "src/utils.py"),
+            ("../../../etc/passwd", "etc/passwd"),
+            ("foo/../../bar.py", "foo/bar.py"),
+            ("/absolute/path.py", "absolute/path.py"),
+        ],
+    )
+    def test_sanitize_filename(self, raw: str, expected: str) -> None:
+        """Path traversal components are stripped."""
+        assert _sanitize_filename(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["../", "..", "/../.."])
+    def test_sanitize_filename_empty_result(self, raw: str) -> None:
+        """Filenames that resolve to nothing return None."""
+        assert _sanitize_filename(raw) is None
+
+    async def test_zip_traversal_sanitized_with_warning(
+        self,
+        tmp_dir: Path,
+    ) -> None:
+        """ZIP entry with path traversal gets sanitized and produces warning."""
+        zpath = tmp_dir / "hw.zip"
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr("../../evil.py", "import os")
+            zf.writestr("safe.py", "x = 1")
+
+        result = await extract_submission_content(zpath)
+        filenames = {f.filename for f in result.files}
+        assert "evil.py" in filenames
+        assert "../../evil.py" not in filenames
+        assert "safe.py" in filenames
+        # Path traversal produces a warning
+        traversal_warnings = [
+            w for w in result.security_warnings if w.violation_type == "path_traversal"
+        ]
+        assert len(traversal_warnings) == 1
+        assert traversal_warnings[0].raw_filename == "../../evil.py"
+        assert traversal_warnings[0].filename == "evil.py"
 
 
 class TestSubmissionContent:
@@ -165,7 +253,4 @@ class TestSubmissionContent:
             zf.writestr("b.py", "y = 2")
         result = await extract_submission_content(zpath)
         text = result.full_text
-        assert "--- a.py ---" in text
-        assert "--- b.py ---" in text
-        assert "x = 1" in text
-        assert "y = 2" in text
+        assert text.strip() == "--- a.py ---\nx = 1\n--- b.py ---\ny = 2"

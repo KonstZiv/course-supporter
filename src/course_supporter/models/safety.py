@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -16,8 +18,15 @@ class FileContent(BaseModel):
 class SubmissionContent(BaseModel):
     """Aggregated content extracted from a homework submission."""
 
+    model_config = {"arbitrary_types_allowed": True}
+
     files: list[FileContent] = Field(description="Individual file contents.")
     total_size: int = Field(description="Total size in bytes across all files.")
+    security_warnings: list[Any] = Field(
+        default_factory=list,
+        description="Non-fatal security observations found during extraction.",
+        exclude=True,
+    )
 
     @property
     def full_text(self) -> str:

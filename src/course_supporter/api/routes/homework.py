@@ -113,6 +113,13 @@ async def submit_homework(
             "(falls back to tenant default).",
         ),
     ] = None,
+    response_language: Annotated[
+        str | None,
+        Form(
+            description="ISO 639-1 language for the review response "
+            "(e.g. uk, en). Auto-detected if omitted.",
+        ),
+    ] = None,
 ) -> HomeworkSubmitResponse:
     """Submit homework for review.
 
@@ -249,6 +256,7 @@ async def submit_homework(
             task_hint_id=task_id,
             webhook_url=webhook_url,
             file_hash=file_hash,
+            response_language=response_language,
         )
 
         # Enqueue processing

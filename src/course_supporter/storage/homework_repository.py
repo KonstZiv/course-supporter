@@ -50,6 +50,7 @@ class HomeworkRepository:
         original_filename: str | None = None,
         task_hint_id: uuid.UUID | None = None,
         webhook_url: str | None = None,
+        file_hash: str | None = None,
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -63,6 +64,7 @@ class HomeworkRepository:
             original_filename: Original filename from the upload.
             task_hint_id: Optional task ID hint from the caller.
             webhook_url: Per-submission webhook URL override.
+            file_hash: SHA-256 hex digest of the uploaded file.
 
         Returns:
             The newly created HomeworkSubmission.
@@ -77,10 +79,46 @@ class HomeworkRepository:
             original_filename=original_filename,
             task_hint_id=task_hint_id,
             webhook_url=webhook_url,
+            file_hash=file_hash,
         )
         self._session.add(submission)
         await self._session.flush()
         return submission
+
+    async def find_duplicate(
+        self,
+        *,
+        student_id: uuid.UUID,
+        node_id: uuid.UUID,
+        file_hash: str,
+    ) -> HomeworkSubmission | None:
+        """Find a completed submission with the same file hash.
+
+        Checks for an existing submission from the same student, for the
+        same course node, with an identical file hash that already has
+        a terminal result (completed or delivered).
+
+        Args:
+            student_id: Student UUID.
+            node_id: Target course node UUID.
+            file_hash: SHA-256 hex digest to match.
+
+        Returns:
+            The existing submission if found, None otherwise.
+        """
+        stmt = (
+            select(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.node_id == node_id,
+                HomeworkSubmission.file_hash == file_hash,
+                HomeworkSubmission.status.in_({"completed", "delivered"}),
+            )
+            .order_by(HomeworkSubmission.created_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_by_id(self, submission_id: uuid.UUID) -> HomeworkSubmission | None:
         """Get a submission by primary key."""

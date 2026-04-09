@@ -550,8 +550,15 @@ class HomeworkSubmitResponse(BaseModel):
         description="Student record ID (created or existing)."
     )
     status: str = Field(description="Initial status: ``received``.")
-    job_id: uuid.UUID = Field(
-        description="Background job ID for tracking processing progress."
+    job_id: uuid.UUID | None = Field(
+        default=None,
+        description="Background job ID for tracking processing progress. "
+        "None when returning a cached duplicate result.",
+    )
+    duplicate: bool = Field(
+        default=False,
+        description="True if this is a cached result from a "
+        "prior identical submission.",
     )
 
 

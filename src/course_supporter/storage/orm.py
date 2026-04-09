@@ -989,6 +989,11 @@ class HomeworkSubmission(Base):
         String(50), comment="MIME type of the uploaded file"
     )
     original_filename: Mapped[str | None] = mapped_column(String(500))
+    file_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        index=True,
+        comment="SHA-256 hex digest for deduplication",
+    )
 
     # Status
     status: Mapped[str] = mapped_column(

@@ -179,6 +179,11 @@ class TestSubmitHomework:
                 "get_or_create",
                 return_value=(student, True),
             ),
+            patch.object(
+                HomeworkRepository,
+                "find_duplicate",
+                return_value=None,
+            ),
             patch.object(HomeworkRepository, "create", return_value=submission),
             patch.object(HomeworkRepository, "set_job_id", return_value=None),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
@@ -343,6 +348,66 @@ class TestSubmitHomework:
         assert resp.status_code == 422
         assert "too large" in resp.json()["detail"].lower()
         mock_s3.delete_object.assert_awaited_once()
+
+    async def test_duplicate_file_returns_cached(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+    ) -> None:
+        """Identical file already reviewed returns cached result."""
+        student = _mock_student()
+        existing = _mock_submission(student_id=student.id)
+        existing.status = "completed"
+        existing.job_id = uuid.uuid4()
+
+        def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
+            if requested_id == course_node_id:
+                return _mock_node(node_id=course_node_id)
+            if requested_id == node_id:
+                return _mock_node(
+                    node_id=node_id,
+                    parent_materialnode_id=course_node_id,
+                )
+            return None
+
+        with (
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                side_effect=get_node_by_id,
+            ),
+            patch.object(
+                StudentRepository,
+                "get_or_create",
+                return_value=(student, True),
+            ),
+            patch.object(
+                HomeworkRepository,
+                "find_duplicate",
+                return_value=existing,
+            ),
+        ):
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(
+                    course_node_id=course_node_id,
+                    node_id=node_id,
+                ),
+                files={
+                    "file": (
+                        "solution.py",
+                        io.BytesIO(b"print('hello')"),
+                        "text/x-python",
+                    )
+                },
+            )
+
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["submission_id"] == str(existing.id)
+        assert data["duplicate"] is True
+        assert data["status"] == "completed"
 
 
 class TestSubmitHomeworkOpenAPI:

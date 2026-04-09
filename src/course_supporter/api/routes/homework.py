@@ -11,7 +11,9 @@ Routes
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 import structlog
@@ -62,6 +64,20 @@ ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
         ".gz",
     }
 )
+
+
+async def _hashing_upload(
+    file: UploadFile,
+) -> tuple[AsyncIterator[bytes], hashlib._Hash]:
+    """Wrap upload_file_chunks to compute SHA-256 while streaming."""
+    hasher = hashlib.sha256()
+
+    async def _stream() -> AsyncIterator[bytes]:
+        async for chunk in upload_file_chunks(file):
+            hasher.update(chunk)
+            yield chunk
+
+    return _stream(), hasher
 
 
 @router.post("/homework/submit", status_code=202)
@@ -147,22 +163,23 @@ async def submit_homework(
     if target_node is None or target_node.tenant_id != tenant.tenant_id:
         raise HTTPException(status_code=404, detail="Node not found.")
 
-    # --- Upload file to S3 ---
+    # --- Upload file to S3 (streaming SHA-256) ---
     submission_id = uuid.uuid4()
     filename = file.filename or "upload"
     key = f"homework/{tenant.tenant_id}/{submission_id}/{filename}"
     content_type = file.content_type or "application/octet-stream"
 
+    stream, hasher = await _hashing_upload(file)
     s3_url, uploaded_bytes = await s3.upload_smart(
-        stream=upload_file_chunks(file),
+        stream=stream,
         key=key,
         content_type=content_type,
         file_size=file.size,
     )
+    file_hash = hasher.hexdigest()
 
     # Check actual uploaded size (in case file.size was None)
     if uploaded_bytes > MAX_HOMEWORK_SIZE:
-        # Clean up the oversized upload
         await s3.delete_object(key)
         raise HTTPException(
             status_code=422,
@@ -177,6 +194,7 @@ async def submit_homework(
         key=key,
         size=uploaded_bytes,
         content_type=content_type,
+        file_hash=file_hash,
     )
 
     # --- Create DB records (clean up S3 on failure) ---
@@ -194,8 +212,32 @@ async def submit_homework(
                 external_id=student_external_id,
             )
 
-        # Create submission
+        # --- Dedup: check for identical file already reviewed ---
         hw_repo = HomeworkRepository(session)
+        existing = await hw_repo.find_duplicate(
+            student_id=student.id,
+            node_id=node_id,
+            file_hash=file_hash,
+        )
+        if existing is not None:
+            # Identical file already processed — return cached result
+            await s3.delete_object(key)
+            logger.warning(
+                "homework_duplicate_detected",
+                student_id=str(student.id),
+                node_id=str(node_id),
+                file_hash=file_hash,
+                existing_submission_id=str(existing.id),
+            )
+            return HomeworkSubmitResponse(
+                submission_id=existing.id,
+                student_id=student.id,
+                status=existing.status,
+                job_id=existing.job_id,
+                duplicate=True,
+            )
+
+        # Create submission
         submission = await hw_repo.create(
             tenant_id=tenant.tenant_id,
             student_id=student.id,
@@ -206,6 +248,7 @@ async def submit_homework(
             original_filename=file.filename,
             task_hint_id=task_id,
             webhook_url=webhook_url,
+            file_hash=file_hash,
         )
 
         # Enqueue processing
@@ -229,6 +272,7 @@ async def submit_homework(
         student_id=str(student.id),
         node_id=str(node_id),
         job_id=str(job.id),
+        file_hash=file_hash,
     )
 
     return HomeworkSubmitResponse(

@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     safety_archive_max_files: int = 1000
     safety_archive_max_nesting: int = 1
     safety_max_content_chars: int = 100_000
+    homework_max_content_chars: int = 80_000
 
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"

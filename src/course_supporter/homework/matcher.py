@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import structlog
 
+from course_supporter.config import get_settings
 from course_supporter.models.matching import (
     LLMMatchResponse,
     MatchResult,
@@ -196,7 +197,8 @@ class TaskMatcher:
 
         # Truncate content for LLM
         full_text = content.full_text
-        max_chars = 80_000  # Leave room for task catalog + system prompt
+        settings = get_settings()
+        max_chars = settings.homework_max_content_chars
         if len(full_text) > max_chars:
             full_text = full_text[:max_chars] + "\n\n[... truncated ...]"
 

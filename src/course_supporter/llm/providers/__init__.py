@@ -20,6 +20,7 @@ PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
     "anthropic": AnthropicProvider,
     "openai": OpenAICompatProvider,
     "deepseek": OpenAICompatProvider,
+    "mistral": OpenAICompatProvider,
 }
 
 __all__ = [

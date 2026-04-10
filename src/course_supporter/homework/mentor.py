@@ -27,6 +27,58 @@ _HUMANIZE_PROMPT_PATH = "prompts/mentor/humanize_v1.yaml"
 _MAX_SUBMISSION_CHARS = 80_000
 # Max chars of code fragments to include in humanize prompt
 _MAX_CODE_FRAGMENT_CHARS = 5_000
+# Humanize output length bounds (log warning only, non-blocking)
+_MIN_REVIEW_CHARS = 50
+_MAX_REVIEW_CHARS = 5_000
+
+
+def _adjust_analysis(analysis: MentorAnalysis) -> tuple[MentorAnalysis, list[str]]:
+    """Apply deterministic consistency rules to LLM analysis output.
+
+    Returns a (possibly corrected) analysis and a list of adjustments made.
+    Rules are soft caps — they correct obvious contradictions but do not
+    override the LLM's judgment on subjective aspects.
+    """
+    adjustments: list[str] = []
+    updates: dict[str, object] = {}
+
+    critical_count = sum(1 for i in analysis.issues if i.severity == "critical")
+
+    # Rule 1: incorrect → cannot pass
+    if analysis.correctness == "incorrect" and analysis.passed:
+        updates["passed"] = False
+        adjustments.append("passed→False (correctness is incorrect)")
+
+    # Rule 2: correct + critical issues → demote correctness
+    if analysis.correctness == "correct" and critical_count > 0:
+        updates["correctness"] = "partially_correct"
+        adjustments.append(
+            f"correctness→partially_correct ({critical_count} critical issues)",
+        )
+
+    # Rule 3: incorrect → cap score at 40
+    if analysis.correctness == "incorrect" and analysis.score > 40:
+        adjustments.append(f"score {analysis.score}→40 (incorrect)")
+        updates["score"] = 40
+
+    # Rule 4: critical issues → cap score at 74
+    elif critical_count > 0 and analysis.score > 74:
+        adjustments.append(f"score {analysis.score}→74 (critical issues)")
+        updates["score"] = 74
+
+    # Rule 5: no issues + correct → floor score at 70
+    elif (
+        not analysis.issues
+        and analysis.correctness == "correct"
+        and analysis.score < 70
+    ):
+        adjustments.append(f"score {analysis.score}→70 (correct, no issues)")
+        updates["score"] = 70
+
+    if updates:
+        analysis = analysis.model_copy(update=updates)
+
+    return analysis, adjustments
 
 
 def _build_analysis_user_prompt(ctx: MentorContext) -> str:
@@ -211,7 +263,14 @@ class MentorAgent:
             cost_usd=response.cost_usd,
         )
 
-        return cast(MentorAnalysis, analysis_data)
+        raw_analysis = cast(MentorAnalysis, analysis_data)
+        adjusted, adjustments = _adjust_analysis(raw_analysis)
+        if adjustments:
+            logger.warning(
+                "mentor_analysis_adjusted",
+                adjustments=adjustments,
+            )
+        return adjusted
 
     async def _humanize(
         self,
@@ -250,4 +309,11 @@ class MentorAgent:
             cost_usd=response.cost_usd,
         )
 
-        return response.content
+        review_text = response.content
+        text_len = len(review_text)
+        if text_len < _MIN_REVIEW_CHARS:
+            logger.warning("mentor_humanize_too_short", length=text_len)
+        elif text_len > _MAX_REVIEW_CHARS:
+            logger.warning("mentor_humanize_too_long", length=text_len)
+
+        return review_text

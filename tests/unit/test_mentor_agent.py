@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from course_supporter.homework.mentor import (
     MentorAgent,
+    _adjust_analysis,
     _build_analysis_user_prompt,
     _extract_code_fragments,
 )
@@ -160,6 +161,110 @@ class TestBuildAnalysisUserPrompt:
         assert "Description" not in prompt
         assert "Learning goal" not in prompt
         assert "Evaluation Criteria" not in prompt
+
+
+class TestAdjustAnalysis:
+    """Deterministic consistency rules for MentorAnalysis."""
+
+    def test_no_adjustments_for_consistent_analysis(self) -> None:
+        analysis = MentorAnalysis(
+            passed=True,
+            score=85,
+            task_understanding="Task.",
+            correctness="correct",
+            issues=[
+                ReviewIssue(severity="minor", description="Style issue."),
+            ],
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjustments == []
+        assert adjusted.score == 85
+
+    def test_incorrect_cannot_pass(self) -> None:
+        analysis = MentorAnalysis(
+            passed=True,
+            score=30,
+            task_understanding="Task.",
+            correctness="incorrect",
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.passed is False
+        assert any("passed→False" in a for a in adjustments)
+
+    def test_incorrect_caps_score_at_40(self) -> None:
+        analysis = MentorAnalysis(
+            passed=False,
+            score=65,
+            task_understanding="Task.",
+            correctness="incorrect",
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.score == 40
+        assert any("score 65→40" in a for a in adjustments)
+
+    def test_critical_issues_cap_score_at_74(self) -> None:
+        analysis = MentorAnalysis(
+            passed=True,
+            score=90,
+            task_understanding="Task.",
+            correctness="partially_correct",
+            issues=[
+                ReviewIssue(severity="critical", description="Crash."),
+            ],
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.score == 74
+        assert any("score 90→74" in a for a in adjustments)
+
+    def test_correct_with_critical_demotes_correctness(self) -> None:
+        analysis = MentorAnalysis(
+            passed=True,
+            score=80,
+            task_understanding="Task.",
+            correctness="correct",
+            issues=[
+                ReviewIssue(severity="critical", description="Breaks on edge case."),
+            ],
+        )
+        adjusted, _adjustments = _adjust_analysis(analysis)
+        assert adjusted.correctness == "partially_correct"
+        assert adjusted.score == 74  # also capped by critical rule
+
+    def test_correct_no_issues_floor_score(self) -> None:
+        analysis = MentorAnalysis(
+            passed=True,
+            score=50,
+            task_understanding="Task.",
+            correctness="correct",
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.score == 70
+        assert any("score 50→70" in a for a in adjustments)
+
+    def test_correct_no_issues_high_score_unchanged(self) -> None:
+        """Score above floor is not touched."""
+        analysis = MentorAnalysis(
+            passed=True,
+            score=95,
+            task_understanding="Task.",
+            correctness="correct",
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.score == 95
+        assert adjustments == []
+
+    def test_multiple_adjustments(self) -> None:
+        """incorrect + passed + high score triggers two rules."""
+        analysis = MentorAnalysis(
+            passed=True,
+            score=80,
+            task_understanding="Task.",
+            correctness="incorrect",
+        )
+        adjusted, adjustments = _adjust_analysis(analysis)
+        assert adjusted.passed is False
+        assert adjusted.score == 40
+        assert len(adjustments) == 2
 
 
 class TestExtractCodeFragments:

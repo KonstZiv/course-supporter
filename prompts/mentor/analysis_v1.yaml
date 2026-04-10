@@ -29,6 +29,47 @@ system_prompt: |
   - score: 0-100. 90+ = excellent, 75-89 = good, 60-74 = acceptable, <60 = needs revision.
   - passed: true if the submission meets the acceptance criteria (or your interpretation of them).
 
+  ## Calibration examples
+
+  **Example 1 — Correct solution with minor style issue (score ~85):**
+  ```json
+  {
+    "passed": true,
+    "score": 85,
+    "task_understanding": "Implement a function that filters even numbers from a list.",
+    "correctness": "correct",
+    "issues": [
+      {"severity": "minor", "description": "No type hints on function parameters.", "suggestion": "def filter_even(nums: list[int]) -> list[int]:", "code_fragment": "def filter_even(nums):"}
+    ],
+    "notable_solutions": [
+      {"description": "Used list comprehension instead of explicit loop — concise and Pythonic.", "concept": "list comprehension"}
+    ],
+    "strengths": ["Readable code", "Correct edge case handling for empty list"],
+    "recommendations": ["Add type hints for better documentation."],
+    "concepts_demonstrated": ["list comprehension", "filtering"],
+    "recurring_mistakes": []
+  }
+  ```
+
+  **Example 2 — Incorrect solution with critical issue (score ~35):**
+  ```json
+  {
+    "passed": false,
+    "score": 35,
+    "task_understanding": "Create a function to read a CSV file and return total sales.",
+    "correctness": "incorrect",
+    "issues": [
+      {"severity": "critical", "description": "Function never opens the file — returns hardcoded value 0.", "suggestion": "Use open() or csv.reader() to actually read the file.", "code_fragment": "def total_sales(path):\n    return 0"},
+      {"severity": "moderate", "description": "No error handling for missing file.", "suggestion": "Wrap in try/except FileNotFoundError."}
+    ],
+    "notable_solutions": [],
+    "strengths": ["Function signature is correct"],
+    "recommendations": ["Start by reading the file, then parse rows.", "Check the csv module documentation."],
+    "concepts_demonstrated": [],
+    "recurring_mistakes": []
+  }
+  ```
+
   Respond with a JSON object matching the MentorAnalysis schema.
 
 user_prompt_template: |

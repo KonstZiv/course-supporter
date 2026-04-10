@@ -264,6 +264,14 @@ class MentorAgent:
         )
 
         raw_analysis = cast(MentorAnalysis, analysis_data)
+        logger.debug(
+            "mentor_analysis_raw",
+            passed=raw_analysis.passed,
+            score=raw_analysis.score,
+            correctness=raw_analysis.correctness,
+            issues=len(raw_analysis.issues),
+            notable=len(raw_analysis.notable_solutions),
+        )
         adjusted, adjustments = _adjust_analysis(raw_analysis)
         if adjustments:
             logger.warning(

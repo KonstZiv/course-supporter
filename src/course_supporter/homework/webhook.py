@@ -157,6 +157,8 @@ async def deliver_webhook(
                     )
                     return True
 
+                body_snippet = response.text[:200] if response.text else ""
+
                 # 4xx (except 429) = permanent failure, no retry
                 if 400 <= response.status_code < 500 and response.status_code != 429:
                     last_error = f"HTTP {response.status_code}"
@@ -164,6 +166,7 @@ async def deliver_webhook(
                         "webhook_permanent_failure",
                         status_code=response.status_code,
                         attempt=attempt + 1,
+                        response_body=body_snippet,
                     )
                     break
 
@@ -173,6 +176,7 @@ async def deliver_webhook(
                     "webhook_transient_failure",
                     status_code=response.status_code,
                     attempt=attempt + 1,
+                    response_body=body_snippet,
                 )
 
             except httpx.HTTPError as exc:
@@ -186,6 +190,11 @@ async def deliver_webhook(
             # Exponential backoff before next attempt
             if attempt < settings.webhook_max_retries - 1:
                 delay = 2**attempt  # 1s, 2s, 4s
+                log.debug(
+                    "webhook_retry_backoff",
+                    delay_sec=delay,
+                    next_attempt=attempt + 2,
+                )
                 await asyncio.sleep(delay)
 
     latency_ms = int((time.monotonic() - start) * 1000)

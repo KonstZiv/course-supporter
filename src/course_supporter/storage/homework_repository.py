@@ -51,6 +51,7 @@ class HomeworkRepository:
         task_hint_id: uuid.UUID | None = None,
         webhook_url: str | None = None,
         file_hash: str | None = None,
+        response_language: str | None = None,
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -65,6 +66,7 @@ class HomeworkRepository:
             task_hint_id: Optional task ID hint from the caller.
             webhook_url: Per-submission webhook URL override.
             file_hash: SHA-256 hex digest of the uploaded file.
+            response_language: Requested ISO 639-1 language for review.
 
         Returns:
             The newly created HomeworkSubmission.
@@ -80,6 +82,7 @@ class HomeworkRepository:
             task_hint_id=task_hint_id,
             webhook_url=webhook_url,
             file_hash=file_hash,
+            response_language=response_language,
         )
         self._session.add(submission)
         await self._session.flush()

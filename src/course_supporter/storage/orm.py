@@ -935,6 +935,11 @@ class Student(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    preferred_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="ISO 639-1 language code from last review (e.g. uk, en)",
+    )
+
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
     submissions: Mapped[list["HomeworkSubmission"]] = relationship(
@@ -1027,6 +1032,12 @@ class HomeworkSubmission(Base):
     )
     webhook_delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+
+    # Language
+    response_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="ISO 639-1 language used for the review response",
     )
 
     # Error & tracking

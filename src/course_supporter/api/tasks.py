@@ -1480,11 +1480,61 @@ async def arq_process_homework(
                     matches_count=len(match_result.matches),
                 )
 
-                # TODO(HW-006): Mentor review
+                # --- HW-006: Mentor review ---
+                await hw_repo.update_status(sid, "reviewing")
+                await session.commit()
+
+                from course_supporter.homework.mentor import MentorAgent
+                from course_supporter.homework.mentor_context import (
+                    build_mentor_context,
+                )
+
+                mentor_ctx = await build_mentor_context(
+                    submission_content=content,
+                    submission=submission,
+                    session=session,
+                )
+                mentor = MentorAgent()
+                review = await mentor.review(mentor_ctx, router)
+
+                await hw_repo.store_review_result(
+                    sid,
+                    result=review.model_dump(mode="json"),
+                    review_markdown=review.review_text,
+                )
+                # Update submission language + student preference
+                from sqlalchemy import update as sa_update
+
+                from course_supporter.storage.orm import (
+                    HomeworkSubmission as HWModel,
+                )
+                from course_supporter.storage.orm import (
+                    Student as StudentModel,
+                )
+
+                await session.execute(
+                    sa_update(HWModel)
+                    .where(HWModel.id == sid)
+                    .values(response_language=review.response_language)
+                )
+                await session.execute(
+                    sa_update(StudentModel)
+                    .where(StudentModel.id == submission.student_id)
+                    .values(preferred_language=review.response_language)
+                )
+                await session.commit()
+
+                log.info(
+                    "homework_reviewed",
+                    passed=review.analysis.passed,
+                    score=review.analysis.score,
+                    language=review.response_language,
+                    issues=len(review.analysis.issues),
+                    notable=len(review.analysis.notable_solutions),
+                )
+
                 # TODO(HW-007): Webhook delivery
 
-                # Stub: mark as completed for now
-                await hw_repo.update_status(sid, "reviewing")
                 await hw_repo.update_status(sid, "completed")
                 await job_repo.update_status(jid, "complete")
                 await session.commit()

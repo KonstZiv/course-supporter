@@ -76,6 +76,15 @@ class TaskMatcher:
             msg = "No task nodes found in course structure"
             raise TaskMatchError(msg)
 
+        from collections import Counter
+
+        type_counts = Counter(n.node_type for n in task_nodes)
+        logger.debug(
+            "task_matcher_tasks_collected",
+            total=len(task_nodes),
+            types=dict(type_counts),
+        )
+
         # If hint provided, validate it exists in task list
         if task_hint_id is not None:
             hint_node = next((n for n in task_nodes if n.id == task_hint_id), None)
@@ -95,17 +104,23 @@ class TaskMatcher:
         # Convert LLM indices to real node IDs
         matches: list[TaskMatch] = []
         for lm in llm_result.matches:
-            if 0 <= lm.task_index < len(task_nodes):
-                node = task_nodes[lm.task_index]
-                matches.append(
-                    TaskMatch(
-                        node_id=node.id,
-                        task_title=node.title or "",
-                        task_type=node.node_type or "",
-                        confidence=lm.confidence,
-                        section_hint=lm.section_hint,
-                    )
+            if not (0 <= lm.task_index < len(task_nodes)):
+                logger.warning(
+                    "task_matcher_invalid_index",
+                    index=lm.task_index,
+                    valid_range=f"0-{len(task_nodes) - 1}",
                 )
+                continue
+            node = task_nodes[lm.task_index]
+            matches.append(
+                TaskMatch(
+                    node_id=node.id,
+                    task_title=node.title or "",
+                    task_type=node.node_type or "",
+                    confidence=lm.confidence,
+                    section_hint=lm.section_hint,
+                )
+            )
 
         if not matches:
             msg = (

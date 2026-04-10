@@ -131,8 +131,14 @@ class SafetyChecker:
 
         # Truncate content for LLM context
         full_text = content.full_text
-        if len(full_text) > max_chars:
+        original_len = len(full_text)
+        if original_len > max_chars:
             full_text = full_text[:max_chars] + "\n\n[... truncated ...]"
+            logger.debug(
+                "safety_content_truncated",
+                original_len=original_len,
+                truncated_len=max_chars,
+            )
 
         # Load prompt template
         prompt_data = load_prompt(_PROMPT_PATH)

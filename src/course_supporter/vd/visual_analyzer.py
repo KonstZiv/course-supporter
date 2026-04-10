@@ -431,6 +431,7 @@ class VisualAnalyzer:
                     logger.exception(
                         "vision_llm_error",
                         model=use_model,
+                        error_type=type(exc).__name__,
                     )
                     raise
 

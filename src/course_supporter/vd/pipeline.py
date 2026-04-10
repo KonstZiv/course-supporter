@@ -85,10 +85,25 @@ class VDPipeline:
         previous_scene: SceneMemory | None = None
         frames_analyzed = 0
 
-        for scene in sampling.scenes:
+        total_scenes = len(sampling.scenes)
+        for scene_idx, scene in enumerate(sampling.scenes, 1):
             scene_frames = [f for f in sampling.frames if f.scene_id == scene.scene_id]
             if not scene_frames:
+                logger.debug(
+                    "vd_scene_skip_empty",
+                    scene_id=scene.scene_id,
+                    progress=f"{scene_idx}/{total_scenes}",
+                )
                 continue
+
+            logger.debug(
+                "vd_scene_started",
+                scene_id=scene.scene_id,
+                progress=f"{scene_idx}/{total_scenes}",
+                frame_count=len(scene_frames),
+                start_sec=scene.start_sec,
+                end_sec=scene.end_sec,
+            )
 
             # Initial scene memory carries compressed previous scene
             scene_memory = SceneMemory(

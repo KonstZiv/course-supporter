@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     worker_heavy_window_tz: str = "UTC"
     worker_immediate_override: bool = True
 
+    # --- Webhook delivery ---
+    webhook_timeout_seconds: int = 30
+    webhook_max_retries: int = 3
+
     @field_validator("worker_heavy_window_tz")
     @classmethod
     def _validate_timezone(cls, v: str) -> str:

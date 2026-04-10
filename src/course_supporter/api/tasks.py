@@ -1306,6 +1306,12 @@ async def arq_process_homework(
         submission_id: HomeworkSubmission UUID as string.
     """
     from course_supporter.homework.matcher import TaskMatcher, TaskMatchError
+    from course_supporter.homework.webhook import (
+        build_matched_payload,
+        build_reviewed_payload,
+        deliver_webhook,
+        resolve_webhook_url,
+    )
     from course_supporter.models.safety import CourseContext
     from course_supporter.safety.archive import extract_submission_content
     from course_supporter.safety.checker import SafetyChecker
@@ -1319,6 +1325,7 @@ async def arq_process_homework(
     from course_supporter.storage.material_node_repository import (
         MaterialNodeRepository,
     )
+    from course_supporter.storage.student_repository import StudentRepository
 
     jid = uuid.UUID(job_id)
     sid = uuid.UUID(submission_id)
@@ -1343,6 +1350,13 @@ async def arq_process_homework(
             if submission is None:
                 msg = f"HomeworkSubmission {sid} not found"
                 raise ValueError(msg)
+
+            # Load related entities for webhook delivery
+            from course_supporter.storage.orm import Tenant
+
+            student_repo = StudentRepository(session)
+            student = await student_repo.get_by_id(submission.student_id)
+            tenant = await session.get(Tenant, submission.tenant_id)
 
             # Enrich logger with tenant/student context
             log = log.bind(
@@ -1480,6 +1494,24 @@ async def arq_process_homework(
                     matches_count=len(match_result.matches),
                 )
 
+                # --- HW-007a: Webhook — matched notification ---
+                webhook_url = resolve_webhook_url(submission, tenant)
+                if webhook_url and student:
+                    matched_payload = build_matched_payload(
+                        submission,
+                        student,
+                        matched_task_id=match_result.primary_task_id,
+                        matched_task_title=match_result.matches[0].task_title,
+                        matched_task_type=match_result.matches[0].task_type,
+                    )
+                    await deliver_webhook(
+                        url=webhook_url,
+                        payload=matched_payload,
+                        tenant_id=submission.tenant_id,
+                        session=session,
+                    )
+                    await session.commit()
+
                 # --- HW-006: Mentor review ---
                 await hw_repo.update_status(sid, "reviewing")
                 await session.commit()
@@ -1533,9 +1565,27 @@ async def arq_process_homework(
                     notable=len(review.analysis.notable_solutions),
                 )
 
-                # TODO(HW-007): Webhook delivery
-
+                # --- HW-007b: Webhook — reviewed notification ---
                 await hw_repo.update_status(sid, "completed")
+                await session.commit()
+
+                webhook_url = resolve_webhook_url(submission, tenant)
+                if webhook_url and student:
+                    # Refresh submission to pick up stored review data
+                    await session.refresh(submission)
+                    reviewed_payload = build_reviewed_payload(
+                        submission,
+                        student,
+                    )
+                    delivered = await deliver_webhook(
+                        url=webhook_url,
+                        payload=reviewed_payload,
+                        tenant_id=submission.tenant_id,
+                        session=session,
+                    )
+                    if delivered:
+                        await hw_repo.update_status(sid, "delivered")
+
                 await job_repo.update_status(jid, "complete")
                 await session.commit()
                 log.info("homework_processing_done")

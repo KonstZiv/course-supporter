@@ -562,6 +562,14 @@ class HomeworkSubmitResponse(BaseModel):
     )
 
 
+class TenantWebhookResponse(BaseModel):
+    """Response for PATCH /tenant/webhook."""
+
+    webhook_url: str | None = Field(
+        description="Current default webhook URL for the tenant. None if cleared.",
+    )
+
+
 # --- Jobs ---
 
 

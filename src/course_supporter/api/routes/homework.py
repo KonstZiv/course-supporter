@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
-from course_supporter.api.schemas import HomeworkSubmitResponse
+from course_supporter.api.schemas import HomeworkSubmitResponse, TenantWebhookResponse
 from course_supporter.api.upload_validation import file_extension
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
@@ -41,6 +41,7 @@ router = APIRouter(tags=["homework"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 CheckDep = Annotated[TenantContext, Depends(require_scope(AuthScope.CHECK))]
+PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 # 10 MB max file size
@@ -289,3 +290,48 @@ async def submit_homework(
         status="received",
         job_id=job.id,
     )
+
+
+@router.patch(
+    "/tenant/webhook",
+    response_model=TenantWebhookResponse,
+    summary="Set or clear the tenant default webhook URL",
+)
+async def update_tenant_webhook(
+    tenant: PrepDep,
+    session: SessionDep,
+    webhook_url: Annotated[
+        str | None,
+        Form(description="Default webhook URL, or empty/null to clear."),
+    ] = None,
+) -> TenantWebhookResponse:
+    """Update the default webhook URL for the authenticated tenant.
+
+    This URL is used as fallback when a homework submission does not
+    specify its own ``webhook_url``.  Send empty string or omit the
+    field to clear the default.
+    """
+    from course_supporter.storage.orm import Tenant as TenantModel
+
+    # Validate non-empty URL against SSRF
+    if webhook_url:
+        webhook_url = await validate_webhook_url(webhook_url)
+    else:
+        webhook_url = None
+
+    from sqlalchemy import update as sa_update
+
+    await session.execute(
+        sa_update(TenantModel)
+        .where(TenantModel.id == tenant.tenant_id)
+        .values(webhook_url=webhook_url)
+    )
+    await session.commit()
+
+    logger.info(
+        "tenant_webhook_updated",
+        tenant_id=str(tenant.tenant_id),
+        webhook_url=webhook_url,
+    )
+
+    return TenantWebhookResponse(webhook_url=webhook_url)

@@ -7,9 +7,8 @@ are None — the prompt builder includes only what is present.
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +19,9 @@ from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.student_repository import StudentRepository
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger()
 
@@ -75,16 +77,28 @@ class MentorContext:
     course_description: str | None = None
 
 
+class MethodistFields(TypedDict, total=False):
+    """Typed return value for _extract_methodist_fields."""
+
+    learning_objectives: list[str]
+    common_misconceptions: list[str]
+    teaching_recommendations: str | None
+    key_concepts: list[dict[str, str]]
+    grading_criteria: str | None
+    assignment_description: str | None
+    assignment_steps: list[str]
+
+
 def _extract_methodist_fields(
     methodological_content: dict[str, Any] | None,
-    matched_task_id: uuid.UUID | None,
-) -> dict[str, Any]:
+    task_title: str | None,
+) -> MethodistFields:
     """Extract relevant fields from MethodistNodeOutput JSONB.
 
-    Finds the matching assignment recommendation (if any) and
-    extracts grading_criteria, steps, and other fields.
+    Matches the assignment recommendation by title when possible,
+    falls back to the first assignment otherwise.
     """
-    result: dict[str, Any] = {}
+    result = MethodistFields()
     if not methodological_content:
         return result
 
@@ -111,9 +125,7 @@ def _extract_methodist_fields(
     # Find matching assignment recommendation
     assignments = methodological_content.get("recommended_assignments", [])
     if assignments:
-        # If we have a matched task, try to find the closest assignment
-        # For now, take the first one as the primary recommendation
-        assignment = assignments[0]
+        assignment = _find_assignment(assignments, task_title)
         result["grading_criteria"] = assignment.get("grading_criteria")
         result["assignment_description"] = assignment.get("description")
         result["assignment_steps"] = assignment.get("steps", [])
@@ -121,8 +133,21 @@ def _extract_methodist_fields(
     return result
 
 
+def _find_assignment(
+    assignments: list[dict[str, Any]],
+    task_title: str | None,
+) -> dict[str, Any]:
+    """Find the assignment matching task_title, or fall back to first."""
+    if task_title:
+        title_lower = task_title.lower()
+        for assignment in assignments:
+            if assignment.get("title", "").lower() == title_lower:
+                return assignment
+    return assignments[0]
+
+
 def _build_student_history(
-    past_submissions: list[Any],
+    past_submissions: list[HomeworkSubmission],
     *,
     max_entries: int = 5,
 ) -> list[PastSubmissionSummary]:
@@ -144,7 +169,7 @@ def _build_student_history(
     return history
 
 
-def _parse_submission_summary(sub: Any) -> PastSubmissionSummary:
+def _parse_submission_summary(sub: HomeworkSubmission) -> PastSubmissionSummary:
     """Parse a single submission into a history summary.
 
     Raises on malformed data — caller decides whether to skip.
@@ -180,7 +205,7 @@ def _parse_submission_summary(sub: Any) -> PastSubmissionSummary:
 async def build_mentor_context(
     *,
     submission_content: SubmissionContent,
-    submission: Any,
+    submission: HomeworkSubmission,
     session: AsyncSession,
 ) -> MentorContext:
     """Assemble MentorContext from all available sources.
@@ -243,7 +268,7 @@ async def build_mentor_context(
         # Methodist output
         methodist = _extract_methodist_fields(
             task.methodological_content,
-            submission.matched_task_id,
+            task.title,
         )
         ctx.learning_objectives = methodist.get("learning_objectives", [])
         ctx.grading_criteria = methodist.get("grading_criteria")

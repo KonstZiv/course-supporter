@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
-
 from course_supporter.homework.mentor_context import (
     _build_student_history,
     _extract_methodist_fields,
@@ -32,7 +30,7 @@ class TestExtractMethodistFields:
                 }
             ],
         }
-        result = _extract_methodist_fields(mc, uuid.uuid4())
+        result = _extract_methodist_fields(mc, "Loop exercise")
 
         assert result["learning_objectives"] == [
             "Understand loops",
@@ -54,7 +52,7 @@ class TestExtractMethodistFields:
             "learning_objectives": ["Understand OOP"],
             "common_misconceptions": [],
         }
-        result = _extract_methodist_fields(mc, uuid.uuid4())
+        result = _extract_methodist_fields(mc, "Loop exercise")
         assert result["learning_objectives"] == ["Understand OOP"]
         assert result.get("grading_criteria") is None
 
@@ -67,9 +65,60 @@ class TestExtractMethodistFields:
                 {"definition": "also skip"},
             ],
         }
-        result = _extract_methodist_fields(mc, uuid.uuid4())
+        result = _extract_methodist_fields(mc, "Loop exercise")
         assert len(result["key_concepts"]) == 1
         assert result["key_concepts"][0]["name"] == "valid"
+
+    def test_assignment_matched_by_title(self) -> None:
+        """Correct assignment is selected when title matches."""
+        mc = {
+            "recommended_assignments": [
+                {
+                    "title": "First task",
+                    "grading_criteria": "Wrong criteria",
+                    "steps": ["wrong"],
+                },
+                {
+                    "title": "Second task",
+                    "grading_criteria": "Correct criteria",
+                    "steps": ["right"],
+                },
+            ],
+        }
+        result = _extract_methodist_fields(mc, "Second task")
+        assert result["grading_criteria"] == "Correct criteria"
+        assert result["assignment_steps"] == ["right"]
+
+    def test_assignment_fallback_to_first(self) -> None:
+        """Falls back to first assignment when title doesn't match."""
+        mc = {
+            "recommended_assignments": [
+                {
+                    "title": "First task",
+                    "grading_criteria": "First criteria",
+                    "steps": ["first"],
+                },
+                {
+                    "title": "Second task",
+                    "grading_criteria": "Second criteria",
+                },
+            ],
+        }
+        result = _extract_methodist_fields(mc, "Nonexistent task")
+        assert result["grading_criteria"] == "First criteria"
+
+    def test_assignment_title_case_insensitive(self) -> None:
+        """Assignment title matching is case-insensitive."""
+        mc = {
+            "recommended_assignments": [
+                {
+                    "title": "Loop Exercise",
+                    "grading_criteria": "Correct",
+                },
+            ],
+        }
+        result = _extract_methodist_fields(mc, "loop exercise")
+        assert result["grading_criteria"] == "Correct"
 
 
 class TestBuildStudentHistory:

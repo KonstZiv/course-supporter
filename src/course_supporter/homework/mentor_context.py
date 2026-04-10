@@ -129,30 +129,52 @@ def _build_student_history(
     """Build compact history from past submissions.
 
     Extracts key info from review_result JSONB if available.
+    Malformed entries are skipped to avoid breaking the pipeline.
     """
     history: list[PastSubmissionSummary] = []
     for sub in past_submissions[:max_entries]:
-        review = sub.review_result or {}
-        analysis = review.get("analysis", {})
-        matched = sub.matched_task
-        task_title = matched.title if matched else "(unknown)"
-
-        history.append(
-            PastSubmissionSummary(
-                task_title=task_title,
-                score=analysis.get("score"),
-                passed=analysis.get("passed"),
-                issues_summary=[
-                    i.get("description", "") for i in analysis.get("issues", [])[:3]
-                ],
-                notable_solutions_summary=[
-                    n.get("description", "")
-                    for n in analysis.get("notable_solutions", [])[:3]
-                ],
+        try:
+            history.append(_parse_submission_summary(sub))
+        except Exception:
+            logger.warning(
+                "student_history_parse_error",
+                submission_id=getattr(sub, "id", None),
             )
-        )
 
     return history
+
+
+def _parse_submission_summary(sub: Any) -> PastSubmissionSummary:
+    """Parse a single submission into a history summary.
+
+    Raises on malformed data — caller decides whether to skip.
+    """
+    review = sub.review_result or {}
+    analysis = review.get("analysis", {})
+    matched = sub.matched_task
+    task_title = matched.title if matched else "(unknown)"
+
+    raw_issues = analysis.get("issues", [])
+    issues_summary = (
+        [i["description"] for i in raw_issues[:3] if isinstance(i, dict)]
+        if isinstance(raw_issues, list)
+        else []
+    )
+
+    raw_notable = analysis.get("notable_solutions", [])
+    notable_summary = (
+        [n["description"] for n in raw_notable[:3] if isinstance(n, dict)]
+        if isinstance(raw_notable, list)
+        else []
+    )
+
+    return PastSubmissionSummary(
+        task_title=task_title,
+        score=analysis.get("score"),
+        passed=analysis.get("passed"),
+        issues_summary=issues_summary,
+        notable_solutions_summary=notable_summary,
+    )
 
 
 async def build_mentor_context(

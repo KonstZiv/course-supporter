@@ -142,3 +142,33 @@ class TestBuildStudentHistory:
         assert len(history) == 1
         assert history[0].task_title == "(unknown)"
         assert history[0].score is None
+
+    def test_malformed_review_result_empty_analysis(self) -> None:
+        """Missing 'analysis' key in review_result is handled gracefully."""
+        from unittest.mock import MagicMock
+
+        sub = MagicMock()
+        sub.id = "test-id"
+        matched = MagicMock()
+        matched.title = "Exercise 1"
+        sub.matched_task = matched
+        sub.review_result = {}
+        history = _build_student_history([sub])
+        assert len(history) == 1
+        assert history[0].score is None
+        assert history[0].issues_summary == []
+
+    def test_malformed_review_result_issues_not_list(self) -> None:
+        """Non-list 'issues' in review_result is handled gracefully."""
+        from unittest.mock import MagicMock
+
+        sub = MagicMock()
+        sub.id = "test-id"
+        matched = MagicMock()
+        matched.title = "Exercise 1"
+        sub.matched_task = matched
+        sub.review_result = {"analysis": {"issues": "not a list", "score": 50}}
+        history = _build_student_history([sub])
+        assert len(history) == 1
+        assert history[0].score == 50
+        assert history[0].issues_summary == []

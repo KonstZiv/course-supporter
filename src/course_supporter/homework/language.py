@@ -75,11 +75,17 @@ _LANG_MARKERS: dict[str, list[str]] = {
     ],
 }
 
+# Pre-compiled word-boundary patterns per language (avoids substring false positives)
+_LANG_MARKER_PATTERNS: dict[str, list[re.Pattern[str]]] = {
+    lang: [re.compile(rf"\b{re.escape(m)}\b", re.IGNORECASE) for m in markers]
+    for lang, markers in _LANG_MARKERS.items()
+}
+
 # Regex to extract comment text from common programming languages
 _COMMENT_RE = re.compile(
     r"""
-    (?://\s*(.+)$)        |  # C-style single line
-    (?:\#\s*(.+)$)        |  # Python/shell
+    (?://[^\S\n]*(.+)$)        |  # C-style single line
+    (?:\#[^\S\n]*(.+)$)        |  # Python/shell
     (?:/\*\s*([\s\S]*?)\s*\*/) |  # C-style multiline
     (?:\"\"\"([\s\S]*?)\"\"\")  |  # Python docstring double
     (?:\'\'\'([\s\S]*?)\'\'\')     # Python docstring single
@@ -94,7 +100,9 @@ def _extract_human_text(content: str) -> str:
     for match in _COMMENT_RE.finditer(content):
         for group in match.groups():
             if group:
-                parts.append(group.strip())
+                stripped = group.strip()
+                if stripped:
+                    parts.append(stripped)
     return " ".join(parts)
 
 
@@ -106,11 +114,9 @@ def _detect_from_text(text: str) -> str | None:
     if not text or len(text) < 10:
         return None
 
-    text_lower = text.lower()
-
     scores: dict[str, int] = {}
-    for lang, markers in _LANG_MARKERS.items():
-        score = sum(1 for m in markers if m.lower() in text_lower)
+    for lang, patterns in _LANG_MARKER_PATTERNS.items():
+        score = sum(1 for p in patterns if p.search(text))
         if score > 0:
             scores[lang] = score
 

@@ -147,6 +147,20 @@ class TestBuildAnalysisUserPrompt:
         assert "Expected Steps" not in prompt
         assert "Student History" not in prompt
 
+    def test_empty_strings_treated_as_missing(self) -> None:
+        """Empty strings are excluded from prompt (spectrum context principle)."""
+        ctx = _minimal_context(
+            task_description="",
+            learning_goal="",
+            grading_criteria="",
+            success_criteria="",
+        )
+        prompt = _build_analysis_user_prompt(ctx)
+        assert "## Task: Simple addition" in prompt
+        assert "Description" not in prompt
+        assert "Learning goal" not in prompt
+        assert "Evaluation Criteria" not in prompt
+
 
 class TestExtractCodeFragments:
     """Code fragments extraction for humanize step."""

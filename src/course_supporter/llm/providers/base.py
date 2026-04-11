@@ -26,15 +26,18 @@ class StructuredOutputError(Exception):
         provider: str,
         raw_content: str,
         schema_name: str,
-        cause: ValidationError,
+        cause: ValidationError | Exception,
     ) -> None:
         self.provider = provider
         self.raw_content = raw_content
         self.schema_name = schema_name
-        error_summary = "; ".join(
-            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-            for e in cause.errors()[:5]
-        )
+        if isinstance(cause, ValidationError):
+            error_summary = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+                for e in cause.errors()[:5]
+            )
+        else:
+            error_summary = str(cause)[:500]
         super().__init__(
             f"{provider}: failed to parse response as {schema_name}: {error_summary}"
         )

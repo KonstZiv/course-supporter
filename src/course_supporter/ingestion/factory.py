@@ -11,6 +11,8 @@ import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import structlog
+
 from course_supporter.ingestion.heavy_steps import (
     DescribeSlidesFunc,
     ParsePDFFunc,
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.stt.router import STTRouter
     from course_supporter.vd.pipeline import VDPipeline
+
+logger = structlog.get_logger()
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +111,12 @@ def create_vd_pipeline(
         return None
 
     if router is None:
+        logger.warning("vd_pipeline_skipped_no_router")
         return None
 
     key_pool = settings.key_pool_for("gemini")
     if key_pool is None:
+        logger.warning("vd_pipeline_skipped_no_gemini_keys")
         return None
 
     from course_supporter.vd.frame_sampler import FrameSampler

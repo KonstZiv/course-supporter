@@ -213,7 +213,7 @@ def create_stt_log_callback(
             strategy=result.strategy,
             provider=result.provider,
             model_id=result.model_id,
-            unit_type="minutes",
+            unit_type="seconds",
             unit_in=(
                 round(result.audio_duration_sec) if result.audio_duration_sec else None
             ),

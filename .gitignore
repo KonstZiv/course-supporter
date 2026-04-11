@@ -218,6 +218,9 @@ minio_data/
 .idea/
 .keys-issued-to-users
 
+# Course material videos (uploaded for E2E testing)
+*.mp4
+
 # VD Spike — large media files
 current-doc/vd-spike/sample.mp4
 current-doc/vd-spike/sample2.mp4

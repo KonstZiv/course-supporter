@@ -1,21 +1,30 @@
-"""OpenAI-compatible provider (OpenAI + DeepSeek)."""
+"""OpenAI-compatible provider (OpenAI + DeepSeek + Mistral).
+
+Uses ``instructor`` for structured output: tool/function calling
+with automatic retry on validation errors. This is more reliable
+than embedding JSON schema in the system prompt.
+"""
 
 import itertools
-import json
 from collections.abc import Iterator, Sequence
 from typing import Any
 
+import instructor
 import openai
+from instructor.exceptions import InstructorRetryException
 from pydantic import BaseModel
 
-from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 
 class OpenAICompatProvider(LLMProvider):
-    """Provider for OpenAI API and compatible services (DeepSeek).
+    """Provider for OpenAI API and compatible services (DeepSeek, Mistral).
 
-    DeepSeek uses the same API format with a different base_url.
+    Uses the same OpenAI SDK with different ``base_url`` per provider.
+    Structured output uses ``instructor`` for tool-based schema
+    enforcement with automatic validation retry.
+
     When multiple API keys are provided, SDK clients are
     pre-created and rotated in round-robin order per request.
     """
@@ -36,9 +45,19 @@ class OpenAICompatProvider(LLMProvider):
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
         )
+        self._instructor_clients = tuple(
+            instructor.from_openai(openai.AsyncOpenAI(api_key=k, base_url=base_url))
+            for k in api_keys
+        )
+        self._instructor_cycle: Iterator[instructor.AsyncInstructor] = itertools.cycle(
+            self._instructor_clients
+        )
 
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
+
+    def _next_instructor_client(self) -> instructor.AsyncInstructor:
+        return next(self._instructor_cycle)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API."""
@@ -52,10 +71,6 @@ class OpenAICompatProvider(LLMProvider):
         with self._measure_latency() as timer:
             response = await client.chat.completions.create(
                 model=model,
-                # OpenAI SDK expects union of typed message params
-                # (ChatCompletionSystemMessageParam | ...), but accepts
-                # plain dicts at runtime. Using dicts keeps code simple
-                # and avoids coupling to SDK-specific message types.
                 messages=messages,  # type: ignore[arg-type]
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
@@ -77,41 +92,49 @@ class OpenAICompatProvider(LLMProvider):
         request: LLMRequest,
         response_schema: type[BaseModel],
     ) -> tuple[Any, LLMResponse]:
-        """Generate structured output via JSON mode."""
+        """Generate structured output via instructor (tool/function calling).
+
+        Instructor handles schema enforcement via tool definitions and
+        automatic retry with Pydantic validation error feedback.
+        Falls back to StructuredOutputError on persistent failure.
+        """
         model = request.model or self._default_model
         messages: list[dict[str, str]] = []
-        schema_json = json.dumps(
-            response_schema.model_json_schema(), ensure_ascii=False
-        )
-        system = (
-            f"{request.system_prompt or ''}\n\n"
-            f"Respond ONLY with valid JSON matching this schema:\n{schema_json}"
-        )
-        messages.append({"role": "system", "content": system})
+        if request.system_prompt:
+            messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
-        client = self._next_client()
+        client = self._next_instructor_client()
         with self._measure_latency() as timer:
-            # call-overload: OpenAI SDK overloads don't match dict-based
-            # messages + dict-based response_format simultaneously, but
-            # both are accepted at runtime per OpenAI API docs.
-            response = await client.chat.completions.create(  # type: ignore[call-overload]
-                model=model,
-                messages=messages,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                response_format={"type": "json_object"},
-            )
+            try:
+                (
+                    result,
+                    completion,
+                ) = await client.chat.completions.create_with_completion(
+                    model=model,
+                    messages=messages,
+                    response_model=response_schema,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                    max_retries=2,
+                )
+            except InstructorRetryException as exc:
+                raise StructuredOutputError(
+                    provider=self.provider_name,
+                    raw_content=str(exc),
+                    schema_name=response_schema.__name__,
+                    cause=exc,
+                ) from exc
 
-        choice = response.choices[0]
-        usage = response.usage
+        usage = completion.usage
         llm_response = LLMResponse(
-            content=choice.message.content or "",
+            content=completion.choices[0].message.content or ""
+            if completion.choices
+            else "",
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
             latency_ms=timer.elapsed_ms,
         )
-        parsed = self._parse_structured(llm_response.content, response_schema)
-        return parsed, llm_response
+        return result, llm_response

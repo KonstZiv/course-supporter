@@ -22,6 +22,7 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import ChildSnapshotContext, NodeSummary
+from course_supporter.service_logging import set_tenant_from_job
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -141,10 +142,12 @@ async def arq_ingest_material(
     log = structlog.get_logger().bind(
         job_id=job_id, material_id=material_id, source_type=source_type
     )
+
+    await set_tenant_from_job(session_factory, jid)
     log.info("ingestion_started")
 
     heavy = create_heavy_steps(router=router)
-    vd = create_vd_pipeline()
+    vd = create_vd_pipeline(router=router)
 
     from course_supporter.config import get_settings
     from course_supporter.stt.setup import create_stt_router
@@ -353,6 +356,8 @@ async def arq_generate_structure(
     )
     log.info("generate_structure_started")
 
+    await set_tenant_from_job(session_factory, jid)
+
     async with session_factory() as session:
         job_repo = JobRepository(session)
         try:
@@ -423,7 +428,10 @@ async def arq_generate_structure(
             )
 
             # Persist LLM metadata as ExternalServiceCall
+            from course_supporter.service_logging import get_current_tenant_id
+
             esc = ExternalServiceCall(
+                tenant_id=get_current_tenant_id(),
                 action="course_structuring",
                 strategy=mode,
                 provider=gen_result.response.provider,
@@ -728,6 +736,7 @@ async def _persist_step_result(
     Returns:
         Created snapshot ID.
     """
+    from course_supporter.service_logging import get_current_tenant_id
     from course_supporter.storage.orm import ExternalServiceCall
     from course_supporter.storage.structure_node_repository import (
         StructureNodeRepository,
@@ -735,6 +744,7 @@ async def _persist_step_result(
     from course_supporter.structure_conversion import convert_to_structure_nodes
 
     esc = ExternalServiceCall(
+        tenant_id=get_current_tenant_id(),
         action="course_structuring",
         strategy=mode,
         provider=step_output.response.provider,
@@ -825,6 +835,7 @@ async def arq_execute_step(
         mode=mode,
         step_type=step_type,
     )
+    await set_tenant_from_job(session_factory, jid)
     log.info("execute_step_started")
 
     async with session_factory() as session:
@@ -986,6 +997,7 @@ async def arq_reconcile_preview(
     router: ModelRouter = ctx["model_router"]
 
     log = structlog.get_logger().bind(job_id=job_id, node_id=node_id)
+    await set_tenant_from_job(session_factory, jid)
     log.info("reconcile_preview_started")
 
     async with session_factory() as session:
@@ -1108,6 +1120,7 @@ async def arq_execute_methodist_step(
         editable_id=editable_id,
         phase=phase,
     )
+    await set_tenant_from_job(session_factory, jid)
     log.info("methodist_step_started")
 
     async with session_factory() as session:
@@ -1238,10 +1251,11 @@ async def arq_execute_methodist_step(
             )
 
             # 7. Persist output on editable node
+            from course_supporter.service_logging import get_current_tenant_id
             from course_supporter.storage.orm import ExternalServiceCall
 
             esc = ExternalServiceCall(
-                tenant_id=mat_node.tenant_id if mat_node else None,
+                tenant_id=get_current_tenant_id(),
                 job_id=jid,
                 action="methodist",
                 strategy="default",
@@ -1338,6 +1352,7 @@ async def arq_process_homework(
         job_id=job_id,
         submission_id=submission_id,
     )
+    await set_tenant_from_job(session_factory, jid)
     log.info("homework_processing_started")
 
     async with session_factory() as session:

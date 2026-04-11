@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.config import Settings
 from course_supporter.llm.factory import create_providers
-from course_supporter.llm.logging import create_log_callback
 from course_supporter.llm.registry import load_registry
 from course_supporter.llm.router import ModelRouter
+from course_supporter.service_logging import create_llm_log_callback
 
 logger = structlog.get_logger()
 
@@ -42,7 +42,7 @@ def create_model_router(
 
     log_callback = None
     if session_factory is not None:
-        log_callback = create_log_callback(session_factory)
+        log_callback = create_llm_log_callback(session_factory)
         logger.info("llm_db_logging_enabled")
 
     router = ModelRouter(

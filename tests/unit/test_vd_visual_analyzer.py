@@ -24,10 +24,8 @@ from course_supporter.vd.visual_analyzer import (
     _build_memory_context,
     _build_similarity_hint,
     _is_conditional_delta,
-    _is_rate_limit,
     _load_prompt,
     _parse_response,
-    _retry_wait,
 )
 
 
@@ -410,43 +408,20 @@ class TestShouldUseDelta:
 
 
 @pytest.fixture()
-def mock_key_pool() -> MagicMock:
-    pool = MagicMock()
-    pool.__len__ = lambda _: 1
-    pool.next_key.return_value = MagicMock(get_secret_value=lambda: "fake-key")
-    return pool
+def mock_router() -> AsyncMock:
+    return AsyncMock()
 
 
 @pytest.fixture()
-def analyzer(mock_key_pool: MagicMock) -> VisualAnalyzer:
-    return VisualAnalyzer(mock_key_pool, rpm_per_key=999)
+def mock_rate_limiter() -> AsyncMock:
+    limiter = AsyncMock()
+    limiter.acquire = AsyncMock()
+    return limiter
 
 
-# -- _is_rate_limit / _retry_wait -----------------------------------------
-
-
-class TestIsRateLimit:
-    def test_429_string(self) -> None:
-        assert _is_rate_limit(Exception("429 Resource exhausted"))
-
-    def test_resource_exhausted(self) -> None:
-        assert _is_rate_limit(Exception("RESOURCE_EXHAUSTED"))
-
-    def test_other_error(self) -> None:
-        assert not _is_rate_limit(Exception("500 Internal server error"))
-
-
-class TestRetryWait:
-    def test_extracts_retry_delay(self) -> None:
-        exc = Exception("Please retry in 12.5s")
-        wait = _retry_wait(exc, 0)
-        assert wait == pytest.approx(14.5)  # 12.5 + 2.0 buffer
-
-    def test_exponential_backoff(self) -> None:
-        exc = Exception("429 no retry hint")
-        w0 = _retry_wait(exc, 0)
-        w1 = _retry_wait(exc, 1)
-        assert w1 == pytest.approx(w0 * 2)
+@pytest.fixture()
+def analyzer(mock_router: AsyncMock, mock_rate_limiter: AsyncMock) -> VisualAnalyzer:
+    return VisualAnalyzer(mock_router, mock_rate_limiter)
 
 
 # -- VisualAnalyzer.__init__ / model property ------------------------------
@@ -456,13 +431,11 @@ class TestAnalyzerInit:
     def test_model_property(self, analyzer: VisualAnalyzer) -> None:
         assert analyzer.model == "gemini-2.5-flash"
 
-    def test_custom_model(self, mock_key_pool: MagicMock) -> None:
-        a = VisualAnalyzer(mock_key_pool, model="custom-model")
+    def test_custom_model(
+        self, mock_router: AsyncMock, mock_rate_limiter: AsyncMock
+    ) -> None:
+        a = VisualAnalyzer(mock_router, mock_rate_limiter, model="custom-model")
         assert a.model == "custom-model"
-
-    def test_min_interval(self, mock_key_pool: MagicMock) -> None:
-        a = VisualAnalyzer(mock_key_pool, rpm_per_key=10)
-        assert a._min_interval == pytest.approx(6.0)
 
 
 # -- _find_frame -----------------------------------------------------------
@@ -496,15 +469,16 @@ class TestFindFrame:
 
 class TestCallLlm:
     async def test_success(self, analyzer: VisualAnalyzer) -> None:
-        mock_usage = MagicMock(prompt_token_count=100, candidates_token_count=50)
-        mock_response = MagicMock(text="LLM response", usage_metadata=mock_usage)
-        mock_client = MagicMock()
-        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+        mock_resp = MagicMock(
+            content="LLM response",
+            model_id="gemini-2.5-flash",
+            latency_ms=100,
+            tokens_in=100,
+            tokens_out=50,
+        )
+        analyzer._router.complete = AsyncMock(return_value=mock_resp)
 
-        with (
-            patch("google.genai.Client", return_value=mock_client),
-            patch("google.genai.types.Content"),
-        ):
+        with patch("google.genai.types.Content"):
             result = await analyzer._call_llm([MagicMock()])
 
         assert result["text"] == "LLM response"
@@ -513,30 +487,23 @@ class TestCallLlm:
 
     async def test_rate_limit_retries(self, analyzer: VisualAnalyzer) -> None:
         rate_err = Exception("429 Resource exhausted")
-        mock_usage = MagicMock(prompt_token_count=10, candidates_token_count=5)
-        mock_response = MagicMock(text="OK", usage_metadata=mock_usage)
-
-        call_count = 0
-
-        def side_effect(*_a: object, **_k: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise rate_err
-            return mock_response
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content = side_effect
+        mock_resp = MagicMock(
+            content="OK",
+            model_id="gemini-2.5-flash",
+            latency_ms=100,
+            tokens_in=10,
+            tokens_out=5,
+        )
+        analyzer._router.complete = AsyncMock(side_effect=[rate_err, mock_resp])
 
         with (
-            patch("google.genai.Client", return_value=mock_client),
             patch("google.genai.types.Content"),
             patch("asyncio.sleep", new=AsyncMock()),
         ):
             result = await analyzer._call_llm([MagicMock()])
 
         assert result["text"] == "OK"
-        assert call_count == 2
+        assert analyzer._router.complete.await_count == 2
 
 
 # -- analyze_scene (fully mocked) -----------------------------------------
@@ -572,12 +539,14 @@ class TestAnalyzeScene:
         assert results[0].frame_id == "f0"
         assert sm is None  # no memory pipeline
 
-    async def test_multi_frame_with_memory(self, mock_key_pool: MagicMock) -> None:
+    async def test_multi_frame_with_memory(
+        self, mock_router: AsyncMock, mock_rate_limiter: AsyncMock
+    ) -> None:
         mock_memory = AsyncMock()
         mock_memory.update_scene_memory = AsyncMock(
             return_value=SceneMemory(scene_id=0, summary="Updated", frames_seen=1)
         )
-        a = VisualAnalyzer(mock_key_pool, rpm_per_key=999, memory=mock_memory)
+        a = VisualAnalyzer(mock_router, mock_rate_limiter, memory=mock_memory)
         scene = Scene(
             scene_id=0,
             frame_ids=["f0", "f1"],

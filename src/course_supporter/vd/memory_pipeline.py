@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from course_supporter.key_pool import KeyPool
+from course_supporter.vd.rate_limiter import is_rate_limit, retry_wait
 from course_supporter.vd.schemas import (
     EyesResult,
     InstantMemory,
@@ -28,6 +27,10 @@ from course_supporter.vd.schemas import (
     SceneMemory,
     VideoMemory,
 )
+
+if TYPE_CHECKING:
+    from course_supporter.llm.router import ModelRouter
+    from course_supporter.vd.rate_limiter import VDRateLimiter
 
 logger = structlog.get_logger()
 
@@ -135,28 +138,22 @@ def build_instant_memory(
 class MemoryPipeline:
     """Streaming memory: scene updates per frame, video updates per scene.
 
+    Routes all LLM calls through ``ModelRouter`` for unified cost
+    tracking, fallback chains, and tenant attribution. Rate limiting
+    is enforced by a shared ``VDRateLimiter``.
+
     Args:
-        key_pool: Gemini API key pool for LLM calls.
-        model: Text LLM model identifier.
-        fallback_model: Model to try on 429 rate limit.
-        rpm_per_key: Requests per minute per API key.
+        router: ModelRouter for LLM calls.
+        rate_limiter: Shared VD rate limiter.
     """
 
     def __init__(
         self,
-        key_pool: KeyPool,
-        *,
-        model: str = "gemini-2.5-flash",
-        fallback_model: str = "gemini-3.1-flash-lite-preview",
-        rpm_per_key: int = 10,
+        router: ModelRouter,
+        rate_limiter: VDRateLimiter,
     ) -> None:
-        self._key_pool = key_pool
-        self._model = model
-        self._fallback_model = fallback_model
-        total_rpm = rpm_per_key * len(key_pool)
-        self._min_interval = 60.0 / total_rpm
-        self._last_call_time = 0.0
-        self._lock = asyncio.Lock()
+        self._router = router
+        self._rate_limiter = rate_limiter
 
     async def update_scene_memory(
         self,
@@ -166,7 +163,7 @@ class MemoryPipeline:
         """Update scene memory with a new frame observation.
 
         Called once per frame within a scene. LLM synthesizes
-        what is happening in the scene overall, not just this frame.
+        what is happening in this scene overall, not just this frame.
         """
         template = _load_template("scene_memory_streaming.txt")
         prompt = template.format(
@@ -264,54 +261,34 @@ class MemoryPipeline:
         *,
         _max_retries: int = 3,
     ) -> str:
-        """Rate-limited text LLM call with retry and model fallback."""
-        import google.genai as genai
-
-        from course_supporter.vd.visual_analyzer import _is_rate_limit, _retry_wait
-
+        """Rate-limited text LLM call via ModelRouter with retry on 429."""
         for attempt in range(_max_retries + 1):
-            use_model = self._model if attempt == 0 else self._fallback_model
-
-            async with self._lock:
-                elapsed = time.monotonic() - self._last_call_time
-                if elapsed < self._min_interval:
-                    await asyncio.sleep(self._min_interval - elapsed)
-
-                key = self._key_pool.next_key()
-                client = genai.Client(api_key=key.get_secret_value())
-
-                t0 = time.monotonic()
-                try:
-                    response = await asyncio.to_thread(
-                        client.models.generate_content,
-                        model=use_model,
-                        contents=prompt,
+            await self._rate_limiter.acquire()
+            try:
+                response = await self._router.complete(
+                    action="vd_memory",
+                    prompt=prompt,
+                )
+                logger.info(
+                    "memory_llm_call",
+                    model=response.model_id,
+                    latency_ms=response.latency_ms,
+                    tokens_in=response.tokens_in,
+                    tokens_out=response.tokens_out,
+                )
+                return response.content
+            except Exception as exc:
+                if attempt < _max_retries and is_rate_limit(exc):
+                    wait = retry_wait(exc, attempt)
+                    logger.warning(
+                        "memory_rate_limit_retry",
+                        attempt=attempt + 1,
+                        wait_sec=wait,
                     )
-                except Exception as exc:
-                    self._last_call_time = time.monotonic()
-                    if attempt < _max_retries and _is_rate_limit(exc):
-                        wait = _retry_wait(exc, attempt)
-                        logger.warning(
-                            "memory_rate_limit_retry",
-                            attempt=attempt + 1,
-                            wait_sec=wait,
-                            fallback_model=self._fallback_model,
-                        )
-                        await asyncio.sleep(wait)
-                        continue
-                    logger.exception(
-                        "memory_llm_error",
-                        model=use_model,
-                    )
-                    raise
-                self._last_call_time = time.monotonic()
-
-            logger.info(
-                "memory_llm_call",
-                model=use_model,
-                latency=round(time.monotonic() - t0, 2),
-            )
-            return response.text or ""
+                    await asyncio.sleep(wait)
+                    continue
+                logger.exception("memory_llm_error")
+                raise
 
         msg = "Unreachable: retry loop exhausted without return or raise"
         raise RuntimeError(msg)

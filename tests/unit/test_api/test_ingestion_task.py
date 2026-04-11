@@ -15,6 +15,16 @@ _ENTRY_REPO = (
 )
 
 
+@pytest.fixture()
+def _bypass_tenant_lookup() -> None:  # type: ignore[misc]
+    """Bypass set_tenant_from_job when tests use mock session factories."""
+    with patch(
+        "course_supporter.api.tasks.set_tenant_from_job",
+        new=AsyncMock(),
+    ):
+        yield
+
+
 def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
     """Create a mock async_sessionmaker that returns an async ctx manager."""
     if session is None:
@@ -74,6 +84,7 @@ def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
     return entry
 
 
+@pytest.mark.usefixtures("_bypass_tenant_lookup")
 class TestArqIngestMaterial:
     """Tests for the ARQ-based arq_ingest_material function."""
 

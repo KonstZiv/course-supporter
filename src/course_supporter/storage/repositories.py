@@ -6,7 +6,7 @@ import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
@@ -164,8 +164,9 @@ class SlideVideoMappingRepository:
 class ExternalServiceCallRepository:
     """Repository for external service call analytics and cost reporting.
 
-    Optionally scoped by tenant_id. When tenant_id is provided,
-    all queries filter by it. When None, returns all records.
+    Scoped by tenant_id: includes records with matching tenant_id
+    AND records with tenant_id=NULL (legacy/pre-tracking records).
+    When tenant_id is None, returns all records.
     """
 
     def __init__(
@@ -198,7 +199,12 @@ class ExternalServiceCallRepository:
             ),
         ).select_from(ExternalServiceCall)
         if self._tenant_id is not None:
-            stmt = stmt.where(ExternalServiceCall.tenant_id == self._tenant_id)
+            stmt = stmt.where(
+                or_(
+                    ExternalServiceCall.tenant_id == self._tenant_id,
+                    ExternalServiceCall.tenant_id.is_(None),
+                )
+            )
         result = await self._session.execute(stmt)
         row = result.one()
         return CostSummary(
@@ -259,7 +265,12 @@ class ExternalServiceCallRepository:
             .order_by(func.count().desc())
         )
         if self._tenant_id is not None:
-            stmt = stmt.where(ExternalServiceCall.tenant_id == self._tenant_id)
+            stmt = stmt.where(
+                or_(
+                    ExternalServiceCall.tenant_id == self._tenant_id,
+                    ExternalServiceCall.tenant_id.is_(None),
+                )
+            )
         result = await self._session.execute(stmt)
         return [
             GroupedCost(

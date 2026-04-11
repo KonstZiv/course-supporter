@@ -36,9 +36,12 @@ def create_stt_router(
     registry = load_registry(settings.external_services_path)
     providers = create_stt_providers(settings)
 
-    # DB logging callback can be added here in future,
-    # reusing the same ExternalServiceCall table as LLM.
     log_callback = None
+    if session_factory is not None:
+        from course_supporter.service_logging import create_stt_log_callback
+
+        log_callback = create_stt_log_callback(session_factory)
+        logger.info("stt_db_logging_enabled")
 
     logger.info(
         "stt_router_created",

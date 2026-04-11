@@ -11,6 +11,8 @@ import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import structlog
+
 from course_supporter.ingestion.heavy_steps import (
     DescribeSlidesFunc,
     ParsePDFFunc,
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.stt.router import STTRouter
     from course_supporter.vd.pipeline import VDPipeline
+
+logger = structlog.get_logger()
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,22 +86,18 @@ def create_heavy_steps(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class VDModelConfig:
-    """Configuration for VD pipeline LLM calls."""
-
-    model: str = "gemini-2.5-flash"
-    fallback_model: str = "gemini-3.1-flash-lite-preview"
-    rpm_per_key: int = 5
-
-
 def create_vd_pipeline(
     settings: Settings | None = None,
+    router: ModelRouter | None = None,
 ) -> VDPipeline | None:
     """Create VDPipeline from settings, or None if disabled/unconfigured.
 
+    All LLM calls are routed through ``ModelRouter`` for unified cost
+    tracking, fallback chains, and tenant attribution.
+
     Args:
         settings: Application settings. If None, loads from get_settings().
+        router: ModelRouter for LLM calls. Required for VD to function.
 
     Returns:
         Configured VDPipeline, or None if VD is disabled or no Gemini keys.
@@ -110,31 +110,29 @@ def create_vd_pipeline(
     if not settings.vd_enabled:
         return None
 
+    if router is None:
+        logger.warning("vd_pipeline_skipped_no_router")
+        return None
+
     key_pool = settings.key_pool_for("gemini")
     if key_pool is None:
+        logger.warning("vd_pipeline_skipped_no_gemini_keys")
         return None
 
     from course_supporter.vd.frame_sampler import FrameSampler
     from course_supporter.vd.memory_pipeline import MemoryPipeline
     from course_supporter.vd.pipeline import VDPipeline
+    from course_supporter.vd.rate_limiter import VDRateLimiter
     from course_supporter.vd.visual_analyzer import VisualAnalyzer
 
-    cfg = VDModelConfig(
-        model=settings.vd_model,
-        fallback_model=settings.vd_fallback_model,
-        rpm_per_key=settings.vd_rpm_per_key,
-    )
-    memory = MemoryPipeline(
-        key_pool,
-        model=cfg.model,
-        fallback_model=cfg.fallback_model,
-        rpm_per_key=cfg.rpm_per_key,
-    )
+    total_rpm = settings.vd_rpm_per_key * len(key_pool)
+    rate_limiter = VDRateLimiter(total_rpm)
+
+    memory = MemoryPipeline(router, rate_limiter)
     analyzer = VisualAnalyzer(
-        key_pool,
-        model=cfg.model,
-        fallback_model=cfg.fallback_model,
-        rpm_per_key=cfg.rpm_per_key,
+        router,
+        rate_limiter,
+        model=settings.vd_model,
         memory=memory,
     )
     return VDPipeline(

@@ -586,6 +586,10 @@ class TestCallbackIntegrationWithArqTask:
             patch(_arq_entry_repo) as entry_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
+            patch(
+                "course_supporter.api.tasks.set_tenant_from_job",
+                new=AsyncMock(),
+            ),
         ):
             job_cls.return_value.update_status = AsyncMock()
             entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
@@ -643,6 +647,10 @@ class TestCallbackIntegrationWithArqTask:
             patch(_arq_entry_repo) as entry_cls,
             patch(_heavy),
             patch(_factory_fn, return_value={"web": mock_processor}),
+            patch(
+                "course_supporter.api.tasks.set_tenant_from_job",
+                new=AsyncMock(),
+            ),
         ):
             job_cls.return_value.update_status = AsyncMock()
             entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)

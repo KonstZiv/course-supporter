@@ -3,10 +3,14 @@
 Uses ``instructor`` for structured output: tool/function calling
 with automatic retry on validation errors. This is more reliable
 than embedding JSON schema in the system prompt.
+
+Supports multimodal vision requests: when ``LLMRequest.contents``
+contains ``bytes`` items they are sent as base64 inline images.
 """
 
 from __future__ import annotations
 
+import base64
 import itertools
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any
@@ -17,6 +21,29 @@ from pydantic import BaseModel
 
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+
+def _build_vision_content(
+    images: list[bytes],
+    prompt: str,
+) -> list[dict[str, Any]]:
+    """Build OpenAI vision content parts from raw image bytes + text.
+
+    Each bytes item becomes an inline base64 image_url part.
+    The prompt is appended as a text part.
+    """
+    parts: list[dict[str, Any]] = []
+    for img in images:
+        b64 = base64.b64encode(img).decode("ascii")
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            }
+        )
+    parts.append({"type": "text", "text": prompt})
+    return parts
+
 
 if TYPE_CHECKING:
     import instructor
@@ -84,12 +111,23 @@ class OpenAICompatProvider(LLMProvider):
         return next(self._instructor_cycle)  # type: ignore[arg-type]
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        """Generate text completion via OpenAI-compatible API."""
+        """Generate text completion via OpenAI-compatible API.
+
+        When ``request.contents`` contains bytes items, a multimodal
+        vision message is built with inline base64 images.
+        """
         model = request.model or self._default_model
         messages: list[ChatCompletionMessageParam] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
-        messages.append({"role": "user", "content": request.prompt})
+
+        # Vision path: contents has image bytes
+        image_items = [c for c in (request.contents or []) if isinstance(c, bytes)]
+        if image_items:
+            parts = _build_vision_content(image_items, request.prompt)
+            messages.append({"role": "user", "content": parts})  # type: ignore[arg-type,misc]
+        else:
+            messages.append({"role": "user", "content": request.prompt})
 
         client = self._next_client()
         with self._measure_latency() as timer:

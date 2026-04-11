@@ -247,6 +247,12 @@ class ExternalServiceCallRepository:
             select(
                 group_column.label("group"),
                 func.count().label("calls"),
+                func.count()
+                .filter(ExternalServiceCall.success.is_(True))
+                .label("successful_calls"),
+                func.count()
+                .filter(ExternalServiceCall.success.is_(False))
+                .label("failed_calls"),
                 func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
                     "cost_usd"
                 ),
@@ -276,6 +282,8 @@ class ExternalServiceCallRepository:
             GroupedCost(
                 group=row.group,
                 calls=row.calls,
+                successful_calls=row.successful_calls,
+                failed_calls=row.failed_calls,
                 cost_usd=float(row.cost_usd),
                 units_in=int(row.units_in),
                 units_out=int(row.units_out),

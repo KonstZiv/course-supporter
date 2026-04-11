@@ -61,7 +61,8 @@ def print_table(report: CostReport) -> str:
             lines.append(f"{indent}(no data)")
         else:
             header = (
-                f"{indent}{'Group':<30} {'Calls':>6} {'Cost':>10} "
+                f"{indent}{'Group':<30} {'Calls':>6} "
+                f"{'OK':>4} {'Fail':>5} {'Cost':>10} "
                 f"{'Units In':>10} {'Units Out':>11} {'Avg ms':>8}"
             )
             lines.append(header)
@@ -69,10 +70,13 @@ def print_table(report: CostReport) -> str:
             for g in groups:
                 lines.append(
                     f"{indent}{g.group:<30} {g.calls:>6} "
+                    f"{g.successful_calls:>4} {g.failed_calls:>5} "
                     f"${g.cost_usd:>9.4f} {g.units_in:>10} "
                     f"{g.units_out:>11} {g.avg_latency_ms:>8.1f}"
                 )
         lines.append("")
+
+    lines.append(f"Note: {report.note}")
 
     return "\n".join(lines)
 

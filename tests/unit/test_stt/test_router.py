@@ -61,6 +61,21 @@ class TestSTTRouterHappyPath:
         assert result.action == "transcribe"
         assert result.strategy == "quality"
 
+    async def test_cost_calculated_from_cost_per_minute(self) -> None:
+        """STT cost is computed from cost_per_minute when available."""
+        stt_result = _make_result()
+        stt_result.audio_duration_sec = 120.0  # 2 minutes
+        provider = _make_provider(result=stt_result)
+        cfg = _make_model_cfg()
+        cfg.cost_per_minute = 0.006  # $0.006/min
+        registry = _make_registry([cfg])
+
+        router = STTRouter({"test": provider}, registry)
+        result = await router.transcribe("transcribe", "/tmp/a.mp3")
+
+        assert result.cost_usd is not None
+        assert result.cost_usd == pytest.approx(0.012, abs=1e-6)  # 2 min x $0.006
+
 
 class TestSTTRouterFallback:
     async def test_fallback_within_chain(self) -> None:

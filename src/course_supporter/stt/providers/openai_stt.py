@@ -13,6 +13,15 @@ from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment
 
 logger = structlog.get_logger()
 
+_MIME_BY_EXT: dict[str, str] = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".webm": "audio/webm",
+}
+
 
 class OpenAISTTProvider(STTProvider):
     """OpenAI transcription via official SDK.
@@ -48,12 +57,14 @@ class OpenAISTTProvider(STTProvider):
         response_format = "verbose_json" if model.startswith("whisper") else "json"
 
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
+        suffix = audio_path.suffix or ".wav"
+        mime = _MIME_BY_EXT.get(suffix, "audio/wav")
 
         client = self._next_client()
         with self._measure_latency() as timer:
             result = await client.audio.transcriptions.create(  # type: ignore[call-overload]
                 model=model,
-                file=audio_bytes,
+                file=(f"audio{suffix}", audio_bytes, mime),
                 language=request.language or "",
                 response_format=response_format,
             )

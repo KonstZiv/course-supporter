@@ -20,6 +20,8 @@ class GroupedCost(BaseModel):
 
     group: str
     calls: int
+    successful_calls: int
+    failed_calls: int
     cost_usd: float
     units_in: int
     units_out: int
@@ -29,6 +31,10 @@ class GroupedCost(BaseModel):
 class CostReport(BaseModel):
     """Full cost report with summary and breakdowns."""
 
+    note: str = (
+        "Approximate estimate. "
+        "Actual costs may differ due to provider billing specifics."
+    )
     summary: CostSummary
     by_action: list[GroupedCost]
     by_provider: list[GroupedCost]

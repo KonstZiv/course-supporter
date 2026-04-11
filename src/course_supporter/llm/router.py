@@ -392,11 +392,10 @@ class ModelRouter:
 
         response.action = action
         response.strategy = strategy
-        if response.tokens_in is not None and response.tokens_out is not None:
-            response.cost_usd = model_cfg.estimate_cost(
-                response.tokens_in,
-                response.tokens_out,
-            )
+        tokens_in = response.tokens_in or 0
+        tokens_out = response.tokens_out or 0
+        if tokens_in or tokens_out:
+            response.cost_usd = model_cfg.estimate_cost(tokens_in, tokens_out)
 
     @staticmethod
     def _set_strategy_path(result: _RouterResult, strategy_path: str) -> None:

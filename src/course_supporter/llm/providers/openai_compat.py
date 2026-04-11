@@ -5,18 +5,21 @@ with automatic retry on validation errors. This is more reliable
 than embedding JSON schema in the system prompt.
 """
 
+from __future__ import annotations
+
 import itertools
 from collections.abc import Iterator, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import instructor
 import openai
-from instructor.exceptions import InstructorRetryException
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+if TYPE_CHECKING:
+    import instructor
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -40,24 +43,33 @@ class OpenAICompatProvider(LLMProvider):
         super().__init__()
         self.provider_name = provider_name
         self._default_model = default_model
+        self._api_keys = tuple(api_keys)
+        self._base_url = base_url
         self._clients = tuple(
             openai.AsyncOpenAI(api_key=k, base_url=base_url) for k in api_keys
         )
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
         )
-        self._instructor_clients = tuple(
-            instructor.from_openai(openai.AsyncOpenAI(api_key=k, base_url=base_url))
-            for k in api_keys
-        )
-        self._instructor_cycle: Iterator[instructor.AsyncInstructor] = itertools.cycle(
-            self._instructor_clients
-        )
+        # Instructor clients created lazily on first complete_structured call
+        self._instructor_clients: tuple[instructor.AsyncInstructor, ...] | None = None
+        self._instructor_cycle: Iterator[instructor.AsyncInstructor] | None = None
 
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
 
     def _next_instructor_client(self) -> instructor.AsyncInstructor:
+        if self._instructor_clients is None:
+            import instructor as _instructor
+
+            self._instructor_clients = tuple(
+                _instructor.from_openai(
+                    openai.AsyncOpenAI(api_key=k, base_url=self._base_url)
+                )
+                for k in self._api_keys
+            )
+            self._instructor_cycle = itertools.cycle(self._instructor_clients)
+        assert self._instructor_cycle is not None  # set above
         return next(self._instructor_cycle)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -119,7 +131,11 @@ class OpenAICompatProvider(LLMProvider):
                     max_tokens=request.max_tokens,
                     max_retries=2,
                 )
-            except InstructorRetryException as exc:
+            except Exception as exc:
+                from instructor.exceptions import InstructorRetryException
+
+                if not isinstance(exc, InstructorRetryException):
+                    raise
                 raise StructuredOutputError(
                     provider=self.provider_name,
                     raw_content=str(exc),

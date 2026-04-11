@@ -12,6 +12,7 @@ from typing import Any
 import instructor
 import openai
 from instructor.exceptions import InstructorRetryException
+from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
@@ -99,7 +100,7 @@ class OpenAICompatProvider(LLMProvider):
         Falls back to StructuredOutputError on persistent failure.
         """
         model = request.model or self._default_model
-        messages: list[dict[str, str]] = []
+        messages: list[ChatCompletionMessageParam] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})

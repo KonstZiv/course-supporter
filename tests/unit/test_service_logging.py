@@ -110,6 +110,25 @@ class TestSetTenantFromJob:
 
         assert get_current_tenant_id() is None
 
+    async def test_clears_previous_tenant_on_new_call(self) -> None:
+        """Prevents tenant leakage between sequential ARQ tasks."""
+        old_tid = uuid.uuid4()
+        _current_tenant_id.set(old_tid)
+        assert get_current_tenant_id() == old_tid
+
+        # New task with failed lookup — must NOT inherit old tenant
+        jid = uuid.uuid4()
+        factory = MagicMock()
+        session = AsyncMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("course_supporter.storage.job_repository.JobRepository") as repo_cls:
+            repo_cls.return_value.get_by_id = AsyncMock(return_value=None)
+            await set_tenant_from_job(factory, jid)
+
+        assert get_current_tenant_id() is None
+
 
 class TestPersist:
     """Test _persist writes ExternalServiceCall to DB."""

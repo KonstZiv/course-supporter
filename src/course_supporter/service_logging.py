@@ -62,10 +62,13 @@ async def set_tenant_from_job(
 ) -> None:
     """Look up tenant_id from Job and set it in contextvar for cost logging.
 
+    Always resets the contextvar first to prevent tenant leakage
+    between sequential ARQ tasks in the same worker.
     Best-effort: DB/network failures are logged but never propagate.
     """
     from course_supporter.storage.job_repository import JobRepository
 
+    _current_tenant_id.set(None)
     try:
         async with session_factory() as session:
             job = await JobRepository(session).get_by_id(job_id)

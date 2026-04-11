@@ -63,7 +63,7 @@ class OpenAICompatProvider(LLMProvider):
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API."""
         model = request.model or self._default_model
-        messages: list[dict[str, str]] = []
+        messages: list[ChatCompletionMessageParam] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
@@ -72,7 +72,7 @@ class OpenAICompatProvider(LLMProvider):
         with self._measure_latency() as timer:
             response = await client.chat.completions.create(
                 model=model,
-                messages=messages,  # type: ignore[arg-type]
+                messages=messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             )

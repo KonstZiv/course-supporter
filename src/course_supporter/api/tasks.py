@@ -203,7 +203,12 @@ async def _set_tenant_from_job(
     session_factory: async_sessionmaker[AsyncSession],
     job_id: uuid.UUID,
 ) -> None:
-    """Look up tenant_id from Job and set it in contextvar for cost logging."""
+    """Look up tenant_id from Job and set it in contextvar for cost logging.
+
+    Best-effort: DB/network failures are logged but never propagate.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
     from course_supporter.service_logging import _current_tenant_id
     from course_supporter.storage.job_repository import JobRepository
 
@@ -212,8 +217,13 @@ async def _set_tenant_from_job(
             job = await JobRepository(session).get_by_id(job_id)
             if job and job.tenant_id:
                 _current_tenant_id.set(job.tenant_id)
-    except Exception:
-        structlog.get_logger().debug("tenant_lookup_skipped", job_id=str(job_id))
+    except (SQLAlchemyError, OSError, TypeError) as exc:
+        structlog.get_logger().warning(
+            "tenant_lookup_failed",
+            job_id=str(job_id),
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 def _resolve_target_nodes(

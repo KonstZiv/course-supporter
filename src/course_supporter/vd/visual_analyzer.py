@@ -11,8 +11,9 @@ Supports three delta strategies for similar frames:
 - ``CONDITIONAL``: LLM decides — prompt includes previous description
   and LLM chooses full vs delta (variant B).
 
-Rate limiting is enforced via an async lock that respects per-key
-RPM quotas with round-robin key rotation.
+All LLM calls are routed through ``ModelRouter`` for unified cost
+tracking, fallback chains, and tenant attribution. Rate limiting
+is enforced by a shared ``VDRateLimiter``.
 """
 
 from __future__ import annotations
@@ -20,17 +21,17 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from course_supporter.key_pool import KeyPool
 from course_supporter.vd.memory_pipeline import (
     MemoryPipeline,
     append_delta_to_scene,
     build_instant_memory,
     needs_llm_scene_update,
 )
+from course_supporter.vd.rate_limiter import is_rate_limit, retry_wait
 from course_supporter.vd.schemas import (
     ChangeClass,
     DeltaStrategy,
@@ -42,12 +43,15 @@ from course_supporter.vd.schemas import (
     VideoMemory,
 )
 
+if TYPE_CHECKING:
+    from course_supporter.llm.router import ModelRouter
+    from course_supporter.vd.rate_limiter import VDRateLimiter
+
 logger = structlog.get_logger()
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _PROMPT_CACHE: dict[str, str] = {}
 _MAX_DESCRIPTION_LEN = 300
-_RETRY_BASE_WAIT = 40.0  # seconds, matches typical Gemini retry-after
 
 
 def _load_prompt(name: str) -> str:
@@ -123,23 +127,6 @@ def _build_similarity_hint(frame: SampledFrame | None) -> str:
     )
 
 
-def _is_rate_limit(exc: BaseException) -> bool:
-    """Check if an exception is a 429 rate-limit error."""
-    exc_str = str(exc)
-    return "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str
-
-
-def _retry_wait(exc: BaseException, attempt: int) -> float:
-    """Calculate retry wait time from error or exponential backoff."""
-    import re
-
-    # Try to extract retry delay from error message
-    match = re.search(r"retry\s+in\s+([\d.]+)s", str(exc), re.IGNORECASE)
-    if match:
-        return float(match.group(1)) + 2.0  # add buffer
-    return _RETRY_BASE_WAIT * float(2**attempt)
-
-
 def _build_memory_context(
     instant: InstantMemory | None,
     scene_memory: SceneMemory,
@@ -169,41 +156,38 @@ def _build_memory_context(
 class VisualAnalyzer:
     """Per-frame Vision LLM analysis with context images and memory.
 
+    Routes all LLM calls through ``ModelRouter`` for unified cost
+    tracking and fallback chains. Rate limiting is enforced by a
+    shared ``VDRateLimiter``.
+
     Args:
-        key_pool: Gemini API key pool for rotation.
-        model: Vision LLM model identifier.
-        rpm_per_key: Requests per minute per API key.
+        router: ModelRouter for LLM calls.
+        rate_limiter: Shared VD rate limiter.
+        model: Vision LLM model identifier (for metadata/logging).
         context_max_gap_sec: Max time gap for context images.
         max_context_images: Max number of previous frames as context.
         delta_strategy: How to handle frames similar to previous.
         memory: Optional MemoryPipeline for streaming memory updates.
-            Injected separately so it can use a different model/provider.
     """
 
     def __init__(
         self,
-        key_pool: KeyPool,
+        router: ModelRouter,
+        rate_limiter: VDRateLimiter,
         *,
         model: str = "gemini-2.5-flash",
-        fallback_model: str = "gemini-3.1-flash-lite-preview",
-        rpm_per_key: int = 5,
         context_max_gap_sec: float = 7.0,
         max_context_images: int = 2,
         delta_strategy: DeltaStrategy = DeltaStrategy.CONDITIONAL,
         memory: MemoryPipeline | None = None,
     ) -> None:
-        self._key_pool = key_pool
+        self._router = router
+        self._rate_limiter = rate_limiter
         self._model = model
-        self._fallback_model = fallback_model
         self._context_max_gap = context_max_gap_sec
         self._max_ctx_images = max_context_images
         self._delta_strategy = delta_strategy
         self._memory = memory
-
-        total_rpm = rpm_per_key * len(key_pool)
-        self._min_interval = 60.0 / total_rpm
-        self._last_call_time = 0.0
-        self._lock = asyncio.Lock()
 
     @property
     def model(self) -> str:
@@ -316,7 +300,7 @@ class VisualAnalyzer:
         prev_result: EyesResult | None,
     ) -> EyesResult:
         """Analyze a single frame with Vision LLM."""
-        import google.genai as genai
+        from google.genai import types as genai_types
 
         parts: list[Any] = []
 
@@ -324,7 +308,7 @@ class VisualAnalyzer:
         for cf in context_frames:
             img_path = self._find_frame(frame_dir, cf.filename)
             parts.append(
-                genai.types.Part.from_bytes(
+                genai_types.Part.from_bytes(
                     data=img_path.read_bytes(),
                     mime_type="image/jpeg",
                 ),
@@ -333,7 +317,7 @@ class VisualAnalyzer:
         # Main image (current frame — LAST image per prompt)
         main_path = self._find_frame(frame_dir, frame.filename)
         parts.append(
-            genai.types.Part.from_bytes(
+            genai_types.Part.from_bytes(
                 data=main_path.read_bytes(),
                 mime_type="image/jpeg",
             ),
@@ -347,9 +331,9 @@ class VisualAnalyzer:
             prev_result=prev_result,
             frame=frame,
         )
-        parts.append(genai.types.Part.from_text(text=prompt))
+        parts.append(genai_types.Part.from_text(text=prompt))
 
-        # Rate-limited API call
+        # Rate-limited API call via ModelRouter
         api_result = await self._call_llm(parts)
 
         # Parse response
@@ -390,72 +374,49 @@ class VisualAnalyzer:
         *,
         _max_retries: int = 3,
     ) -> dict[str, Any]:
-        """Make a rate-limited Vision LLM call with retry and model fallback.
+        """Rate-limited Vision LLM call via ModelRouter with retry on 429."""
+        from google.genai import types as genai_types
 
-        On 429: retry with same model first, then switch to fallback model.
-        """
-        import google.genai as genai
+        contents: list[Any] = [genai_types.Content(parts=parts)]
 
         for attempt in range(_max_retries + 1):
-            # First attempt uses primary model, retries use fallback
-            use_model = self._model if attempt == 0 else self._fallback_model
-
-            async with self._lock:
-                elapsed = time.monotonic() - self._last_call_time
-                if elapsed < self._min_interval:
-                    await asyncio.sleep(self._min_interval - elapsed)
-
-                key = self._key_pool.next_key()
-                client = genai.Client(api_key=key.get_secret_value())
-
-                t0 = time.monotonic()
-                try:
-                    contents: Any = [genai.types.Content(parts=parts)]
-                    response = await asyncio.to_thread(
-                        client.models.generate_content,
-                        model=use_model,
-                        contents=contents,
-                    )
-                except Exception as exc:
-                    self._last_call_time = time.monotonic()
-                    if attempt < _max_retries and _is_rate_limit(exc):
-                        wait = _retry_wait(exc, attempt)
-                        logger.warning(
-                            "eyes_rate_limit_retry",
-                            attempt=attempt + 1,
-                            wait_sec=wait,
-                            fallback_model=self._fallback_model,
-                        )
-                        await asyncio.sleep(wait)
-                        continue
-                    logger.exception(
-                        "vision_llm_error",
-                        model=use_model,
-                        error_type=type(exc).__name__,
-                    )
-                    raise
-
-                self._last_call_time = time.monotonic()
+            await self._rate_limiter.acquire()
+            t0 = time.monotonic()
+            try:
+                response = await self._router.complete(
+                    action="vd_frame_analysis",
+                    prompt="",
+                    contents=contents,
+                )
                 latency = round(time.monotonic() - t0, 2)
-
-                usage = response.usage_metadata
-                result = {
-                    "text": response.text or "",
-                    "input_tokens": (usage.prompt_token_count or 0 if usage else 0),
-                    "output_tokens": (
-                        usage.candidates_token_count or 0 if usage else 0
-                    ),
-                    "latency_sec": latency,
-                }
-
                 logger.info(
                     "eyes_frame_done",
-                    model=use_model,
+                    model=response.model_id,
                     latency=latency,
-                    tokens_in=result["input_tokens"],
-                    tokens_out=result["output_tokens"],
+                    tokens_in=response.tokens_in,
+                    tokens_out=response.tokens_out,
                 )
-                return result
+                return {
+                    "text": response.content,
+                    "input_tokens": response.tokens_in or 0,
+                    "output_tokens": response.tokens_out or 0,
+                    "latency_sec": latency,
+                }
+            except Exception as exc:
+                if attempt < _max_retries and is_rate_limit(exc):
+                    wait = retry_wait(exc, attempt)
+                    logger.warning(
+                        "eyes_rate_limit_retry",
+                        attempt=attempt + 1,
+                        wait_sec=wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                logger.exception(
+                    "vision_llm_error",
+                    error_type=type(exc).__name__,
+                )
+                raise
 
         msg = "Unreachable: retry loop exhausted without return or raise"
         raise RuntimeError(msg)

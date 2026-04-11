@@ -228,3 +228,14 @@ actions:
     requires: [vision]
     chain:
       default: [gemini-2.5-flash, gpt-4o-mini]
+
+  vd_frame_analysis:
+    strategy: default
+    requires: [vision]
+    chain:
+      default: [gemini-2.5-flash, gemini-2.5-pro]
+
+  vd_memory:
+    strategy: default
+    chain:
+      default: [gemini-2.5-flash, gemini-2.5-pro]

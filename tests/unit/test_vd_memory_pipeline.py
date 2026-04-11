@@ -290,16 +290,20 @@ class TestParseSceneMemory:
 
 
 @pytest.fixture()
-def mock_key_pool() -> MagicMock:
-    pool = MagicMock()
-    pool.__len__ = lambda _: 1
-    pool.next_key.return_value = MagicMock(get_secret_value=lambda: "fake-key")
-    return pool
+def mock_router() -> AsyncMock:
+    return AsyncMock()
 
 
 @pytest.fixture()
-def pipeline(mock_key_pool: MagicMock) -> MemoryPipeline:
-    return MemoryPipeline(mock_key_pool, rpm_per_key=999)
+def mock_rate_limiter() -> AsyncMock:
+    limiter = AsyncMock()
+    limiter.acquire = AsyncMock()
+    return limiter
+
+
+@pytest.fixture()
+def pipeline(mock_router: AsyncMock, mock_rate_limiter: AsyncMock) -> MemoryPipeline:
+    return MemoryPipeline(mock_router, mock_rate_limiter)
 
 
 # -- _load_template --------------------------------------------------------
@@ -324,18 +328,17 @@ class TestLoadTemplate:
 
 
 class TestMemoryPipelineInit:
-    def test_min_interval_calculation(self, mock_key_pool: MagicMock) -> None:
-        mp = MemoryPipeline(mock_key_pool, rpm_per_key=10)
-        # 1 key * 10 rpm = 10 rpm total => 6s interval
-        assert mp._min_interval == pytest.approx(6.0)
+    def test_stores_router(
+        self, mock_router: AsyncMock, mock_rate_limiter: AsyncMock
+    ) -> None:
+        mp = MemoryPipeline(mock_router, mock_rate_limiter)
+        assert mp._router is mock_router
 
-    def test_model_stored(self, mock_key_pool: MagicMock) -> None:
-        mp = MemoryPipeline(mock_key_pool, model="test-model")
-        assert mp._model == "test-model"
-
-    def test_fallback_model_stored(self, mock_key_pool: MagicMock) -> None:
-        mp = MemoryPipeline(mock_key_pool, fallback_model="fallback-model")
-        assert mp._fallback_model == "fallback-model"
+    def test_stores_rate_limiter(
+        self, mock_router: AsyncMock, mock_rate_limiter: AsyncMock
+    ) -> None:
+        mp = MemoryPipeline(mock_router, mock_rate_limiter)
+        assert mp._rate_limiter is mock_rate_limiter
 
 
 # -- update_scene_memory (mocked LLM) -------------------------------------
@@ -490,52 +493,40 @@ class TestProcessScene:
 
 class TestCallLlm:
     async def test_success(self, pipeline: MemoryPipeline) -> None:
-        mock_response = MagicMock(text="LLM response")
-        mock_client = MagicMock()
-        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+        mock_resp = MagicMock(
+            content="LLM response",
+            model_id="gemini-2.5-flash",
+            latency_ms=100,
+            tokens_in=50,
+            tokens_out=20,
+        )
+        pipeline._router.complete = AsyncMock(return_value=mock_resp)
 
-        with patch("google.genai.Client", return_value=mock_client):
-            result = await pipeline._call_llm("test prompt")
+        result = await pipeline._call_llm("test prompt")
 
         assert result == "LLM response"
+        pipeline._router.complete.assert_awaited_once()
 
-    async def test_rate_limit_retry_uses_fallback(
-        self, pipeline: MemoryPipeline
-    ) -> None:
+    async def test_rate_limit_retry(self, pipeline: MemoryPipeline) -> None:
         rate_err = Exception("429 Resource exhausted")
-        rate_err.code = 429  # type: ignore[attr-defined]
-        mock_response = MagicMock(text="Fallback OK")
+        mock_resp = MagicMock(
+            content="Retry OK",
+            model_id="gemini-2.5-flash",
+            latency_ms=100,
+            tokens_in=50,
+            tokens_out=20,
+        )
+        pipeline._router.complete = AsyncMock(side_effect=[rate_err, mock_resp])
 
-        call_count = 0
-
-        def side_effect(*_args: object, **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise rate_err
-            return mock_response
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content = side_effect
-
-        with (
-            patch("google.genai.Client", return_value=mock_client),
-            patch("asyncio.sleep", new=AsyncMock()),
-        ):
+        with patch("asyncio.sleep", new=AsyncMock()):
             result = await pipeline._call_llm("test")
 
-        assert result == "Fallback OK"
-        assert call_count == 2
+        assert result == "Retry OK"
+        assert pipeline._router.complete.await_count == 2
 
     async def test_permanent_error_raises(self, pipeline: MemoryPipeline) -> None:
         perm_err = Exception("401 Unauthorized")
-        perm_err.code = 401  # type: ignore[attr-defined]
+        pipeline._router.complete = AsyncMock(side_effect=perm_err)
 
-        mock_client = MagicMock()
-        mock_client.models.generate_content = MagicMock(side_effect=perm_err)
-
-        with (
-            patch("google.genai.Client", return_value=mock_client),
-            pytest.raises(Exception, match="401"),
-        ):
+        with pytest.raises(Exception, match="401"):
             await pipeline._call_llm("test")

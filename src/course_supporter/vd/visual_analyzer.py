@@ -51,7 +51,8 @@ logger = structlog.get_logger()
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _PROMPT_CACHE: dict[str, str] = {}
-_MAX_DESCRIPTION_LEN = 300
+# Max chars for the visual description extracted from Vision LLM response.
+MAX_VISUAL_DESCRIPTION_LEN = 300
 
 
 def _load_prompt(name: str) -> str:
@@ -92,7 +93,7 @@ def _parse_response(text: str) -> tuple[str, str, int]:
 
     description = " ".join(desc_parts[:3]) if desc_parts else text[:200]
 
-    return description[:_MAX_DESCRIPTION_LEN], scene_type, importance
+    return description[:MAX_VISUAL_DESCRIPTION_LEN], scene_type, importance
 
 
 def _is_conditional_delta(text: str) -> bool:

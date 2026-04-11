@@ -18,7 +18,9 @@ import structlog
 
 logger = structlog.get_logger()
 
-_RETRY_BASE_WAIT = 40.0  # seconds, matches typical Gemini retry-after
+# Default backoff base when Gemini 429 response has no retry-after header.
+# 40s matches observed typical retry-after values from Gemini API.
+GEMINI_RETRY_BASE_WAIT_SEC = 40.0
 
 
 class VDRateLimiter:
@@ -53,4 +55,4 @@ def retry_wait(exc: BaseException, attempt: int) -> float:
     match = re.search(r"retry\s+in\s+([\d.]+)s", str(exc), re.IGNORECASE)
     if match:
         return float(match.group(1)) + 2.0  # add buffer
-    return _RETRY_BASE_WAIT * float(2**attempt)
+    return GEMINI_RETRY_BASE_WAIT_SEC * float(2**attempt)

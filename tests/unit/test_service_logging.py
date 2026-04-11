@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.service_logging import (
-    _current_tenant_id,
     get_current_tenant_id,
     set_tenant_from_job,
     tenant_scope,
@@ -62,8 +61,9 @@ class TestSetTenantFromJob:
             await set_tenant_from_job(factory, jid)
 
         assert get_current_tenant_id() == tid
-        # Clean up
-        _current_tenant_id.set(None)
+        # Clean up via tenant_scope context manager
+        with tenant_scope(tid):
+            pass  # resets to previous value (None) on exit
 
     async def test_no_job_found(self) -> None:
         jid = uuid.uuid4()

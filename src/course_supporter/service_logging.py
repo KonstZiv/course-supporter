@@ -71,9 +71,16 @@ async def set_tenant_from_job(
             job = await JobRepository(session).get_by_id(job_id)
             if job and job.tenant_id:
                 _current_tenant_id.set(job.tenant_id)
-    except (SQLAlchemyError, OSError, TypeError, AttributeError) as exc:
+    except (SQLAlchemyError, OSError) as exc:
         logger.warning(
             "tenant_lookup_failed",
+            job_id=str(job_id),
+            error=str(exc),
+            exc_info=True,
+        )
+    except (TypeError, AttributeError) as exc:
+        logger.error(
+            "tenant_lookup_unexpected_error",
             job_id=str(job_id),
             error=str(exc),
             exc_info=True,
@@ -123,12 +130,13 @@ async def _persist(
         async with session_factory() as session:
             session.add(record)
             await session.commit()
-    except (SQLAlchemyError, OSError):
+    except (SQLAlchemyError, OSError) as exc:
         logger.error(
             "service_call_log_failed",
             provider=provider,
             model=model_id,
             action=action,
+            error=str(exc),
             exc_info=True,
         )
 

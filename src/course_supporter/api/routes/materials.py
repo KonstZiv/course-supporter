@@ -449,11 +449,14 @@ async def retry_material(
     tenant: PrepDep,
     session: SessionDep,
     arq: ArqDep,
+    force: bool = False,
 ) -> MaterialEntryCreateResponse:
-    """Retry ingestion for a failed material.
+    """Retry ingestion for a material.
 
-    Only materials in ``error`` state can be retried.
-    Returns 409 if the material is not in ``error`` state.
+    By default only materials in ``error`` state can be retried.
+    Pass ``?force=true`` to re-ingest from any state (e.g. to
+    reprocess a ``ready`` material after pipeline improvements).
+    Returns 409 if the material is not retryable without ``force``.
     """
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
@@ -461,11 +464,12 @@ async def retry_material(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
 
-    if entry.state != "error":
+    if not force and entry.state != "error":
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Cannot retry: material is in '{entry.state}' state, expected 'error'."
+                f"Cannot retry: material is in '{entry.state}' state, "
+                f"expected 'error'. Use ?force=true to re-ingest."
             ),
         )
 

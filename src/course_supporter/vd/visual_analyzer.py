@@ -301,28 +301,16 @@ class VisualAnalyzer:
         prev_result: EyesResult | None,
     ) -> EyesResult:
         """Analyze a single frame with Vision LLM."""
-        from google.genai import types as genai_types
-
-        parts: list[Any] = []
+        images: list[bytes] = []
 
         # Context images (previous frames, oldest first)
         for cf in context_frames:
             img_path = self._find_frame(frame_dir, cf.filename)
-            parts.append(
-                genai_types.Part.from_bytes(
-                    data=img_path.read_bytes(),
-                    mime_type="image/jpeg",
-                ),
-            )
+            images.append(img_path.read_bytes())
 
         # Main image (current frame — LAST image per prompt)
         main_path = self._find_frame(frame_dir, frame.filename)
-        parts.append(
-            genai_types.Part.from_bytes(
-                data=main_path.read_bytes(),
-                mime_type="image/jpeg",
-            ),
-        )
+        images.append(main_path.read_bytes())
 
         # Build prompt text based on strategy
         prompt = self._build_prompt(
@@ -332,10 +320,9 @@ class VisualAnalyzer:
             prev_result=prev_result,
             frame=frame,
         )
-        parts.append(genai_types.Part.from_text(text=prompt))
 
         # Rate-limited API call via ModelRouter
-        api_result = await self._call_llm(parts)
+        api_result = await self._call_llm(images, prompt=prompt)
 
         # Parse response
         response_text = api_result["text"]
@@ -371,23 +358,20 @@ class VisualAnalyzer:
 
     async def _call_llm(
         self,
-        parts: list[Any],
+        images: list[bytes],
         *,
+        prompt: str,
         _max_retries: int = 3,
     ) -> dict[str, Any]:
         """Rate-limited Vision LLM call via ModelRouter with retry on 429."""
-        from google.genai import types as genai_types
-
-        contents: list[Any] = [genai_types.Content(parts=parts)]
-
         for attempt in range(_max_retries + 1):
             await self._rate_limiter.acquire()
             t0 = time.monotonic()
             try:
                 response = await self._router.complete(
                     action="vd_frame_analysis",
-                    prompt="",
-                    contents=contents,
+                    prompt=prompt,
+                    contents=images,
                 )
                 latency = round(time.monotonic() - t0, 2)
                 logger.info(

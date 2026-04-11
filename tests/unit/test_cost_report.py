@@ -111,6 +111,8 @@ class TestExternalServiceCallRepositoryGrouped:
                 {
                     "group": "architect",
                     "calls": 3,
+                    "successful_calls": 2,
+                    "failed_calls": 1,
                     "cost_usd": 0.01,
                     "units_in": 3000,
                     "units_out": 1500,
@@ -119,6 +121,8 @@ class TestExternalServiceCallRepositoryGrouped:
                 {
                     "group": "summarize",
                     "calls": 2,
+                    "successful_calls": 2,
+                    "failed_calls": 0,
                     "cost_usd": 0.005,
                     "units_in": 2000,
                     "units_out": 500,
@@ -134,7 +138,11 @@ class TestExternalServiceCallRepositoryGrouped:
         assert len(groups) == 2
         assert groups[0].group == "architect"
         assert groups[0].calls == 3
+        assert groups[0].successful_calls == 2
+        assert groups[0].failed_calls == 1
         assert groups[1].group == "summarize"
+        assert groups[1].successful_calls == 2
+        assert groups[1].failed_calls == 0
 
     async def test_get_by_provider_groups(self) -> None:
         """GROUP BY provider returns correct groups."""
@@ -145,6 +153,8 @@ class TestExternalServiceCallRepositoryGrouped:
                 {
                     "group": "gemini",
                     "calls": 4,
+                    "successful_calls": 3,
+                    "failed_calls": 1,
                     "cost_usd": 0.008,
                     "units_in": 4000,
                     "units_out": 1800,
@@ -170,6 +180,8 @@ class TestExternalServiceCallRepositoryGrouped:
                 {
                     "group": "gemini-2.0-flash",
                     "calls": 3,
+                    "successful_calls": 3,
+                    "failed_calls": 0,
                     "cost_usd": 0.006,
                     "units_in": 3000,
                     "units_out": 1500,
@@ -206,6 +218,8 @@ class TestCostReportAPI:
                 GroupedCost(
                     group="architect",
                     calls=2,
+                    successful_calls=2,
+                    failed_calls=0,
                     cost_usd=0.005,
                     units_in=1000,
                     units_out=500,
@@ -289,6 +303,7 @@ class TestCostReportAPI:
         assert report.summary.total_calls == 2
         assert len(report.by_action) == 1
         assert report.by_action[0].group == "architect"
+        assert "Approximate" in report.note
 
 
 class TestCostReportCLI:
@@ -312,6 +327,8 @@ class TestCostReportCLI:
                 GroupedCost(
                     group="architect",
                     calls=3,
+                    successful_calls=2,
+                    failed_calls=1,
                     cost_usd=0.0075,
                     units_in=3000,
                     units_out=1500,
@@ -326,6 +343,7 @@ class TestCostReportCLI:
         assert "3000" in table
         assert "architect" in table
         assert "By Action" in table
+        assert "Approximate" in table
 
     def test_cli_json_output(self) -> None:
         """CostReport serializes to valid JSON."""

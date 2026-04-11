@@ -32,6 +32,7 @@ class ProviderModelConfig(BaseModel):
     unit_type: str = "tokens"
     cost_per_1k_in: float = 0.0
     cost_per_1k_out: float = 0.0
+    cost_per_minute: float | None = None
     local: bool = False
 
 
@@ -81,6 +82,7 @@ class ModelConfig(BaseModel):
     max_output_tokens: int | None = None
     unit_type: str = "tokens"
     cost_per_1k: CostPer1K = CostPer1K(input=0.0, output=0.0)
+    cost_per_minute: float | None = None
     local: bool = False
 
     def estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
@@ -133,6 +135,7 @@ class ModelRegistryConfig(BaseModel):
                         input=pm.cost_per_1k_in,
                         output=pm.cost_per_1k_out,
                     ),
+                    cost_per_minute=pm.cost_per_minute,
                     local=pm.local,
                 )
 

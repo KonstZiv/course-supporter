@@ -87,6 +87,14 @@ class TestModelConfig:
         )
         assert m.estimate_cost(0, 0) == 0.0
 
+    def test_cost_per_minute_default_none(self) -> None:
+        m = ModelConfig(provider="test")
+        assert m.cost_per_minute is None
+
+    def test_cost_per_minute_set(self) -> None:
+        m = ModelConfig(provider="stt", cost_per_minute=0.0037)
+        assert m.cost_per_minute == pytest.approx(0.0037)
+
 
 class TestRegistryValidation:
     def test_valid_config_loads(self, valid_config: dict) -> None:
@@ -114,6 +122,29 @@ class TestRegistryValidation:
         m = cfg.models["model-a"]
         assert m.cost_per_1k.input == pytest.approx(0.001)
         assert m.cost_per_1k.output == pytest.approx(0.002)
+
+    def test_cost_per_minute_parsed(self, valid_config: dict) -> None:
+        """STT models with cost_per_minute get it propagated to ModelConfig."""
+        valid_config["providers"]["stt_provider"] = {
+            "type": "stt",
+            "models": [
+                {
+                    "id": "stt-model",
+                    "unit_type": "minutes",
+                    "cost_per_minute": 0.0037,
+                },
+            ],
+        }
+        valid_config["actions"]["transcribe"] = {
+            "chain": {"default": ["stt-model"]},
+        }
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["stt-model"].cost_per_minute == pytest.approx(0.0037)
+
+    def test_cost_per_minute_absent(self, valid_config: dict) -> None:
+        """LLM models without cost_per_minute have None."""
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["model-a"].cost_per_minute is None
 
     def test_unknown_model_in_chain(self, valid_config: dict) -> None:
         valid_config["actions"]["analyze"]["chain"]["default"] = ["nonexistent"]

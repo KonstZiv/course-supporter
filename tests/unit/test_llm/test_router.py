@@ -217,7 +217,7 @@ class TestCostEnrichment:
         assert r.cost_usd is not None
         assert r.cost_usd > 0
 
-    async def test_cost_none_when_tokens_missing(self) -> None:
+    async def test_cost_none_when_both_tokens_missing(self) -> None:
         resp = _resp()
         resp.tokens_in = None
         resp.tokens_out = None
@@ -226,6 +226,30 @@ class TestCostEnrichment:
             _registry(),
         ).complete("act", "hi")
         assert r.cost_usd is None
+
+    async def test_cost_estimated_with_partial_tokens_in(self) -> None:
+        """Cost calculated when only tokens_in is available (e.g. vision)."""
+        resp = _resp()
+        resp.tokens_in = 2000
+        resp.tokens_out = None
+        r = await ModelRouter(
+            {"p_a": _ok_provider(resp)},
+            _registry(),
+        ).complete("act", "hi")
+        assert r.cost_usd is not None
+        assert r.cost_usd > 0
+
+    async def test_cost_estimated_with_partial_tokens_out(self) -> None:
+        """Cost calculated when only tokens_out is available."""
+        resp = _resp()
+        resp.tokens_in = None
+        resp.tokens_out = 500
+        r = await ModelRouter(
+            {"p_a": _ok_provider(resp)},
+            _registry(),
+        ).complete("act", "hi")
+        assert r.cost_usd is not None
+        assert r.cost_usd > 0
 
 
 class TestLogCallback:

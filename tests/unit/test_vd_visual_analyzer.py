@@ -478,8 +478,7 @@ class TestCallLlm:
         )
         analyzer._router.complete = AsyncMock(return_value=mock_resp)
 
-        with patch("google.genai.types.Content"):
-            result = await analyzer._call_llm([MagicMock()])
+        result = await analyzer._call_llm([b"fake-image"], prompt="describe")
 
         assert result["text"] == "LLM response"
         assert result["input_tokens"] == 100
@@ -496,11 +495,8 @@ class TestCallLlm:
         )
         analyzer._router.complete = AsyncMock(side_effect=[rate_err, mock_resp])
 
-        with (
-            patch("google.genai.types.Content"),
-            patch("asyncio.sleep", new=AsyncMock()),
-        ):
-            result = await analyzer._call_llm([MagicMock()])
+        with patch("asyncio.sleep", new=AsyncMock()):
+            result = await analyzer._call_llm([b"fake-image"], prompt="describe")
 
         assert result["text"] == "OK"
         assert analyzer._router.complete.await_count == 2

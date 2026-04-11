@@ -5,18 +5,21 @@ with automatic retry on validation errors. This is more reliable
 than embedding JSON schema in the system prompt.
 """
 
+from __future__ import annotations
+
 import itertools
 from collections.abc import Iterator, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import instructor
 import openai
-from instructor.exceptions import InstructorRetryException
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+if TYPE_CHECKING:
+    import instructor
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -40,25 +43,45 @@ class OpenAICompatProvider(LLMProvider):
         super().__init__()
         self.provider_name = provider_name
         self._default_model = default_model
+        self._api_keys = tuple(api_keys)
+        self._base_url = base_url
         self._clients = tuple(
             openai.AsyncOpenAI(api_key=k, base_url=base_url) for k in api_keys
         )
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
         )
-        self._instructor_clients = tuple(
-            instructor.from_openai(openai.AsyncOpenAI(api_key=k, base_url=base_url))
-            for k in api_keys
-        )
-        self._instructor_cycle: Iterator[instructor.AsyncInstructor] = itertools.cycle(
-            self._instructor_clients
-        )
+        # Instructor clients and exception class created lazily
+        # on first complete_structured() call to avoid slow startup.
+        self._instructor_clients: tuple[instructor.AsyncInstructor, ...] | None = None
+        self._instructor_cycle: Iterator[instructor.AsyncInstructor] | None = None
+        self._retry_exc_cls: type[Exception] = Exception
 
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
 
+    def _ensure_instructor(self) -> None:
+        """Lazily create instructor-patched clients on first use."""
+        if self._instructor_clients is not None:
+            return
+        import instructor as _instructor
+        from instructor.exceptions import (
+            InstructorRetryException,
+        )
+
+        self._instructor_clients = tuple(
+            _instructor.from_openai(
+                openai.AsyncOpenAI(api_key=k, base_url=self._base_url)
+            )
+            for k in self._api_keys
+        )
+        self._instructor_cycle = itertools.cycle(self._instructor_clients)
+        self._retry_exc_cls = InstructorRetryException
+
     def _next_instructor_client(self) -> instructor.AsyncInstructor:
-        return next(self._instructor_cycle)
+        self._ensure_instructor()
+        # _ensure_instructor guarantees these are set
+        return next(self._instructor_cycle)  # type: ignore[arg-type]
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API."""
@@ -119,7 +142,9 @@ class OpenAICompatProvider(LLMProvider):
                     max_tokens=request.max_tokens,
                     max_retries=2,
                 )
-            except InstructorRetryException as exc:
+            except Exception as exc:
+                if not isinstance(exc, self._retry_exc_cls):
+                    raise
                 raise StructuredOutputError(
                     provider=self.provider_name,
                     raw_content=str(exc),

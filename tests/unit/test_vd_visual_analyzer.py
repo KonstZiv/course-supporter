@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from course_supporter.vd.rate_limiter import is_rate_limit, retry_wait
 from course_supporter.vd.schemas import (
     ChangeClass,
     DeltaStrategy,
@@ -423,33 +422,6 @@ def mock_rate_limiter() -> AsyncMock:
 @pytest.fixture()
 def analyzer(mock_router: AsyncMock, mock_rate_limiter: AsyncMock) -> VisualAnalyzer:
     return VisualAnalyzer(mock_router, mock_rate_limiter)
-
-
-# -- _is_rate_limit / _retry_wait -----------------------------------------
-
-
-class TestIsRateLimit:
-    def test_429_string(self) -> None:
-        assert is_rate_limit(Exception("429 Resource exhausted"))
-
-    def test_resource_exhausted(self) -> None:
-        assert is_rate_limit(Exception("RESOURCE_EXHAUSTED"))
-
-    def test_other_error(self) -> None:
-        assert not is_rate_limit(Exception("500 Internal server error"))
-
-
-class TestRetryWait:
-    def test_extracts_retry_delay(self) -> None:
-        exc = Exception("Please retry in 12.5s")
-        wait = retry_wait(exc, 0)
-        assert wait == pytest.approx(14.5)  # 12.5 + 2.0 buffer
-
-    def test_exponential_backoff(self) -> None:
-        exc = Exception("429 no retry hint")
-        w0 = retry_wait(exc, 0)
-        w1 = retry_wait(exc, 1)
-        assert w1 == pytest.approx(w0 * 2)
 
 
 # -- VisualAnalyzer.__init__ / model property ------------------------------

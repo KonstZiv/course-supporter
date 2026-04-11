@@ -93,7 +93,6 @@ async def set_tenant_from_job(
 async def _persist(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    tenant_id: uuid.UUID | None,
     action: str,
     strategy: str,
     provider: str,
@@ -113,7 +112,7 @@ async def _persist(
     from course_supporter.storage.orm import ExternalServiceCall
 
     record = ExternalServiceCall(
-        tenant_id=tenant_id or get_current_tenant_id(),
+        tenant_id=get_current_tenant_id(),
         action=action,
         strategy=strategy,
         provider=provider,
@@ -159,7 +158,6 @@ def create_llm_log_callback(
     ) -> None:
         await _persist(
             session_factory,
-            tenant_id=None,  # resolved from contextvar
             action=response.action,
             strategy=response.strategy,
             provider=response.provider,
@@ -195,10 +193,19 @@ def create_stt_log_callback(
         error_message: str | None,
     ) -> None:
         if result is None:
+            if error_message:
+                await _persist(
+                    session_factory,
+                    action="transcribe",
+                    strategy="unknown",
+                    provider="unknown",
+                    model_id="unknown",
+                    success=False,
+                    error_message=error_message,
+                )
             return
         await _persist(
             session_factory,
-            tenant_id=None,
             action=result.action,
             strategy=result.strategy,
             provider=result.provider,

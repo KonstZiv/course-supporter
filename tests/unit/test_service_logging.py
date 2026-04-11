@@ -121,7 +121,6 @@ class TestPersist:
         with patch("course_supporter.storage.orm.ExternalServiceCall"):
             await _persist(
                 mock_factory,
-                tenant_id=None,
                 action="test_action",
                 strategy="default",
                 provider="gemini",
@@ -147,7 +146,6 @@ class TestPersist:
         with patch("course_supporter.storage.orm.ExternalServiceCall"):
             await _persist(
                 mock_factory,
-                tenant_id=None,
                 action="test",
                 strategy="default",
                 provider="test",

@@ -22,6 +22,7 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import ChildSnapshotContext, NodeSummary
+from course_supporter.service_logging import set_tenant_from_job
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -142,7 +143,7 @@ async def arq_ingest_material(
         job_id=job_id, material_id=material_id, source_type=source_type
     )
 
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
     log.info("ingestion_started")
 
     heavy = create_heavy_steps(router=router)
@@ -197,33 +198,6 @@ async def arq_ingest_material(
         content_json=content,
     )
     log.info("ingestion_done")
-
-
-async def _set_tenant_from_job(
-    session_factory: async_sessionmaker[AsyncSession],
-    job_id: uuid.UUID,
-) -> None:
-    """Look up tenant_id from Job and set it in contextvar for cost logging.
-
-    Best-effort: DB/network failures are logged but never propagate.
-    """
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from course_supporter.service_logging import _current_tenant_id
-    from course_supporter.storage.job_repository import JobRepository
-
-    try:
-        async with session_factory() as session:
-            job = await JobRepository(session).get_by_id(job_id)
-            if job and job.tenant_id:
-                _current_tenant_id.set(job.tenant_id)
-    except (SQLAlchemyError, OSError, TypeError) as exc:
-        structlog.get_logger().warning(
-            "tenant_lookup_failed",
-            job_id=str(job_id),
-            error=str(exc),
-            exc_info=True,
-        )
 
 
 def _resolve_target_nodes(
@@ -382,7 +356,7 @@ async def arq_generate_structure(
     )
     log.info("generate_structure_started")
 
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
@@ -861,7 +835,7 @@ async def arq_execute_step(
         mode=mode,
         step_type=step_type,
     )
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
     log.info("execute_step_started")
 
     async with session_factory() as session:
@@ -1023,7 +997,7 @@ async def arq_reconcile_preview(
     router: ModelRouter = ctx["model_router"]
 
     log = structlog.get_logger().bind(job_id=job_id, node_id=node_id)
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
     log.info("reconcile_preview_started")
 
     async with session_factory() as session:
@@ -1146,7 +1120,7 @@ async def arq_execute_methodist_step(
         editable_id=editable_id,
         phase=phase,
     )
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
     log.info("methodist_step_started")
 
     async with session_factory() as session:
@@ -1378,7 +1352,7 @@ async def arq_process_homework(
         job_id=job_id,
         submission_id=submission_id,
     )
-    await _set_tenant_from_job(session_factory, jid)
+    await set_tenant_from_job(session_factory, jid)
     log.info("homework_processing_started")
 
     async with session_factory() as session:

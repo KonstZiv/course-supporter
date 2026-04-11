@@ -5,11 +5,11 @@ down to every external call, regardless of the service type.
 
 Usage in task functions::
 
-    from course_supporter.service_logging import tenant_scope
+    from course_supporter.service_logging import set_tenant_from_job
 
     async def arq_ingest_material(ctx, ...):
-        with tenant_scope(tenant_id):
-            ...  # all LLM/STT/VD calls within this scope get tenant_id
+        await set_tenant_from_job(session_factory, job_id)
+        ...  # all LLM/STT/VD calls get tenant_id from contextvar
 
 Factory functions create typed callbacks compatible with
 ModelRouter, STTRouter, and VD pipeline components.
@@ -54,6 +54,30 @@ def tenant_scope(tenant_id: uuid.UUID) -> Iterator[None]:
 def get_current_tenant_id() -> uuid.UUID | None:
     """Read the current tenant_id from context."""
     return _current_tenant_id.get()
+
+
+async def set_tenant_from_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    job_id: uuid.UUID,
+) -> None:
+    """Look up tenant_id from Job and set it in contextvar for cost logging.
+
+    Best-effort: DB/network failures are logged but never propagate.
+    """
+    from course_supporter.storage.job_repository import JobRepository
+
+    try:
+        async with session_factory() as session:
+            job = await JobRepository(session).get_by_id(job_id)
+            if job and job.tenant_id:
+                _current_tenant_id.set(job.tenant_id)
+    except (SQLAlchemyError, OSError, TypeError, AttributeError) as exc:
+        logger.warning(
+            "tenant_lookup_failed",
+            job_id=str(job_id),
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 # ── Persist to DB ──

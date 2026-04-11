@@ -15,6 +15,20 @@ _ENTRY_REPO = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _bypass_tenant_lookup() -> None:  # type: ignore[misc]
+    """Bypass set_tenant_from_job in all ingestion task tests.
+
+    The real function needs a working DB session; tests use MagicMock
+    session factories. Patching it as a no-op avoids TypeError.
+    """
+    with patch(
+        "course_supporter.api.tasks.set_tenant_from_job",
+        new=AsyncMock(),
+    ):
+        yield
+
+
 def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
     """Create a mock async_sessionmaker that returns an async ctx manager."""
     if session is None:
@@ -96,7 +110,6 @@ class TestArqIngestMaterial:
             patch(_HEAVY),
             patch(_FACTORY, return_value=_mock_processors()),
         ):
-            mock_job_repo_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_job_repo_cls.return_value.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
@@ -143,7 +156,6 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=_mock_processors(doc)),
         ):
             mock_job = mock_job_cls.return_value
-            mock_job.get_by_id = AsyncMock(return_value=None)
             mock_job.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
@@ -190,7 +202,6 @@ class TestArqIngestMaterial:
                 return_value=_failing_processors(error="boom"),
             ),
         ):
-            mock_job_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_job_cls.return_value.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
@@ -229,7 +240,6 @@ class TestArqIngestMaterial:
             patch(_HEAVY),
             patch(_FACTORY, return_value=_mock_processors()),
         ):
-            mock_job_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_job_cls.return_value.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_cb_cls.return_value.on_success = AsyncMock()
@@ -315,7 +325,6 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=procs),
             patch.object(anyio.Path, "exists", AsyncMock(return_value=False)),
         ):
-            mock_job_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_job_cls.return_value.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj
@@ -381,7 +390,6 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "exists", mock_exists),
             patch.object(anyio.Path, "unlink", mock_unlink),
         ):
-            mock_job_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_job_cls.return_value.update_status = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj

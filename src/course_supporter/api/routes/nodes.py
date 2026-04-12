@@ -143,6 +143,7 @@ async def create_root_node(
         tenant_id=tenant.tenant_id,
         title=body.title,
         description=body.description,
+        default_language=body.default_language,
     )
     await session.commit()
 
@@ -208,6 +209,7 @@ async def create_child_node(
         parent_materialnode_id=node_id,
         title=body.title,
         description=body.description,
+        default_language=body.default_language,
     )
     await session.commit()
 
@@ -285,10 +287,12 @@ async def update_node(
     tenant: PrepDep,
     session: SessionDep,
 ) -> NodeResponse:
-    """Update a node's title and/or description.
+    """Update a node's title, description, and/or default language.
 
     Only fields present in the request body are updated.
-    To clear the description, send ``"description": null``.
+    To clear a field, send it as ``null``. Updating
+    ``default_language`` is a pure DB write — it does not trigger
+    re-ingestion of existing materials.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
     repo = MaterialNodeRepository(session)
@@ -299,6 +303,8 @@ async def update_node(
         update_kwargs["title"] = body.title
     if "description" in body.model_fields_set:
         update_kwargs["description"] = body.description
+    if "default_language" in body.model_fields_set:
+        update_kwargs["default_language"] = body.default_language
 
     node = await repo.update(node_id, **update_kwargs)
     await session.commit()

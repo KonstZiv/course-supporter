@@ -74,6 +74,8 @@ class ElevenLabsSTTProvider(STTProvider):
 
         # Convert detected ISO 639-3 back to 639-1.
         lang_out = iso639_3_to_1(detected_lang) if detected_lang else None
+        # Only surface as detected_language when caller did not set it.
+        detected_out = lang_out if request.language is None else None
 
         segments = _build_segments(body)
 
@@ -81,6 +83,7 @@ class ElevenLabsSTTProvider(STTProvider):
             text=text,
             segments=segments,
             language=lang_out,
+            detected_language=detected_out,
             provider=self.provider_name,
             model_id=self._default_model,
             latency_ms=timer.elapsed_ms,

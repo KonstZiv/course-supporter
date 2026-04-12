@@ -552,6 +552,9 @@ class TestCallbackIntegrationWithArqTask:
         mid = uuid.uuid4()
         mock_doc = MagicMock()
         mock_doc.model_dump_json.return_value = '{"content": "ok"}'
+        # metadata must be a real dict so .get() returns None (no
+        # detected_language to cache).
+        mock_doc.metadata = {}
 
         mock_processor = MagicMock()
         mock_processor.process = AsyncMock(return_value=mock_doc)

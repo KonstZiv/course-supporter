@@ -134,6 +134,76 @@ class TestGetById:
         assert result is None
 
 
+class TestGetRootFor:
+    """MaterialNodeRepository.get_root_for tests."""
+
+    async def test_returns_none_when_start_node_absent(self) -> None:
+        """CTE returns no rows → method returns None."""
+        session = AsyncMock()
+        result_row = MagicMock()
+        result_row.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_row)
+
+        repo = MaterialNodeRepository(session)
+        assert await repo.get_root_for(uuid.uuid4()) is None
+        session.get.assert_not_called()
+
+    async def test_returns_root_node_when_found(self) -> None:
+        """CTE returns root_id → load root via session.get."""
+        root_id = uuid.uuid4()
+        root_node = _mock_node(node_id=root_id)
+        session = AsyncMock()
+        result_row = MagicMock()
+        result_row.scalar_one_or_none = MagicMock(return_value=root_id)
+        session.execute = AsyncMock(return_value=result_row)
+        session.get = AsyncMock(return_value=root_node)
+
+        repo = MaterialNodeRepository(session)
+        result = await repo.get_root_for(uuid.uuid4())
+        assert result is root_node
+        session.get.assert_awaited_once()
+
+
+class TestUpdateDefaultLanguage:
+    """MaterialNodeRepository.update handles default_language."""
+
+    async def test_sets_default_language(self) -> None:
+        """Providing default_language sets the attribute."""
+        node = _mock_node()
+        node.default_language = None
+        session = AsyncMock()
+        session.get.return_value = node
+        session.flush = AsyncMock()
+
+        repo = MaterialNodeRepository(session)
+        result = await repo.update(node.id, default_language="uk")
+        assert result.default_language == "uk"
+
+    async def test_clears_default_language_with_none(self) -> None:
+        """Explicit None clears the stored language."""
+        node = _mock_node()
+        node.default_language = "en"
+        session = AsyncMock()
+        session.get.return_value = node
+        session.flush = AsyncMock()
+
+        repo = MaterialNodeRepository(session)
+        result = await repo.update(node.id, default_language=None)
+        assert result.default_language is None
+
+    async def test_omitted_default_language_leaves_field_untouched(self) -> None:
+        """Not passing default_language leaves the field alone."""
+        node = _mock_node()
+        node.default_language = "uk"
+        session = AsyncMock()
+        session.get.return_value = node
+        session.flush = AsyncMock()
+
+        repo = MaterialNodeRepository(session)
+        result = await repo.update(node.id, title="new title")
+        assert result.default_language == "uk"
+
+
 class TestGetTree:
     """MaterialNodeRepository.get_subtree tests."""
 

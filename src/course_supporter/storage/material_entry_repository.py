@@ -6,7 +6,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.source import MaterialRole
@@ -31,6 +31,7 @@ class MaterialEntryRepository:
         source_url: str,
         filename: str | None = None,
         material_role: str = "educational",
+        language: str | None = None,
     ) -> MaterialEntry:
         """Create a new material entry with auto-incremented order.
 
@@ -40,6 +41,9 @@ class MaterialEntryRepository:
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
             material_role: Role: educational or methodological.
+            language: Optional ISO 639-1 language override. When None,
+                the course default is used and STT falls back to
+                auto-detection (which caches its result back here).
 
         Returns:
             The newly created MaterialEntry.
@@ -51,6 +55,7 @@ class MaterialEntryRepository:
             source_url=source_url,
             filename=filename,
             material_role=material_role,
+            language=language,
             order=next_order,
         )
         self._session.add(entry)
@@ -86,6 +91,33 @@ class MaterialEntryRepository:
         stmt = select(MaterialEntry).where(MaterialEntry.source_url == source_url)
         result = await self._session.execute(stmt)
         return result.scalars().first()
+
+    async def set_language_if_unset(
+        self,
+        entry_id: uuid.UUID,
+        language: str,
+    ) -> bool:
+        """Atomically set ``language`` only if it is currently NULL.
+
+        Guards against races where a concurrent PATCH may set the
+        language between our read and write. Returns True if the row
+        was updated, False if it was skipped because the language
+        was already set (or the row does not exist).
+        """
+        stmt = (
+            update(MaterialEntry)
+            .where(
+                MaterialEntry.id == entry_id,
+                MaterialEntry.language.is_(None),
+            )
+            .values(language=language)
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        # ``rowcount`` is provided by CursorResult (actual runtime type
+        # for DML execute); SQLAlchemy's static return type is the wider
+        # ``Result`` which does not expose it — hence the ignore.
+        return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     async def set_pending(
         self,

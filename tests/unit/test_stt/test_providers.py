@@ -1,5 +1,8 @@
 """Tests for STT provider interface and factory."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from course_supporter.stt.providers import STT_PROVIDER_REGISTRY
@@ -81,3 +84,104 @@ class TestSTTProviderFactory:
         providers = create_stt_providers(s)
         assert "deepgram" in providers
         assert isinstance(providers["deepgram"], DeepgramSTTProvider)
+
+
+class TestDeepgramLanguageAutoDetect:
+    """Deepgram must auto-detect language when caller omits it."""
+
+    @pytest.fixture()
+    def fake_audio(self, tmp_path: Path) -> Path:
+        p = tmp_path / "sample.wav"
+        p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+        return p
+
+    def _response_body(
+        self,
+        *,
+        detected_language: str | None = "uk",
+        transcript: str = "hello",
+        duration: float = 1.23,
+    ) -> dict[str, Any]:
+        """Build a Deepgram-shaped response body.
+
+        Returned as a plain dict (not ``MagicMock``) on purpose: this mirrors
+        Deepgram's real JSON contract so parser changes / API schema drift
+        are caught by the test instead of being silently absorbed by
+        attribute-auto-generating mocks.
+        """
+        channel: dict[str, Any] = {
+            "alternatives": [
+                {
+                    "transcript": transcript,
+                    "confidence": 0.95,
+                    "paragraphs": {
+                        "paragraphs": [
+                            {
+                                "sentences": [
+                                    {"text": transcript, "start": 0.0, "end": 0.5}
+                                ]
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+        if detected_language is not None:
+            channel["detected_language"] = detected_language
+        return {
+            "results": {"channels": [channel]},
+            "metadata": {"duration": duration},
+        }
+
+    async def test_adds_detect_language_when_no_language(
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When request.language=None, provider sends detect_language=true."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = self._response_body()
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        result = await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), language=None)
+        )
+
+        call_kwargs = post_mock.await_args.kwargs
+        params = call_kwargs["params"]
+        assert params.get("detect_language") is True
+        assert "language" not in params
+        assert result.detected_language == "uk"
+        assert result.language is None
+
+    async def test_no_detect_language_when_language_explicit(
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit request.language → skip detect_language and pass it as-is."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = self._response_body(detected_language=None)
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        result = await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), language="en")
+        )
+
+        params = post_mock.await_args.kwargs["params"]
+        assert params.get("language") == "en"
+        assert "detect_language" not in params
+        assert result.detected_language is None
+        assert result.language == "en"

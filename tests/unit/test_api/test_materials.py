@@ -59,6 +59,7 @@ def _mock_entry(
     entry.material_role = "educational"
     entry.source_url = source_url
     entry.filename = filename
+    entry.language = None
     entry.order = 0
     entry.state = state
     entry.error_message = None

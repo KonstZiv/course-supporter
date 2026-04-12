@@ -86,6 +86,7 @@ class MaterialNodeRepository:
         title: str,
         parent_materialnode_id: uuid.UUID | None = None,
         description: str | None = None,
+        default_language: str | None = None,
     ) -> MaterialNode:
         """Create a new node with auto-incremented order among siblings.
 
@@ -94,6 +95,8 @@ class MaterialNodeRepository:
             title: Node title.
             parent_materialnode_id: FK to parent node (None for root).
             description: Optional node description.
+            default_language: Optional ISO 639-1 default language for
+                materials under this node (inherited by children).
 
         Returns:
             The newly created MaterialNode.
@@ -104,6 +107,7 @@ class MaterialNodeRepository:
             parent_materialnode_id=parent_materialnode_id,
             title=title,
             description=description,
+            default_language=default_language,
             order=next_order,
         )
         self._session.add(node)
@@ -113,6 +117,43 @@ class MaterialNodeRepository:
     async def get_by_id(self, node_id: uuid.UUID) -> MaterialNode | None:
         """Get a node by primary key."""
         return await self._session.get(MaterialNode, node_id)
+
+    async def get_root_for(self, node_id: uuid.UUID) -> MaterialNode | None:
+        """Walk up the parent chain to find the root (course) node.
+
+        Uses a recursive CTE to traverse ``parent_materialnode_id`` links
+        to the first node whose parent is NULL. Returns None if the
+        starting node does not exist.
+
+        Performance note: a single recursive CTE query is preferred over
+        an iterative loop of round-trips because course trees are shallow
+        in practice (typically 3-7 levels), and a single DB call beats
+        N sequential ``session.get`` calls over the wire.
+        """
+        # Recursive CTE: start at node_id, climb up via parent FK.
+        ancestor_cte = (
+            select(
+                MaterialNode.id,
+                MaterialNode.parent_materialnode_id,
+            )
+            .where(MaterialNode.id == node_id)
+            .cte(name="ancestors", recursive=True)
+        )
+        ancestor_cte = ancestor_cte.union_all(
+            select(
+                MaterialNode.id,
+                MaterialNode.parent_materialnode_id,
+            ).where(MaterialNode.id == ancestor_cte.c.parent_materialnode_id),
+        )
+        root_id_stmt = (
+            select(ancestor_cte.c.id)
+            .where(ancestor_cte.c.parent_materialnode_id.is_(None))
+            .limit(1)
+        )
+        root_id = (await self._session.execute(root_id_stmt)).scalar_one_or_none()
+        if root_id is None:
+            return None
+        return await self._session.get(MaterialNode, root_id)
 
     async def get_roots(self, tenant_id: uuid.UUID) -> list[MaterialNode]:
         """Get root nodes (parent_materialnode_id=None) for a tenant, ordered."""
@@ -317,6 +358,7 @@ class MaterialNodeRepository:
         *,
         title: str | None = None,
         description: str | None | _Unset = _Unset.TOKEN,
+        default_language: str | None | _Unset = _Unset.TOKEN,
     ) -> MaterialNode:
         """Update node fields.
 
@@ -324,6 +366,8 @@ class MaterialNodeRepository:
             node_id: UUID of the node.
             title: New title (if provided).
             description: New description (None to clear, _Unset to skip).
+            default_language: New default language
+                (None to clear, _Unset to skip).
 
         Returns:
             Updated MaterialNode.
@@ -340,6 +384,8 @@ class MaterialNodeRepository:
             node.title = title
         if not isinstance(description, _Unset):
             node.description = description
+        if not isinstance(default_language, _Unset):
+            node.default_language = default_language
 
         await self._session.flush()
         return node

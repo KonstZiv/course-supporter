@@ -149,6 +149,12 @@ class MaterialNode(Base):
     )
     expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
     expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
+    default_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="Default ISO 639-1 language for materials under this subtree. "
+        "Usually set on the root (course) node; inherited by children and "
+        "their materials unless overridden on the material itself.",
+    )
     order: Mapped[int] = mapped_column(Integer, default=0)
     node_fingerprint: Mapped[str | None] = mapped_column(
         String(64),
@@ -264,6 +270,14 @@ class MaterialEntry(Base):
         comment="SHA-256 of uploaded raw file for integrity detection",
     )
     raw_size_bytes: Mapped[int | None] = mapped_column(Integer)
+
+    # ── Language ──
+    language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="ISO 639-1 language of the material. NULL = inherit from course "
+        "(root MaterialNode.default_language) or auto-detect at STT time. "
+        "Auto-detected language is cached back to this column on first success.",
+    )
 
     # ── Processed layer ──
     processed_hash: Mapped[str | None] = mapped_column(

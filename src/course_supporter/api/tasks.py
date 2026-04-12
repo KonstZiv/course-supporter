@@ -130,6 +130,9 @@ async def arq_ingest_material(
     from course_supporter.storage.material_entry_repository import (
         MaterialEntryRepository,
     )
+    from course_supporter.storage.material_node_repository import (
+        MaterialNodeRepository,
+    )
 
     check_work_window(JobPriority(priority))
 
@@ -156,14 +159,30 @@ async def arq_ingest_material(
     processors = create_processors(heavy, vd_pipeline=vd, stt_router=stt_router)
     s3: S3Client | None = ctx.get("s3_client")
 
+    detected_language: str | None = None
+
     async with session_factory() as session:
         job_repo = JobRepository(session)
         entry_repo = MaterialEntryRepository(session)
+        node_repo = MaterialNodeRepository(session)
 
         entry = await entry_repo.get_by_id(mid)
         if entry is None:
             log.error("material_entry_not_found", material_id=material_id)
             return
+
+        # Resolve effective language: entry override → course default → None.
+        # When None, STT will auto-detect and return detected_language which
+        # we persist back to the entry after successful ingestion.
+        if entry.language is None:
+            root = await node_repo.get_root_for(entry.materialnode_id)
+            if root is not None and root.default_language:
+                entry.language = root.default_language
+                log.debug(
+                    "language_inherited_from_course",
+                    language=entry.language,
+                    root_id=str(root.id),
+                )
 
         try:
             await job_repo.update_status(jid, "active")
@@ -181,6 +200,7 @@ async def arq_ingest_material(
                 doc = await processor.process(resolved, router=router)
 
             content = doc.model_dump_json()
+            detected_language = doc.metadata.get("detected_language")
 
         except Exception as exc:
             await session.rollback()
@@ -191,6 +211,20 @@ async def arq_ingest_material(
             )
             log.error("ingestion_failed", error=str(exc))
             return
+
+    # Cache auto-detected language back to the entry for future STT calls.
+    # Uses an atomic UPDATE ... WHERE language IS NULL to avoid a race
+    # where a concurrent PATCH may set language between our check and write.
+    if detected_language:
+        async with session_factory() as session:
+            entry_repo = MaterialEntryRepository(session)
+            updated = await entry_repo.set_language_if_unset(mid, detected_language)
+            await session.commit()
+            if updated:
+                log.info(
+                    "language_auto_detected_cached",
+                    language=detected_language,
+                )
 
     await callback.on_success(
         job_id=jid,

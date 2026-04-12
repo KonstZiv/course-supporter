@@ -49,14 +49,19 @@ class DeepgramSTTProvider(STTProvider):
         audio_path = Path(request.audio_path)
         content_type = guess_content_type(audio_path.suffix)
 
-        params: dict[str, str] = {
+        params: dict[str, str | bool] = {
             "model": self._default_model,
-            "punctuate": "true",
-            "paragraphs": "true",
-            "smart_format": "true",
+            "punctuate": True,
+            "paragraphs": True,
+            "smart_format": True,
         }
         if request.language:
             params["language"] = request.language
+        else:
+            # Auto-detect when caller didn't specify the language.
+            # httpx encodes True → "true" for query params (lowercase),
+            # matching Deepgram's documented boolean format.
+            params["detect_language"] = True
 
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         client = self._next_client()
@@ -71,7 +76,8 @@ class DeepgramSTTProvider(STTProvider):
         resp.raise_for_status()
         body = resp.json()
 
-        alt = body["results"]["channels"][0]["alternatives"][0]
+        channel = body["results"]["channels"][0]
+        alt = channel["alternatives"][0]
         text: str = alt.get("transcript", "")
         confidence: float | None = alt.get("confidence")
 
@@ -79,12 +85,20 @@ class DeepgramSTTProvider(STTProvider):
         metadata = body.get("metadata", {})
         duration: float | None = metadata.get("duration")
 
+        # Auto-detected language (Deepgram reports this at the channel level).
+        detected: str | None = None
+        if request.language is None:
+            raw_detected = channel.get("detected_language")
+            if isinstance(raw_detected, str) and raw_detected:
+                detected = raw_detected
+
         segments = _build_segments(alt)
 
         return STTResult(
             text=text,
             segments=segments,
             language=request.language,
+            detected_language=detected,
             confidence=confidence,
             provider=self.provider_name,
             model_id=self._default_model,

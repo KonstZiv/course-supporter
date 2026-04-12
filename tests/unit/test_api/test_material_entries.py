@@ -62,6 +62,7 @@ def _mock_entry(
     entry.material_role = material_role
     entry.source_url = source_url
     entry.filename = filename
+    entry.language = None
     entry.order = order
     entry.state = state
     entry.error_message = error_message

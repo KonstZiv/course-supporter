@@ -44,6 +44,11 @@ def configure_logging(
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        # Render full tracebacks when ``logger.exception()`` or
+        # ``exc_info=True`` is used. Without this, logs only show
+        # ``exc_info: true`` flag without the actual Python traceback,
+        # which makes debugging production failures nearly impossible.
+        structlog.processors.format_exc_info,
         structlog.processors.UnicodeDecoder(),
         _redact_sensitive_keys,
     ]

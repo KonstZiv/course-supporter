@@ -120,18 +120,15 @@ class TestDeepgramLanguageAutoDetect:
         self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When request.language=None, provider sends detect_language=true."""
-        from unittest.mock import AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
         from course_supporter.stt.schemas import STTRequest
 
         provider = DeepgramSTTProvider(api_keys=["k"])
-        mock_resp = type(
-            "R",
-            (),
-            {"raise_for_status": lambda self: None, "json": lambda self: self._body},
-        )()
-        mock_resp._body = self._response_body()  # type: ignore[attr-defined]
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = self._response_body()
         post_mock = AsyncMock(return_value=mock_resp)
         monkeypatch.setattr(provider._clients[0], "post", post_mock)
 
@@ -150,18 +147,15 @@ class TestDeepgramLanguageAutoDetect:
         self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Explicit request.language → skip detect_language and pass it as-is."""
-        from unittest.mock import AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
         from course_supporter.stt.schemas import STTRequest
 
         provider = DeepgramSTTProvider(api_keys=["k"])
-        mock_resp = type(
-            "R",
-            (),
-            {"raise_for_status": lambda self: None, "json": lambda self: self._body},
-        )()
-        mock_resp._body = self._response_body(include_detected=False)  # type: ignore[attr-defined]
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = self._response_body(include_detected=False)
         post_mock = AsyncMock(return_value=mock_resp)
         monkeypatch.setattr(provider._clients[0], "post", post_mock)
 

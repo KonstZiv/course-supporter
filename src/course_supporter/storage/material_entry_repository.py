@@ -114,8 +114,10 @@ class MaterialEntryRepository:
             .execution_options(synchronize_session=False)
         )
         result = await self._session.execute(stmt)
-        # rowcount is exposed via CursorResult; cast for mypy strictness.
-        return int(result.rowcount or 0) > 0  # type: ignore[attr-defined]
+        # ``rowcount`` is provided by CursorResult (actual runtime type
+        # for DML execute); SQLAlchemy's static return type is the wider
+        # ``Result`` which does not expose it — hence the ignore.
+        return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     async def set_pending(
         self,

@@ -95,25 +95,42 @@ class TestDeepgramLanguageAutoDetect:
         p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
         return p
 
-    def _response_body(self, *, include_detected: bool = True) -> dict[str, Any]:
+    def _response_body(
+        self,
+        *,
+        detected_language: str | None = "uk",
+        transcript: str = "hello",
+        duration: float = 1.23,
+    ) -> dict[str, Any]:
+        """Build a Deepgram-shaped response body.
+
+        Returned as a plain dict (not ``MagicMock``) on purpose: this mirrors
+        Deepgram's real JSON contract so parser changes / API schema drift
+        are caught by the test instead of being silently absorbed by
+        attribute-auto-generating mocks.
+        """
         channel: dict[str, Any] = {
             "alternatives": [
                 {
-                    "transcript": "hello",
+                    "transcript": transcript,
                     "confidence": 0.95,
                     "paragraphs": {
                         "paragraphs": [
-                            {"sentences": [{"text": "hello", "start": 0.0, "end": 0.5}]}
+                            {
+                                "sentences": [
+                                    {"text": transcript, "start": 0.0, "end": 0.5}
+                                ]
+                            }
                         ]
                     },
                 }
             ],
         }
-        if include_detected:
-            channel["detected_language"] = "uk"
+        if detected_language is not None:
+            channel["detected_language"] = detected_language
         return {
             "results": {"channels": [channel]},
-            "metadata": {"duration": 1.23},
+            "metadata": {"duration": duration},
         }
 
     async def test_adds_detect_language_when_no_language(
@@ -155,7 +172,7 @@ class TestDeepgramLanguageAutoDetect:
         provider = DeepgramSTTProvider(api_keys=["k"])
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
-        mock_resp.json.return_value = self._response_body(include_detected=False)
+        mock_resp.json.return_value = self._response_body(detected_language=None)
         post_mock = AsyncMock(return_value=mock_resp)
         monkeypatch.setattr(provider._clients[0], "post", post_mock)
 

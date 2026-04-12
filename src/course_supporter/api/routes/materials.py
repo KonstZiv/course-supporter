@@ -498,6 +498,11 @@ async def retry_material(
         source_type=entry.source_type,
         source_url=entry.source_url,
     )
+    # Flip the material to PENDING synchronously so the UI reflects the
+    # transition immediately, without waiting for the worker to pick up
+    # the ARQ job and call set_pending itself. The worker will call
+    # set_pending again (idempotent) with the same job_id.
+    await entry_repo.set_pending(entry.id, job.id)
     await session.commit()
 
     logger.info(

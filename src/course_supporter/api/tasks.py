@@ -213,13 +213,14 @@ async def arq_ingest_material(
             return
 
     # Cache auto-detected language back to the entry for future STT calls.
+    # Uses an atomic UPDATE ... WHERE language IS NULL to avoid a race
+    # where a concurrent PATCH may set language between our check and write.
     if detected_language:
         async with session_factory() as session:
             entry_repo = MaterialEntryRepository(session)
-            cached = await entry_repo.get_by_id(mid)
-            if cached is not None and cached.language is None:
-                cached.language = detected_language
-                await session.commit()
+            updated = await entry_repo.set_language_if_unset(mid, detected_language)
+            await session.commit()
+            if updated:
                 log.info(
                     "language_auto_detected_cached",
                     language=detected_language,

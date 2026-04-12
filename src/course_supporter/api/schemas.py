@@ -229,6 +229,17 @@ class NodeUpdateRequest(BaseModel):
             "``model_fields_set``."
         ),
     )
+    default_language: str | None = Field(
+        default=None,
+        pattern=r"^[a-z]{2}$",
+        description=(
+            "New default ISO 639-1 language for this subtree. "
+            "Send ``null`` to clear, omit to keep unchanged. "
+            "Setting it is a pure DB write; does NOT trigger re-ingestion of "
+            "existing materials. New uploads and explicit retries will pick it up."
+        ),
+        examples=["uk", "en"],
+    )
 
 
 class NodeMoveRequest(BaseModel):

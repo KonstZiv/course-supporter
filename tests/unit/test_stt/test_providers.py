@@ -1,5 +1,8 @@
 """Tests for STT provider interface and factory."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from course_supporter.stt.providers import STT_PROVIDER_REGISTRY
@@ -87,13 +90,13 @@ class TestDeepgramLanguageAutoDetect:
     """Deepgram must auto-detect language when caller omits it."""
 
     @pytest.fixture()
-    def fake_audio(self, tmp_path):  # type: ignore[no-untyped-def]
+    def fake_audio(self, tmp_path: Path) -> Path:
         p = tmp_path / "sample.wav"
         p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
         return p
 
-    def _response_body(self, *, include_detected: bool = True) -> dict:
-        channel: dict = {
+    def _response_body(self, *, include_detected: bool = True) -> dict[str, Any]:
+        channel: dict[str, Any] = {
             "alternatives": [
                 {
                     "transcript": "hello",
@@ -114,8 +117,8 @@ class TestDeepgramLanguageAutoDetect:
         }
 
     async def test_adds_detect_language_when_no_language(
-        self, fake_audio, monkeypatch
-    ) -> None:  # type: ignore[no-untyped-def]
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When request.language=None, provider sends detect_language=true."""
         from unittest.mock import AsyncMock
 
@@ -138,14 +141,14 @@ class TestDeepgramLanguageAutoDetect:
 
         call_kwargs = post_mock.await_args.kwargs
         params = call_kwargs["params"]
-        assert params.get("detect_language") == "true"
+        assert params.get("detect_language") is True
         assert "language" not in params
         assert result.detected_language == "uk"
         assert result.language is None
 
     async def test_no_detect_language_when_language_explicit(
-        self, fake_audio, monkeypatch
-    ) -> None:  # type: ignore[no-untyped-def]
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Explicit request.language → skip detect_language and pass it as-is."""
         from unittest.mock import AsyncMock
 

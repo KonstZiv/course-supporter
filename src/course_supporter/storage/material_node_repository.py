@@ -121,9 +121,14 @@ class MaterialNodeRepository:
     async def get_root_for(self, node_id: uuid.UUID) -> MaterialNode | None:
         """Walk up the parent chain to find the root (course) node.
 
-        Uses a recursive CTE to traverse ``parent_materialnode_id``
-        links up to the first node whose parent is NULL. Returns None
-        if the starting node does not exist.
+        Uses a recursive CTE to traverse ``parent_materialnode_id`` links
+        to the first node whose parent is NULL. Returns None if the
+        starting node does not exist.
+
+        Performance note: a single recursive CTE query is preferred over
+        an iterative loop of round-trips because course trees are shallow
+        in practice (typically 3-7 levels), and a single DB call beats
+        N sequential ``session.get`` calls over the wire.
         """
         # Recursive CTE: start at node_id, climb up via parent FK.
         ancestor_cte = (
@@ -353,6 +358,7 @@ class MaterialNodeRepository:
         *,
         title: str | None = None,
         description: str | None | _Unset = _Unset.TOKEN,
+        default_language: str | None | _Unset = _Unset.TOKEN,
     ) -> MaterialNode:
         """Update node fields.
 
@@ -360,6 +366,8 @@ class MaterialNodeRepository:
             node_id: UUID of the node.
             title: New title (if provided).
             description: New description (None to clear, _Unset to skip).
+            default_language: New default language
+                (None to clear, _Unset to skip).
 
         Returns:
             Updated MaterialNode.
@@ -376,6 +384,8 @@ class MaterialNodeRepository:
             node.title = title
         if not isinstance(description, _Unset):
             node.description = description
+        if not isinstance(default_language, _Unset):
+            node.default_language = default_language
 
         await self._session.flush()
         return node

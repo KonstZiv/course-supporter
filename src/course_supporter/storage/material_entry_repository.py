@@ -6,7 +6,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.source import MaterialRole
@@ -91,6 +91,31 @@ class MaterialEntryRepository:
         stmt = select(MaterialEntry).where(MaterialEntry.source_url == source_url)
         result = await self._session.execute(stmt)
         return result.scalars().first()
+
+    async def set_language_if_unset(
+        self,
+        entry_id: uuid.UUID,
+        language: str,
+    ) -> bool:
+        """Atomically set ``language`` only if it is currently NULL.
+
+        Guards against races where a concurrent PATCH may set the
+        language between our read and write. Returns True if the row
+        was updated, False if it was skipped because the language
+        was already set (or the row does not exist).
+        """
+        stmt = (
+            update(MaterialEntry)
+            .where(
+                MaterialEntry.id == entry_id,
+                MaterialEntry.language.is_(None),
+            )
+            .values(language=language)
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        # rowcount is exposed via CursorResult; cast for mypy strictness.
+        return int(result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     async def set_pending(
         self,

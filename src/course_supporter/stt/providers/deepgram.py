@@ -49,17 +49,19 @@ class DeepgramSTTProvider(STTProvider):
         audio_path = Path(request.audio_path)
         content_type = guess_content_type(audio_path.suffix)
 
-        params: dict[str, str] = {
+        params: dict[str, str | bool] = {
             "model": self._default_model,
-            "punctuate": "true",
-            "paragraphs": "true",
-            "smart_format": "true",
+            "punctuate": True,
+            "paragraphs": True,
+            "smart_format": True,
         }
         if request.language:
             params["language"] = request.language
         else:
             # Auto-detect when caller didn't specify the language.
-            params["detect_language"] = "true"
+            # httpx encodes True → "true" for query params (lowercase),
+            # matching Deepgram's documented boolean format.
+            params["detect_language"] = True
 
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         client = self._next_client()

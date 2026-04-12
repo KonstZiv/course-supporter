@@ -72,10 +72,17 @@ class OpenAISTTProvider(STTProvider):
         text: str = result.text if hasattr(result, "text") else str(result)
         segments = _extract_segments(result)
 
+        # whisper-1 verbose_json returns `language`; gpt-4o-mini-transcribe does not.
+        detected_raw = getattr(result, "language", None)
+        detected: str | None = None
+        if request.language is None and isinstance(detected_raw, str) and detected_raw:
+            detected = detected_raw
+
         return STTResult(
             text=text,
             segments=segments,
             language=request.language,
+            detected_language=detected,
             provider=self.provider_name,
             model_id=model,
             latency_ms=timer.elapsed_ms,

@@ -135,6 +135,16 @@ async def create_material(
         str | None,
         Form(description="Override filename (optional, defaults to uploaded name)."),
     ] = None,
+    language: Annotated[
+        str | None,
+        Form(
+            description=(
+                "Optional ISO 639-1 language override. When empty, the course "
+                "default is used and STT falls back to auto-detection."
+            ),
+            pattern=r"^[a-z]{2}$",
+        ),
+    ] = None,
 ) -> MaterialEntryCreateResponse:
     """Add a new material to a tree node.
 
@@ -197,6 +207,7 @@ async def create_material(
         source_url=actual_url,
         filename=actual_filename,
         material_role=material_role,
+        language=language,
     )
 
     job = await enqueue_ingestion(
@@ -320,6 +331,7 @@ async def confirm_upload(
         source_url=s3_url,
         filename=actual_filename,
         material_role=body.material_role,
+        language=body.language,
     )
 
     job = await enqueue_ingestion(

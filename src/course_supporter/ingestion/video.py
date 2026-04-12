@@ -465,12 +465,16 @@ class VideoProcessor(SourceProcessor):
                 f"VideoProcessor expects 'video', got '{source.source_type}'"
             )
 
-        logger.info("video_processor_start", source_url=source.source_url)
+        logger.info(
+            "video_processor_start",
+            source_url=source.source_url,
+            language=source.language,
+        )
 
         video_path = await self._resolve_local_path(source.source_url)
 
         # Launch STT and VD in parallel
-        stt_task = asyncio.create_task(self._run_stt(video_path))
+        stt_task = asyncio.create_task(self._run_stt(video_path, source.language))
         vd_task: asyncio.Task[list[ContentChunk]] | None = (
             asyncio.create_task(self._run_vd(video_path))
             if self._vd is not None
@@ -478,7 +482,7 @@ class VideoProcessor(SourceProcessor):
         )
 
         # Wait for STT (required)
-        stt_chunks = await stt_task
+        stt_chunks, detected_language = await stt_task
 
         # Wait for VD (optional, graceful degradation)
         vd_chunks: list[ContentChunk] = []
@@ -498,18 +502,23 @@ class VideoProcessor(SourceProcessor):
             stt_chunks=len(stt_chunks),
             vd_chunks=len(vd_chunks),
             strategy=strategy,
+            detected_language=detected_language,
         )
+
+        metadata: dict[str, Any] = {
+            "strategy": strategy,
+            "stt_segments": len(stt_chunks),
+            "vd_scenes": len(vd_chunks),
+        }
+        if detected_language:
+            metadata["detected_language"] = detected_language
 
         return SourceDocument(
             source_type=SourceType.VIDEO,
             source_url=source.source_url,
             title=source.filename or "",
             chunks=stt_chunks + vd_chunks,
-            metadata={
-                "strategy": strategy,
-                "stt_segments": len(stt_chunks),
-                "vd_scenes": len(vd_chunks),
-            },
+            metadata=metadata,
         )
 
     @staticmethod
@@ -534,15 +543,24 @@ class VideoProcessor(SourceProcessor):
             raise ProcessingError(f"Video file not found: {video_path}")
         return video_path
 
-    async def _run_stt(self, video_path: Path) -> list[ContentChunk]:
-        """Extract audio and transcribe via STT Router."""
+    async def _run_stt(
+        self, video_path: Path, language: str | None
+    ) -> tuple[list[ContentChunk], str | None]:
+        """Extract audio and transcribe via STT Router.
+
+        Returns:
+            (chunks, detected_language) tuple. ``detected_language`` is
+            the provider-reported language when ``language`` was None,
+            otherwise None. Upstream persists this back to the material.
+        """
         audio_path = await _extract_audio_ffmpeg(str(video_path))
         try:
             result = await self._stt_router.transcribe(
                 action="transcribe",
                 audio_path=audio_path,
+                language=language,
             )
-            return self._stt_result_to_chunks(result)
+            return self._stt_result_to_chunks(result), result.detected_language
         finally:
             with contextlib.suppress(OSError):
                 await asyncio.to_thread(Path(audio_path).unlink)

@@ -42,6 +42,14 @@ class STTResult(BaseModel):
     text: str
     segments: list[STTSegment] = Field(default_factory=list)
     language: str | None = None
+    detected_language: str | None = Field(
+        default=None,
+        description=(
+            "ISO 639-1 code reported by the provider when auto-detection "
+            "was used (language=None in request). Upstream code can cache "
+            "this on the material for future STT calls."
+        ),
+    )
     confidence: float | None = None
     provider: str
     model_id: str

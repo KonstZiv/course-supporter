@@ -47,6 +47,7 @@ def _mock_node(
     node.learning_goal = None
     node.expected_knowledge = None
     node.expected_skills = None
+    node.default_language = None
     node.children = children or []
     node.created_at = datetime.now(UTC)
     node.updated_at = datetime.now(UTC)

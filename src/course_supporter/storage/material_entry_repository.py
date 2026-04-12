@@ -31,6 +31,7 @@ class MaterialEntryRepository:
         source_url: str,
         filename: str | None = None,
         material_role: str = "educational",
+        language: str | None = None,
     ) -> MaterialEntry:
         """Create a new material entry with auto-incremented order.
 
@@ -40,6 +41,9 @@ class MaterialEntryRepository:
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
             material_role: Role: educational or methodological.
+            language: Optional ISO 639-1 language override. When None,
+                the course default is used and STT falls back to
+                auto-detection (which caches its result back here).
 
         Returns:
             The newly created MaterialEntry.
@@ -51,6 +55,7 @@ class MaterialEntryRepository:
             source_url=source_url,
             filename=filename,
             material_role=material_role,
+            language=language,
             order=next_order,
         )
         self._session.add(entry)

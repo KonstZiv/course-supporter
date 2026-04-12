@@ -134,6 +134,36 @@ class TestGetById:
         assert result is None
 
 
+class TestGetRootFor:
+    """MaterialNodeRepository.get_root_for tests."""
+
+    async def test_returns_none_when_start_node_absent(self) -> None:
+        """CTE returns no rows → method returns None."""
+        session = AsyncMock()
+        result_row = MagicMock()
+        result_row.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_row)
+
+        repo = MaterialNodeRepository(session)
+        assert await repo.get_root_for(uuid.uuid4()) is None
+        session.get.assert_not_called()
+
+    async def test_returns_root_node_when_found(self) -> None:
+        """CTE returns root_id → load root via session.get."""
+        root_id = uuid.uuid4()
+        root_node = _mock_node(node_id=root_id)
+        session = AsyncMock()
+        result_row = MagicMock()
+        result_row.scalar_one_or_none = MagicMock(return_value=root_id)
+        session.execute = AsyncMock(return_value=result_row)
+        session.get = AsyncMock(return_value=root_node)
+
+        repo = MaterialNodeRepository(session)
+        result = await repo.get_root_for(uuid.uuid4())
+        assert result is root_node
+        session.get.assert_awaited_once()
+
+
 class TestGetTree:
     """MaterialNodeRepository.get_subtree tests."""
 

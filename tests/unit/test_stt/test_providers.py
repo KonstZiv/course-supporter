@@ -81,3 +81,93 @@ class TestSTTProviderFactory:
         providers = create_stt_providers(s)
         assert "deepgram" in providers
         assert isinstance(providers["deepgram"], DeepgramSTTProvider)
+
+
+class TestDeepgramLanguageAutoDetect:
+    """Deepgram must auto-detect language when caller omits it."""
+
+    @pytest.fixture()
+    def fake_audio(self, tmp_path):  # type: ignore[no-untyped-def]
+        p = tmp_path / "sample.wav"
+        p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+        return p
+
+    def _response_body(self, *, include_detected: bool = True) -> dict:
+        channel: dict = {
+            "alternatives": [
+                {
+                    "transcript": "hello",
+                    "confidence": 0.95,
+                    "paragraphs": {
+                        "paragraphs": [
+                            {"sentences": [{"text": "hello", "start": 0.0, "end": 0.5}]}
+                        ]
+                    },
+                }
+            ],
+        }
+        if include_detected:
+            channel["detected_language"] = "uk"
+        return {
+            "results": {"channels": [channel]},
+            "metadata": {"duration": 1.23},
+        }
+
+    async def test_adds_detect_language_when_no_language(
+        self, fake_audio, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        """When request.language=None, provider sends detect_language=true."""
+        from unittest.mock import AsyncMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = type(
+            "R",
+            (),
+            {"raise_for_status": lambda self: None, "json": lambda self: self._body},
+        )()
+        mock_resp._body = self._response_body()  # type: ignore[attr-defined]
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        result = await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), language=None)
+        )
+
+        call_kwargs = post_mock.await_args.kwargs
+        params = call_kwargs["params"]
+        assert params.get("detect_language") == "true"
+        assert "language" not in params
+        assert result.detected_language == "uk"
+        assert result.language is None
+
+    async def test_no_detect_language_when_language_explicit(
+        self, fake_audio, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Explicit request.language → skip detect_language and pass it as-is."""
+        from unittest.mock import AsyncMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = type(
+            "R",
+            (),
+            {"raise_for_status": lambda self: None, "json": lambda self: self._body},
+        )()
+        mock_resp._body = self._response_body(include_detected=False)  # type: ignore[attr-defined]
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        result = await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), language="en")
+        )
+
+        params = post_mock.await_args.kwargs["params"]
+        assert params.get("language") == "en"
+        assert "detect_language" not in params
+        assert result.detected_language is None
+        assert result.language == "en"

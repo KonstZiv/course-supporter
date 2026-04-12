@@ -143,6 +143,7 @@ async def create_root_node(
         tenant_id=tenant.tenant_id,
         title=body.title,
         description=body.description,
+        default_language=body.default_language,
     )
     await session.commit()
 
@@ -208,6 +209,7 @@ async def create_child_node(
         parent_materialnode_id=node_id,
         title=body.title,
         description=body.description,
+        default_language=body.default_language,
     )
     await session.commit()
 

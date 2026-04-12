@@ -190,6 +190,16 @@ class NodeCreateRequest(BaseModel):
         description="Optional detailed description of the node's purpose.",
         examples=["Overview of the foundational concepts covered in this module."],
     )
+    default_language: str | None = Field(
+        default=None,
+        pattern=r"^[a-z]{2}$",
+        description=(
+            "Optional ISO 639-1 language for materials under this node. "
+            "Usually set on the root/course node; inherited by materials "
+            "unless overridden. Leave empty to rely on STT auto-detection."
+        ),
+        examples=["uk", "en"],
+    )
 
 
 class NodeUpdateRequest(BaseModel):
@@ -288,6 +298,10 @@ class NodeResponse(BaseModel):
     )
     expected_skills: list[str] | None = Field(
         default=None, description="Expected skills items."
+    )
+    default_language: str | None = Field(
+        default=None,
+        description=("Default ISO 639-1 language for materials under this subtree."),
     )
     order: int = Field(description="0-based position among siblings.")
     node_fingerprint: str | None = Field(
@@ -457,6 +471,15 @@ class MaterialEntryCreateRequest(BaseModel):
         description="Original filename for display purposes.",
         examples=["slides.pdf", "lecture-01.mp4"],
     )
+    language: str | None = Field(
+        default=None,
+        pattern=r"^[a-z]{2}$",
+        description=(
+            "Optional ISO 639-1 language override. When absent, the course "
+            "default is used, and STT auto-detection is the final fallback."
+        ),
+        examples=["uk", "en"],
+    )
 
 
 class MaterialEntryUpdateRequest(BaseModel):
@@ -484,6 +507,12 @@ class MaterialEntryResponse(BaseModel):
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
+    language: str | None = Field(
+        default=None,
+        description=(
+            "ISO 639-1 language. ``null`` when unset and not yet auto-detected."
+        ),
+    )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
         description=(
@@ -522,6 +551,12 @@ class MaterialEntryCreateResponse(BaseModel):
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
+    language: str | None = Field(
+        default=None,
+        description=(
+            "ISO 639-1 language. ``null`` when unset and not yet auto-detected."
+        ),
+    )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
         description="Derived lifecycle state (will be ``raw`` or ``pending``)."
@@ -923,6 +958,15 @@ class ConfirmUploadRequest(BaseModel):
         default=None,
         max_length=500,
         description="Override filename (defaults to key basename).",
+    )
+    language: str | None = Field(
+        default=None,
+        pattern=r"^[a-z]{2}$",
+        description=(
+            "Optional ISO 639-1 language override. When absent, the course "
+            "default is used, and STT auto-detection is the final fallback."
+        ),
+        examples=["uk", "en"],
     )
 
 

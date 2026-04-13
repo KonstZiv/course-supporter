@@ -12,6 +12,48 @@ from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 
+def _build_contents(request: LLMRequest) -> str | list[Any]:
+    """Build ``contents`` payload for Gemini SDK from an LLMRequest.
+
+    The router / VD pipeline passes images as raw ``bytes`` in
+    ``request.contents`` and the text instruction in ``request.prompt``
+    (provider-agnostic format, also used by OpenAI-compat providers).
+
+    Gemini's SDK, however, validates the ``contents`` argument against
+    ``Content`` / ``Part`` / ``File`` / ``Image`` / ``str`` shapes and
+    rejects a bare ``list[bytes]`` with 25-plus Pydantic validation
+    errors. This helper converts our generic format into the exact
+    SDK-accepted shape:
+
+    - text-only (no contents): pass the prompt string directly
+    - already-shaped contents (Content / Part / str items): pass through
+    - raw bytes + prompt: wrap bytes in ``Part.from_bytes`` (image/jpeg)
+      and append the prompt as a text part, all inside one ``Content``
+    """
+    contents = request.contents
+    if not contents:
+        return request.prompt
+
+    # If caller already built SDK-native items (strings, Content, Part,
+    # File, Image, dict), pass through unchanged to preserve existing
+    # callers (e.g. video.py uses types.Content directly for video URIs).
+    if all(not isinstance(c, (bytes, bytearray)) for c in contents):
+        return contents
+
+    parts: list[Any] = []
+    for item in contents:
+        if isinstance(item, (bytes, bytearray)):
+            parts.append(
+                types.Part.from_bytes(data=bytes(item), mime_type="image/jpeg")
+            )
+        else:
+            # Unknown item type inside a mixed list — trust SDK to handle it.
+            parts.append(item)
+    if request.prompt:
+        parts.append(types.Part.from_text(text=request.prompt))
+    return [types.Content(parts=parts)]
+
+
 class GeminiProvider(LLMProvider):
     """Gemini provider using google-genai SDK.
 
@@ -42,9 +84,7 @@ class GeminiProvider(LLMProvider):
             system_instruction=request.system_prompt,
         )
 
-        contents: str | list[Any] = (
-            request.contents if request.contents else request.prompt
-        )
+        contents = _build_contents(request)
 
         client = self._next_client()
         with self._measure_latency() as timer:
@@ -79,9 +119,7 @@ class GeminiProvider(LLMProvider):
             response_schema=response_schema,
         )
 
-        contents: str | list[Any] = (
-            request.contents if request.contents else request.prompt
-        )
+        contents = _build_contents(request)
 
         client = self._next_client()
         with self._measure_latency() as timer:

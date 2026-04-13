@@ -129,6 +129,73 @@ class TestProviderFactory:
         assert "gemini" in providers
         assert isinstance(providers["gemini"], GeminiProvider)
 
+
+class TestGeminiBuildContents:
+    """_build_contents maps our generic format to Gemini SDK shapes."""
+
+    def test_text_only_returns_prompt_string(self) -> None:
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(prompt="hello")
+        assert _build_contents(req) == "hello"
+
+    def test_empty_contents_returns_prompt(self) -> None:
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(prompt="hi", contents=[])
+        assert _build_contents(req) == "hi"
+
+    def test_raw_bytes_wrapped_into_parts_with_prompt(self) -> None:
+        """VD path: bytes list + prompt text → one Content with Parts."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        img = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        req = LLMRequest(prompt="Describe this", contents=[img])
+        result = _build_contents(req)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        content = result[0]
+        assert isinstance(content, types.Content)
+        # Parts: 1 image + 1 text
+        assert len(content.parts) == 2
+
+    def test_multiple_images_plus_prompt(self) -> None:
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(
+            prompt="compare",
+            contents=[b"img1", b"img2", b"img3"],
+        )
+        result = _build_contents(req)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert len(result[0].parts) == 4  # 3 images + 1 text
+        # First three parts carry image data
+        for i in range(3):
+            assert isinstance(result[0].parts[i], types.Part)
+
+    def test_already_sdk_shaped_contents_passthrough(self) -> None:
+        """Legacy caller passes Content/Part/str — must not rewrap into Parts."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        existing = [types.Content(parts=[types.Part.from_text(text="hi")])]
+        req = LLMRequest(prompt="ignored", contents=existing)
+        result = _build_contents(req)
+        # Pydantic may rebuild the list, but items must be the same Content
+        # objects (no wrapping into a new Content with mixed Parts).
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert isinstance(result[0], types.Content)
+        assert len(result[0].parts) == 1  # still the single "hi" text part
+
     def test_deepseek_uses_openai_compat(self) -> None:
         from course_supporter.config import Settings
         from course_supporter.llm.factory import create_providers

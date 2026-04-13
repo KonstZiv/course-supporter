@@ -11,6 +11,33 @@ from pydantic import BaseModel
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
+# Image MIME signatures (magic bytes). Only the formats Gemini accepts
+# and that we actually produce are listed: VD frame_sampler emits JPEG
+# (ffmpeg frame_%06d.jpg), describe_slides emits PNG (PyMuPDF
+# pixmap.tobytes("png")). WebP/HEIC/HEIF are left in because Gemini
+# supports them and users may one day paste such content.
+_IMAGE_MIME_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _detect_image_mime(data: bytes) -> str:
+    """Detect image MIME type from magic bytes.
+
+    Falls back to ``application/octet-stream`` for unknown formats so the
+    SDK surfaces a clear error rather than silently mislabeling bytes.
+    """
+    for signature, mime in _IMAGE_MIME_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    # RIFF....WEBP needs a two-segment check.
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
 
 def _build_contents(request: LLMRequest) -> str | list[Any]:
     """Build ``contents`` payload for Gemini SDK from an LLMRequest.
@@ -26,29 +53,40 @@ def _build_contents(request: LLMRequest) -> str | list[Any]:
     SDK-accepted shape:
 
     - text-only (no contents): pass the prompt string directly
-    - already-shaped contents (Content / Part / str items): pass through
-    - raw bytes + prompt: wrap bytes in ``Part.from_bytes`` (image/jpeg)
-      and append the prompt as a text part, all inside one ``Content``
+    - already-shaped contents (all items non-bytes): pass through
+    - raw bytes list + optional prompt: wrap each bytes item in
+      ``Part.from_bytes`` (MIME auto-detected from magic bytes) and
+      append the prompt as a text Part, all inside one ``Content``
+
+    Mixing bytes with SDK-native items in the same list is rejected —
+    callers should commit to one shape.
     """
     contents = request.contents
     if not contents:
         return request.prompt
 
-    # If caller already built SDK-native items (strings, Content, Part,
-    # File, Image, dict), pass through unchanged to preserve existing
-    # callers (e.g. video.py uses types.Content directly for video URIs).
-    if all(not isinstance(c, (bytes, bytearray)) for c in contents):
+    has_bytes = any(isinstance(c, (bytes, bytearray)) for c in contents)
+    has_non_bytes = any(not isinstance(c, (bytes, bytearray)) for c in contents)
+
+    # Legacy / SDK-shaped passthrough: e.g. video.py passes
+    # types.Content with FileData for the Gemini File API.
+    if not has_bytes:
         return contents
+
+    if has_non_bytes:
+        msg = (
+            "Gemini _build_contents: cannot mix raw bytes with SDK-native "
+            "items in the same contents list. Pass either all bytes "
+            "(image data) or all SDK-shaped items."
+        )
+        raise TypeError(msg)
 
     parts: list[Any] = []
     for item in contents:
-        if isinstance(item, (bytes, bytearray)):
-            parts.append(
-                types.Part.from_bytes(data=bytes(item), mime_type="image/jpeg")
-            )
-        else:
-            # Unknown item type inside a mixed list — trust SDK to handle it.
-            parts.append(item)
+        data = bytes(item)
+        parts.append(
+            types.Part.from_bytes(data=data, mime_type=_detect_image_mime(data))
+        )
     if request.prompt:
         parts.append(types.Part.from_text(text=request.prompt))
     return [types.Content(parts=parts)]

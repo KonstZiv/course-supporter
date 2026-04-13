@@ -151,6 +151,7 @@ class TestGeminiBuildContents:
 
         from course_supporter.llm.providers.gemini import _build_contents
 
+        # Valid JPEG magic bytes so MIME detection succeeds.
         img = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
         req = LLMRequest(prompt="Describe this", contents=[img])
         result = _build_contents(req)
@@ -167,16 +168,13 @@ class TestGeminiBuildContents:
 
         from course_supporter.llm.providers.gemini import _build_contents
 
-        req = LLMRequest(
-            prompt="compare",
-            contents=[b"img1", b"img2", b"img3"],
-        )
+        jpeg = b"\xff\xd8\xff\xe0" + b"x" * 10
+        req = LLMRequest(prompt="compare", contents=[jpeg, jpeg, jpeg])
         result = _build_contents(req)
 
         assert isinstance(result, list)
         assert len(result) == 1
         assert len(result[0].parts) == 4  # 3 images + 1 text
-        # First three parts carry image data
         for i in range(3):
             assert isinstance(result[0].parts[i], types.Part)
 
@@ -189,12 +187,58 @@ class TestGeminiBuildContents:
         existing = [types.Content(parts=[types.Part.from_text(text="hi")])]
         req = LLMRequest(prompt="ignored", contents=existing)
         result = _build_contents(req)
-        # Pydantic may rebuild the list, but items must be the same Content
-        # objects (no wrapping into a new Content with mixed Parts).
         assert isinstance(result, list)
         assert len(result) == 1
         assert isinstance(result[0], types.Content)
         assert len(result[0].parts) == 1  # still the single "hi" text part
+
+    def test_mixed_bytes_and_sdk_items_rejected(self) -> None:
+        """Mixing bytes with SDK-native items is a bug — raise TypeError."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(
+            prompt="x",
+            contents=[
+                b"\xff\xd8\xff\xe0",
+                types.Content(parts=[types.Part.from_text(text="hi")]),
+            ],
+        )
+        with pytest.raises(TypeError, match="cannot mix raw bytes"):
+            _build_contents(req)
+
+
+class TestGeminiDetectImageMime:
+    """Magic-byte MIME detection for image payloads."""
+
+    def test_jpeg(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"\xff\xd8\xff\xe0JFIF...") == "image/jpeg"
+
+    def test_png(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"\x89PNG\r\n\x1a\nIHDR...") == "image/png"
+
+    def test_gif(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"GIF89a...") == "image/gif"
+        assert _detect_image_mime(b"GIF87a...") == "image/gif"
+
+    def test_webp(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        # RIFF<4 bytes size>WEBP<...>
+        data = b"RIFF\x00\x00\x00\x00WEBPVP8 ..."
+        assert _detect_image_mime(data) == "image/webp"
+
+    def test_unknown_falls_back_to_octet_stream(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"random nonsense") == "application/octet-stream"
 
     def test_deepseek_uses_openai_compat(self) -> None:
         from course_supporter.config import Settings

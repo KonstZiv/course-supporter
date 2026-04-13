@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.job_priority import JobPriority
 from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.orm import Job
 
 
@@ -25,9 +26,18 @@ async def enqueue_ingestion(
     source_url: str,
     priority: JobPriority = JobPriority.NORMAL,
 ) -> Job:
-    """Create a Job record and enqueue ingestion to ARQ.
+    """Create a Job record, enqueue ingestion to ARQ, flip entry to PENDING.
 
     The caller is responsible for committing the session.
+
+    Single source of truth for the RAW/READY/ERROR → PENDING transition:
+    this helper is the one place where a material entry acquires a
+    ``job_id`` and ``pending_since`` prior to processing. That way the
+    UI sees state=pending immediately after the create/retry call returns,
+    without having to wait for the worker to pick up the ARQ task. The
+    worker still calls ``set_pending`` defensively on task entry — it is
+    idempotent and protects against manual/out-of-band enqueues that
+    bypass this helper.
 
     Args:
         redis: ARQ Redis connection pool.
@@ -45,9 +55,10 @@ async def enqueue_ingestion(
     log = structlog.get_logger().bind(
         node_id=str(node_id), material_id=str(material_id)
     )
-    repo = JobRepository(session)
+    job_repo = JobRepository(session)
+    entry_repo = MaterialEntryRepository(session)
 
-    job = await repo.create(
+    job = await job_repo.create(
         tenant_id=tenant_id,
         materialnode_id=node_id,
         job_type="ingest",
@@ -69,7 +80,11 @@ async def enqueue_ingestion(
     )
 
     if arq_job is not None:
-        await repo.set_arq_job_id(job.id, arq_job.job_id)
+        await job_repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    # Synchronously mark the entry as PENDING so the UI reflects the
+    # transition immediately upon return.
+    await entry_repo.set_pending(material_id, job.id)
 
     log.info(
         "job_enqueued",

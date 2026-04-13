@@ -498,6 +498,7 @@ async def retry_material(
         source_type=entry.source_type,
         source_url=entry.source_url,
     )
+    # enqueue_ingestion already flipped the entry to PENDING synchronously.
     await session.commit()
 
     logger.info(

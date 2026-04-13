@@ -72,7 +72,11 @@ providers:
       - id: deepseek-chat
         capabilities: [structured_output]
         max_context: 131072
-        max_output_tokens: 8192
+        # Bumped from 8192 after real material_outline runs on full-length
+        # Ukrainian course videos routinely hit finish_reason="length" at
+        # 8k output tokens, burning 14 min of retries before falling back
+        # to Sonnet. DeepSeek actually supports 16k output.
+        max_output_tokens: 16384
         unit_type: tokens
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028

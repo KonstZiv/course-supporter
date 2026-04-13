@@ -73,7 +73,7 @@ async def _ffmpeg_extract_fps(
     fps: float,
     output_dir: Path,
     *,
-    timeout_sec: float = 300.0,
+    timeout_sec: float = 900.0,
 ) -> list[Path]:
     """Extract frames at fixed *fps* into *output_dir* via FFmpeg.
 

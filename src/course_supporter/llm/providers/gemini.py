@@ -65,8 +65,16 @@ def _build_contents(request: LLMRequest) -> str | list[Any]:
     if not contents:
         return request.prompt
 
-    has_bytes = any(isinstance(c, (bytes, bytearray)) for c in contents)
-    has_non_bytes = any(not isinstance(c, (bytes, bytearray)) for c in contents)
+    # Single-pass classification with early break once both flags are set.
+    has_bytes = False
+    has_non_bytes = False
+    for c in contents:
+        if isinstance(c, (bytes, bytearray)):
+            has_bytes = True
+        else:
+            has_non_bytes = True
+        if has_bytes and has_non_bytes:
+            break
 
     # Legacy / SDK-shaped passthrough: e.g. video.py passes
     # types.Content with FileData for the Gemini File API.

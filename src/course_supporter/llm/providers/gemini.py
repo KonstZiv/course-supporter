@@ -11,6 +11,94 @@ from pydantic import BaseModel
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
+# Image MIME signatures (magic bytes). Only the formats Gemini accepts
+# and that we actually produce are listed: VD frame_sampler emits JPEG
+# (ffmpeg frame_%06d.jpg), describe_slides emits PNG (PyMuPDF
+# pixmap.tobytes("png")). WebP/HEIC/HEIF are left in because Gemini
+# supports them and users may one day paste such content.
+_IMAGE_MIME_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _detect_image_mime(data: bytes) -> str:
+    """Detect image MIME type from magic bytes.
+
+    Falls back to ``application/octet-stream`` for unknown formats so the
+    SDK surfaces a clear error rather than silently mislabeling bytes.
+    """
+    for signature, mime in _IMAGE_MIME_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    # RIFF....WEBP needs a two-segment check.
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _build_contents(request: LLMRequest) -> str | list[Any]:
+    """Build ``contents`` payload for Gemini SDK from an LLMRequest.
+
+    The router / VD pipeline passes images as raw ``bytes`` in
+    ``request.contents`` and the text instruction in ``request.prompt``
+    (provider-agnostic format, also used by OpenAI-compat providers).
+
+    Gemini's SDK, however, validates the ``contents`` argument against
+    ``Content`` / ``Part`` / ``File`` / ``Image`` / ``str`` shapes and
+    rejects a bare ``list[bytes]`` with 25-plus Pydantic validation
+    errors. This helper converts our generic format into the exact
+    SDK-accepted shape:
+
+    - text-only (no contents): pass the prompt string directly
+    - already-shaped contents (all items non-bytes): pass through
+    - raw bytes list + optional prompt: wrap each bytes item in
+      ``Part.from_bytes`` (MIME auto-detected from magic bytes) and
+      append the prompt as a text Part, all inside one ``Content``
+
+    Mixing bytes with SDK-native items in the same list is rejected —
+    callers should commit to one shape.
+    """
+    contents = request.contents
+    if not contents:
+        return request.prompt
+
+    # Single-pass classification with early break once both flags are set.
+    has_bytes = False
+    has_non_bytes = False
+    for c in contents:
+        if isinstance(c, (bytes, bytearray)):
+            has_bytes = True
+        else:
+            has_non_bytes = True
+        if has_bytes and has_non_bytes:
+            break
+
+    # Legacy / SDK-shaped passthrough: e.g. video.py passes
+    # types.Content with FileData for the Gemini File API.
+    if not has_bytes:
+        return contents
+
+    if has_non_bytes:
+        msg = (
+            "Gemini _build_contents: cannot mix raw bytes with SDK-native "
+            "items in the same contents list. Pass either all bytes "
+            "(image data) or all SDK-shaped items."
+        )
+        raise TypeError(msg)
+
+    parts: list[Any] = []
+    for item in contents:
+        data = bytes(item)
+        parts.append(
+            types.Part.from_bytes(data=data, mime_type=_detect_image_mime(data))
+        )
+    if request.prompt:
+        parts.append(types.Part.from_text(text=request.prompt))
+    return [types.Content(parts=parts)]
+
 
 class GeminiProvider(LLMProvider):
     """Gemini provider using google-genai SDK.
@@ -42,9 +130,7 @@ class GeminiProvider(LLMProvider):
             system_instruction=request.system_prompt,
         )
 
-        contents: str | list[Any] = (
-            request.contents if request.contents else request.prompt
-        )
+        contents = _build_contents(request)
 
         client = self._next_client()
         with self._measure_latency() as timer:
@@ -79,9 +165,7 @@ class GeminiProvider(LLMProvider):
             response_schema=response_schema,
         )
 
-        contents: str | list[Any] = (
-            request.contents if request.contents else request.prompt
-        )
+        contents = _build_contents(request)
 
         client = self._next_client()
         with self._measure_latency() as timer:

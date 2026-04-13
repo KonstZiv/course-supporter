@@ -129,6 +129,117 @@ class TestProviderFactory:
         assert "gemini" in providers
         assert isinstance(providers["gemini"], GeminiProvider)
 
+
+class TestGeminiBuildContents:
+    """_build_contents maps our generic format to Gemini SDK shapes."""
+
+    def test_text_only_returns_prompt_string(self) -> None:
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(prompt="hello")
+        assert _build_contents(req) == "hello"
+
+    def test_empty_contents_returns_prompt(self) -> None:
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(prompt="hi", contents=[])
+        assert _build_contents(req) == "hi"
+
+    def test_raw_bytes_wrapped_into_parts_with_prompt(self) -> None:
+        """VD path: bytes list + prompt text → one Content with Parts."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        # Valid JPEG magic bytes so MIME detection succeeds.
+        img = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        req = LLMRequest(prompt="Describe this", contents=[img])
+        result = _build_contents(req)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        content = result[0]
+        assert isinstance(content, types.Content)
+        # Parts: 1 image + 1 text
+        assert len(content.parts) == 2
+
+    def test_multiple_images_plus_prompt(self) -> None:
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        jpeg = b"\xff\xd8\xff\xe0" + b"x" * 10
+        req = LLMRequest(prompt="compare", contents=[jpeg, jpeg, jpeg])
+        result = _build_contents(req)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert len(result[0].parts) == 4  # 3 images + 1 text
+        for i in range(3):
+            assert isinstance(result[0].parts[i], types.Part)
+
+    def test_already_sdk_shaped_contents_passthrough(self) -> None:
+        """Legacy caller passes Content/Part/str — must not rewrap into Parts."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        existing = [types.Content(parts=[types.Part.from_text(text="hi")])]
+        req = LLMRequest(prompt="ignored", contents=existing)
+        result = _build_contents(req)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert isinstance(result[0], types.Content)
+        assert len(result[0].parts) == 1  # still the single "hi" text part
+
+    def test_mixed_bytes_and_sdk_items_rejected(self) -> None:
+        """Mixing bytes with SDK-native items is a bug — raise TypeError."""
+        from google.genai import types
+
+        from course_supporter.llm.providers.gemini import _build_contents
+
+        req = LLMRequest(
+            prompt="x",
+            contents=[
+                b"\xff\xd8\xff\xe0",
+                types.Content(parts=[types.Part.from_text(text="hi")]),
+            ],
+        )
+        with pytest.raises(TypeError, match="cannot mix raw bytes"):
+            _build_contents(req)
+
+
+class TestGeminiDetectImageMime:
+    """Magic-byte MIME detection for image payloads."""
+
+    def test_jpeg(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"\xff\xd8\xff\xe0JFIF...") == "image/jpeg"
+
+    def test_png(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"\x89PNG\r\n\x1a\nIHDR...") == "image/png"
+
+    def test_gif(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"GIF89a...") == "image/gif"
+        assert _detect_image_mime(b"GIF87a...") == "image/gif"
+
+    def test_webp(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        # RIFF<4 bytes size>WEBP<...>
+        data = b"RIFF\x00\x00\x00\x00WEBPVP8 ..."
+        assert _detect_image_mime(data) == "image/webp"
+
+    def test_unknown_falls_back_to_octet_stream(self) -> None:
+        from course_supporter.llm.providers.gemini import _detect_image_mime
+
+        assert _detect_image_mime(b"random nonsense") == "application/octet-stream"
+
     def test_deepseek_uses_openai_compat(self) -> None:
         from course_supporter.config import Settings
         from course_supporter.llm.factory import create_providers

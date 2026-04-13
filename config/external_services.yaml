@@ -10,15 +10,18 @@ providers:
     models:
       - id: gemini-3-flash-preview
         # Preview model — added as relief when gemini-2.5-flash is
-        # throttled (503 UNAVAILABLE). Pricing not yet officially
-        # published; using 2.5-flash pricing as a conservative proxy
-        # for the cost report.
+        # throttled (503 UNAVAILABLE).
+        # TODO: Update pricing when official rates for
+        # gemini-3-flash-preview are published. The two cost_per_1k_*
+        # values below are PROVISIONAL — copied from gemini-2.5-flash
+        # as a conservative proxy so the cost report is not wildly
+        # misleading while the preview is in use.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.00015
-        cost_per_1k_out: 0.0006
+        cost_per_1k_in: 0.00015   # PROVISIONAL: 2.5-flash rate (pending official)
+        cost_per_1k_out: 0.0006   # PROVISIONAL: 2.5-flash rate (pending official)
       - id: gemini-2.5-flash
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576

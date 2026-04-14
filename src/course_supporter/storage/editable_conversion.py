@@ -13,6 +13,11 @@ from course_supporter.storage.orm import (
 )
 
 # Metadata-only columns excluded from content copying.
+#
+# Methodist Layer 3 fields (methodological_*, methodist_call_id) live only
+# on StructureNodeEditable — they are populated later by the Methodist agent
+# and must not be copied from the source StructureNode (which does not have
+# them) when initialising a fresh editable tree.
 _EXCLUDED_FIELDS: frozenset[str] = frozenset(
     {
         "id",
@@ -23,6 +28,10 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
         "edited_fields",
         "created_at",
         "updated_at",
+        # Methodist Layer 3 — populated by Methodist agent, not from SN.
+        "methodological_content",
+        "methodological_markdown",
+        "methodist_call_id",
     }
 )
 

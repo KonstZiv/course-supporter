@@ -107,6 +107,86 @@ class TestCreate:
         assert added.order == 2
         assert result is added
 
+    async def test_create_without_task_type(self) -> None:
+        """task_type defaults to None on regular materials."""
+        session = AsyncMock()
+        session.add = MagicMock()
+        repo = MaterialEntryRepository(session)
+
+        with patch.object(repo, "_next_sibling_order", return_value=0):
+            await repo.create(
+                node_id=uuid.uuid4(),
+                source_type="text",
+                source_url="s3://bucket/article.md",
+            )
+
+        added = session.add.call_args[0][0]
+        assert added.task_type is None
+
+    async def test_create_with_task_type_enum(self) -> None:
+        """AssignmentType is persisted as its string value."""
+        from course_supporter.models.methodist import AssignmentType
+
+        session = AsyncMock()
+        session.add = MagicMock()
+        repo = MaterialEntryRepository(session)
+
+        with patch.object(repo, "_next_sibling_order", return_value=0):
+            await repo.create(
+                node_id=uuid.uuid4(),
+                source_type="text",
+                source_url="s3://bucket/hw1.md",
+                task_type=AssignmentType.SHORT_TASK,
+            )
+
+        added = session.add.call_args[0][0]
+        assert added.task_type == "short_task"
+
+    async def test_create_with_task_type_string(self) -> None:
+        """Raw string values are accepted for task_type."""
+        session = AsyncMock()
+        session.add = MagicMock()
+        repo = MaterialEntryRepository(session)
+
+        with patch.object(repo, "_next_sibling_order", return_value=0):
+            await repo.create(
+                node_id=uuid.uuid4(),
+                source_type="text",
+                source_url="s3://bucket/hw1.md",
+                task_type="task",
+            )
+
+        added = session.add.call_args[0][0]
+        assert added.task_type == "task"
+
+
+class TestUpdateTaskType:
+    """MaterialEntryRepository.update_task_type tests."""
+
+    async def test_set_task_type(self) -> None:
+        from course_supporter.models.methodist import AssignmentType
+
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+        entry = _mock_entry()
+        entry.task_type = None
+
+        result = await repo.update_task_type(entry, task_type=AssignmentType.PROJECT)
+
+        assert result.task_type == "project"
+        session.flush.assert_awaited()
+
+    async def test_clear_task_type(self) -> None:
+        session = AsyncMock()
+        repo = MaterialEntryRepository(session)
+        entry = _mock_entry()
+        entry.task_type = "task"
+
+        result = await repo.update_task_type(entry, task_type=None)
+
+        assert result.task_type is None
+        session.flush.assert_awaited()
+
 
 class TestGetById:
     """MaterialEntryRepository.get_by_id tests."""

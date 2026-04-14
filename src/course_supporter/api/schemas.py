@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
+from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.storage.orm import GenerationMode, MappingValidationState
 
@@ -399,6 +400,13 @@ class MaterialEntrySummaryResponse(BaseModel):
     material_role: str = Field(
         description="Role: ``educational`` or ``methodological``."
     )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Assignment type if this material is a concrete task. "
+            "``null`` for regular (non-task) materials."
+        ),
+    )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
     order: int = Field(description="0-based position among sibling materials.")
@@ -470,6 +478,16 @@ class MaterialEntryCreateRequest(BaseModel):
         ),
         examples=["educational", "methodological"],
     )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Mark the material as a concrete assignment of the given taxonomy "
+            "tier (``test``, ``short_task``, ``task``, ``project``). When set, "
+            "the Methodist agent preserves this material as a "
+            "recommended_assignment verbatim. ``null`` for regular materials."
+        ),
+        examples=[None, "test", "task"],
+    )
     source_url: str = Field(
         ...,
         max_length=2000,
@@ -494,10 +512,23 @@ class MaterialEntryCreateRequest(BaseModel):
 
 
 class MaterialEntryUpdateRequest(BaseModel):
-    """Request body for PATCH /materials/{entry_id}."""
+    """Request body for PATCH /materials/{entry_id}.
 
-    material_role: MaterialRole = Field(
-        description="New role: ``educational`` or ``methodological``."
+    All fields are optional — only fields present in the request body
+    are updated. Field presence is detected via ``model_fields_set``.
+    Passing ``task_type: null`` explicitly clears the task flag.
+    """
+
+    material_role: MaterialRole | None = Field(
+        default=None,
+        description="New role: ``educational`` or ``methodological``.",
+    )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Assignment taxonomy tier. Pass ``null`` to clear. "
+            "Omit the field to keep the current value."
+        ),
     )
 
 
@@ -515,6 +546,12 @@ class MaterialEntryResponse(BaseModel):
     )
     material_role: str = Field(
         description="Role: ``educational`` or ``methodological``."
+    )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Assignment type if this material is a concrete task, else ``null``."
+        ),
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
@@ -559,6 +596,12 @@ class MaterialEntryCreateResponse(BaseModel):
     )
     material_role: str = Field(
         description="Role: ``educational`` or ``methodological``."
+    )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Assignment type if this material is a concrete task, else ``null``."
+        ),
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
@@ -963,6 +1006,13 @@ class ConfirmUploadRequest(BaseModel):
         description=(
             "Role: ``educational`` (delivers content) "
             "or ``methodological`` (declares course intent)."
+        ),
+    )
+    task_type: AssignmentType | None = Field(
+        default=None,
+        description=(
+            "Mark the material as a concrete task of the given taxonomy tier. "
+            "``null`` for regular materials."
         ),
     )
     filename: str | None = Field(

@@ -257,6 +257,20 @@ class MaterialEntry(Base):
         server_default="educational",
         comment="Role: educational (content) or methodological (intent)",
     )
+    task_type: Mapped[str | None] = mapped_column(
+        Enum(
+            "test",
+            "short_task",
+            "task",
+            "project",
+            name="task_type_enum",
+            create_type=False,
+        ),
+        nullable=True,
+        default=None,
+        comment="Assignment type when material is a concrete task "
+        "(test/short_task/task/project). NULL for regular materials.",
+    )
     order: Mapped[int] = mapped_column(Integer, default=0)
 
     # ── Raw layer ──

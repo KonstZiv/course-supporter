@@ -139,13 +139,28 @@ class TestFormatHelpers:
 
     def test_format_material_roles(self) -> None:
         entries = [
-            ("Lecture 1", "video", "educational"),
-            ("Syllabus", "text", "methodological"),
+            ("Lecture 1", "video", "educational", None),
+            ("Syllabus", "text", "methodological", None),
         ]
         result = format_material_roles(entries)
         assert "educational" in result
         assert "methodological" in result
         assert "Lecture 1" in result
+
+    def test_format_material_roles_with_task_type(self) -> None:
+        entries = [
+            ("Lecture 1", "video", "educational", None),
+            ("HW: variables", "text", "educational", "short_task"),
+            ("Capstone", "text", "educational", "project"),
+        ]
+        result = format_material_roles(entries)
+        assert "HW: variables" in result
+        assert "`short_task`" in result
+        assert "`project`" in result
+        assert "authored assignment" in result
+        # non-task lines must not include the task marker
+        lecture_line = next(ln for ln in result.splitlines() if "Lecture 1" in ln)
+        assert "task_type" not in lecture_line
 
 
 class TestMethodistAgentErrorHandling:

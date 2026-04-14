@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole
 from course_supporter.storage.orm import MaterialEntry, MaterialNode
 
@@ -31,6 +32,7 @@ class MaterialEntryRepository:
         source_url: str,
         filename: str | None = None,
         material_role: str = "educational",
+        task_type: AssignmentType | str | None = None,
         language: str | None = None,
     ) -> MaterialEntry:
         """Create a new material entry with auto-incremented order.
@@ -41,6 +43,9 @@ class MaterialEntryRepository:
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
             material_role: Role: educational or methodological.
+            task_type: Optional AssignmentType when this material represents
+                a concrete task (test, short_task, task, project). NULL for
+                regular materials.
             language: Optional ISO 639-1 language override. When None,
                 the course default is used and STT falls back to
                 auto-detection (which caches its result back here).
@@ -49,12 +54,18 @@ class MaterialEntryRepository:
             The newly created MaterialEntry.
         """
         next_order = await self._next_sibling_order(node_id)
+        task_type_value: str | None
+        if isinstance(task_type, AssignmentType):
+            task_type_value = task_type.value
+        else:
+            task_type_value = task_type
         entry = MaterialEntry(
             materialnode_id=node_id,
             source_type=source_type,
             source_url=source_url,
             filename=filename,
             material_role=material_role,
+            task_type=task_type_value,
             language=language,
             order=next_order,
         )
@@ -294,6 +305,22 @@ class MaterialEntryRepository:
             material_role: New role (MaterialRole.EDUCATIONAL or METHODOLOGICAL).
         """
         entry.material_role = material_role.value
+        await self._session.flush()
+        return entry
+
+    async def update_task_type(
+        self,
+        entry: MaterialEntry,
+        *,
+        task_type: AssignmentType | None,
+    ) -> MaterialEntry:
+        """Update the task_type field on an already-loaded entry.
+
+        Args:
+            entry: Entry ORM model to update.
+            task_type: New AssignmentType, or None to clear the task flag.
+        """
+        entry.task_type = task_type.value if task_type is not None else None
         await self._session.flush()
         return entry
 

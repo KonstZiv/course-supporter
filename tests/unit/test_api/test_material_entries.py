@@ -47,6 +47,7 @@ def _mock_entry(
     node_id: uuid.UUID | None = None,
     source_type: str = "text",
     material_role: str = "educational",
+    task_type: str | None = None,
     source_url: str = "https://example.com/doc.md",
     filename: str | None = None,
     order: int = 0,
@@ -60,6 +61,7 @@ def _mock_entry(
     entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
     entry.material_role = material_role
+    entry.task_type = task_type
     entry.source_url = source_url
     entry.filename = filename
     entry.language = None
@@ -628,6 +630,102 @@ class TestUpdateMaterial:
         resp = await client.patch(
             f"/api/v1/materials/{uuid.uuid4()}",
             json={"material_role": "invalid"},
+        )
+        assert resp.status_code == 422
+
+    async def test_set_task_type(self, client: AsyncClient, node_id: uuid.UUID) -> None:
+        """PATCH sets task_type without changing role."""
+        entry = _mock_entry(node_id=node_id, material_role="educational")
+        updated = _mock_entry(
+            node_id=node_id,
+            material_role="educational",
+            task_type="short_task",
+        )
+        update_task_mock = AsyncMock(return_value=updated)
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                MaterialEntryRepository,
+                "update_task_type",
+                update_task_mock,
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={"task_type": "short_task"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["task_type"] == "short_task"
+        # material_role update should NOT have been called since it wasn't in body
+        update_task_mock.assert_awaited_once()
+
+    async def test_clear_task_type(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """PATCH with task_type: null clears the task flag."""
+        entry = _mock_entry(
+            node_id=node_id,
+            material_role="educational",
+            task_type="task",
+        )
+        updated = _mock_entry(
+            node_id=node_id,
+            material_role="educational",
+            task_type=None,
+        )
+        update_task_mock = AsyncMock(return_value=updated)
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                MaterialEntryRepository,
+                "update_task_type",
+                update_task_mock,
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={"task_type": None},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["task_type"] is None
+        update_task_mock.assert_awaited_once()
+
+    async def test_empty_body_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """PATCH with no fields returns 422."""
+        entry = _mock_entry(node_id=node_id)
+        with (
+            patch.object(MaterialEntryRepository, "get_by_id", return_value=entry),
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/materials/{entry.id}",
+                json={},
+            )
+        assert resp.status_code == 422
+
+    async def test_invalid_task_type_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """PATCH rejects task_type outside the taxonomy."""
+        resp = await client.patch(
+            f"/api/v1/materials/{uuid.uuid4()}",
+            json={"task_type": "essay"},
         )
         assert resp.status_code == 422
 

@@ -32,6 +32,25 @@ system_prompt: |
   educational materials are the *implementation*. Check if the implementation
   matches the intent. If only educational materials exist, infer the intent.
 
+  ## Task Materials (explicit `task_type`)
+
+  Some materials carry an explicit **`task_type`** tag in the Material Roles
+  section: one of ``test``, ``short_task``, ``task``, or ``project``. These
+  are concrete assignments authored by the course owner.
+
+  **You MUST preserve them as `recommended_assignments` verbatim:**
+  - Do NOT rewrite, paraphrase, or replace the author's task
+  - Do NOT generate a substitute assignment of the same type
+  - The ``assignment_type`` field in the output MUST match the material's
+    ``task_type`` exactly
+  - Populate ``title`` and ``description`` from the material content; fill
+    ``steps`` / ``sample_questions`` only if the source text contains them
+  - You MAY still add additional assignments (of any type) if the node is
+    under-assessed — but never replace an authored task
+
+  Treat the tagged material as authoritative for that taxonomy tier at this
+  node.
+
   ## Sliding Window Context
 
   You receive context about the node's position in the course tree:

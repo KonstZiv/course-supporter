@@ -50,6 +50,7 @@ def _mock_entry(
     source_url: str = "https://example.com/doc.md",
     filename: str | None = None,
     state: str = "raw",
+    task_type: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialEntry."""
     entry = MagicMock()
@@ -57,6 +58,7 @@ def _mock_entry(
     entry.materialnode_id = node_id or uuid.uuid4()
     entry.source_type = source_type
     entry.material_role = "educational"
+    entry.task_type = task_type
     entry.source_url = source_url
     entry.filename = filename
     entry.language = None
@@ -236,6 +238,54 @@ class TestMaterialUploadValidation:
             )
         assert response.status_code == 201
         assert response.json()["state"] == "raw"
+
+    async def test_create_material_accepts_task_type(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """POST /materials forwards task_type to the repository."""
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="text",
+            task_type="short_task",
+        )
+        job = _mock_job()
+        create_mock = AsyncMock(return_value=entry)
+        with (
+            patch.object(
+                MaterialNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(MaterialEntryRepository, "create", create_mock),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            response = await client.post(
+                f"/api/v1/nodes/{node_id}/materials",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/hw.md",
+                    "task_type": "short_task",
+                },
+            )
+        assert response.status_code == 201
+        assert response.json()["task_type"] == "short_task"
+        # Repository receives the enum value
+        call_kwargs = create_mock.call_args.kwargs
+        assert call_kwargs["task_type"] == "short_task"
+
+    async def test_create_material_rejects_invalid_task_type(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """POST /materials rejects task_type outside the taxonomy."""
+        response = await client.post(
+            f"/api/v1/nodes/{node_id}/materials",
+            data={
+                "source_type": "text",
+                "source_url": "https://example.com/x.md",
+                "task_type": "essay",
+            },
+        )
+        assert response.status_code == 422
 
 
 # -- POST /nodes/{nid}/materials/upload-url --

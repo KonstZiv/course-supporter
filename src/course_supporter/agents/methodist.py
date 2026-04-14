@@ -305,17 +305,23 @@ def format_methodist_parent(
 
 
 def format_material_roles(
-    entries: list[tuple[str, str, str]],
+    entries: list[tuple[str, str, str, str | None]],
 ) -> str:
     """Format material role info for the Methodist prompt.
 
     Args:
-        entries: List of (title, source_type, material_role) tuples.
+        entries: List of (title, source_type, material_role, task_type) tuples.
+            ``task_type`` is the AssignmentType value (``test`` / ``short_task``
+            / ``task`` / ``project``) when the material is an explicit
+            assignment, or ``None`` for regular materials.
     """
     if not entries:
         return ""
     lines = ["## Material Roles", ""]
-    for title, stype, role in entries:
-        lines.append(f"- **{title}** ({stype}): {role}")
+    for title, stype, role, task_type in entries:
+        line = f"- **{title}** ({stype}): {role}"
+        if task_type:
+            line += f" — **task_type: `{task_type}`** (authored assignment)"
+        lines.append(line)
     lines.append("")
     return "\n".join(lines)

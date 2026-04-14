@@ -1201,7 +1201,7 @@ async def arq_execute_methodist_step(
             node_repo = MaterialNodeRepository(session)
             mat_node = await node_repo.get_by_id(mn_id)
             outline_ctx = ""
-            material_roles_info: list[tuple[str, str, str]] = []
+            material_roles_info: list[tuple[str, str, str, str | None]] = []
             if mat_node is not None:
                 entry_repo = MaterialEntryRepository(session)
                 entries = await entry_repo.get_for_node(mn_id)
@@ -1212,6 +1212,7 @@ async def arq_execute_methodist_step(
                             entry.filename or entry.source_url,
                             entry.source_type,
                             entry.material_role,
+                            entry.task_type,
                         )
                     )
                     if entry.outline_content:

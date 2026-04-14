@@ -46,6 +46,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
@@ -116,6 +117,16 @@ async def create_material(
             "or methodological (declares course intent).",
         ),
     ] = MaterialRole.EDUCATIONAL,
+    task_type: Annotated[
+        AssignmentType | None,
+        Form(
+            description=(
+                "Mark the material as a concrete task of the given taxonomy "
+                "tier (test, short_task, task, project). Omit for regular "
+                "materials."
+            ),
+        ),
+    ] = None,
     source_url: Annotated[
         str | None,
         Form(description="URL to the source material. Required if no file."),
@@ -207,6 +218,7 @@ async def create_material(
         source_url=actual_url,
         filename=actual_filename,
         material_role=material_role,
+        task_type=task_type,
         language=language,
     )
 
@@ -226,6 +238,7 @@ async def create_material(
         entry_id=str(entry.id),
         node_id=str(node_id),
         job_id=str(job.id),
+        task_type=task_type,
     )
     response = MaterialEntryCreateResponse.model_validate(entry)
     response.job_id = job.id
@@ -331,6 +344,7 @@ async def confirm_upload(
         source_url=s3_url,
         filename=actual_filename,
         material_role=body.material_role,
+        task_type=body.task_type,
         language=body.language,
     )
 
@@ -399,9 +413,11 @@ async def update_material(
     tenant: PrepDep,
     session: SessionDep,
 ) -> MaterialEntryResponse:
-    """Update material metadata (currently only material_role).
+    """Update material metadata (material_role and/or task_type).
 
-    Toggles between ``educational`` and ``methodological`` roles.
+    Only fields explicitly sent in the request body are updated.
+    Pass ``task_type: null`` to clear the task flag; omit the field
+    to keep the current value.
     """
     entry_repo = MaterialEntryRepository(session)
     node_repo = MaterialNodeRepository(session)
@@ -409,15 +425,29 @@ async def update_material(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
 
-    entry = await entry_repo.update_material_role(
-        entry, material_role=body.material_role
-    )
+    fields_set = body.model_fields_set
+    if not fields_set:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one field must be provided.",
+        )
+
+    if "material_role" in fields_set and body.material_role is not None:
+        entry = await entry_repo.update_material_role(
+            entry, material_role=body.material_role
+        )
+
+    if "task_type" in fields_set:
+        entry = await entry_repo.update_task_type(entry, task_type=body.task_type)
+
     await session.commit()
 
     logger.info(
-        "material_role_updated",
+        "material_updated",
         entry_id=str(entry_id),
         material_role=body.material_role,
+        task_type=body.task_type,
+        fields=list(fields_set),
     )
     return MaterialEntryResponse.model_validate(entry)
 

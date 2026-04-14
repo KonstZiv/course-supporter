@@ -46,21 +46,35 @@ class MergeStep:
     ) -> CourseContext:
         """Merge source documents and optional mappings into CourseContext.
 
+        Accepts an empty ``documents`` list: intermediate parent nodes that
+        delegate their context to child snapshots have no own materials to
+        merge, and the caller supplies the context via ``material_tree`` +
+        out-of-band ``children_snapshots``. Upstream callers that require
+        materials (leaf generation) guard with
+        ``_collect_ready_documents(..., allow_empty=False)`` before reaching
+        this step.
+
         Args:
-            documents: List of processed SourceDocuments.
+            documents: List of processed SourceDocuments. May be empty.
             mappings: Optional slide<->video mappings for cross-referencing.
             material_tree: Optional tree hierarchy with material associations.
 
         Returns:
             CourseContext with sorted documents, mappings, and tree metadata.
-
-        Raises:
-            ValueError: If documents list is empty.
         """
-        if not documents:
-            raise ValueError("Cannot merge empty documents list")
-
         resolved_mappings = mappings or []
+
+        if not documents:
+            logger.info(
+                "merge_empty_documents",
+                mapping_count=len(resolved_mappings),
+                tree_node_count=len(material_tree) if material_tree else 0,
+            )
+            return CourseContext(
+                documents=[],
+                slide_video_mappings=resolved_mappings,
+                material_tree=material_tree or [],
+            )
 
         # Sort documents by source_type priority
         sorted_docs = sorted(

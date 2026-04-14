@@ -1,7 +1,5 @@
 """Tests for MergeStep."""
 
-import pytest
-
 from course_supporter.ingestion.merge import MergeStep
 from course_supporter.models.course import (
     CourseContext,
@@ -61,12 +59,47 @@ class TestMergeStep:
 
         assert len(result.documents) == 2
 
-    def test_empty_documents_raises(self) -> None:
-        """Empty documents list -> ValueError."""
+    def test_empty_documents_returns_empty_context(self) -> None:
+        """Empty documents list returns an empty CourseContext.
+
+        Intermediate parent nodes that rely on child snapshots have no own
+        materials to merge; upstream guards (``_collect_ready_documents``)
+        enforce non-empty for leaf generation where materials are required.
+        """
         step = MergeStep()
 
-        with pytest.raises(ValueError, match="Cannot merge empty documents list"):
-            step.merge([])
+        result = step.merge([])
+
+        assert result.documents == []
+        assert result.slide_video_mappings == []
+        assert result.material_tree == []
+
+    def test_empty_documents_preserves_material_tree(self) -> None:
+        """An empty merge still carries the ``material_tree`` forward.
+
+        The parent-generate path passes a tree summary so the Architect
+        can still orient itself via the hierarchy even without own
+        materials.
+        """
+        import uuid as _uuid
+
+        step = MergeStep()
+        tree = [
+            MaterialNodeSummary(
+                node_id=_uuid.uuid4(),
+                title="Intro",
+                parent_id=None,
+                depth=0,
+                order=0,
+                material_refs=[],
+            )
+        ]
+
+        result = step.merge([], mappings=None, material_tree=tree)
+
+        assert result.documents == []
+        assert len(result.material_tree) == 1
+        assert result.material_tree[0].title == "Intro"
 
     def test_document_ordering(self) -> None:
         """Documents sorted by priority: video -> presentation -> text -> web."""

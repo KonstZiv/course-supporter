@@ -74,8 +74,7 @@ async def get_current_tenant(
         tenant_id=api_key_record.tenant_id,
         tenant_name=api_key_record.tenant.name,
         scopes=api_key_record.scopes,
-        rate_limit_prep=api_key_record.rate_limit_prep,
-        rate_limit_check=api_key_record.rate_limit_check,
+        plan_id=api_key_record.plan_id,
         key_prefix=api_key_record.key_prefix,
     )
 

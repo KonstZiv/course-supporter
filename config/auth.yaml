@@ -1,10 +1,33 @@
 # ============================================================
-# Auth: API scopes and their metadata
+# Auth: API scopes, plans, and rate limits.
+#
+# Scopes are authorization markers — which operations an API key
+# is allowed to perform. A scope is just a name + a human description.
+#
+# Plans bundle per-scope rate limits. Every APIKey row points to a
+# plan via api_keys.plan_id. At request time the matched scope's
+# limit is looked up from the plan.
+#
+# Adding a new scope:
+#   1. Append it under `scopes:` here.
+#   2. Add AuthScope enum member in src/course_supporter/auth/registry.py.
+#   3. Add the scope's limit to every plan below (startup validation
+#      will fail if any plan is missing it).
+#
+# Adding a new plan:
+#   1. Append it under `plans:` here with all current scopes.
+#   2. Assign tenants via api_keys.plan_id (no code change needed).
 # ============================================================
+
 scopes:
   prep:
     description: "Course preparation operations (CRUD, upload, generation)"
-    rate_limit_field: rate_limit_prep
   check:
     description: "Course checking operations (read-only queries, mentoring)"
-    rate_limit_field: rate_limit_check
+
+default_plan: basic
+
+plans:
+  basic:
+    prep: 60
+    check: 300

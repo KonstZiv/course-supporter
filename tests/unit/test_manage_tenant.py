@@ -82,8 +82,7 @@ class TestCreateKey:
             tenant="Test Tenant",
             scopes="prep,check",
             label="production",
-            rate_prep=60,
-            rate_check=300,
+            plan="basic",
         )
 
         with patch("scripts.manage_tenant.generate_api_key") as mock_gen:
@@ -115,8 +114,7 @@ class TestCreateKey:
             tenant="NonExistent",
             scopes="prep",
             label="default",
-            rate_prep=60,
-            rate_check=300,
+            plan="basic",
         )
 
         with pytest.raises(SystemExit) as exc_info:

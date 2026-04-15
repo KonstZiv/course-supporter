@@ -90,6 +90,13 @@ class MaterialNodeRepository:
     ) -> MaterialNode:
         """Create a new node with auto-incremented order among siblings.
 
+        Always assigns an integer ``order`` even though the column is
+        nullable. Rationale: a brand-new node is implicitly "the next one"
+        and should sort consistently above any siblings that author later
+        explicitly sets to NULL via PATCH (NULLs sort last). Authors who
+        want "no preferred position" for a fresh node should PATCH
+        ``order=null`` immediately after create.
+
         Args:
             tenant_id: FK to the owning tenant.
             title: Node title.
@@ -99,7 +106,7 @@ class MaterialNodeRepository:
                 materials under this node (inherited by children).
 
         Returns:
-            The newly created MaterialNode.
+            The newly created MaterialNode with integer ``order``.
         """
         next_order = await self._next_sibling_order(parent_materialnode_id)
         node = MaterialNode(
@@ -435,8 +442,13 @@ class MaterialNodeRepository:
     ) -> int:
         """Get next order value for siblings under the given parent.
 
-        Siblings with NULL order are excluded from MAX(); newly inserted
-        nodes always get an integer to keep them sortable above NULLs.
+        Returns ``MAX(order) + 1`` across siblings, or ``0`` if the parent
+        has no children (or all existing children have NULL order — MAX
+        ignores NULLs in SQL).
+
+        Always returns an integer: callers (``create()``) use this to
+        assign a sortable position to new nodes. NULL ``order`` is only
+        introduced via explicit PATCH on an existing node.
         """
         # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = select(func.coalesce(func.max(MaterialNode.order) + 1, 0)).where(

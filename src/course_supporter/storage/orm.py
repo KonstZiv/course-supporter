@@ -152,7 +152,13 @@ class MaterialNode(Base):
         "Usually set on the root (course) node; inherited by children and "
         "their materials unless overridden on the material itself.",
     )
-    order: Mapped[int] = mapped_column(Integer, default=0)
+    order: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Sibling sort key within parent. NULL = no preferred order, "
+        "sorted last by created_at. Sort: ORDER BY order ASC NULLS LAST, "
+        "created_at ASC.",
+    )
     node_fingerprint: Mapped[str | None] = mapped_column(
         String(64),
         comment="Merkle SHA-256 of content subtree. NULL = stale. "

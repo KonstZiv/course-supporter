@@ -163,7 +163,10 @@ class MaterialNodeRepository:
                 MaterialNode.tenant_id == tenant_id,
                 MaterialNode.parent_materialnode_id.is_(None),
             )
-            .order_by(MaterialNode.order)
+            .order_by(
+                MaterialNode.order.asc().nulls_last(),
+                MaterialNode.created_at.asc(),
+            )
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -173,7 +176,10 @@ class MaterialNodeRepository:
         stmt = (
             select(MaterialNode)
             .where(MaterialNode.parent_materialnode_id == node_id)
-            .order_by(MaterialNode.order)
+            .order_by(
+                MaterialNode.order.asc().nulls_last(),
+                MaterialNode.created_at.asc(),
+            )
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -212,7 +218,10 @@ class MaterialNodeRepository:
         stmt = (
             select(MaterialNode)
             .where(MaterialNode.id.in_(select(cte.c.id)))
-            .order_by(MaterialNode.order)
+            .order_by(
+                MaterialNode.order.asc().nulls_last(),
+                MaterialNode.created_at.asc(),
+            )
         )
         if include_materials:
             stmt = stmt.options(
@@ -330,7 +339,10 @@ class MaterialNodeRepository:
                 MaterialNode.parent_materialnode_id == node.parent_materialnode_id,
                 MaterialNode.tenant_id == node.tenant_id,
             )
-            .order_by(MaterialNode.order)
+            .order_by(
+                MaterialNode.order.asc().nulls_last(),
+                MaterialNode.created_at.asc(),
+            )
         )
         result = await self._session.execute(stmt)
         siblings = list(result.scalars().all())
@@ -421,13 +433,20 @@ class MaterialNodeRepository:
         self,
         parent_materialnode_id: uuid.UUID | None,
     ) -> int:
-        """Get next order value for siblings under the given parent."""
+        """Get next order value for siblings under the given parent.
+
+        Siblings with NULL order are excluded from MAX(); newly inserted
+        nodes always get an integer to keep them sortable above NULLs.
+        """
         # SQLAlchemy translates `column == None` to `IS NULL`
         stmt = select(func.coalesce(func.max(MaterialNode.order) + 1, 0)).where(
             MaterialNode.parent_materialnode_id == parent_materialnode_id,
         )
         result = await self._session.execute(stmt)
-        return result.scalar_one()
+        # coalesce ensures non-NULL int return; assert satisfies mypy strict
+        value = result.scalar_one()
+        assert value is not None
+        return int(value)
 
     async def _is_descendant(
         self,

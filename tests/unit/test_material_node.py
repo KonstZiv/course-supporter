@@ -35,10 +35,12 @@ class TestMaterialNodeModel:
         assert node.parent_materialnode_id == parent_materialnode_id
         assert node.description == "Details about subtopic A"
 
-    def test_order_default(self) -> None:
-        """Order column defaults to 0."""
+    def test_order_nullable(self) -> None:
+        """Order column is nullable; NULL = no preferred sort position."""
         col = MaterialNode.__table__.c.order
-        assert col.default.arg == 0
+        assert col.nullable is True
+        assert col.default is None
+        assert col.server_default is None
 
     def test_pk_uses_uuid7(self) -> None:
         """PK default is UUIDv7 factory."""

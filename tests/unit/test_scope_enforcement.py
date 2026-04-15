@@ -22,8 +22,7 @@ def _make_tenant(scopes: list[str]) -> TenantContext:
         tenant_id=uuid.uuid4(),
         tenant_name="test-tenant",
         scopes=scopes,
-        rate_limit_prep=100,
-        rate_limit_check=1000,
+        plan_id="basic",
         key_prefix="cs_test",
     )
 

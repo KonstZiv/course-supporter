@@ -19,8 +19,7 @@ STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
     tenant_name="test-tenant",
     scopes=["prep", "check"],
-    rate_limit_prep=100,
-    rate_limit_check=1000,
+    plan_id="basic",
     key_prefix="cs_test",
 )
 

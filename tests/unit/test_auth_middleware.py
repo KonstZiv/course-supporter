@@ -18,8 +18,7 @@ def _make_api_key_record(
     tenant_is_active: bool = True,
     expires_at: datetime | None = None,
     scopes: list[str] | None = None,
-    rate_limit_prep: int = 100,
-    rate_limit_check: int = 1000,
+    plan_id: str = "basic",
 ) -> MagicMock:
     """Create a mock APIKey ORM object joined with Tenant."""
     tenant = MagicMock()
@@ -33,8 +32,7 @@ def _make_api_key_record(
     api_key_record.is_active = is_active
     api_key_record.expires_at = expires_at
     api_key_record.scopes = scopes or ["prep", "check"]
-    api_key_record.rate_limit_prep = rate_limit_prep
-    api_key_record.rate_limit_check = rate_limit_check
+    api_key_record.plan_id = plan_id
     api_key_record.key_prefix = "cs_test"
     return api_key_record
 
@@ -166,8 +164,7 @@ class TestAuthMiddleware:
         """Valid auth populates all TenantContext fields correctly."""
         record = _make_api_key_record(
             scopes=["prep"],
-            rate_limit_prep=50,
-            rate_limit_check=500,
+            plan_id="basic",
         )
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = record

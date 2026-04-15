@@ -44,22 +44,19 @@ class TestAPIKeyModel:
             key_prefix="cs_live_a1b2",
             label="production",
             scopes=["prep", "check"],
-            rate_limit_prep=100,
-            rate_limit_check=500,
+            plan_id="basic",
         )
 
         assert key.key_prefix == "cs_live_a1b2"
         assert key.label == "production"
         assert key.scopes == ["prep", "check"]
-        assert key.rate_limit_prep == 100
-        assert key.rate_limit_check == 500
+        assert key.plan_id == "basic"
 
     def test_api_key_defaults(self) -> None:
         """APIKey column defaults match spec."""
         table = APIKey.__table__
         assert table.c.is_active.default.arg is True
-        assert table.c.rate_limit_prep.default.arg == 60
-        assert table.c.rate_limit_check.default.arg == 300
+        assert table.c.plan_id.server_default.arg == "basic"
 
     def test_api_key_hash_unique_constraint(self) -> None:
         """APIKey model has unique constraint on key_hash column."""

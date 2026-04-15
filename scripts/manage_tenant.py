@@ -23,6 +23,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from course_supporter.auth.keys import generate_api_key
+from course_supporter.auth.registry import get_auth_registry
 from course_supporter.config import settings
 from course_supporter.storage.orm import APIKey, Tenant
 
@@ -55,6 +56,15 @@ def create_tenant(args: argparse.Namespace) -> None:
 
 def create_key(args: argparse.Namespace) -> None:
     """Generate an API key for a tenant."""
+    registry = get_auth_registry()
+    if args.plan not in registry.plans:
+        print(
+            f"Unknown plan: {args.plan}. "
+            f"Available: {', '.join(sorted(registry.plans))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     with get_sync_session() as session:
         tenant = session.execute(
             select(Tenant).where(Tenant.name == args.tenant)
@@ -72,8 +82,7 @@ def create_key(args: argparse.Namespace) -> None:
             key_prefix=key_prefix,
             label=args.label,
             scopes=scopes,
-            rate_limit_prep=args.rate_prep,
-            rate_limit_check=args.rate_check,
+            plan_id=args.plan,
         )
         session.add(api_key)
         session.commit()
@@ -82,6 +91,7 @@ def create_key(args: argparse.Namespace) -> None:
         print(f"   Key:     {full_key}")
         print(f"   Prefix:  {key_prefix}")
         print(f"   Scopes:  {', '.join(scopes)}")
+        print(f"   Plan:    {args.plan}")
         print(f"   Label:   {args.label}")
         print()
         print("Save this key now -- it cannot be retrieved later!")
@@ -141,7 +151,10 @@ def list_keys(args: argparse.Namespace) -> None:
         for i, key in enumerate(keys, 1):
             status = "active" if key.is_active else "revoked"
             scopes = ",".join(key.scopes) if key.scopes else "none"
-            print(f"  {i}. {key.key_prefix} [{key.label}] scopes={scopes} {status}")
+            print(
+                f"  {i}. {key.key_prefix} [{key.label}] "
+                f"scopes={scopes} plan={key.plan_id} {status}"
+            )
 
 
 def revoke_key(args: argparse.Namespace) -> None:
@@ -196,8 +209,11 @@ def main() -> None:
     p.add_argument("--tenant", required=True, help="Tenant name")
     p.add_argument("--scopes", required=True, help="Comma-separated: prep,check")
     p.add_argument("--label", default="default", help="Key label")
-    p.add_argument("--rate-prep", type=int, default=60, help="Prep rate limit/min")
-    p.add_argument("--rate-check", type=int, default=300, help="Check rate limit/min")
+    p.add_argument(
+        "--plan",
+        default="basic",
+        help="Rate-limit plan name from config/auth.yaml (default: basic)",
+    )
 
     # list-tenants
     sub.add_parser("list-tenants", help="List all tenants")

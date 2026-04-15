@@ -92,15 +92,12 @@ class APIKey(Base):
         comment="JSON array of granted scopes. "
         "Defined in config/auth.yaml, validated by AuthScope enum",
     )
-    rate_limit_prep: Mapped[int] = mapped_column(
-        Integer,
-        default=60,
-        comment="Max requests per 60s window for prep scope",
-    )
-    rate_limit_check: Mapped[int] = mapped_column(
-        Integer,
-        default=300,
-        comment="Max requests per 60s window for check scope",
+    plan_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        server_default="basic",
+        comment="Name of plan from config/auth.yaml — "
+        "resolves to per-scope rate limits at runtime.",
     )
     is_active: Mapped[bool] = mapped_column(default=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

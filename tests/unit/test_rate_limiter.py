@@ -107,13 +107,25 @@ class TestRateLimitAPI:
     @pytest.mark.asyncio
     async def test_429_response_in_api(self) -> None:
         """Exceeding rate limit returns 429 with Retry-After header."""
+        from course_supporter.auth.registry import (
+            AuthRegistryConfig,
+            ScopeConfig,
+        )
+
         tenant = TenantContext(
             tenant_id=uuid.uuid4(),
             tenant_name="test-tenant",
             scopes=["prep"],
-            rate_limit_prep=2,
-            rate_limit_check=1000,
+            plan_id="tight",
             key_prefix="cs_test",
+        )
+        test_registry = AuthRegistryConfig(
+            scopes={
+                "prep": ScopeConfig(description="prep"),
+                "check": ScopeConfig(description="check"),
+            },
+            default_plan="tight",
+            plans={"tight": {"prep": 2, "check": 1000}},
         )
 
         mock_session = AsyncMock()
@@ -126,48 +138,54 @@ class TestRateLimitAPI:
 
         rate_limiter._requests.clear()
         try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-            ) as client:
-                node = MagicMock()
-                node.id = uuid.uuid4()
-                node.tenant_id = tenant.tenant_id
-                node.parent_materialnode_id = None
-                node.title = "Test"
-                node.description = None
-                node.learning_goal = None
-                node.expected_knowledge = None
-                node.expected_skills = None
-                node.default_language = None
-                node.order = 0
-                node.node_fingerprint = None
-                node.created_at = datetime.now(UTC)
-                node.updated_at = datetime.now(UTC)
+            with patch(
+                "course_supporter.auth.scopes.get_auth_registry",
+                return_value=test_registry,
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="http://test",
+                ) as client:
+                    node = MagicMock()
+                    node.id = uuid.uuid4()
+                    node.tenant_id = tenant.tenant_id
+                    node.parent_materialnode_id = None
+                    node.title = "Test"
+                    node.description = None
+                    node.learning_goal = None
+                    node.expected_knowledge = None
+                    node.expected_skills = None
+                    node.default_language = None
+                    node.order = 0
+                    node.node_fingerprint = None
+                    node.created_at = datetime.now(UTC)
+                    node.updated_at = datetime.now(UTC)
 
-                with patch.object(MaterialNodeRepository, "create", return_value=node):
-                    # First 2 requests should pass (limit=2)
-                    r1 = await client.post(
-                        "/api/v1/nodes",
-                        json={"title": "Node 1"},
-                    )
-                    assert r1.status_code == 201
+                    with patch.object(
+                        MaterialNodeRepository, "create", return_value=node
+                    ):
+                        # First 2 requests should pass (limit=2)
+                        r1 = await client.post(
+                            "/api/v1/nodes",
+                            json={"title": "Node 1"},
+                        )
+                        assert r1.status_code == 201
 
-                    r2 = await client.post(
-                        "/api/v1/nodes",
-                        json={"title": "Node 2"},
-                    )
-                    assert r2.status_code == 201
+                        r2 = await client.post(
+                            "/api/v1/nodes",
+                            json={"title": "Node 2"},
+                        )
+                        assert r2.status_code == 201
 
-                    # Third request should be rate limited
-                    r3 = await client.post(
-                        "/api/v1/nodes",
-                        json={"title": "Node 3"},
-                    )
-                    assert r3.status_code == 429
-                    assert r3.json()["detail"] == "Rate limit exceeded"
-                    assert "retry-after" in r3.headers
-                    assert int(r3.headers["retry-after"]) >= 1
+                        # Third request should be rate limited
+                        r3 = await client.post(
+                            "/api/v1/nodes",
+                            json={"title": "Node 3"},
+                        )
+                        assert r3.status_code == 429
+                        assert r3.json()["detail"] == "Rate limit exceeded"
+                        assert "retry-after" in r3.headers
+                        assert int(r3.headers["retry-after"]) >= 1
         finally:
             rate_limiter._requests.clear()
             app.dependency_overrides.clear()

@@ -9,23 +9,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from course_supporter.models.source import SourceDocument
 
-# HH:MM:SS or MM:SS (e.g. "01:23:45", "5:00", "00:30")
-TIMECODE_RE = r"^(\d{1,2}:)?[0-5]?\d:[0-5]?\d$"
-
-
-class SlideVideoMapEntry(BaseModel):
-    """Input schema for creating a slide-video mapping via API.
-
-    References a specific presentation and video by MaterialEntry ID,
-    mapping a slide number to a timecode range in the video.
-    """
-
-    presentation_materialentry_id: str
-    video_materialentry_id: str
-    slide_number: int = Field(ge=1)
-    video_timecode_start: str = Field(pattern=TIMECODE_RE)
-    video_timecode_end: str | None = Field(default=None, pattern=TIMECODE_RE)
-
 
 class SlideTimecodeRef(BaseModel):
     """Lightweight slide-to-timecode reference for merge step.

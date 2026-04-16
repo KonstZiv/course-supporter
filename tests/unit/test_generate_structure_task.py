@@ -26,7 +26,6 @@ def _make_node(
     order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
-    mappings: list[Any] | None = None,
     node_fingerprint: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialNode with required attributes."""
@@ -38,7 +37,6 @@ def _make_node(
     node.order = order
     node.children = children or []
     node.materials = materials or []
-    node.slide_video_mappings = mappings or []
     node.node_fingerprint = node_fingerprint
     return node
 
@@ -60,20 +58,6 @@ def _make_entry(
     entry.source_url = source_url
     entry.outline_content = None
     return entry
-
-
-def _make_mapping(
-    *,
-    validation_state: str = "validated",
-    slide_number: int = 1,
-    video_timecode_start: str = "00:01:00",
-) -> MagicMock:
-    """Create a mock SlideVideoMapping."""
-    m = MagicMock()
-    m.validation_state = validation_state
-    m.slide_number = slide_number
-    m.video_timecode_start = video_timecode_start
-    return m
 
 
 def _make_snapshot(snapshot_id: uuid.UUID | None = None) -> MagicMock:
@@ -206,10 +190,9 @@ class _MockDeps:
         self.editable_repo = AsyncMock()
         self.editable_repo.init_from_snapshot = AsyncMock(return_value=[])
 
-        # MaterialState / MappingValidationState — used for enum comparison
-        # These are imported inside the function via lazy import, so we
-        # let them resolve naturally. Our mock entries use string values
-        # which match the enum values.
+        # MaterialState — used for enum comparison. Imported inside the
+        # function via lazy import, so we let it resolve naturally. Our
+        # mock entries use string values which match the enum values.
 
 
 def _make_session_factory(
@@ -436,39 +419,6 @@ class TestMixedStates:
         merge_call.assert_called_once()
         docs = merge_call.call_args[0][0]
         assert len(docs) == 1
-
-
-class TestMappingsFiltering:
-    """Validated mappings included, non-validated excluded."""
-
-    @pytest.mark.asyncio
-    async def test_validated_mappings_only(
-        self,
-        job_id: str,
-        root_node_id: str,
-    ) -> None:
-        """Only validated mappings become SlideTimecodeRef."""
-        entry = _make_entry(state="ready")
-        valid = _make_mapping(validation_state="validated", slide_number=1)
-        pending = _make_mapping(
-            validation_state="pending_validation",
-            slide_number=2,
-        )
-        failed = _make_mapping(
-            validation_state="validation_failed",
-            slide_number=3,
-        )
-        root = _make_node(materials=[entry], mappings=[valid, pending, failed])
-
-        deps = _MockDeps(root_nodes=[root])
-
-        await _run_task(job_id, root_node_id, deps)
-
-        merge_call = deps.merge_instance.merge
-        merge_call.assert_called_once()
-        mappings_arg = merge_call.call_args[0][1]
-        assert len(mappings_arg) == 1
-        assert mappings_arg[0].slide_number == 1
 
 
 class TestLLMMetadata:

@@ -10,7 +10,6 @@ from course_supporter.models.course import (
     ModuleOutput,
     SlideRange,
     SlideTimecodeRef,
-    SlideVideoMapEntry,
     WebReference,
 )
 from course_supporter.models.outline import (
@@ -42,7 +41,6 @@ __all__ = [
     "PresenterInfo",
     "SlideRange",
     "SlideTimecodeRef",
-    "SlideVideoMapEntry",
     "SourceDocument",
     "SourceType",
     "WebReference",

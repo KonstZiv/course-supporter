@@ -17,9 +17,9 @@ from course_supporter.errors import (
     NodeNotFoundError,
     NoReadyMaterialsError,
 )
-from course_supporter.generation_orchestrator import GenerationPlan, MappingWarning
+from course_supporter.generation_orchestrator import GenerationPlan
 from course_supporter.storage.database import get_session
-from course_supporter.storage.orm import MappingValidationState, StructureNodeType
+from course_supporter.storage.orm import StructureNodeType
 
 STUB_TENANT = MagicMock(
     tenant_id=uuid.uuid4(),
@@ -351,62 +351,6 @@ class TestGenerateStructure:
         call_kwargs = mock_trigger.call_args.kwargs
         assert call_kwargs["mode"] == "free"
 
-    async def test_202_with_mapping_warnings(self, client: AsyncClient) -> None:
-        """Generation response includes mapping warnings."""
-        gen_job = _make_job()
-        warning_id = uuid.uuid4()
-        warning_node = uuid.uuid4()
-        plan = GenerationPlan(
-            generation_jobs=[gen_job],
-            mapping_warnings=[
-                MappingWarning(
-                    mapping_id=warning_id,
-                    materialnode_id=warning_node,
-                    slide_number=5,
-                    validation_state=MappingValidationState.PENDING_VALIDATION,
-                ),
-            ],
-        )
-
-        with (
-            patch(_REPO_PATH) as mock_repo_cls,
-            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
-            patch(_TRIGGER_PATH, new_callable=AsyncMock, return_value=plan),
-        ):
-            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
-            resp = await client.post(
-                f"/api/v1/nodes/{NODE_ID}/generate",
-                json={"mode": "free"},
-            )
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert len(data["mapping_warnings"]) == 1
-        w = data["mapping_warnings"][0]
-        assert w["mapping_id"] == str(warning_id)
-        assert w["materialnode_id"] == str(warning_node)
-        assert w["slide_number"] == 5
-        assert w["validation_state"] == "pending_validation"
-
-    async def test_202_no_warnings_empty_list(self, client: AsyncClient) -> None:
-        """No warnings -> empty list in response."""
-        gen_job = _make_job()
-        plan = GenerationPlan(generation_jobs=[gen_job])
-
-        with (
-            patch(_REPO_PATH) as mock_repo_cls,
-            patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
-            patch(_TRIGGER_PATH, new_callable=AsyncMock, return_value=plan),
-        ):
-            mock_repo_cls.return_value.get_by_id = AsyncMock(return_value=_mock_node())
-            resp = await client.post(
-                f"/api/v1/nodes/{NODE_ID}/generate",
-                json={"mode": "free"},
-            )
-
-        assert resp.status_code == 202
-        assert resp.json()["mapping_warnings"] == []
-
     async def test_trigger_receives_root_and_target(self, client: AsyncClient) -> None:
         """trigger_generation is called with root_node_id and target_node_id."""
         root_id = uuid.uuid4()
@@ -495,7 +439,6 @@ class TestRefineStructure:
         assert len(data["reconciliation_jobs"]) == 1
         assert data["estimated_llm_calls"] == 2
         assert data["ingestion_jobs"] == []
-        assert data["mapping_warnings"] == []
 
     async def test_404_node_not_found(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""

@@ -4,7 +4,6 @@ from course_supporter.ingestion.merge import MergeStep
 from course_supporter.models.course import (
     CourseContext,
     MaterialNodeSummary,
-    SlideTimecodeRef,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -24,16 +23,6 @@ def _make_doc(
         source_url=f"file:///test.{source_type}",
         title=f"Test {source_type}",
         chunks=chunks or [],
-    )
-
-
-def _make_slide_chunk(slide_number: int, text: str = "Slide text") -> ContentChunk:
-    """Create a SLIDE_TEXT chunk with slide_number metadata."""
-    return ContentChunk(
-        chunk_type=ChunkType.SLIDE_TEXT,
-        text=text,
-        index=slide_number,
-        metadata={"slide_number": slide_number},
     )
 
 
@@ -95,7 +84,7 @@ class TestMergeStep:
             )
         ]
 
-        result = step.merge([], mappings=None, material_tree=tree)
+        result = step.merge([], material_tree=tree)
 
         assert result.documents == []
         assert len(result.material_tree) == 1
@@ -126,117 +115,6 @@ class TestMergeStep:
         result = step.merge([_make_doc()])
 
         assert result.slide_video_mappings == []
-
-    def test_with_mappings(self) -> None:
-        """Documents + mappings passed through to CourseContext."""
-        step = MergeStep()
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-            SlideTimecodeRef(slide_number=2, video_timecode_start="00:05:30"),
-        ]
-
-        result = step.merge([_make_doc()], mappings=mappings)
-
-        assert len(result.slide_video_mappings) == 2
-        assert result.slide_video_mappings[0].video_timecode_start == "00:01:00"
-
-    def test_cross_references(self) -> None:
-        """Presentation SLIDE_TEXT chunks enriched with video_timecode."""
-        step = MergeStep()
-        presentation = _make_doc(
-            SourceType.PRESENTATION,
-            chunks=[_make_slide_chunk(1), _make_slide_chunk(2)],
-        )
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-            SlideTimecodeRef(slide_number=2, video_timecode_start="00:05:30"),
-        ]
-
-        result = step.merge([presentation], mappings=mappings)
-
-        chunks = result.documents[0].chunks
-        assert chunks[0].metadata["video_timecode"] == "00:01:00"
-        assert chunks[1].metadata["video_timecode"] == "00:05:30"
-
-    def test_cross_references_preserve_original_metadata(self) -> None:
-        """Cross-referencing preserves existing chunk metadata."""
-        step = MergeStep()
-        presentation = _make_doc(
-            SourceType.PRESENTATION,
-            chunks=[_make_slide_chunk(1)],
-        )
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-        ]
-
-        result = step.merge([presentation], mappings=mappings)
-
-        chunk = result.documents[0].chunks[0]
-        assert chunk.metadata["slide_number"] == 1
-        assert chunk.metadata["video_timecode"] == "00:01:00"
-
-    def test_cross_references_skip_non_presentation(self) -> None:
-        """Non-presentation documents not affected by cross-references."""
-        step = MergeStep()
-        video = _make_doc(
-            SourceType.VIDEO,
-            chunks=[
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text="Transcript",
-                    index=0,
-                )
-            ],
-        )
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-        ]
-
-        result = step.merge([video], mappings=mappings)
-
-        assert "video_timecode" not in result.documents[0].chunks[0].metadata
-
-    def test_cross_references_unmatched_slide(self) -> None:
-        """Slides without matching mapping keep original metadata."""
-        step = MergeStep()
-        presentation = _make_doc(
-            SourceType.PRESENTATION,
-            chunks=[_make_slide_chunk(3)],
-        )
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-        ]
-
-        result = step.merge([presentation], mappings=mappings)
-
-        chunk = result.documents[0].chunks[0]
-        assert "video_timecode" not in chunk.metadata
-        assert chunk.metadata["slide_number"] == 3
-
-    def test_cross_references_skip_slide_description(self) -> None:
-        """SLIDE_DESCRIPTION chunks not enriched even with matching slide_number."""
-        step = MergeStep()
-        presentation = _make_doc(
-            SourceType.PRESENTATION,
-            chunks=[
-                _make_slide_chunk(1),
-                ContentChunk(
-                    chunk_type=ChunkType.SLIDE_DESCRIPTION,
-                    text="Diagram showing flow",
-                    index=1,
-                    metadata={"slide_number": 1},
-                ),
-            ],
-        )
-        mappings = [
-            SlideTimecodeRef(slide_number=1, video_timecode_start="00:01:00"),
-        ]
-
-        result = step.merge([presentation], mappings=mappings)
-
-        chunks = result.documents[0].chunks
-        assert chunks[0].metadata["video_timecode"] == "00:01:00"
-        assert "video_timecode" not in chunks[1].metadata
 
     def test_stable_sort_same_type(self) -> None:
         """Multiple documents of the same type preserve relative order."""

@@ -23,23 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from course_supporter.storage.orm import (
         Job,
-        MappingValidationState,
         MaterialEntry,
         MaterialNode,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class MappingWarning:
-    """Warning about a slide-video mapping with problematic validation state.
-
-    Non-blocking: does not prevent generation, only informs the user.
-    """
-
-    mapping_id: uuid.UUID
-    materialnode_id: uuid.UUID
-    slide_number: int
-    validation_state: MappingValidationState
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,14 +36,12 @@ class GenerationPlan:
         ingestion_jobs: Jobs created for stale material ingestion.
         generation_jobs: Per-node generation jobs (bottom-up DAG order).
         reconciliation_jobs: Per-node reconciliation jobs (top-down order).
-        mapping_warnings: Mappings with pending/failed validation states.
         estimated_llm_calls: Total LLM calls expected for this plan.
     """
 
     ingestion_jobs: list[Job] = field(default_factory=list)
     generation_jobs: list[Job] = field(default_factory=list)
     reconciliation_jobs: list[Job] = field(default_factory=list)
-    mapping_warnings: list[MappingWarning] = field(default_factory=list)
     estimated_llm_calls: int = 0
 
     @property
@@ -107,36 +91,6 @@ def _collect_job_ids(
         List of Job UUID strings for entries with job_id.
     """
     return [str(entry.job_id) for entry in stale if entry.job_id is not None]
-
-
-async def _collect_mapping_warnings(
-    session: AsyncSession,
-    flat_nodes: list[MaterialNode],
-) -> list[MappingWarning]:
-    """Collect non-blocking warnings about problematic slide-video mappings.
-
-    Args:
-        session: Active DB session.
-        flat_nodes: Flat list of nodes in the target subtree.
-
-    Returns:
-        List of warnings for pending/failed validation mappings.
-    """
-    from course_supporter.storage.orm import MappingValidationState
-    from course_supporter.storage.repositories import SlideVideoMappingRepository
-
-    mapping_repo = SlideVideoMappingRepository(session)
-    node_ids = [n.id for n in flat_nodes]
-    problematic = await mapping_repo.get_problematic_by_node_ids(node_ids)
-    return [
-        MappingWarning(
-            mapping_id=m.id,
-            materialnode_id=m.materialnode_id,
-            slide_number=m.slide_number,
-            validation_state=MappingValidationState(m.validation_state),
-        )
-        for m in problematic
-    ]
 
 
 def _post_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
@@ -337,9 +291,6 @@ async def trigger_generation(
     )
     target, flat_nodes = resolve_target_nodes(root_nodes, target_node_id)
 
-    # 1b. Collect mapping warnings (non-blocking)
-    mapping_warnings = await _collect_mapping_warnings(session, flat_nodes)
-
     # 2. Conflict detection
     job_repo = JobRepository(session)
     all_tree_node_ids = [n.id for n in flat_nodes]
@@ -447,7 +398,6 @@ async def trigger_generation(
         ingestion_jobs=ingestion_jobs,
         generation_jobs=generation_jobs,
         reconciliation_jobs=reconciliation_jobs,
-        mapping_warnings=mapping_warnings,
         estimated_llm_calls=total_llm_calls,
     )
 

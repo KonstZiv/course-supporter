@@ -28,7 +28,7 @@ from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.models.course import MaterialNodeSummary, SlideTimecodeRef
+    from course_supporter.models.course import MaterialNodeSummary
     from course_supporter.models.source import SourceDocument
     from course_supporter.models.step import (
         Correction,
@@ -321,33 +321,6 @@ def _collect_outline_context(
     return json.dumps(parsed, ensure_ascii=False)
 
 
-def _collect_validated_mappings(
-    flat_nodes: list[MaterialNode],
-) -> list[SlideTimecodeRef]:
-    """Extract SlideTimecodeRef from validated SlideVideoMappings.
-
-    Args:
-        flat_nodes: Flat list of nodes with slide_video_mappings loaded.
-
-    Returns:
-        List of SlideTimecodeRef (may be empty).
-    """
-    from course_supporter.models.course import SlideTimecodeRef
-    from course_supporter.storage.orm import MappingValidationState
-
-    mappings: list[SlideTimecodeRef] = []
-    for node in flat_nodes:
-        for svm in node.slide_video_mappings:
-            if svm.validation_state == MappingValidationState.VALIDATED:
-                mappings.append(
-                    SlideTimecodeRef(
-                        slide_number=svm.slide_number,
-                        video_timecode_start=svm.video_timecode_start,
-                    )
-                )
-    return mappings
-
-
 async def arq_generate_structure(
     ctx: dict[str, Any],
     job_id: str,
@@ -409,7 +382,6 @@ async def arq_generate_structure(
             # Collect data for generation
             documents = _collect_ready_documents(flat_nodes)
             outline_context = _collect_outline_context(flat_nodes)
-            mappings = _collect_validated_mappings(flat_nodes)
 
             # Build tree summary for LLM context
             from course_supporter.tree_utils import build_material_tree_summary
@@ -419,7 +391,6 @@ async def arq_generate_structure(
             # Merge
             context = MergeStep().merge(
                 documents,
-                mappings if mappings else None,
                 material_tree=tree_summary,
             )
 
@@ -697,7 +668,6 @@ def _build_step_input(
     effective_node_id: uuid.UUID,
     step_type: StepType,
     documents: list[SourceDocument],
-    mappings: list[SlideTimecodeRef],
     tree_summary: list[MaterialNodeSummary],
     flat_nodes: list[MaterialNode],
     mode: Literal["free", "guided"],
@@ -730,7 +700,7 @@ def _build_step_input(
         existing_structure=existing_structure,
         mode=mode,
         material_tree=tree_summary,
-        slide_timecode_refs=mappings,
+        slide_timecode_refs=[],
         children_snapshots=children_snapshots or [],
         outline_context=outline_context,
     )
@@ -905,8 +875,6 @@ async def arq_execute_step(
                 documents = _collect_ready_documents(flat_nodes)
                 outline_ctx = _collect_outline_context(flat_nodes)
 
-            mappings = _collect_validated_mappings(flat_nodes)
-
             from course_supporter.tree_utils import build_material_tree_summary
 
             tree_summary = build_material_tree_summary(flat_nodes)
@@ -955,7 +923,6 @@ async def arq_execute_step(
                 effective_node_id=effective_node_id,
                 step_type=st,
                 documents=documents,
-                mappings=mappings,
                 tree_summary=tree_summary,
                 flat_nodes=flat_nodes,
                 mode=mode,

@@ -336,7 +336,6 @@ class ArchitectAgent:
 
         context = MergeStep().merge(
             step_input.materials,
-            step_input.slide_timecode_refs or None,
             material_tree=step_input.material_tree or None,
         )
         children_context = _format_children_context(step_input.children_summaries)

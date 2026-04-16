@@ -30,7 +30,6 @@ from course_supporter.api.schemas import (
     GenerateRequest,
     GenerationPlanResponse,
     JobResponse,
-    MappingWarningResponse,
     SnapshotDetailResponse,
     SnapshotListResponse,
     SnapshotSummaryResponse,
@@ -157,9 +156,6 @@ async def generate_structure(
         ],
         ingestion_jobs=[JobResponse.model_validate(j) for j in plan.ingestion_jobs],
         estimated_llm_calls=plan.estimated_llm_calls,
-        mapping_warnings=[
-            MappingWarningResponse.model_validate(w) for w in plan.mapping_warnings
-        ],
     )
 
 
@@ -211,7 +207,6 @@ async def refine_structure(
         ],
         ingestion_jobs=[],
         estimated_llm_calls=plan.estimated_llm_calls,
-        mapping_warnings=[],
     )
 
 

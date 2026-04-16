@@ -15,7 +15,6 @@ from course_supporter.errors import (
 )
 from course_supporter.generation_orchestrator import (
     GenerationPlan,
-    MappingWarning,
     _ancestor_chain,
     _collect_job_ids,
     _partition_entries,
@@ -24,7 +23,6 @@ from course_supporter.generation_orchestrator import (
     trigger_generation,
     trigger_refine,
 )
-from course_supporter.storage.orm import MappingValidationState
 
 # ── Helpers ──
 
@@ -34,13 +32,11 @@ def _make_node(
     node_id: uuid.UUID | None = None,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
-    mappings: list[Any] | None = None,
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.children = children or []
     node.materials = materials or []
-    node.slide_video_mappings = mappings or []
     return node
 
 
@@ -88,7 +84,6 @@ class _Deps:
         conflict: Any = None,
         enqueue_ingestion_job: MagicMock | None = None,
         enqueue_step_job: MagicMock | None = None,
-        problematic_mappings: list[Any] | None = None,
     ) -> None:
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
@@ -105,11 +100,6 @@ class _Deps:
         )
         self.enqueue_step = AsyncMock(
             return_value=enqueue_step_job or _make_job(),
-        )
-
-        self.mapping_repo = AsyncMock()
-        self.mapping_repo.get_problematic_by_node_ids = AsyncMock(
-            return_value=problematic_mappings or [],
         )
 
 
@@ -147,10 +137,6 @@ async def _run(
         patch(
             "course_supporter.enqueue.enqueue_step",
             deps.enqueue_step,
-        ),
-        patch(
-            "course_supporter.storage.repositories.SlideVideoMappingRepository",
-            return_value=deps.mapping_repo,
         ),
     ):
         return await trigger_generation(
@@ -442,83 +428,6 @@ class TestNoMaterials:
 
         with pytest.raises(NoReadyMaterialsError):
             await _run(deps)
-
-
-# ── Mapping warnings ──
-
-
-def _make_mapping_orm(
-    *,
-    mapping_id: uuid.UUID | None = None,
-    node_id: uuid.UUID | None = None,
-    slide_number: int = 1,
-    validation_state: str = "pending_validation",
-) -> MagicMock:
-    m = MagicMock()
-    m.id = mapping_id or uuid.uuid4()
-    m.materialnode_id = node_id or uuid.uuid4()
-    m.slide_number = slide_number
-    m.validation_state = validation_state
-    return m
-
-
-class TestMappingWarnings:
-    async def test_no_problematic_mappings(self) -> None:
-        """No problematic mappings -> empty warnings."""
-        entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
-        deps = _Deps(root_nodes=[root], problematic_mappings=[])
-
-        plan = await _run(deps)
-
-        assert plan.mapping_warnings == []
-
-    async def test_pending_mapping_in_warnings(self) -> None:
-        """Pending validation mapping appears in warnings."""
-        entry = _make_entry(state="ready")
-        node_id = uuid.uuid4()
-        root = _make_node(node_id=node_id, materials=[entry])
-        pending = _make_mapping_orm(
-            node_id=node_id,
-            slide_number=3,
-            validation_state="pending_validation",
-        )
-        deps = _Deps(root_nodes=[root], problematic_mappings=[pending])
-
-        plan = await _run(deps)
-
-        assert len(plan.mapping_warnings) == 1
-        w = plan.mapping_warnings[0]
-        assert isinstance(w, MappingWarning)
-        assert w.mapping_id == pending.id
-        assert w.materialnode_id == node_id
-        assert w.slide_number == 3
-        assert w.validation_state == MappingValidationState.PENDING_VALIDATION
-
-    async def test_failed_mapping_in_warnings(self) -> None:
-        """Validation failed mapping appears in warnings."""
-        entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
-        failed = _make_mapping_orm(validation_state="validation_failed")
-        deps = _Deps(root_nodes=[root], problematic_mappings=[failed])
-
-        plan = await _run(deps)
-
-        assert len(plan.mapping_warnings) == 1
-        warn = plan.mapping_warnings[0]
-        assert warn.validation_state == MappingValidationState.VALIDATION_FAILED
-
-    async def test_warnings_present_in_cascade_plan(self) -> None:
-        """Warnings are included in cascade (stale materials) plans."""
-        raw = _make_entry(state="raw")
-        root = _make_node(materials=[raw])
-        failed = _make_mapping_orm(validation_state="validation_failed")
-        deps = _Deps(root_nodes=[root], problematic_mappings=[failed])
-
-        plan = await _run(deps)
-
-        assert len(plan.ingestion_jobs) == 1
-        assert len(plan.mapping_warnings) == 1
 
 
 # ── _collect_job_ids ──
@@ -899,4 +808,3 @@ class TestTriggerRefine:
         plan = await _run_refine(deps, target_node_id=leaf.id)
 
         assert plan.ingestion_jobs == []
-        assert plan.mapping_warnings == []

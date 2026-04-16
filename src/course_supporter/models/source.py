@@ -59,7 +59,7 @@ class ContentChunk(BaseModel):
 
 
 class SourceDocument(BaseModel):
-    """Unified output of any SourceProcessor.
+    """Unified output of any MaterialProcessor.
 
     Contains all extracted content from a single source material
     (one video, one PDF, etc.) as a list of ContentChunks.

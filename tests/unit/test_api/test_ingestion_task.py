@@ -62,7 +62,7 @@ def _mock_processors(
             source_url="https://example.com",
         )
     mock_proc = MagicMock()
-    mock_proc.process = AsyncMock(return_value=doc)
+    mock_proc.process_raw = AsyncMock(return_value=doc)
     return {source_type: mock_proc}
 
 
@@ -73,7 +73,7 @@ def _failing_processors(
 ) -> dict[SourceType, MagicMock]:
     """Create a processors dict with a processor that raises."""
     mock_proc = MagicMock()
-    mock_proc.process = AsyncMock(side_effect=RuntimeError(error))
+    mock_proc.process_raw = AsyncMock(side_effect=RuntimeError(error))
     return {source_type: mock_proc}
 
 
@@ -306,7 +306,7 @@ class TestArqIngestMaterial:
             )
 
         mock_proc = MagicMock()
-        mock_proc.process = capture_process
+        mock_proc.process_raw = capture_process
         procs = {SourceType.TEXT: mock_proc}
 
         with (

@@ -27,7 +27,7 @@ from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
     from course_supporter.config import Settings
-    from course_supporter.ingestion.base import SourceProcessor
+    from course_supporter.ingestion.base import MaterialProcessor
     from course_supporter.llm.router import ModelRouter
     from course_supporter.stt.router import STTRouter
     from course_supporter.vd.pipeline import VDPipeline
@@ -147,7 +147,7 @@ def create_processors(
     *,
     vd_pipeline: VDPipeline | None = None,
     stt_router: STTRouter | None = None,
-) -> dict[SourceType, SourceProcessor]:
+) -> dict[SourceType, MaterialProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
@@ -160,7 +160,7 @@ def create_processors(
     Returns:
         Mapping from SourceType to fully-wired processor instances.
     """
-    video_processor: SourceProcessor
+    video_processor: MaterialProcessor
     if stt_router is not None:
         video_processor = VideoProcessor(
             stt_router=stt_router,

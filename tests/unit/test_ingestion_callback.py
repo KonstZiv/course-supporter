@@ -428,7 +428,7 @@ class TestCallbackIntegrationWithArqTask:
         mock_doc.metadata = {}
 
         mock_processor = MagicMock()
-        mock_processor.process = AsyncMock(return_value=mock_doc)
+        mock_processor.process_raw = AsyncMock(return_value=mock_doc)
 
         session = AsyncMock()
         session.commit = AsyncMock()
@@ -509,7 +509,7 @@ class TestCallbackIntegrationWithArqTask:
         _factory_fn = "course_supporter.api.tasks.create_processors"
 
         mock_processor = MagicMock()
-        mock_processor.process = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_processor.process_raw = AsyncMock(side_effect=RuntimeError("boom"))
 
         mock_entry = MagicMock()
         mock_entry.source_url = "https://example.com"

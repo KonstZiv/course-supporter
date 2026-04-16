@@ -38,7 +38,7 @@ class TestPDFProcessing:
             ]
         )
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         assert isinstance(doc, SourceDocument)
         assert doc.source_type == SourceType.PRESENTATION
@@ -63,7 +63,7 @@ class TestPDFProcessing:
             parse_pdf_func=mock_parse,
             describe_slides_func=mock_describe,
         )
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         desc_chunks = [
             c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_DESCRIPTION
@@ -75,7 +75,7 @@ class TestPDFProcessing:
         """No pages -> empty chunks."""
         mock_parse = _mock_parse_pdf([])
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         assert doc.chunks == []
         assert doc.metadata["page_count"] == 0
@@ -93,7 +93,7 @@ class TestPDFProcessing:
             parse_pdf_func=mock_parse,
             describe_slides_func=mock_describe,
         )
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
         assert len(text_chunks) == 1
@@ -110,7 +110,7 @@ class TestPDFProcessing:
             ]
         )
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         text_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.SLIDE_TEXT]
         assert len(text_chunks) == 1
@@ -123,7 +123,7 @@ class TestPDFProcessing:
         """Pages with only whitespace are not returned by parse_pdf."""
         mock_parse = _mock_parse_pdf([])  # parse_pdf strips empty pages
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         assert doc.chunks == []
         assert doc.metadata["page_count"] == 0
@@ -147,7 +147,7 @@ class TestPDFProcessing:
             parse_pdf_func=mock_parse,
             describe_slides_func=mock_describe,
         )
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         assert len(doc.chunks) == 4
         assert doc.chunks[0].chunk_type == ChunkType.SLIDE_TEXT
@@ -164,7 +164,7 @@ class TestPDFProcessing:
         mock_parse = _mock_parse_pdf([])
 
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        await proc.process(_make_source(url="file:///slides.pdf"))
+        await proc.process_raw(_make_source(url="file:///slides.pdf"))
 
         mock_parse.assert_awaited_once()
         args = mock_parse.call_args
@@ -199,7 +199,7 @@ class TestPPTXProcessing:
 
         with patch("pptx.Presentation", return_value=mock_prs):
             proc = PresentationProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///s.pptx", filename="s.pptx")
             )
 
@@ -213,7 +213,7 @@ class TestPPTXProcessing:
 
         with patch("pptx.Presentation", return_value=mock_prs):
             proc = PresentationProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///s.pptx", filename="s.pptx"),
                 router=None,
             )
@@ -227,7 +227,7 @@ class TestPPTXProcessing:
 
         with patch("pptx.Presentation", return_value=mock_prs):
             proc = PresentationProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///s.pptx", filename="s.pptx")
             )
 
@@ -242,13 +242,13 @@ class TestPresentationProcessorValidation:
         with pytest.raises(
             UnsupportedFormatError, match="Unsupported presentation format"
         ):
-            await proc.process(_make_source(url="file:///s.doc", filename="s.doc"))
+            await proc.process_raw(_make_source(url="file:///s.doc", filename="s.doc"))
 
     async def test_invalid_source_type(self) -> None:
         """Non-presentation source_type -> UnsupportedFormatError."""
         proc = PresentationProcessor()
         with pytest.raises(UnsupportedFormatError, match="expects 'presentation'"):
-            await proc.process(_make_source(source_type="video"))
+            await proc.process_raw(_make_source(source_type="video"))
 
     async def test_slide_numbering(self) -> None:
         """Chunk index and metadata use 1-based slide numbers."""
@@ -260,7 +260,7 @@ class TestPresentationProcessorValidation:
             ]
         )
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         for i, chunk in enumerate(doc.chunks):
             assert chunk.metadata["slide_number"] == i + 1
@@ -270,7 +270,7 @@ class TestPresentationProcessorValidation:
         """page_count and format in metadata."""
         mock_parse = _mock_parse_pdf([])
         proc = PresentationProcessor(parse_pdf_func=mock_parse)
-        doc = await proc.process(_make_source())
+        doc = await proc.process_raw(_make_source())
 
         assert doc.metadata["format"] == "pdf"
         assert doc.metadata["page_count"] == 0
@@ -282,7 +282,7 @@ class TestPresentationProcessorValidation:
 
         with patch("pptx.Presentation", return_value=mock_prs):
             proc = PresentationProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///s.pptx", filename="s.pptx")
             )
 

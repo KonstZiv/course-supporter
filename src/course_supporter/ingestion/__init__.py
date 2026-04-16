@@ -1,13 +1,13 @@
 """Ingestion pipeline for processing course materials."""
 
 from course_supporter.ingestion.base import (
+    MaterialProcessor,
     ProcessingError,
-    SourceProcessor,
     UnsupportedFormatError,
 )
 
 __all__ = [
+    "MaterialProcessor",
     "ProcessingError",
-    "SourceProcessor",
     "UnsupportedFormatError",
 ]

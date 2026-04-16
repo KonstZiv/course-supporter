@@ -54,7 +54,7 @@ class TestWhisperVideoProcessor:
             patch.object(proc, "_extract_audio", return_value="/tmp/audio.wav"),
             patch("pathlib.Path.unlink"),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert isinstance(doc, SourceDocument)
         assert doc.source_type == SourceType.VIDEO
@@ -74,7 +74,7 @@ class TestWhisperVideoProcessor:
             patch.object(proc, "_extract_audio", return_value="/tmp/a.wav"),
             patch("pathlib.Path.unlink"),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         chunk = doc.chunks[0]
         assert chunk.chunk_type == ChunkType.TRANSCRIPT
@@ -93,7 +93,7 @@ class TestWhisperVideoProcessor:
             ),
             pytest.raises(ProcessingError, match="FFmpeg not found"),
         ):
-            await proc.process(_make_source())
+            await proc.process_raw(_make_source())
 
     async def test_ffmpeg_fails(self) -> None:
         """FFmpeg subprocess error -> ProcessingError."""
@@ -107,7 +107,7 @@ class TestWhisperVideoProcessor:
             ),
             pytest.raises(ProcessingError, match="FFmpeg failed"),
         ):
-            await proc.process(_make_source())
+            await proc.process_raw(_make_source())
 
     async def test_empty_audio(self) -> None:
         """Empty transcription result -> empty chunks."""
@@ -118,7 +118,7 @@ class TestWhisperVideoProcessor:
             patch.object(proc, "_extract_audio", return_value="/tmp/a.wav"),
             patch("pathlib.Path.unlink"),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert doc.chunks == []
 
@@ -126,7 +126,7 @@ class TestWhisperVideoProcessor:
         """Non-video source -> UnsupportedFormatError."""
         proc = WhisperVideoProcessor(transcribe_func=_mock_transcribe_func())
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
-            await proc.process(_make_source(source_type="text"))
+            await proc.process_raw(_make_source(source_type="text"))
 
     async def test_cleanup_on_error(self) -> None:
         """Temp audio file cleaned up even when transcription fails."""
@@ -139,7 +139,7 @@ class TestWhisperVideoProcessor:
             patch("pathlib.Path.unlink", mock_unlink),
             pytest.raises(RuntimeError, match="Whisper crash"),
         ):
-            await proc.process(_make_source())
+            await proc.process_raw(_make_source())
 
         mock_unlink.assert_called_once()
 
@@ -152,7 +152,7 @@ class TestWhisperVideoProcessor:
             patch.object(proc, "_extract_audio", return_value="/tmp/audio.wav"),
             patch("pathlib.Path.unlink"),
         ):
-            await proc.process(_make_source())
+            await proc.process_raw(_make_source())
 
         mock_func.assert_awaited_once()
         args = mock_func.call_args
@@ -177,7 +177,7 @@ class TestWhisperUrlDownload:
                 ),
             ),
         ):
-            await proc.process(
+            await proc.process_raw(
                 _make_source(url="https://www.youtube.com/watch?v=abc123")
             )
 
@@ -198,7 +198,7 @@ class TestWhisperUrlDownload:
                 ),
             ),
         ):
-            await proc.process(_make_source(url="/tmp/local_video.mp4"))
+            await proc.process_raw(_make_source(url="/tmp/local_video.mp4"))
 
         mock_dl.assert_not_awaited()
 
@@ -268,7 +268,7 @@ class TestVideoProcessorParallel:
             patch("pathlib.Path.unlink"),
             patch("pathlib.Path.is_file", return_value=True),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert len(doc.chunks) == 2
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -301,7 +301,7 @@ class TestVideoProcessorParallel:
             patch("pathlib.Path.unlink"),
             patch("pathlib.Path.is_file", return_value=True),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert len(doc.chunks) == 1
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -327,7 +327,7 @@ class TestVideoProcessorParallel:
             patch("pathlib.Path.unlink"),
             patch("pathlib.Path.is_file", return_value=True),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert doc.metadata["strategy"] == "stt"
         assert doc.metadata["vd_scenes"] == 0

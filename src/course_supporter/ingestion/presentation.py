@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from course_supporter.ingestion.base import (
-    SourceProcessor,
+    MaterialProcessor,
     UnsupportedFormatError,
 )
 from course_supporter.ingestion.heavy_steps import (
@@ -34,7 +34,7 @@ logger = structlog.get_logger()
 SUPPORTED_EXTENSIONS = {".pdf", ".pptx"}
 
 
-class PresentationProcessor(SourceProcessor):
+class PresentationProcessor(MaterialProcessor):
     """Process PDF and PPTX presentations.
 
     Extracts text from each slide/page as SLIDE_TEXT chunks.
@@ -58,7 +58,7 @@ class PresentationProcessor(SourceProcessor):
 
         return local_parse_pdf
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,

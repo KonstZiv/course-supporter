@@ -71,7 +71,7 @@ class _MaterialProxy:
 async def _resolve_s3_url(
     material: _HasSourceUrl,
     s3: S3Client | None,
-) -> AsyncIterator[Any]:  # Any: processor.process() expects MaterialEntry
+) -> AsyncIterator[Any]:  # Any: processor.process_raw() expects MaterialEntry
     """Download S3 object to temp file, yield a proxy with local path.
 
     The original ORM object is **never mutated**, preventing accidental
@@ -197,7 +197,7 @@ async def arq_ingest_material(
                 raise ValueError(msg) from None
 
             async with _resolve_s3_url(entry, s3) as resolved:
-                doc = await processor.process(resolved, router=router)
+                doc = await processor.process_raw(resolved, router=router)
 
             content = doc.model_dump_json()
             detected_language = doc.metadata.get("detected_language")

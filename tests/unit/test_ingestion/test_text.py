@@ -29,7 +29,7 @@ class TestMarkdownProcessing:
 
         with patch("pathlib.Path.read_text", return_value=md_content):
             proc = TextProcessor()
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert isinstance(doc, SourceDocument)
         headings = [c for c in doc.chunks if c.chunk_type == ChunkType.HEADING]
@@ -45,7 +45,7 @@ class TestMarkdownProcessing:
 
         with patch("pathlib.Path.read_text", return_value=md_content):
             proc = TextProcessor()
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         paragraphs = [c for c in doc.chunks if c.chunk_type == ChunkType.PARAGRAPH]
         assert len(paragraphs) == 2
@@ -67,7 +67,7 @@ class TestDocxProcessing:
 
         with patch("docx.Document", return_value=mock_doc):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///d.docx", filename="d.docx")
             )
 
@@ -90,7 +90,7 @@ class TestDocxProcessing:
 
         with patch("docx.Document", return_value=mock_doc):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///d.docx", filename="d.docx")
             )
 
@@ -105,7 +105,7 @@ class TestHTMLProcessing:
 
         with patch("pathlib.Path.read_text", return_value=html):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///p.html", filename="p.html")
             )
 
@@ -122,7 +122,7 @@ class TestPlainTextProcessing:
         """.txt → single PARAGRAPH chunk."""
         with patch("pathlib.Path.read_text", return_value="Just plain text"):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///f.txt", filename="f.txt")
             )
 
@@ -133,7 +133,7 @@ class TestPlainTextProcessing:
         """Empty content → empty chunks."""
         with patch("pathlib.Path.read_text", return_value=""):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///f.txt", filename="f.txt")
             )
 
@@ -145,13 +145,13 @@ class TestTextProcessorValidation:
         """.rtf → UnsupportedFormatError."""
         proc = TextProcessor()
         with pytest.raises(UnsupportedFormatError, match="Unsupported text format"):
-            await proc.process(_make_source(url="file:///f.rtf", filename="f.rtf"))
+            await proc.process_raw(_make_source(url="file:///f.rtf", filename="f.rtf"))
 
     async def test_invalid_source_type(self) -> None:
         """Non-text source_type → UnsupportedFormatError."""
         proc = TextProcessor()
         with pytest.raises(UnsupportedFormatError, match="expects 'text'"):
-            await proc.process(_make_source(source_type="video"))
+            await proc.process_raw(_make_source(source_type="video"))
 
     async def test_chunk_ordering(self) -> None:
         """Chunks indexed sequentially."""
@@ -159,7 +159,7 @@ class TestTextProcessorValidation:
 
         with patch("pathlib.Path.read_text", return_value=md_content):
             proc = TextProcessor()
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         indices = [c.index for c in doc.chunks]
         assert indices == list(range(len(indices)))
@@ -168,7 +168,7 @@ class TestTextProcessorValidation:
         """Output source_type is SourceType.TEXT."""
         with patch("pathlib.Path.read_text", return_value="text"):
             proc = TextProcessor()
-            doc = await proc.process(
+            doc = await proc.process_raw(
                 _make_source(url="file:///f.txt", filename="f.txt")
             )
 

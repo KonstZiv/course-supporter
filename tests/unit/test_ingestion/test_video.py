@@ -41,7 +41,7 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        doc = await proc.process_raw(_make_source(), router=router)
 
         assert isinstance(doc, SourceDocument)
         assert doc.source_type == SourceType.VIDEO
@@ -56,7 +56,7 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        doc = await proc.process_raw(_make_source(), router=router)
 
         chunk = doc.chunks[0]
         assert chunk.chunk_type == ChunkType.TRANSCRIPT
@@ -67,14 +67,14 @@ class TestGeminiVideoProcessor:
         """None router raises ProcessingError."""
         proc = GeminiVideoProcessor()
         with pytest.raises(ProcessingError, match="requires a ModelRouter"):
-            await proc.process(_make_source(), router=None)
+            await proc.process_raw(_make_source(), router=None)
 
     async def test_invalid_source_type(self) -> None:
         """Non-video source raises UnsupportedFormatError."""
         proc = GeminiVideoProcessor()
         router = AsyncMock()
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
-            await proc.process(_make_source(source_type="text"), router=router)
+            await proc.process_raw(_make_source(source_type="text"), router=router)
 
     async def test_llm_failure_propagates(self) -> None:
         """Router exception propagates as-is."""
@@ -83,7 +83,7 @@ class TestGeminiVideoProcessor:
 
         proc = GeminiVideoProcessor()
         with pytest.raises(RuntimeError, match="API down"):
-            await proc.process(_make_source(), router=router)
+            await proc.process_raw(_make_source(), router=router)
 
     async def test_output_fields(self) -> None:
         """Verify output shape: source_type, source_url, metadata."""
@@ -94,7 +94,9 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(url="s3://bucket/v.mp4"), router=router)
+        doc = await proc.process_raw(
+            _make_source(url="s3://bucket/v.mp4"), router=router
+        )
 
         assert doc.source_url == "s3://bucket/v.mp4"
         assert doc.metadata["strategy"] == "gemini"
@@ -108,7 +110,7 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        doc = await proc.process_raw(_make_source(), router=router)
 
         assert len(doc.chunks) == 2
         assert doc.chunks[0].start_sec == 0.0
@@ -123,7 +125,7 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        doc = await proc.process_raw(_make_source(), router=router)
 
         assert len(doc.chunks) == 2
         assert doc.chunks[0].text == "First"
@@ -140,7 +142,7 @@ class TestGeminiVideoProcessor:
         )
 
         proc = GeminiVideoProcessor()
-        doc = await proc.process(_make_source(), router=router)
+        doc = await proc.process_raw(_make_source(), router=router)
 
         indices = [c.index for c in doc.chunks]
         assert indices == [0, 1, 2]
@@ -155,7 +157,7 @@ class TestGeminiVideoProcessor:
 
         proc = GeminiVideoProcessor()
         with pytest.raises(ProcessingError, match="did not process the video"):
-            await proc.process(_make_source(), router=router)
+            await proc.process_raw(_make_source(), router=router)
 
     async def test_none_tokens_raises_processing_error(self) -> None:
         """tokens_in=None -> ProcessingError."""
@@ -167,7 +169,7 @@ class TestGeminiVideoProcessor:
 
         proc = GeminiVideoProcessor()
         with pytest.raises(ProcessingError, match="did not process the video"):
-            await proc.process(_make_source(), router=router)
+            await proc.process_raw(_make_source(), router=router)
 
 
 def _mock_stt_router(
@@ -205,7 +207,7 @@ class TestVideoProcessor:
             patch("pathlib.Path.unlink"),
             patch("pathlib.Path.is_file", return_value=True),
         ):
-            doc = await proc.process(_make_source())
+            doc = await proc.process_raw(_make_source())
 
         assert len(doc.chunks) == 1
         assert doc.chunks[0].chunk_type == ChunkType.TRANSCRIPT
@@ -215,13 +217,13 @@ class TestVideoProcessor:
         """UnsupportedFormatError for non-video source."""
         proc = VideoProcessor(stt_router=AsyncMock())
         with pytest.raises(UnsupportedFormatError, match="expects 'video'"):
-            await proc.process(_make_source(source_type="text"))
+            await proc.process_raw(_make_source(source_type="text"))
 
     async def test_url_source_rejected(self) -> None:
         """Remote URL raises ProcessingError (local files only)."""
         proc = VideoProcessor(stt_router=AsyncMock())
         with pytest.raises(ProcessingError, match="requires a local file path"):
-            await proc.process(_make_source(url="https://example.com/v.mp4"))
+            await proc.process_raw(_make_source(url="https://example.com/v.mp4"))
 
 
 class TestTimecodeToSeconds:

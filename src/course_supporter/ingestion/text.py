@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from course_supporter.ingestion.base import (
-    SourceProcessor,
+    MaterialProcessor,
     UnsupportedFormatError,
 )
 from course_supporter.models.source import (
@@ -28,14 +28,14 @@ logger = structlog.get_logger()
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".docx", ".html", ".htm", ".txt"}
 
 
-class TextProcessor(SourceProcessor):
+class TextProcessor(MaterialProcessor):
     """Process text documents (MD, DOCX, HTML, TXT).
 
     Extracts headings and paragraphs without LLM.
     The router parameter is accepted but not used.
     """
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,

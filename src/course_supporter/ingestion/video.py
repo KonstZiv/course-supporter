@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from course_supporter.ingestion.base import (
+    MaterialProcessor,
     ProcessingError,
-    SourceProcessor,
     UnsupportedFormatError,
 )
 from course_supporter.ingestion.heavy_steps import (
@@ -111,7 +111,7 @@ async def _extract_audio_ffmpeg(video_path: str) -> str:
     return audio_path
 
 
-class GeminiVideoProcessor(SourceProcessor):
+class GeminiVideoProcessor(MaterialProcessor):
     """Process video using Gemini Vision API.
 
     Uploads video to Gemini File API, sends to vision model
@@ -119,7 +119,7 @@ class GeminiVideoProcessor(SourceProcessor):
     ContentChunks.
     """
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,
@@ -245,7 +245,7 @@ class GeminiVideoProcessor(SourceProcessor):
         return chunks
 
 
-class WhisperVideoProcessor(SourceProcessor):
+class WhisperVideoProcessor(MaterialProcessor):
     """Process video using local FFmpeg + OpenAI Whisper.
 
     Extracts audio track via FFmpeg subprocess, then transcribes
@@ -270,7 +270,7 @@ class WhisperVideoProcessor(SourceProcessor):
 
         return local_transcribe
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,
@@ -422,7 +422,7 @@ class WhisperVideoProcessor(SourceProcessor):
         return chunks
 
 
-class VideoProcessor(SourceProcessor):
+class VideoProcessor(MaterialProcessor):
     """Composite video processor: parallel STT + VD.
 
     Runs audio transcription (STT Router) and visual description (VD) as
@@ -454,7 +454,7 @@ class VideoProcessor(SourceProcessor):
         self._stt_router = stt_router
         self._vd = vd_pipeline
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,

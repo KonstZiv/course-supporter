@@ -58,7 +58,7 @@ def _mock_processors(
         else {}
     )
     processor = MagicMock()
-    processor.process = AsyncMock(return_value=mock_doc)
+    processor.process_raw = AsyncMock(return_value=mock_doc)
     return {SourceType.WEB: processor}
 
 
@@ -68,7 +68,7 @@ def _failing_processors(
 ) -> dict[SourceType, MagicMock]:
     """Create a processors dict with a processor that raises."""
     processor = MagicMock()
-    processor.process = AsyncMock(side_effect=RuntimeError(error))
+    processor.process_raw = AsyncMock(side_effect=RuntimeError(error))
     return {SourceType.WEB: processor}
 
 

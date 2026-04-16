@@ -5,8 +5,8 @@ from datetime import datetime
 import pytest
 
 from course_supporter.ingestion.base import (
+    MaterialProcessor,
     ProcessingError,
-    SourceProcessor,
     UnsupportedFormatError,
 )
 from course_supporter.models.course import CourseContext, SlideTimecodeRef
@@ -109,11 +109,11 @@ class TestCourseContext:
         assert ctx.slide_video_mappings[0].video_timecode_start == "00:05:30"
 
 
-class TestSourceProcessor:
+class TestMaterialProcessor:
     def test_source_processor_is_abstract(self) -> None:
-        """SourceProcessor cannot be instantiated directly."""
+        """MaterialProcessor cannot be instantiated directly."""
         with pytest.raises(TypeError):
-            SourceProcessor()  # type: ignore[abstract]
+            MaterialProcessor()  # type: ignore[abstract]
 
     def test_processing_error_hierarchy(self) -> None:
         """UnsupportedFormatError is a subclass of ProcessingError."""

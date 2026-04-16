@@ -91,7 +91,7 @@ async def run_real_pipeline() -> CourseStructure:
             source_url=str(filepath),
             title=filepath.stem,
         )
-        doc = await processor.process(material, router=None)
+        doc = await processor.process_raw(material, router=None)
         documents.append(doc)
 
     context = merge.merge(documents)

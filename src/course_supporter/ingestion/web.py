@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import structlog
 
 from course_supporter.ingestion.base import (
-    SourceProcessor,
+    MaterialProcessor,
     UnsupportedFormatError,
 )
 from course_supporter.ingestion.heavy_steps import (
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 
-class WebProcessor(SourceProcessor):
+class WebProcessor(MaterialProcessor):
     """Process web pages by delegating to an injected scraping function.
 
     Uses ``ScrapeWebFunc`` for content extraction (default: ``local_scrape_web``).
@@ -51,7 +51,7 @@ class WebProcessor(SourceProcessor):
 
         return local_scrape_web
 
-    async def process(
+    async def process_raw(
         self,
         source: MaterialEntry,
         *,

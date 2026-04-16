@@ -177,7 +177,7 @@ erDiagram
 #### 3. MaterialNode
 
 **Таблиця:** `material_nodes`
-**Призначення:** Ієрархічне дерево **контейнерів** для сирого вмісту курсу — авторська навігаційна структура, до якої кріпляться реальні матеріали (`material_entries`). Root nodes (`parent_materialnode_id IS NULL`) = курси, що належать tenant. Дочірні nodes — довільної глибини (module → lesson → topic, і т. д.). Зберігає `node_fingerprint` (Merkle hash) для idempotency генерації структури. **Pedagogical metadata** (learning goals, expected knowledge/skills) зберігаються НЕ тут, а в `structure_nodes_editable` — після того, як Architect згенерує структуру (video/text для цього читаються з `material_entries` → `material_macro_sections` → `material_segments`).
+**Призначення:** Ієрархічне дерево авторських вузлів-контейнерів курсу. Root nodes (`parent_materialnode_id IS NULL`) = курси, що належать tenant. Дочірні вузли — довільної глибини, організовують матеріали у модулі/уроки/теми. Зберігає `node_fingerprint` (Merkle hash) для idempotency згенерованих структур. Педагогічні метадані (цілі навчання, очікувані знання/навички) тут **не зберігаються** — вони є виходом агентів і живуть у `structure_nodes_editable`.
 
 **Поля:**
 
@@ -185,11 +185,11 @@ erDiagram
 |---|---|---|---|
 | `id` | UUID | PK | — |
 | `tenant_id` | UUID | FK→tenants.id, ON DELETE CASCADE, indexed | Власник |
-| `parent_materialnode_id` | UUID | FK→material_nodes.id (self), nullable, ON DELETE CASCADE, indexed | Self-referential, NULL=root (course) |
+| `parent_materialnode_id` | UUID | FK→material_nodes.id (self), nullable, ON DELETE CASCADE, indexed | Self-referential, NULL = root (course) |
 | `title` | String(500) | — | Назва вузла |
 | `description` | Text | nullable | Опис |
 | `default_language` | String(10) | nullable | ISO 639-1; успадковується дітьми + матеріалами; кешується після auto-detect |
-| `order` | Integer | nullable | Sibling sort key within parent. NULL = no preferred order; sorted last by created_at. SQL: `ORDER BY order ASC NULLS LAST, created_at ASC` |
+| `order` | Integer | nullable | Sibling sort key within parent. NULL = без пріоритету; сортується останнім за created_at. SQL: `ORDER BY order ASC NULLS LAST, created_at ASC` |
 | `node_fingerprint` | String(64) | nullable | Merkle SHA-256 контентної піддерева; **NULL = stale**; інвалідується знизу-вгору при змінах матеріалів |
 | `created_at` | timestamptz | server_default now() | — |
 | `updated_at` | timestamptz | onupdate now() | — |
@@ -201,12 +201,12 @@ erDiagram
 - **Створення:** API `POST /nodes` (root) або `POST /nodes/:parent_id/children` (child) → `MaterialNodeRepository.create(...)`.
 - **Зміни:**
   - PATCH `/nodes/:id` — `title`, `description`, `default_language`, `order`.
-  - `node_fingerprint` → NULL при зміні матеріалів (cascade в `ingestion_callback.py`).
-  - `updated_at` авто.
+  - `node_fingerprint` ← NULL при зміні матеріалів (cascade знизу-вгору, у `ingestion_callback.py`); пізніше заповнюється під час генерації через `FingerprintService.ensure_node_fp(...)`.
+  - `updated_at` ← авто при будь-якому UPDATE.
 
 **Історичні зміни (для контексту):**
-- 2026-04-16 (PR #381): `order` став nullable з семантикою `NULLS LAST`.
-- 2026-04-16 (PR #384): прибрано колонки `learning_goal`, `expected_knowledge`, `expected_skills` — Methodist-domain pedagogical fields переїхали у `structure_nodes_editable` (Layer 3 агентів).
+- PR #381 (2026-04-16): `order` став nullable з семантикою `NULLS LAST`.
+- PR #384 (2026-04-16): прибрано колонки `learning_goal`, `expected_knowledge`, `expected_skills` — педагогічні поля переїхали у `structure_nodes_editable` (вихід Architect/Methodist).
 
 ---
 
@@ -273,40 +273,38 @@ erDiagram
 #### 5. MaterialMacroSection
 
 **Таблиця:** `material_macro_sections`
-**Призначення:** Table-of-Contents рівень **одного матеріалу**. Один рядок — одна логічна тематична секція матеріалу (тематичний блок тексту, група слайдів презентації, сегмент відео/аудіо між природними межами). Є Stage-5-виходом ingestion pipeline. Існує заради того, щоб downstream-агенти (Architect, Methodist, Mentor) могли **навігуватись по змісту матеріалу семантично** — наприклад, "у якій секції матеріалу вперше пояснюється концепція X?" — без повного сканування сирого `processed_content`.
+**Призначення:** Рівень змісту (table-of-contents) одного матеріалу. Один рядок — одна тематична секція матеріалу: блок тексту, група слайдів презентації, сегмент відео/аудіо між природними межами. Агенти (Architect, Methodist, Mentor) використовують цю таблицю щоб семантично навігуватись по матеріалу — знайти "у якій секції цього матеріалу вперше пояснюється концепція X" — без сканування сирого `processed_content`. Вихід Stage 5 ingestion pipeline.
 
 **Поля:**
 
 | Поле | Тип | Constraints | Призначення |
 |---|---|---|---|
-| `id` | UUID | PK, UUIDv7 | — |
+| `id` | UUID | PK, default `_uuid7` | — |
 | `material_entry_id` | UUID | FK→material_entries.id, ON DELETE CASCADE, indexed | Батьківський матеріал |
-| `order` | Integer | NOT NULL | 0-indexed позиція в TOC матеріалу |
-| `title` | String(500) | NOT NULL | Self-contained назва секції (згенерована LLM або взята з заголовка) |
-| `start_pos` | Integer | NOT NULL, CHECK `>= 0` | Початок секції в **unit-ах джерела** (ms для video/audio, slide number для presentation, char offset для text/web) |
+| `order` | Integer | NOT NULL | 0-indexed позиція секції у TOC матеріалу |
+| `title` | String(500) | NOT NULL | Коротка самодостатня назва секції |
+| `start_pos` | Integer | NOT NULL, CHECK `>= 0` | Початок секції в unit-ах джерела (ms для video/audio, номер слайду для presentation, char offset для text/web) |
 | `end_pos` | Integer | NOT NULL, CHECK `> start_pos` | Кінець секції в unit-ах джерела (exclusive для video/audio/text/web; inclusive для presentation) |
-| `status` | enum | NOT NULL, default `pending` | `pending / ready / failed` — lifecycle macro-секції (готовність Stage-6) |
-| `error_message` | Text | nullable | NULL якщо не failed |
-| `llm_call_id` | UUID | FK→external_service_calls.id, nullable, ON DELETE SET NULL | LLM-виклик що породив цю секцію; NULL для детерміністичних джерел (наразі — немає такого шляху, всі процесори проходять через LLM TOC) |
+| `status` | enum | NOT NULL, default `pending` | `pending / ready / failed` — lifecycle секції (чи готова Stage 6 для неї) |
+| `error_message` | Text | nullable | Пишеться лише у статусі `failed`; у решті NULL |
+| `llm_call_id` | UUID | FK→external_service_calls.id, nullable, ON DELETE SET NULL | ESC-row Stage 5 LLM-виклику, що породив цю секцію |
 | `created_at` | timestamptz | server_default now() | — |
 
-**Індекси:**
-- `material_entry_id` (FK index)
-- composite `(material_entry_id, order)` — `ix_material_macro_sections_entry_order`
-- partial on `status` WHERE `status != 'ready'` — `ix_material_macro_sections_unready` — для швидкого опитування незавершених macro-секцій
+**Індекси:** `material_entry_id`; composite `(material_entry_id, order)`; partial на `status` WHERE `status != 'ready'` (для швидкого запиту незавершених секцій)
 
-**Foreign keys:** `material_entry_id` → `material_entries.id` (CASCADE), `llm_call_id` → `external_service_calls.id` (SET NULL — зберігаємо cost-аудит навіть якщо ESC-row було видалено).
+**Foreign keys:** `material_entry_id` → material_entries (CASCADE), `llm_call_id` → external_service_calls (SET NULL — зберігаємо cost-аудит навіть якщо ESC-row видалено)
 
-**Invariants (enforced by CHECK):** `start_pos >= 0`, `end_pos > start_pos`.
-
-**Invariants (enforced by code, не DB):**
-- Сума діапазонів усіх macro-секцій одного MaterialEntry = повний розмір `processed_content` (full coverage).
-- Немає overlap між секціями.
-- Перша секція — `start_pos = 0`; остання — `end_pos = len(processed_content)`.
+**Інваріанти:**
+- DB-level CHECK: `start_pos >= 0`, `end_pos > start_pos`.
+- Code-level (enforced у pipeline): секції одного матеріалу покривають `processed_content` повністю і без overlap. Перша — `start_pos = 0`; остання — `end_pos = len(processed_content)`.
 
 **Lifecycle:**
-- **Створення:** ARQ task `arq_run_macro_segment_pipeline` → `run_text_macro_segment_pipeline(...)` (для text/web; video/audio/presentation будуть додані в PR #4d). `MacroTOCAgent` → LLM → `(title, start_snippet)` candidates → `resolve_macro_sections(...)` → batch-insert з `status = ready`.
-- **Зміни:** immutable після `ready`. Регенерація = hard-delete старих рядків + insert нових (при зміні `MaterialEntry.raw_hash`).
+- **Створення:** ARQ task `arq_run_macro_segment_pipeline` (enqueue після успішного ingestion для text/web; video/audio/presentation — PR #4d):
+  - Stage 5 — `MacroTOCAgent` кличе LLM із `processed_content` → список `(title, start_snippet)`.
+  - `resolve_macro_sections(...)` монотонним substring-пошуком перетворює snippets на `start_pos`/`end_pos`.
+  - `MaterialMacroSectionRepository.batch_create(...)` вставляє N рядків із `status = ready`.
+  - `llm_call_id` ← щойно створений `external_service_calls.id` зі Stage 5.
+- **Зміни:** immutable після `ready`. Регенерація (зміна `MaterialEntry.raw_hash`) = hard-delete старих + insert нових. `status = failed` + `error_message` — якщо Stage 5 упав, ряд не створюється взагалі (без partial state).
 
 **JSONB поля:** немає.
 
@@ -315,41 +313,35 @@ erDiagram
 #### 6. MaterialSegment
 
 **Таблиця:** `material_segments`
-**Призначення:** **Атомарна одиниця очищеного / нарізаного контенту** всередині однієї `MaterialMacroSection`. Є Stage-6-виходом pipeline. Існує заради **fine-grained** роботи зі змістом: dowstream-агент може запитати конкретний параграф / речення / sub-chunk слайду без зайвих токенів довкола, а Mentor — зробити verbatim-quote з абсолютною позицією (char/ms/slide). Для `text`/`web` — це pure SQL slice `processed_content[start:end]` без LLM; для `video`/`audio`/`presentation` (коли їх processors будуть імплементовані) — LLM cleanup (видалення filler-word'ів, stutter'ів, redundancy).
+**Призначення:** Атомарна одиниця очищеного або нарізаного контенту всередині однієї `MaterialMacroSection`. Агенти використовують сегменти, коли потрібен конкретний параграф/речення/sub-chunk слайду без зайвого контексту довкола; Mentor — для verbatim-quote з точною абсолютною позицією (char/ms/slide). Для text/web — це pure SQL slice без LLM. Для video/audio/presentation (у наступних PR) — LLM cleanup за секцією (прибирання filler-слів, повторів, stutter-ів). Вихід Stage 6 ingestion pipeline.
 
 **Поля:**
 
 | Поле | Тип | Constraints | Призначення |
 |---|---|---|---|
-| `id` | UUID | PK, UUIDv7 | — |
+| `id` | UUID | PK, default `_uuid7` | — |
 | `macro_section_id` | UUID | FK→material_macro_sections.id, ON DELETE CASCADE, indexed | Батьківська macro-секція |
-| `order` | Integer | NOT NULL | 0-indexed позиція серед segments тієї ж macro |
-| `start_pos` | Integer | NOT NULL, CHECK `>= 0` | **Абсолютний** (не relative до macro) початок в unit-ах джерела |
+| `order` | Integer | NOT NULL | 0-indexed позиція segment-а серед segment-ів тієї ж macro |
+| `start_pos` | Integer | NOT NULL, CHECK `>= 0` | **Абсолютний** (не відносний до macro) початок в unit-ах джерела |
 | `end_pos` | Integer | NOT NULL, CHECK `> start_pos` | Абсолютний кінець |
-| `content` | Text | NOT NULL | Cleaned (LLM) або sliced (text/web) контент |
-| `llm_call_id` | UUID | FK→external_service_calls.id, nullable, ON DELETE SET NULL | NULL для text/web (детерміністичний slice); UUID для video/audio/presentation LLM cleanup |
+| `content` | Text | NOT NULL | Cleaned (LLM) або sliced (text/web) текст segment-а |
+| `llm_call_id` | UUID | FK→external_service_calls.id, nullable, ON DELETE SET NULL | NULL для text/web (детерміністичний slice без LLM); UUID для video/audio/presentation LLM cleanup |
 | `created_at` | timestamptz | server_default now() | — |
 
-**Індекси:**
-- `macro_section_id` (FK index)
-- composite `(macro_section_id, order)` — `ix_material_segments_macro_order`
-- composite `(macro_section_id, start_pos)` — `ix_material_segments_macro_start_pos` — для range-запитів
+**Індекси:** `macro_section_id`; composite `(macro_section_id, order)`; composite `(macro_section_id, start_pos)` (для range-запитів по позиції)
 
-**Foreign keys:** `macro_section_id` → `material_macro_sections.id` (CASCADE), `llm_call_id` → `external_service_calls.id` (SET NULL).
+**Foreign keys:** `macro_section_id` → material_macro_sections (CASCADE), `llm_call_id` → external_service_calls (SET NULL)
 
-**Invariants (enforced by CHECK):** `start_pos >= 0`, `end_pos > start_pos`.
-
-**Invariants (enforced by code, не DB):**
-- Для segments однієї macro: `segment.start_pos >= macro.start_pos AND segment.end_pos <= macro.end_pos` (не виходять за межі батьківської macro).
-- Segments однієї macro **не перекриваються** між собою.
-- Сума діапазонів segments = діапазон batch-macro (full coverage, без gap'ів).
-- Див. пам'ятку [`project_pr4c_segment_invariants.md`] про потенційне підсилення цих інваріантів через DB-level (exclusion constraint + trigger) — оцінимо при імплементації video/audio/presentation.
+**Інваріанти:**
+- DB-level CHECK: `start_pos >= 0`, `end_pos > start_pos`.
+- Code-level (enforced у pipeline): segments однієї macro не перекриваються; їх діапазони не виходять за межі батьківської macro; сума діапазонів = діапазон macro (повне покриття без gap-ів). Потенційне підсилення через DB-level (btree_gist exclusion constraint + trigger) — `project_pr4c_segment_invariants.md`.
 
 **Lifecycle:**
-- **Створення:** ARQ task `arq_run_macro_segment_pipeline`, одразу після успішної macro-batch-create:
-  - Для `text`/`web`: `split_into_segments(macro_content=...[start:end], macro_start_pos=..., max_chars=2000)` — paragraph-split (\n\n) з cap 2000 символів, oversize параграфи ріжуться по whitespace. Segments мають `llm_call_id = NULL`.
-  - Для `video`/`audio`/`presentation` (TBD у наступних PR): LLM cleanup per macro → N segments. `llm_call_id` вказує на ESC-row конкретного виклику.
-- **Зміни:** immutable. Hard-delete cascade при видаленні batch-macro або reprocess MaterialEntry.
+- **Створення:** ARQ task `arq_run_macro_segment_pipeline`, одразу після batch-create macro-секцій:
+  - Для text/web: `split_into_segments(macro_content, macro_start_pos=..., max_chars=2000)` — paragraph-split по `\n\n` з cap 2000 символів; oversize параграфи ріжуться по найближчому whitespace. `content` ← slice `processed_content`, `llm_call_id = NULL`.
+  - Для video/audio/presentation (PR #4d): LLM cleanup per macro → M segments. `content` ← output LLM, `llm_call_id` ← ESC-row Stage 6 виклику.
+  - `MaterialSegmentRepository.batch_create(...)` вставляє M рядків за один flush.
+- **Зміни:** immutable. Hard-delete cascade при видаленні macro-row або при reprocess MaterialEntry.
 
 **JSONB поля:** немає.
 

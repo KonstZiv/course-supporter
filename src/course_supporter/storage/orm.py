@@ -141,11 +141,6 @@ class MaterialNode(Base):
     )
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
-    learning_goal: Mapped[str | None] = mapped_column(
-        Text, comment="Pedagogical goal text for guided generation mode"
-    )
-    expected_knowledge: Mapped[list[str] | None] = mapped_column(JSONB)
-    expected_skills: Mapped[list[str] | None] = mapped_column(JSONB)
     default_language: Mapped[str | None] = mapped_column(
         String(10),
         comment="Default ISO 639-1 language for materials under this subtree. "

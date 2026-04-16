@@ -253,9 +253,6 @@ def _mock_root_node(
     node.description = None
     node.order = 0
     node.node_fingerprint = None
-    node.learning_goal = None
-    node.expected_knowledge = None
-    node.expected_skills = None
     node.default_language = None
     node.children = []
     node.created_at = datetime.now(UTC)

@@ -235,6 +235,9 @@ async def arq_ingest_material(
     # Enqueue Stage 5 / 6 for supported source types. Runs in a
     # separate task so (a) it does not block the ingestion worker slot
     # on LLM latency and (b) it can retry independently of Stage 1.
+    # ``entry`` loaded above is still usable here — session_factory uses
+    # ``expire_on_commit=False`` and ``materialnode_id`` is a scalar
+    # column, so we avoid a redundant SELECT just to re-read it.
     if source_type in ("text", "web"):
         from course_supporter.enqueue import enqueue_macro_segment_pipeline
 
@@ -243,24 +246,20 @@ async def arq_ingest_material(
             log.warning("macro_segment_skip_no_redis")
         else:
             async with session_factory() as enq_session:
-                entry_row = await MaterialEntryRepository(enq_session).get_by_id(mid)
-                if entry_row is None:
-                    log.warning("macro_segment_skip_entry_missing")
+                node_row = await MaterialNodeRepository(enq_session).get_by_id(
+                    entry.materialnode_id
+                )
+                if node_row is None:
+                    log.warning("macro_segment_skip_node_missing")
                 else:
-                    node_row = await MaterialNodeRepository(enq_session).get_by_id(
-                        entry_row.materialnode_id
+                    await enqueue_macro_segment_pipeline(
+                        redis=arq_redis,
+                        session=enq_session,
+                        tenant_id=node_row.tenant_id,
+                        node_id=entry.materialnode_id,
+                        material_id=mid,
                     )
-                    if node_row is None:
-                        log.warning("macro_segment_skip_node_missing")
-                    else:
-                        await enqueue_macro_segment_pipeline(
-                            redis=arq_redis,
-                            session=enq_session,
-                            tenant_id=node_row.tenant_id,
-                            node_id=entry_row.materialnode_id,
-                            material_id=mid,
-                        )
-                        await enq_session.commit()
+                    await enq_session.commit()
 
     log.info("ingestion_done")
 

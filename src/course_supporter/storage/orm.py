@@ -419,7 +419,6 @@ class MaterialMacroSection(Base):
             name="material_macro_section_status_enum",
             create_type=False,
         ),
-        default=MacroSectionStatus.PENDING,
         server_default="pending",
         comment="Lifecycle status: pending → ready | failed",
     )

@@ -41,10 +41,22 @@ def _build_ctx(
 def _mock_processors(
     *,
     content: str = '{"sections": []}',
+    detected_language: str | None = None,
 ) -> dict[SourceType, MagicMock]:
-    """Create a processors dict with a mock processor instance."""
+    """Create a processors dict with a mock processor instance.
+
+    ``detected_language`` controls ``doc.metadata["detected_language"]``
+    so callers can cover both the no-detect path and the STT auto-detect
+    cache path. ``metadata`` is set to a real dict to prevent MagicMock
+    auto-mocking from producing unserialisable values for downstream SQL.
+    """
     mock_doc = MagicMock()
     mock_doc.model_dump_json.return_value = content
+    mock_doc.metadata = (
+        {"detected_language": detected_language}
+        if detected_language is not None
+        else {}
+    )
     processor = MagicMock()
     processor.process = AsyncMock(return_value=mock_doc)
     return {SourceType.WEB: processor}
@@ -63,17 +75,25 @@ def _failing_processors(
 class TestArqIngestMaterialE2E:
     """End-to-end arq_ingest_material with real DB, mocked processor."""
 
+    @pytest.mark.parametrize(
+        ("detected_language", "expected_language"),
+        [
+            pytest.param(None, None, id="no_detection"),
+            pytest.param("uk", "uk", id="with_detection_cached"),
+        ],
+    )
     async def test_success_full_lifecycle(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         committed_seeds: dict[str, uuid.UUID],
+        detected_language: str | None,
+        expected_language: str | None,
     ) -> None:
         """Full success: queued->complete, pending->done, content set.
 
-        1. Seed Job (queued) + Material (pending) in DB.
-        2. Mock processor to return a valid SourceDocument.
-        3. Call arq_ingest_material with real ctx.
-        4. Assert DB: Job=complete, Material=done, content_snapshot set.
+        Also covers the STT auto-detect language cache: when the
+        processor reports ``detected_language``, it is persisted to
+        ``MaterialEntry.language`` (entries seeded with language=NULL).
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
@@ -100,7 +120,10 @@ class TestArqIngestMaterialE2E:
             patch(_HEAVY),
             patch(
                 _FACTORY,
-                return_value=_mock_processors(content=content),
+                return_value=_mock_processors(
+                    content=content,
+                    detected_language=detected_language,
+                ),
             ),
         ):
             await arq_ingest_material(
@@ -125,6 +148,7 @@ class TestArqIngestMaterialE2E:
         assert final_mat is not None
         assert final_mat.state == "ready"
         assert final_mat.processed_content is not None
+        assert final_mat.language == expected_language
 
     async def test_failure_full_lifecycle(
         self,

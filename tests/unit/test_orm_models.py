@@ -5,7 +5,6 @@ from course_supporter.storage.orm import (
     ExternalServiceCall,
     MaterialEntry,
     MaterialNode,
-    SlideVideoMapping,
 )
 
 
@@ -20,7 +19,6 @@ class TestORMModels:
             "api_keys",
             "material_nodes",
             "material_entries",
-            "slide_video_mappings",
             "structure_snapshots",
             "jobs",
             "external_service_calls",
@@ -48,12 +46,6 @@ class TestORMModels:
         assert "tenants.id" in fks
         assert "jobs.id" in fks
 
-    def test_slide_video_mapping_fk(self) -> None:
-        """SlideVideoMapping has FK to material_nodes and material_entries."""
-        fks = {fk.target_fullname for fk in SlideVideoMapping.__table__.foreign_keys}
-        assert "material_nodes.id" in fks
-        assert "material_entries.id" in fks
-
     def test_ondelete_cascade_on_primary_foreign_keys(self) -> None:
         """Primary FK constraints use CASCADE ondelete."""
         # Check key ownership FKs (not nullable SET NULL FKs like job_id)
@@ -61,7 +53,6 @@ class TestORMModels:
             (MaterialEntry, "materialnode_id"),
             (MaterialNode, "parent_materialnode_id"),
             (MaterialNode, "tenant_id"),
-            (SlideVideoMapping, "materialnode_id"),
         ]
         for model, col_name in cascade_fks:
             col = model.__table__.c[col_name]

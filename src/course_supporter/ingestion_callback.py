@@ -4,7 +4,6 @@ After an ingestion job completes (success or failure), this service:
 1. Updates MaterialEntry processing state.
 2. Updates Job status (complete/failed).
 3. Invalidates Merkle fingerprints up the tree.
-4. Triggers revalidation of blocked SlideVideoMappings.
 
 The two-session pattern is encapsulated here: the caller provides a
 session_factory, and this service handles rollback + error-session
@@ -92,7 +91,6 @@ class IngestionCallback:
 
             # Extension points
             await self._invalidate_fingerprints(session, material_id=material_id)
-            await self._revalidate_blocked_mappings(session, material_id=material_id)
 
             await session.commit()
 
@@ -132,9 +130,6 @@ class IngestionCallback:
 
             entry_repo = MaterialEntryRepository(session)
             await entry_repo.fail_processing(material_id, error_message=error_message)
-
-            # Extension point: update blocking_factors on mappings
-            await self._revalidate_blocked_mappings(session, material_id=material_id)
 
             await session.commit()
 
@@ -215,21 +210,3 @@ class IngestionCallback:
         material_id: uuid.UUID,
     ) -> None:
         """Invalidate Merkle fingerprints from material up to root."""
-
-    async def _revalidate_blocked_mappings(
-        self,
-        session: AsyncSession,
-        *,
-        material_id: uuid.UUID,
-    ) -> None:
-        """Revalidate SlideVideoMappings blocked by this material."""
-        from course_supporter.storage.mapping_validation import (
-            MappingValidationService,
-        )
-
-        validator = MappingValidationService(session)
-        count = await validator.revalidate_blocked(material_id)
-        if count > 0:
-            structlog.get_logger().bind(
-                material_id=str(material_id),
-            ).info("revalidated_blocked_mappings", count=count)

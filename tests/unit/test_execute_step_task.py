@@ -25,7 +25,6 @@ def _make_node(
     order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
-    mappings: list[Any] | None = None,
     node_fingerprint: str | None = None,
 ) -> MagicMock:
     """Create a mock MaterialNode."""
@@ -38,7 +37,6 @@ def _make_node(
     node.order = order
     node.children = children or []
     node.materials = materials or []
-    node.slide_video_mappings = mappings or []
     node.node_fingerprint = node_fingerprint
     return node
 
@@ -57,20 +55,6 @@ def _make_entry(
     )
     entry.outline_content = outline_content
     return entry
-
-
-def _make_mapping(
-    *,
-    validation_state: str = "validated",
-    slide_number: int = 1,
-    video_timecode_start: str = "00:01:00",
-) -> MagicMock:
-    """Create a mock SlideVideoMapping."""
-    m = MagicMock()
-    m.validation_state = validation_state
-    m.slide_number = slide_number
-    m.video_timecode_start = video_timecode_start
-    return m
 
 
 def _make_snapshot(snapshot_id: uuid.UUID | None = None) -> MagicMock:
@@ -323,20 +307,6 @@ class TestStepInputAssembly:
         assert isinstance(step_input, StepInput)
         assert step_input.existing_structure is not None
         assert "My Module" in step_input.existing_structure
-
-    async def test_mappings_in_step_input(self, job_id: str, root_node_id: str) -> None:
-        """Validated mappings are included as slide_timecode_refs."""
-        entry = _make_entry(state="ready")
-        valid = _make_mapping(validation_state="validated", slide_number=1)
-        pending = _make_mapping(validation_state="pending_validation", slide_number=2)
-        root = _make_node(materials=[entry], mappings=[valid, pending])
-        deps = _MockDeps(root_nodes=[root])
-
-        await _run_task(job_id, root_node_id, deps)
-
-        step_input = deps.agent.execute.call_args[0][0]
-        assert len(step_input.slide_timecode_refs) == 1
-        assert step_input.slide_timecode_refs[0].slide_number == 1
 
 
 class TestChildrenSummaries:

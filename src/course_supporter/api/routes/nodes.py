@@ -16,20 +16,16 @@ Routes
 - ``POST   /nodes/{nid}/move``                — Move node (reparent)
 - ``POST   /nodes/{nid}/reorder``             — Reorder among siblings
 - ``DELETE /nodes/{nid}``                     — Delete node (cascade)
-- ``POST   /nodes/{nid}/slide-mapping``       — Create slide-video mappings
-- ``GET    /nodes/{nid}/slide-mapping``        — List slide-video mappings
-- ``DELETE /slide-mapping/{mid}``             — Delete a slide-video mapping
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import asdict
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_s3_client, get_session
@@ -42,30 +38,12 @@ from course_supporter.api.schemas import (
     NodeTreeResponse,
     NodeUpdateRequest,
     NodeWithMaterialsResponse,
-    RejectedMappingResponse,
-    SkippedMappingResponse,
-    SlideVideoMapItemResponse,
-    SlideVideoMapListResponse,
-    SlideVideoMapRequest,
-    SlideVideoMapResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.models.course import SlideVideoMapEntry
-from course_supporter.storage.mapping_validation import (
-    MappingValidationError,
-    MappingValidationResult,
-    MappingValidationService,
-    timecode_to_seconds,
-)
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import (
-    MappingValidationState,
-    MaterialNode,
-    SlideVideoMapping,
-)
-from course_supporter.storage.repositories import SlideVideoMappingRepository
+from course_supporter.storage.orm import MaterialNode
 from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
@@ -78,11 +56,6 @@ PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
 ]
-
-
-def _ve_to_dict(err: MappingValidationError) -> dict[str, str | None]:
-    """Convert MappingValidationError dataclass to a JSON-safe dict."""
-    return asdict(err)
 
 
 def _node_response(node: MaterialNode) -> NodeResponse:
@@ -426,167 +399,3 @@ def _flatten(nodes: Sequence[MaterialNode]) -> list[MaterialNode]:
         result.append(node)
         stack.extend(node.children)
     return result
-
-
-# ── Slide-Video Mapping ──
-
-
-@router.post("/nodes/{node_id}/slide-mapping", status_code=201)
-async def create_slide_mapping(
-    node_id: uuid.UUID,
-    body: SlideVideoMapRequest,
-    tenant: PrepDep,
-    session: SessionDep,
-    response: Response,
-) -> SlideVideoMapResponse:
-    """Create slide-video mappings for a material node.
-
-    Supports partial success: valid mappings are created even when some
-    fail validation. Duplicate mappings (same natural key) are skipped.
-
-    Returns:
-        201 — all created (or only skipped duplicates, none rejected).
-        207 — partial success (some created, some rejected).
-        422 — all failed (none created, all rejected).
-    """
-    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-
-    # ── Validation (L1 structural + L2 content + L3 deferred) ──
-    validator = MappingValidationService(session)
-    results = await validator.validate_batch(node_id, body.mappings)
-
-    # ── Deduplication — natural key check ──
-    svm_repo = SlideVideoMappingRepository(session)
-    existing = await svm_repo.get_by_node_id(node_id)
-    existing_keys: set[tuple[str, str, int, int]] = {
-        (
-            str(m.presentation_materialentry_id),
-            str(m.video_materialentry_id),
-            m.slide_number,
-            timecode_to_seconds(m.video_timecode_start),
-        )
-        for m in existing
-    }
-
-    # ── Classify each mapping ──
-    rejected: list[RejectedMappingResponse] = []
-    skipped_items: list[SkippedMappingResponse] = []
-    creatable_mappings: list[SlideVideoMapEntry] = []
-    creatable_results: list[MappingValidationResult] = []
-
-    for idx, (mapping, vr) in enumerate(zip(body.mappings, results, strict=True)):
-        if vr.status == MappingValidationState.VALIDATION_FAILED:
-            rejected.append(
-                RejectedMappingResponse(
-                    index=idx,
-                    errors=[_ve_to_dict(e) for e in vr.errors],
-                )
-            )
-            continue
-
-        natural_key = (
-            str(mapping.presentation_materialentry_id),
-            str(mapping.video_materialentry_id),
-            mapping.slide_number,
-            timecode_to_seconds(mapping.video_timecode_start),
-        )
-        if natural_key in existing_keys:
-            skipped_items.append(
-                SkippedMappingResponse(index=idx, hint="already exists")
-            )
-            continue
-
-        # Re-index validation result for the creatable list
-        creatable_results.append(
-            MappingValidationResult(
-                index=len(creatable_mappings),
-                status=vr.status,
-                errors=vr.errors,
-                blocking_factors=vr.blocking_factors,
-            )
-        )
-        creatable_mappings.append(mapping)
-
-    # ── Create + respond ──
-    records: list[SlideVideoMapping] = []
-    if creatable_mappings:
-        records = await svm_repo.batch_create(
-            node_id, creatable_mappings, validation_results=creatable_results
-        )
-        await session.commit()
-
-    # ── HTTP status code ──
-    if not records and rejected:
-        response.status_code = 422
-    elif records and rejected:
-        response.status_code = 207
-    else:
-        response.status_code = 201
-
-    # ── Hints ──
-    hints: dict[str, str] = {}
-    if rejected:
-        hints["resubmit"] = (
-            "Fix errors in rejected items and resubmit only those. "
-            "Already created mappings will be automatically skipped."
-        )
-        hints["batch_size"] = "If the batch keeps failing, try reducing batch size."
-
-    return SlideVideoMapResponse(
-        created=len(records),
-        skipped=len(skipped_items),
-        failed=len(rejected),
-        mappings=[SlideVideoMapItemResponse.model_validate(r) for r in records],
-        skipped_items=skipped_items,
-        rejected=rejected,
-        hints=hints,
-    )
-
-
-@router.get("/nodes/{node_id}/slide-mapping")
-async def list_slide_mappings(
-    node_id: uuid.UUID,
-    tenant: SharedDep,
-    session: SessionDep,
-) -> SlideVideoMapListResponse:
-    """List all slide-video mappings for a material tree node.
-
-    Returns mappings sorted by ``order`` (ascending, 0-based).
-    An empty list is returned when the node has no mappings (not a 404).
-    """
-    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-
-    svm_repo = SlideVideoMappingRepository(session)
-    mappings = await svm_repo.get_by_node_id(node_id)
-    return SlideVideoMapListResponse(
-        items=[SlideVideoMapItemResponse.model_validate(m) for m in mappings],
-        total=len(mappings),
-    )
-
-
-@router.delete("/slide-mapping/{mapping_id}", status_code=204)
-async def delete_slide_mapping(
-    mapping_id: uuid.UUID,
-    tenant: PrepDep,
-    session: SessionDep,
-) -> None:
-    """Delete a single slide-video mapping.
-
-    Ownership verification: mapping → node → tenant chain.
-    """
-    svm_repo = SlideVideoMappingRepository(session)
-    mapping = await svm_repo.get_by_id(mapping_id)
-    if mapping is None:
-        raise HTTPException(status_code=404, detail="Mapping not found")
-
-    # Ownership: mapping → node → tenant
-    node_repo = MaterialNodeRepository(session)
-    node = await node_repo.get_by_id(mapping.materialnode_id)
-    if node is None or node.tenant_id != tenant.tenant_id:
-        raise HTTPException(
-            status_code=404,
-            detail="Mapping not found",
-        )
-
-    await svm_repo.delete(mapping)
-    await session.commit()

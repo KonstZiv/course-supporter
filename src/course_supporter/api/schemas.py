@@ -4,162 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from course_supporter.models.course import TIMECODE_RE, SlideVideoMapEntry
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
-from course_supporter.storage.orm import GenerationMode, MappingValidationState
-
-# --- Slide-Video Mapping ---
-
-
-class ValidationState(StrEnum):
-    """Validation state for slide-video mappings (API-layer enum)."""
-
-    VALIDATED = "validated"
-    PENDING_VALIDATION = "pending_validation"
-    VALIDATION_FAILED = "validation_failed"
-
-
-class BlockingFactorResponse(BaseModel):
-    """Reason why validation was deferred for a material entry."""
-
-    type: str = Field(description="Blocking reason type, e.g. ``material_not_ready``.")
-    material_entry_id: str = Field(
-        description="UUID of the material entry that is not yet ready."
-    )
-    filename: str | None = Field(
-        description="Original filename of the blocking material, if available."
-    )
-    material_state: str = Field(
-        description="Current state of the blocking material entry."
-    )
-    message: str = Field(description="Human-readable explanation.")
-    blocked_checks: list[str] = Field(
-        description="List of validation checks that were skipped."
-    )
-
-
-class ValidationErrorResponse(BaseModel):
-    """Single validation error with optional hint for fixing it."""
-
-    field: str = Field(description="Name of the field that failed validation.")
-    message: str = Field(description="What went wrong.")
-    hint: str | None = Field(
-        default=None, description="Suggested action to fix the error."
-    )
-
-
-class SlideVideoMapRequest(BaseModel):
-    """Request body for POST /nodes/{node_id}/slide-mapping."""
-
-    mappings: list[SlideVideoMapEntry] = Field(..., min_length=1)
-
-
-class SlideVideoMapItemResponse(BaseModel):
-    """Single slide-video mapping.
-
-    Links a presentation slide to a video timecode range.
-    Each mapping identifies a specific slide by number within a presentation
-    and the corresponding time range in a video where that slide is discussed.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID = Field(description="Unique mapping identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(
-        description="Material tree node this mapping belongs to."
-    )
-    presentation_materialentry_id: uuid.UUID = Field(
-        description="MaterialEntry ID of the presentation (PDF/PPTX)."
-    )
-    video_materialentry_id: uuid.UUID = Field(
-        description="MaterialEntry ID of the video recording."
-    )
-    slide_number: int = Field(
-        ge=1,
-        description=(
-            "1-based slide number within the presentation. "
-            "Valid range depends on the actual number of slides in the file."
-        ),
-    )
-    video_timecode_start: str = Field(
-        pattern=TIMECODE_RE,
-        description=(
-            "Start timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
-            "Indicates when discussion of this slide begins."
-        ),
-    )
-    video_timecode_end: str | None = Field(
-        default=None,
-        pattern=TIMECODE_RE,
-        description=(
-            "End timecode in the video (format ``HH:MM:SS`` or ``MM:SS``). "
-            "``null`` if the slide extends to the next mapping or end of video."
-        ),
-    )
-    validation_state: ValidationState = Field(
-        description="Current validation status of this mapping.",
-    )
-    blocking_factors: list[BlockingFactorResponse] | None = Field(
-        default=None,
-        description=(
-            "Present only when ``validation_state`` is ``pending_validation``."
-        ),
-    )
-    validation_errors: list[ValidationErrorResponse] | None = Field(
-        default=None,
-        description=(
-            "Present only when ``validation_state`` is ``validation_failed``."
-        ),
-    )
-    validated_at: datetime | None = Field(
-        description=(
-            "Timestamp of successful validation. "
-            "``null`` if not yet validated or validation failed."
-        ),
-    )
-    created_at: datetime = Field(description="When this mapping was created.")
-
-
-class SlideVideoMapListResponse(BaseModel):
-    """List of slide-video mappings for a material tree node."""
-
-    items: list[SlideVideoMapItemResponse] = Field(
-        description="Mappings ordered by slide number."
-    )
-    total: int = Field(description="Total number of mappings for this node.")
-
-
-class RejectedMappingResponse(BaseModel):
-    """Single rejected mapping with errors and hints."""
-
-    index: int
-    errors: list[dict[str, str | None]]
-
-
-class SkippedMappingResponse(BaseModel):
-    """Duplicate mapping that was skipped."""
-
-    index: int
-    hint: str
-
-
-class SlideVideoMapResponse(BaseModel):
-    """Response for slide-video mapping batch creation."""
-
-    created: int
-    skipped: int
-    failed: int
-    mappings: list[SlideVideoMapItemResponse]
-    skipped_items: list[SkippedMappingResponse]
-    rejected: list[RejectedMappingResponse]
-    hints: dict[str, str]
-
+from course_supporter.storage.orm import GenerationMode
 
 # --- Material Tree Nodes ---
 
@@ -700,19 +551,6 @@ class GenerateRequest(BaseModel):
     )
 
 
-class MappingWarningResponse(BaseModel):
-    """Warning about a slide-video mapping with problematic validation state."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    mapping_id: uuid.UUID = Field(description="SlideVideoMapping UUID.")
-    materialnode_id: uuid.UUID = Field(description="Parent MaterialNode UUID.")
-    slide_number: int = Field(description="Slide number in the presentation.")
-    validation_state: MappingValidationState = Field(
-        description="Validation state of the mapping.",
-    )
-
-
 class GenerationPlanResponse(BaseModel):
     """Response for POST /nodes/{node_id}/generate."""
 
@@ -731,13 +569,6 @@ class GenerationPlanResponse(BaseModel):
     estimated_llm_calls: int = Field(
         default=0,
         description="Total LLM calls expected for this plan.",
-    )
-    mapping_warnings: list[MappingWarningResponse] = Field(
-        default_factory=list,
-        description=(
-            "Slide-video mappings with problematic "
-            "validation states in the target subtree."
-        ),
     )
 
 

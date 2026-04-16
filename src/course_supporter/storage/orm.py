@@ -7,6 +7,7 @@ from typing import Any
 
 import uuid_utils as uuid7_lib
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -339,6 +341,179 @@ class MaterialEntry(Base):
     # Relationships
     node: Mapped["MaterialNode"] = relationship(back_populates="materials")
     pending_job: Mapped["Job | None"] = relationship(back_populates="material_entries")
+    macro_sections: Mapped[list["MaterialMacroSection"]] = relationship(
+        back_populates="entry",
+        cascade="all, delete-orphan",
+    )
+
+
+class MacroSectionStatus(StrEnum):
+    """Processing status of a MaterialMacroSection."""
+
+    PENDING = "pending"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class MaterialMacroSection(Base):
+    """Thematic table-of-contents entry within a MaterialEntry.
+
+    One row per logical section (thematic block, slide group, article
+    chapter). Produced by Stage 5 of the ingestion pipeline — LLM call
+    for video/audio/presentation or deterministic ladder for text/web.
+    Immutable after status=ready; regeneration replaces the set.
+    """
+
+    __tablename__ = "material_macro_sections"
+    __table_args__ = (
+        Index(
+            "ix_material_macro_sections_entry_order",
+            "material_entry_id",
+            "order",
+        ),
+        Index(
+            "ix_material_macro_sections_unready",
+            "status",
+            postgresql_where=text("status != 'ready'"),
+        ),
+        CheckConstraint("start_pos >= 0", name="ck_macro_start_pos_nonneg"),
+        CheckConstraint("end_pos > start_pos", name="ck_macro_end_pos_gt_start"),
+        {
+            "comment": (
+                "Table-of-contents level sections within a MaterialEntry "
+                "(Stage 5 output of the ingestion pipeline)"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    material_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_entries.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to parent MaterialEntry",
+    )
+    order: Mapped[int] = mapped_column(
+        Integer,
+        comment="0-indexed position within the TOC of this material entry",
+    )
+    title: Mapped[str] = mapped_column(
+        String(500),
+        comment="Self-contained section title",
+    )
+    start_pos: Mapped[int] = mapped_column(
+        Integer,
+        comment="Start position in the source-specific unit "
+        "(ms for video/audio, 1-indexed slide for presentation, "
+        "char offset for text/web)",
+    )
+    end_pos: Mapped[int] = mapped_column(
+        Integer,
+        comment="End position. Exclusive for video/audio/text/web, "
+        "inclusive for presentation",
+    )
+    status: Mapped[str] = mapped_column(
+        Enum(
+            "pending",
+            "ready",
+            "failed",
+            name="material_macro_section_status_enum",
+            create_type=False,
+        ),
+        server_default="pending",
+        comment="Lifecycle status: pending → ready | failed",
+    )
+    error_message: Mapped[str | None] = mapped_column(Text)
+    llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_service_calls.id", ondelete="SET NULL"),
+        comment="FK to ExternalServiceCall that produced this section. "
+        "NULL for deterministic (text/web) sections",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    entry: Mapped["MaterialEntry"] = relationship(back_populates="macro_sections")
+    segments: Mapped[list["MaterialSegment"]] = relationship(
+        back_populates="macro_section",
+        cascade="all, delete-orphan",
+    )
+    llm_call: Mapped["ExternalServiceCall | None"] = relationship()
+
+
+class MaterialSegment(Base):
+    """Cleaned/sliced content unit inside a MaterialMacroSection.
+
+    Produced by Stage 6 of the ingestion pipeline. For
+    video/audio/presentation this is LLM-cleaned narrative; for text/web
+    this is a deterministic slice of ``MaterialEntry.processed_content``.
+
+    Invariants (enforced at write time, not by DB):
+    - For every segment of a given macro section:
+      ``segment.start_pos >= macro.start_pos AND
+       segment.end_pos <= macro.end_pos``
+    - Segments within a macro section must not overlap
+    - Sum of segment ranges covers the macro range without gaps
+    """
+
+    __tablename__ = "material_segments"
+    __table_args__ = (
+        Index(
+            "ix_material_segments_macro_order",
+            "macro_section_id",
+            "order",
+        ),
+        Index(
+            "ix_material_segments_macro_start_pos",
+            "macro_section_id",
+            "start_pos",
+        ),
+        CheckConstraint("start_pos >= 0", name="ck_segment_start_pos_nonneg"),
+        CheckConstraint("end_pos > start_pos", name="ck_segment_end_pos_gt_start"),
+        {
+            "comment": (
+                "Cleaned / sliced content segments inside a "
+                "MaterialMacroSection (Stage 6 output)"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    macro_section_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("material_macro_sections.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to parent MaterialMacroSection",
+    )
+    order: Mapped[int] = mapped_column(
+        Integer,
+        comment="0-indexed position within the parent macro section",
+    )
+    start_pos: Mapped[int] = mapped_column(
+        Integer,
+        comment="Absolute start in the source unit (not relative to the macro section)",
+    )
+    end_pos: Mapped[int] = mapped_column(
+        Integer,
+        comment="Absolute end in the source unit",
+    )
+    content: Mapped[str] = mapped_column(
+        Text,
+        comment="Cleaned (LLM) or sliced (text/web) content of this segment",
+    )
+    llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("external_service_calls.id", ondelete="SET NULL"),
+        comment="FK to ExternalServiceCall that produced this segment. "
+        "NULL for deterministic (text/web) slices",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    macro_section: Mapped["MaterialMacroSection"] = relationship(
+        back_populates="segments"
+    )
+    llm_call: Mapped["ExternalServiceCall | None"] = relationship()
 
 
 # ──────────────────────────────────────────────

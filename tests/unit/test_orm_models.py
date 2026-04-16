@@ -4,7 +4,9 @@ from course_supporter.storage.orm import (
     Base,
     ExternalServiceCall,
     MaterialEntry,
+    MaterialMacroSection,
     MaterialNode,
+    MaterialSegment,
 )
 
 
@@ -19,6 +21,8 @@ class TestORMModels:
             "api_keys",
             "material_nodes",
             "material_entries",
+            "material_macro_sections",
+            "material_segments",
             "structure_snapshots",
             "jobs",
             "external_service_calls",
@@ -46,6 +50,18 @@ class TestORMModels:
         assert "tenants.id" in fks
         assert "jobs.id" in fks
 
+    def test_material_macro_section_fks(self) -> None:
+        """MaterialMacroSection has FKs to entry and LLM call."""
+        fks = {fk.target_fullname for fk in MaterialMacroSection.__table__.foreign_keys}
+        assert "material_entries.id" in fks
+        assert "external_service_calls.id" in fks
+
+    def test_material_segment_fks(self) -> None:
+        """MaterialSegment has FKs to macro section and LLM call."""
+        fks = {fk.target_fullname for fk in MaterialSegment.__table__.foreign_keys}
+        assert "material_macro_sections.id" in fks
+        assert "external_service_calls.id" in fks
+
     def test_ondelete_cascade_on_primary_foreign_keys(self) -> None:
         """Primary FK constraints use CASCADE ondelete."""
         # Check key ownership FKs (not nullable SET NULL FKs like job_id)
@@ -53,10 +69,25 @@ class TestORMModels:
             (MaterialEntry, "materialnode_id"),
             (MaterialNode, "parent_materialnode_id"),
             (MaterialNode, "tenant_id"),
+            (MaterialMacroSection, "material_entry_id"),
+            (MaterialSegment, "macro_section_id"),
         ]
         for model, col_name in cascade_fks:
             col = model.__table__.c[col_name]
             fk = next(iter(col.foreign_keys))
             assert fk.ondelete == "CASCADE", (
                 f"{model.__tablename__}.{col_name} missing CASCADE ondelete"
+            )
+
+    def test_llm_call_fk_set_null(self) -> None:
+        """llm_call_id FKs use SET NULL (preserves cost audit on call delete)."""
+        set_null_fks = [
+            (MaterialMacroSection, "llm_call_id"),
+            (MaterialSegment, "llm_call_id"),
+        ]
+        for model, col_name in set_null_fks:
+            col = model.__table__.c[col_name]
+            fk = next(iter(col.foreign_keys))
+            assert fk.ondelete == "SET NULL", (
+                f"{model.__tablename__}.{col_name} must use SET NULL ondelete"
             )

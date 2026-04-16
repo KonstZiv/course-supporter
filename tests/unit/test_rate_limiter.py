@@ -152,9 +152,6 @@ class TestRateLimitAPI:
                     node.parent_materialnode_id = None
                     node.title = "Test"
                     node.description = None
-                    node.learning_goal = None
-                    node.expected_knowledge = None
-                    node.expected_skills = None
                     node.default_language = None
                     node.order = 0
                     node.node_fingerprint = None

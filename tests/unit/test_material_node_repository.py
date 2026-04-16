@@ -93,23 +93,6 @@ class TestCreate:
         assert added_node.description == "Details"
         assert result is added_node
 
-    async def test_create_stores_new_fields_as_none_by_default(self) -> None:
-        """New learning fields default to None when not provided."""
-        session = AsyncMock()
-        session.add = MagicMock()
-        repo = MaterialNodeRepository(session)
-
-        with patch.object(repo, "_next_sibling_order", return_value=0):
-            result = await repo.create(
-                tenant_id=uuid.uuid4(),
-                title="Node",
-            )
-
-        assert result.description is None
-        assert result.learning_goal is None
-        assert result.expected_knowledge is None
-        assert result.expected_skills is None
-
 
 class TestGetById:
     """MaterialNodeRepository.get_by_id tests."""

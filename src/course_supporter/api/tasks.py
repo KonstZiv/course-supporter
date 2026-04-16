@@ -231,7 +231,119 @@ async def arq_ingest_material(
         material_id=mid,
         content_json=content,
     )
+
+    # Enqueue Stage 5 / 6 for supported source types. Runs in a
+    # separate task so (a) it does not block the ingestion worker slot
+    # on LLM latency and (b) it can retry independently of Stage 1.
+    if source_type in ("text", "web"):
+        from course_supporter.enqueue import enqueue_macro_segment_pipeline
+
+        arq_redis = ctx.get("redis")
+        if arq_redis is None:
+            log.warning("macro_segment_skip_no_redis")
+        else:
+            async with session_factory() as enq_session:
+                entry_row = await MaterialEntryRepository(enq_session).get_by_id(mid)
+                if entry_row is None:
+                    log.warning("macro_segment_skip_entry_missing")
+                else:
+                    node_row = await MaterialNodeRepository(enq_session).get_by_id(
+                        entry_row.materialnode_id
+                    )
+                    if node_row is None:
+                        log.warning("macro_segment_skip_node_missing")
+                    else:
+                        await enqueue_macro_segment_pipeline(
+                            redis=arq_redis,
+                            session=enq_session,
+                            tenant_id=node_row.tenant_id,
+                            node_id=entry_row.materialnode_id,
+                            material_id=mid,
+                        )
+                        await enq_session.commit()
+
     log.info("ingestion_done")
+
+
+async def arq_run_macro_segment_pipeline(
+    ctx: dict[str, Any],
+    job_id: str,  # UUID as string (ARQ JSON serialization)
+    material_id: str,  # UUID as string
+) -> None:
+    """ARQ task: run Stage 5 + 6 of Content Ingestion for one MaterialEntry.
+
+    Expected to be enqueued by the post-ingestion callback once Stage 1
+    has successfully produced ``processed_content``. Source types other
+    than ``text`` / ``web`` are skipped (Stage 5 / 6 for video, audio,
+    presentation will land in follow-up PRs) — the Job is marked
+    ``complete`` with an informative log, not failed.
+
+    The upstream ingestion Job is independent; failure here does not
+    roll back ``processed_content`` and does not affect
+    ``MaterialEntry.state``. Macro / segment tables simply remain
+    empty for the material until retried.
+    """
+    from course_supporter.ingestion.macro_segment_pipeline import (
+        run_text_macro_segment_pipeline,
+    )
+    from course_supporter.storage.job_repository import JobRepository
+    from course_supporter.storage.material_entry_repository import (
+        MaterialEntryRepository,
+    )
+
+    jid = uuid.UUID(job_id)
+    mid = uuid.UUID(material_id)
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    router: ModelRouter = ctx["model_router"]
+
+    await set_tenant_from_job(session_factory, jid)
+    log = structlog.get_logger().bind(job_id=job_id, material_id=material_id)
+    log.info("macro_segment_task_started")
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        entry_repo = MaterialEntryRepository(session)
+
+        entry = await entry_repo.get_by_id(mid)
+        if entry is None:
+            log.error("material_entry_not_found")
+            await job_repo.update_status(
+                jid, "failed", error_message="MaterialEntry not found"
+            )
+            await session.commit()
+            return
+
+        # Sources whose Stage 5 / 6 has not been implemented yet.
+        if entry.source_type not in ("text", "web"):
+            log.info(
+                "macro_segment_task_skipped_source_type",
+                source_type=entry.source_type,
+            )
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            return
+
+        try:
+            await job_repo.update_status(jid, "active")
+            await session.commit()
+
+            await run_text_macro_segment_pipeline(
+                session=session,
+                entry=entry,
+                router=router,
+            )
+            await job_repo.update_status(jid, "complete")
+            await session.commit()
+            log.info("macro_segment_task_done")
+        except Exception as exc:
+            await session.rollback()
+            async with session_factory() as err_session:
+                err_repo = JobRepository(err_session)
+                await err_repo.update_status(
+                    jid, "failed", error_message=str(exc)[:2000]
+                )
+                await err_session.commit()
+            log.exception("macro_segment_task_failed", error=str(exc))
 
 
 def _resolve_target_nodes(

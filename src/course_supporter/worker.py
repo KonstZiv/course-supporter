@@ -21,6 +21,7 @@ from course_supporter.api.tasks import (
     arq_ingest_material,
     arq_process_homework,
     arq_reconcile_preview,
+    arq_run_macro_segment_pipeline,
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
@@ -103,6 +104,7 @@ class WorkerSettings:
     )
     functions: ClassVar[list[Any]] = [
         arq_ingest_material,
+        arq_run_macro_segment_pipeline,
         arq_generate_structure,
         arq_execute_step,
         arq_reconcile_preview,

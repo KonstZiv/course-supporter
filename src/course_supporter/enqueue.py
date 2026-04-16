@@ -302,6 +302,61 @@ async def enqueue_step(
     return job
 
 
+async def enqueue_macro_segment_pipeline(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    node_id: uuid.UUID,
+    material_id: uuid.UUID,
+) -> Job:
+    """Create a Job record and enqueue the Stage-5/6 task.
+
+    Called by the post-ingestion callback once Stage 1 succeeds. The
+    task itself runs best-effort: failure here does not affect
+    ``MaterialEntry.state`` (which stays ``ready`` from Stage 1) or the
+    upstream ingestion Job.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: Active DB session (caller controls transaction).
+        tenant_id: Owning tenant UUID.
+        node_id: MaterialNode that owns the material entry (for Job
+            attribution so the UI can group runs by course).
+        material_id: MaterialEntry that just finished Stage 1.
+
+    Returns:
+        The created Job with ``arq_job_id`` set.
+    """
+    log = structlog.get_logger().bind(
+        node_id=str(node_id), material_id=str(material_id)
+    )
+    repo = JobRepository(session)
+
+    job = await repo.create(
+        tenant_id=tenant_id,
+        materialnode_id=node_id,
+        job_type="macro_segment",
+        input_params={"material_id": str(material_id)},
+    )
+
+    arq_job = await redis.enqueue_job(
+        "arq_run_macro_segment_pipeline",
+        str(job.id),
+        str(material_id),
+    )
+
+    if arq_job is not None:
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    log.info(
+        "macro_segment_job_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
 async def enqueue_homework(
     *,
     redis: ArqRedis,

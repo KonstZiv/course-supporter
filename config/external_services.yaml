@@ -224,6 +224,19 @@ actions:
       gpt-4.1: [gpt-4.1]
       deepseek-chat: [deepseek-chat]
 
+  content_macro_toc:
+    # Stage 5 of the Content Ingestion pipeline: LLM identifies
+    # thematic section boundaries in processed_content for text and web
+    # materials. Returns titles + verbatim start-snippets only (the
+    # orchestrator resolves snippets to char offsets), so output is
+    # small and the task is cheap.
+    strategy: budget
+    requires: [structured_output]
+    chain:
+      default: [deepseek-chat, gemini-2.5-flash]
+      budget: [deepseek-chat, gemini-2.5-flash]
+      quality: [claude-sonnet-4-20250514, gemini-2.5-pro]
+
   methodist:
     strategy: default
     requires: [structured_output]

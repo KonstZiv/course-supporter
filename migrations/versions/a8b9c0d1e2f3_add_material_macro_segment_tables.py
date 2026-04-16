@@ -57,20 +57,13 @@ def upgrade() -> None:
             "start_pos",
             sa.Integer(),
             nullable=False,
-            comment=(
-                "Start position in the source-specific unit "
-                "(ms for video/audio, 1-indexed slide for presentation, "
-                "char offset for text/web)"
-            ),
+            comment="Start position in source-specific unit (see ORM for details)",
         ),
         sa.Column(
             "end_pos",
             sa.Integer(),
             nullable=False,
-            comment=(
-                "End position. Exclusive for video/audio/text/web, "
-                "inclusive for presentation"
-            ),
+            comment="End position in source-specific unit (see ORM for details)",
         ),
         sa.Column(
             "status",
@@ -89,10 +82,7 @@ def upgrade() -> None:
             "llm_call_id",
             sa.Uuid(),
             nullable=True,
-            comment=(
-                "FK to ExternalServiceCall that produced this section. "
-                "NULL for deterministic (text/web) sections"
-            ),
+            comment="FK to ExternalServiceCall; NULL for deterministic sections",
         ),
         sa.Column(
             "created_at",
@@ -157,30 +147,25 @@ def upgrade() -> None:
             "start_pos",
             sa.Integer(),
             nullable=False,
-            comment=(
-                "Absolute start in the source unit (not relative to the macro section)"
-            ),
+            comment="Absolute start in source unit (see ORM for details)",
         ),
         sa.Column(
             "end_pos",
             sa.Integer(),
             nullable=False,
-            comment="Absolute end in the source unit",
+            comment="Absolute end in source unit (see ORM for details)",
         ),
         sa.Column(
             "content",
             sa.Text(),
             nullable=False,
-            comment="Cleaned (LLM) or sliced (text/web) content of this segment",
+            comment="Cleaned (LLM) or sliced (text/web) content",
         ),
         sa.Column(
             "llm_call_id",
             sa.Uuid(),
             nullable=True,
-            comment=(
-                "FK to ExternalServiceCall that produced this segment. "
-                "NULL for deterministic (text/web) slices"
-            ),
+            comment="FK to ExternalServiceCall; NULL for deterministic slices",
         ),
         sa.Column(
             "created_at",

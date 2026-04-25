@@ -1,113 +1,121 @@
-# CLAUDE.md
+# course-supporter (backend) — Claude Code context
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Before working in this repo, read `../CLAUDE.md` (workspace-level). The three non-negotiable rules apply here.
 
-## Project Overview
+## What this project is — target state
 
-**course-supporter** — AI-powered system for transforming course materials into structured learning plans with automated mentoring. Ingests video, presentations, text, and web links, then generates structured course outlines via LLM-powered agents.
+Python backend service that:
+- Ingests authored course materials (video, audio, presentation, text, web).
+- Runs a two-pass LLM pipeline to produce **DocumentSummary** + **DocumentSegment[]** per document (pipeline details in vision §3 KD2, KD2a-d).
+- Generates **NodeSummaryRaw** bottom-up and top-down across the CourseNode tree (vision §3 KD10).
+- Serves editable **NodeSummaryFinal** with approve/accept-raw flow (vision §3 KD11).
+- Processes homework submissions through safety → sanity → review → delivery stages (vision §3 KD15).
 
-Python 3.13+ | src layout (`src/course_supporter/`) | async-first (FastAPI + psycopg v3 + async LLM SDKs)
+**Target architecture is in `../refactoring-vision/vision.md`.** The code you see in `src/` is mid-migration; it does not match vision yet.
 
-## Common Commands
+## Stack (unchanged by refactoring)
+
+- Python 3.13+, `src/` layout (`src/course_supporter/`)
+- FastAPI + async SQLAlchemy (psycopg v3) + ARQ workers
+- PostgreSQL 17 with pgvector, MinIO (S3-compatible), Redis
+- `uv` for dependency management, `ruff`, `mypy --strict`, `pytest` + `pytest-asyncio`
+- UUIDv7 primary keys (via `uuid-utils`)
+
+## Commands (most-used)
 
 ```bash
-# Install dependencies (dev group included by default via PEP 735)
-uv sync
+# Dependencies
+uv sync                              # install all deps (PEP 735 dev group included)
+uv sync --extra media                # + whisper + torch (~2GB)
+uv run pre-commit install            # git hooks
 
-# Install with heavy media deps (whisper + PyTorch ~2GB)
-uv sync --extra media
-
-# Install pre-commit hooks
-uv run pre-commit install
-
-# Lint
+# Quality gates
 uv run ruff check src/ tests/
-
-# Format
 uv run ruff format src/ tests/
-uv run ruff check --fix src/ tests/
+uv run mypy src/                     # strict mode
+make check                           # lint + typecheck + tests
+make all                             # format + full check
 
-# Type check (strict mode)
-uv run mypy src/
-
-# Run all tests
+# Tests
 uv run pytest
-
-# Run single test file
-uv run pytest tests/unit/test_config.py
-
-# Run single test by name
+uv run pytest tests/unit/test_foo.py
 uv run pytest -k "test_name"
 
-# Tests with coverage
-uv run pytest --cov --cov-report=term-missing
+# Infrastructure
+docker compose up -d                 # Postgres + MinIO + Redis
 
-# Full check (lint + typecheck + tests)
-make check
+# DB migrations
+make db-upgrade
+make db-downgrade
+make migrate msg="description"
 
-# Format + full check
-make all
-
-# Start infrastructure (PostgreSQL + MinIO)
-docker compose up -d
-
-# Database migrations
-make db-upgrade            # alembic upgrade head
-make db-downgrade          # alembic downgrade -1
-make db-reset              # downgrade base + upgrade head
-make migrate msg="name"    # autogenerate new migration
-
-# Start API server
+# Run
 uv run uvicorn course_supporter.api:app --reload
+arq course_supporter.worker.WorkerSettings
 ```
 
-## Architecture
+## Rules specific to backend
 
-### Pipeline Flow
+### Schema changes
 
-```
-Course Materials → Ingestion Engine → SourceDocuments
-    → MergeStep → Unified CourseContext
-    → ArchitectAgent → Structured Output via LLM (ModelRouter)
-    → API → Database Persistence
-```
+**Any schema change is a migration + tests + vision consistency check.**
 
-### Key Modules
+When adding/renaming a model:
+1. Confirm it matches vision §2.2 (Layer contracts) and the relevant KD.
+2. Write the SQLAlchemy model.
+3. `make migrate msg="<stage>-<short-name>"` — Alembic autogenerate.
+4. **Review the autogenerate output** — alembic often misses enum renames, check constraints, indexes. Hand-edit the migration file if needed.
+5. `make db-upgrade` locally, run tests with fresh DB.
+6. Migration file is **not** final until tests pass with a clean DB.
 
-- **`ingestion/`** — Abstract `SourceProcessor` interface with implementations: `VideoProcessor` (Gemini → Whisper fallback), `PresentationProcessor` (PDF/PPTX), `TextProcessor` (MD/DOCX/HTML), `WebProcessor`. All produce unified `SourceDocument` output.
-- **`llm/`** — `ModelRouter` with provider selection and fallback logic. Providers: Gemini, Anthropic, OpenAI, DeepSeek (DeepSeek uses OpenAI SDK with custom `base_url`).
-- **`agents/`** — `ArchitectAgent` generates course structure via LLM structured output with Pydantic validation and retry on invalid JSON.
-- **`models/`** — Pydantic schemas: `course.py` (CourseStructure, Module, Lesson, Concept, Exercise), `source.py` (SourceMaterial, SourceDocument), `llm.py` (LLMCall, LLMResponse).
-- **`storage/`** — SQLAlchemy async ORM, repository pattern. 8 tables: courses, source_materials, slide_video_mappings, modules, lessons, concepts, exercises, llm_calls. UUIDv7 PKs (via `uuid-utils`). pgvector for embeddings (Vector(1536)).
-- **`api/`** — FastAPI routes for course management.
-- **`config.py`** — Pydantic Settings with env vars, `SecretStr` for API keys, DB URL assembly from components.
+### Legacy mapping references
 
-### Supporting Directories
+In the current codebase you will find:
+- `MaterialNode` → new name is **`CourseNode`**.
+- `MaterialEntry` → **`AuthoredDocument`**.
+- `MaterialMacroSection` → **`DocumentSummary`**.
+- `MaterialSegment` → **`DocumentSegment`**.
+- `StructureNode*`, `StructureSnapshot`, `StructureNodeEditable`, `ReconciliationPreview` → **DELETED** in the new model. `StructureNodeEditable` conceptually replaced by **`NodeSummaryFinal`** but the fields differ (see vision §2.2).
+- `ArchitectAgent`, `ReconcilerAgent` → **DELETED**. Replaced by the two-pass Methodist pipeline in `MethodistAgent`.
 
-- **`config/models.yaml`** — Model registry (provider configs, fallback chains)
-- **`prompts/architect/v1.yaml`** — Prompt templates
-- **`migrations/`** — Alembic (psycopg v3)
-- **`scripts/`** — Evaluation scripts (`eval_architect.py`)
+Do not preserve any of the deleted entities. Do not migrate data from them silently.
 
-## Code Standards
+### Tests
 
-- **Linting/Formatting:** `ruff` only. Rules: E, W, F, I, N, UP, B, SIM, RUF, ASYNC, S, PTH, T20. No `print()` — use `structlog`. S101/T20 allowed in tests via per-file-ignores.
-- **Type checking:** `mypy --strict`. Pydantic plugin enabled. Targeted `ignore_missing_imports` for untyped libs (trafilatura, pptx, docx, fitz, whisper).
-- **Testing:** `pytest` with `pytest-asyncio` (`asyncio_mode = "auto"`). Fixtures over classes.
-- **Docstrings/comments:** English only (Google/NumPy style).
-- **Logging:** `structlog` exclusively. LLM calls tracked in `llm_calls` table with cost/tokens.
+- Unit tests in `tests/unit/`, integration in `tests/integration/`.
+- Markers: `requires_db`, `requires_redis` — integration only.
+- For LLM-heavy code, use fixtures that return recorded responses. Do not call real LLMs in CI.
 
-## Infrastructure
+### Logging
 
-- **PostgreSQL 17** (image: `pgvector/pgvector:pg17`) with pgvector extension
-- **MinIO** — S3-compatible object storage for course materials
-- **`openai-whisper`** in separate optional dependency `media` (pulls PyTorch ~2GB). Install: `uv sync --extra media`. Mock in CI.
-- **Dependency management:** PEP 735 — `dev` tools in `[dependency-groups]` (included by default with `uv sync`), `media` in `[project.optional-dependencies]`.
+- `structlog` only. No `print()`. No `logging` stdlib directly.
+- LLM calls tracked in `ExternalServiceCall` table (see vision §3 KD5) — every call creates a row, including failed and fallback attempts.
 
-## Environment Configuration
+### Prompts
 
-Copy `.env.example` → `.env`. Required keys: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, PostgreSQL and MinIO connection vars. See `.env.example` for full template.
+Prompts live in `prompts/<agent>/<version>.yaml`. In the new model, ladder configuration references prompts via `prompt_ref` in `config/ladders_*.yaml` (see vision §3 KD16).
 
-## Sprint Documentation
+### LLM router
 
-Detailed task specifications live in `current-doc/`. Each `S1-0XX-*.md` file contains acceptance criteria, exact config snippets, and implementation steps for its task.
+The router (`llm/` module) implements the fallback ladder per KD7 + KD16:
+- **Infrastructure errors (429/503/timeout):** retry same model with exponential backoff (3-4 attempts) → fallback.
+- **Structural parsing errors:** instructor-style retry with error feedback (1-2) → fallback.
+- **Semantic/truncation/empty:** fallback immediately.
+
+Every call — successful or not — creates an `ExternalServiceCall` row.
+
+## Directory orientation
+
+- `src/course_supporter/api/` — FastAPI routes, schemas.
+- `src/course_supporter/auth/` — API key + tenant context.
+- `src/course_supporter/ingestion/` — source processors (video/audio/presentation/text/web).
+- `src/course_supporter/agents/` — MethodistAgent, MentorAgent (+ previously ArchitectAgent/ReconcilerAgent which are being removed).
+- `src/course_supporter/llm/` — ModelRouter with ladder. Config in `config/ladders_*.yaml` (new).
+- `src/course_supporter/storage/` — ORM models + repository pattern.
+- `src/course_supporter/worker.py` — ARQ worker.
+- `prompts/` — prompt YAMLs per agent.
+- `migrations/` — Alembic.
+
+## Archived documentation
+
+`current-doc/sprint2-docs/`, `current-doc/sprint3-docs/`, `past-sprints-doc/` describe **previous** refactor attempts. They are moved to `archive/` and **must not be used as design input**. The current design source is `../refactoring-vision/vision.md`.

@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 import uuid_utils as uuid7_lib
 from sqlalchemy import (
@@ -31,6 +31,48 @@ def _uuid7() -> uuid.UUID:
 
 class Base(DeclarativeBase):
     """Base class for all ORM models."""
+
+
+class SoftDeleteMixin:
+    """Universal soft-delete pattern (vision §3 KD3, KD12).
+
+    Adds a nullable ``deleted_at`` timestamp to a mapped model. ``NULL``
+    means the row is active; a non-null timestamp means soft-deleted.
+
+    Cascade descendants are declared via ``__cascades_soft_delete_to__``
+    — a list of model classes that ``CascadeDeleteService`` should also
+    soft-delete when this entity is deleted. The skeleton is delivered
+    in task 0.1 with empty lists; concrete cascades are wired
+    per-entity in later phase tasks (1.x, 3.x, 4.x).
+
+    Author-content scrubbing on delete is the responsibility of each
+    entity's own deletion handler — vision KD3 lists per-entity scrub
+    rules. This mixin only provides the ``deleted_at`` column and the
+    cascade declaration hook.
+
+    The accompanying Alembic migration adds:
+      - ``deleted_at TIMESTAMPTZ NULL`` column on every soft-deletable table.
+      - ``ix_<table>_active`` partial index on ``deleted_at IS NULL`` for
+        cheap "active-only" queries.
+      - ``BEFORE UPDATE`` trigger that blocks updates of regular columns
+        on already soft-deleted rows (only ``deleted_at``/``updated_at``
+        diffs are permitted, allowing re-deletion idempotency and
+        un-delete).
+    """
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        comment="Soft-delete timestamp (vision KD3). "
+        "NULL = active; NOT NULL = soft-deleted.",
+    )
+
+    __cascades_soft_delete_to__: ClassVar[list[type]] = []
+    """Descendant model classes that cascade-delete from this entity.
+
+    Populated per-entity in subsequent phase tasks.
+    """
 
 
 # ──────────────────────────────────────────────

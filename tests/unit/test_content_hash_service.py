@@ -60,6 +60,21 @@ class C(FakeHashable):
     pass
 
 
+def _stable_hash_for(entity: FakeHashable) -> str:
+    """Synthetic stable-per-(type, id) hash used by the default stub formula.
+
+    Single source of truth: ``StubContentHashService._compute_hash_for``
+    delegates here when no explicit ``hash_func`` override is given, and
+    test assertions call the same function to recompute the expected
+    value — no risk of the stub formula and the assertion helper
+    drifting apart.
+    """
+    return compute_content_hash(
+        f"{type(entity).__name__}:{entity.id}".encode(),
+        [],
+    )
+
+
 class StubContentHashService(ContentHashService):
     """``ContentHashService`` with the per-entity dispatch stubbed out.
 
@@ -97,19 +112,7 @@ class StubContentHashService(ContentHashService):
         if self._hash_func is not None:
             result: str = self._hash_func(entity, exclude_ids)
             return result
-        # Default: synthetic stable-per-(type, id) hash.
-        return compute_content_hash(
-            f"{type(entity).__name__}:{entity.id}".encode(),
-            [],
-        )
-
-
-def _stable_hash_for(entity: FakeHashable) -> str:
-    """Recreate the StubContentHashService default formula for assertions."""
-    return compute_content_hash(
-        f"{type(entity).__name__}:{entity.id}".encode(),
-        [],
-    )
+        return _stable_hash_for(entity)  # type: ignore[arg-type]
 
 
 # ── compute_raw_hash ──────────────────────────────────────────────

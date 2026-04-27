@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -41,8 +41,10 @@ class C(FakeEntity):
 class StubCascadeService(CascadeDeleteService):
     """``CascadeDeleteService`` with the FK-inspection layer stubbed out.
 
-    Replaces ``_fetch_active_children`` with a static lookup table so
-    we can drive the engine logic without real ORM mappers or a DB.
+    Replaces ``_fetch_active_children_batch`` with a static lookup
+    table so we can drive the engine logic without real ORM mappers
+    or a DB. Real FK-resolution behaviour is exercised separately in
+    ``TestRealFKResolution`` against actual ORM models.
     """
 
     def __init__(
@@ -53,13 +55,17 @@ class StubCascadeService(CascadeDeleteService):
         super().__init__(session)
         self._children = children_by_parent
 
-    async def _fetch_active_children(  # type: ignore[override]
+    async def _fetch_active_children_batch(  # type: ignore[override]
         self,
-        parent: SoftDeletableEntity,
+        parent_cls: type,
+        parent_ids: list[uuid.UUID],
         child_cls: type,
     ) -> list[SoftDeletableEntity]:
-        kids = self._children.get(parent.id, {}).get(child_cls, [])
-        return [k for k in kids if k.deleted_at is None]
+        result: list[SoftDeletableEntity] = []
+        for pid in parent_ids:
+            kids = self._children.get(pid, {}).get(child_cls, [])
+            result.extend(k for k in kids if k.deleted_at is None)
+        return result
 
 
 # ── build_cascade_map ──────────────────────────────────────────────
@@ -214,3 +220,142 @@ class TestCascadeCycleGuard:
         assert a.deleted_at == ts
         assert b.deleted_at == ts
         session.flush.assert_awaited_once()
+
+
+# ── Real FK resolution against actual ORM models ──────────────────
+
+
+class TestRealFKResolution:
+    """Drive ``_resolve_cascade_columns`` against real ORM models.
+
+    ``StubCascadeService`` above bypasses ``_fetch_active_children_batch``
+    entirely, so the real ``sqlalchemy.inspect()``-based FK lookup and
+    the ambiguity guard would otherwise be untested. These tests fill
+    that gap. Pure mapper inspection — no DB connection involved.
+    """
+
+    def setup_method(self) -> None:
+        # Each test starts with an empty cache so behaviour is
+        # observable per-call (matters for the caching test).
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+
+        _resolve_cascade_columns.cache_clear()
+
+    def test_resolves_unique_fk(self) -> None:
+        """MaterialEntry -> MaterialMacroSection via material_entry_id."""
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import (
+            MaterialEntry,
+            MaterialMacroSection,
+        )
+
+        fk_col, deleted_at_col = _resolve_cascade_columns(
+            MaterialEntry, MaterialMacroSection
+        )
+        assert fk_col.name == "material_entry_id"
+        assert deleted_at_col.name == "deleted_at"
+        assert deleted_at_col.table.name == "material_macro_sections"
+
+    def test_resolves_self_referential_fk(self) -> None:
+        """MaterialNode -> MaterialNode via parent_materialnode_id."""
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import MaterialNode
+
+        fk_col, deleted_at_col = _resolve_cascade_columns(MaterialNode, MaterialNode)
+        assert fk_col.name == "parent_materialnode_id"
+        assert deleted_at_col.name == "deleted_at"
+
+    def test_no_fk_raises_value_error(self) -> None:
+        """MaterialMacroSection has no FK back to tenants."""
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import MaterialMacroSection, Tenant
+
+        with pytest.raises(
+            ValueError,
+            match=r"No foreign key from MaterialMacroSection to Tenant",
+        ):
+            _resolve_cascade_columns(Tenant, MaterialMacroSection)
+
+    def test_ambiguous_fks_raise_value_error(self) -> None:
+        """HomeworkSubmission has BOTH course_node_id AND node_id -> material_nodes.
+
+        This is the actual code-path that will fire when phase 4 wires
+        HomeworkSubmission's cascade. Surfacing it here so the failure
+        is loud and early rather than silent and wrong.
+        """
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import HomeworkSubmission, MaterialNode
+
+        with pytest.raises(ValueError, match=r"Ambiguous foreign keys") as excinfo:
+            _resolve_cascade_columns(MaterialNode, HomeworkSubmission)
+        # Both FK column names must be in the error so the operator can
+        # decide which one to keep / split.
+        msg = str(excinfo.value)
+        assert "course_node_id" in msg
+        assert "node_id" in msg
+
+    def test_caching_returns_same_columns(self) -> None:
+        """Second call hits the cache and returns the identical objects."""
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import (
+            MaterialEntry,
+            MaterialMacroSection,
+        )
+
+        first = _resolve_cascade_columns(MaterialEntry, MaterialMacroSection)
+        second = _resolve_cascade_columns(MaterialEntry, MaterialMacroSection)
+        assert first is second  # `is` proves cache hit, not just equality
+
+
+# ── Batched fetch wire-format ─────────────────────────────────────
+
+
+class TestBatchedFetch:
+    """Verify ``_fetch_active_children_batch`` issues a single
+    ``SELECT ... WHERE fk IN (...)`` query rather than one per parent.
+
+    Addresses the N+1 concern raised on the original implementation:
+    the engine should scale with cascade depth, not with row count.
+    """
+
+    async def test_single_query_with_in_clause(self) -> None:
+        from course_supporter.storage.orm import (
+            MaterialEntry,
+            MaterialMacroSection,
+        )
+
+        parent_ids = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
+        result_mock = MagicMock()
+        result_mock.scalars.return_value.all.return_value = []
+        session = AsyncMock()
+        session.execute.return_value = result_mock
+
+        svc = CascadeDeleteService(session)
+        rows = await svc._fetch_active_children_batch(
+            MaterialEntry, parent_ids, MaterialMacroSection
+        )
+
+        assert rows == []
+        session.execute.assert_awaited_once()  # one query, not three
+
+        captured = session.execute.call_args.args[0]
+        compiled = str(captured.compile(compile_kwargs={"literal_binds": True}))
+        assert "material_entry_id IN" in compiled
+        assert "deleted_at IS NULL" in compiled
+
+    async def test_empty_parent_ids_short_circuits(self) -> None:
+        """Empty parent_ids must not produce an empty-IN SQL syntax error."""
+        from course_supporter.storage.orm import (
+            MaterialEntry,
+            MaterialMacroSection,
+        )
+
+        session = AsyncMock()
+        svc = CascadeDeleteService(session)
+
+        rows = await svc._fetch_active_children_batch(
+            MaterialEntry, [], MaterialMacroSection
+        )
+
+        assert rows == []
+        session.execute.assert_not_called()

@@ -1,17 +1,41 @@
 """Cascade soft-delete service (vision §3 KD3, KD12).
 
 Engine for recursive soft-delete across declared FK relationships.
-This module ships only the engine; concrete ``cascade_map`` definitions
-land per-entity in subsequent phase tasks. The mapping is consumed
-either as an explicit dict or built dynamically from each model's
-``__cascades_soft_delete_to__`` class attribute.
+Concrete ``cascade_map`` definitions land per-entity in subsequent
+phase tasks; this module ships only the engine, consumed either via
+an explicit dict or via :func:`build_cascade_map` walking each model's
+``__cascades_soft_delete_to__`` declaration.
+
+Performance properties (relevant once concrete cascades are wired in
+phases 1, 3, 4):
+
+* **Breadth-first traversal.** The engine walks the cascade tree level
+  by level rather than depth-first. At each level it groups newly-
+  discovered entities by type and emits **one** batched ``SELECT ...
+  WHERE fk_col IN (parent_ids)`` per ``(parent_type, child_type)``
+  pair. This collapses what would otherwise be O(N) per-parent
+  queries into O(L * T) where L = depth of the cascade and
+  T = number of distinct (parent_type → child_type) pairs at each
+  level. For a typical course tree (Tenant → MaterialNode tree →
+  MaterialEntry → MaterialMacroSection → MaterialSegment) this is a
+  small constant number of round-trips regardless of fan-out.
+* **Cached FK resolution.** Mapper inspection runs once per
+  ``(parent_cls, child_cls)`` pair across the process via
+  :func:`functools.cache`; cascade traversals re-use the resolved
+  columns without re-walking SQLAlchemy metadata.
+
+Both optimisations preserve the original observable behaviour
+(idempotent root, single pre-write hook with the full id list,
+cycle-safe via a ``visited`` set, all-or-nothing write semantics).
 """
 
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import cache
 from typing import Any, Protocol, cast
 
 from sqlalchemy import inspect, select
@@ -61,20 +85,66 @@ def build_cascade_map(root: type) -> dict[type, list[type]]:
     return cascade_map
 
 
+@cache
+def _resolve_cascade_columns(parent_cls: type, child_cls: type) -> tuple[Any, Any]:
+    """Resolve the cascade query columns on ``child_cls``.
+
+    Returns ``(fk_col, deleted_at_col)`` where ``fk_col`` is the column
+    on ``child_cls`` that references ``parent_cls``'s mapped table and
+    ``deleted_at_col`` is the soft-delete column on the same child
+    table. Pure mapper inspection — does not touch the DB.
+
+    Cached via ``functools.cache``: SQLAlchemy mapper metadata is
+    fixed at import time, so each ``(parent_cls, child_cls)`` pair is
+    inspected at most once per process. The cache key is the pair of
+    classes themselves (both hashable).
+
+    Raises:
+        ValueError: when ``child_cls`` has no foreign key to
+            ``parent_cls`` (cascade misconfigured) or when it has more
+            than one (ambiguous cascade — must be made explicit by the
+            caller, e.g. by splitting the descendant or by omitting it
+            from the cascade map).
+    """
+    parent_mapper = cast(Mapper[Any], inspect(parent_cls))
+    child_mapper = cast(Mapper[Any], inspect(child_cls))
+    parent_table = parent_mapper.local_table
+
+    fk_cols = [
+        col
+        for col in child_mapper.local_table.columns
+        for fk in col.foreign_keys
+        if fk.column.table is parent_table
+    ]
+    if not fk_cols:
+        raise ValueError(
+            f"No foreign key from {child_cls.__name__} to {parent_cls.__name__}"
+        )
+    if len(fk_cols) > 1:
+        raise ValueError(
+            f"Ambiguous foreign keys from {child_cls.__name__} "
+            f"to {parent_cls.__name__}: {[c.name for c in fk_cols]}"
+        )
+
+    fk_col = fk_cols[0]
+    deleted_at_col = child_mapper.local_table.c.deleted_at
+    return fk_col, deleted_at_col
+
+
 class CascadeDeleteService:
     """Recursive soft-delete engine (vision §3 KD3, KD12).
 
-    Walks the ``cascade_map`` from the root entity, collecting every
-    reachable active descendant via foreign-key inspection, then writes
-    ``deleted_at`` on all of them in the same DB session. The caller
-    controls the transaction boundary — ``commit`` is not invoked here,
-    so a failure mid-traversal rolls back the whole cascade with the
-    surrounding transaction.
+    Walks the ``cascade_map`` breadth-first from the root entity,
+    collecting every reachable active descendant via batched queries,
+    then writes ``deleted_at`` on all of them in the same DB session.
+    The caller controls the transaction boundary — ``commit`` is not
+    invoked here, so a failure mid-traversal rolls back the whole
+    cascade with the surrounding transaction.
 
-    The skeleton ships with no concrete cascade maps wired up; those
-    arrive per-entity in subsequent phase tasks. ``build_cascade_map``
-    constructs the map at runtime from each model's
-    ``__cascades_soft_delete_to__`` declaration.
+    See module docstring for the BFS + caching rationale. Concrete
+    cascade maps land per-entity in subsequent phase tasks;
+    :func:`build_cascade_map` constructs the map at runtime from each
+    model's ``__cascades_soft_delete_to__`` declaration.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -104,10 +174,7 @@ class CascadeDeleteService:
             return
 
         ts = now if now is not None else datetime.now(UTC)
-        visited: set[tuple[type, uuid.UUID]] = set()
-        to_delete: list[SoftDeletableEntity] = []
-
-        await self._collect(entity, cascade_map, visited, to_delete)
+        to_delete = await self._collect_all(entity, cascade_map)
 
         if on_cancel_jobs is not None:
             await on_cancel_jobs([e.id for e in to_delete])
@@ -117,65 +184,82 @@ class CascadeDeleteService:
 
         await self._session.flush()
 
-    async def _collect(
+    async def _collect_all(
         self,
-        entity: SoftDeletableEntity,
+        root: SoftDeletableEntity,
         cascade_map: dict[type, list[type]],
-        visited: set[tuple[type, uuid.UUID]],
-        to_delete: list[SoftDeletableEntity],
-    ) -> None:
-        cls = type(entity)
-        key = (cls, entity.id)
-        if key in visited:
-            return
-        visited.add(key)
-        if entity.deleted_at is not None:
-            return
+    ) -> list[SoftDeletableEntity]:
+        """BFS across cascade levels with batched fetch per pair.
 
-        to_delete.append(entity)
+        At each level, newly-discovered entities are grouped by their
+        concrete type. For every ``(parent_type, child_type)`` pair
+        present in ``cascade_map``, a single ``SELECT ... WHERE fk IN
+        (parent_ids) AND deleted_at IS NULL`` query collects the next
+        level's children — independent of how many parents are at this
+        level. The ``visited`` set deduplicates entities that are
+        reachable through multiple paths (DAG cascades) and terminates
+        cycles.
+        """
+        visited: set[tuple[type, uuid.UUID]] = set()
+        to_delete: list[SoftDeletableEntity] = []
+        frontier: list[SoftDeletableEntity] = [root]
 
-        for child_cls in cascade_map.get(cls, []):
-            for child in await self._fetch_active_children(entity, child_cls):
-                await self._collect(child, cascade_map, visited, to_delete)
+        while frontier:
+            current: list[SoftDeletableEntity] = []
+            for entity in frontier:
+                cls = type(entity)
+                key = (cls, entity.id)
+                if key in visited:
+                    continue
+                visited.add(key)
+                if entity.deleted_at is not None:
+                    continue
+                to_delete.append(entity)
+                current.append(entity)
 
-    async def _fetch_active_children(
+            by_parent_type: dict[type, list[SoftDeletableEntity]] = defaultdict(list)
+            for entity in current:
+                by_parent_type[type(entity)].append(entity)
+
+            next_frontier: list[SoftDeletableEntity] = []
+            for parent_cls, parents in by_parent_type.items():
+                child_classes = cascade_map.get(parent_cls, [])
+                if not child_classes:
+                    continue
+                parent_ids = [p.id for p in parents]
+                for child_cls in child_classes:
+                    children = await self._fetch_active_children_batch(
+                        parent_cls, parent_ids, child_cls
+                    )
+                    next_frontier.extend(children)
+
+            frontier = next_frontier
+
+        return to_delete
+
+    async def _fetch_active_children_batch(
         self,
-        parent: SoftDeletableEntity,
+        parent_cls: type,
+        parent_ids: list[uuid.UUID],
         child_cls: type,
     ) -> list[SoftDeletableEntity]:
-        """Return active rows of ``child_cls`` linked to ``parent`` by FK.
+        """Batched fetch of active ``child_cls`` rows whose FK ∈ ``parent_ids``.
 
-        Resolves the relationship by inspecting ``child_cls``'s mapped
-        columns and picking the one that references the parent's
-        mapped table. Raises ``ValueError`` on zero or multiple matches
-        — ambiguous cascade relationships must be made explicit by the
-        caller (e.g., split the descendant into a separate type, or
-        omit it from the cascade map).
+        Issues a single ``SELECT ... WHERE fk_col IN (parent_ids) AND
+        deleted_at IS NULL`` query. Returns ``[]`` immediately on an
+        empty ``parent_ids`` (avoids constructing an invalid empty-IN
+        SQL). FK resolution is delegated to the cached
+        :func:`_resolve_cascade_columns`, so the per-call cost is just
+        query construction + execution.
         """
-        parent_mapper = cast(Mapper[Any], inspect(type(parent)))
-        child_mapper = cast(Mapper[Any], inspect(child_cls))
-        parent_table = parent_mapper.local_table
+        if not parent_ids:
+            return []
 
-        fk_cols = [
-            col
-            for col in child_mapper.local_table.columns
-            for fk in col.foreign_keys
-            if fk.column.table is parent_table
-        ]
-        if not fk_cols:
-            raise ValueError(
-                f"No foreign key from {child_cls.__name__} to {type(parent).__name__}"
-            )
-        if len(fk_cols) > 1:
-            raise ValueError(
-                f"Ambiguous foreign keys from {child_cls.__name__} "
-                f"to {type(parent).__name__}: {[c.name for c in fk_cols]}"
-            )
-
-        fk_col = fk_cols[0]
-        deleted_at_col = child_mapper.local_table.c.deleted_at
+        fk_col, deleted_at_col = _resolve_cascade_columns(parent_cls, child_cls)
         stmt: Any = (
-            select(child_cls).where(fk_col == parent.id).where(deleted_at_col.is_(None))
+            select(child_cls)
+            .where(fk_col.in_(parent_ids))
+            .where(deleted_at_col.is_(None))
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

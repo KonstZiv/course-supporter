@@ -63,6 +63,20 @@ the caller in task 0.3 and in per-entity tasks in later phases.
 """
 
 
+OnInvalidateHashes = Callable[[list[uuid.UUID]], Awaitable[None]]
+"""Hook invoked once per cascade with the full id list whose ``content_hash``
+chains must be recomputed up to the root (vision §3 KD9 + KD12).
+
+Same single-shot, pre-write semantics as :data:`OnCancelJobs`: invoked
+exactly once before any ``deleted_at`` write, so victims are still
+``deleted_at IS NULL`` when the hook runs (and therefore not yet
+blocked by the soft-delete protection trigger). Concrete
+implementations live alongside ``ContentHashService.invalidate_subtree``
+and are wired into :meth:`CascadeDeleteService.soft_delete_with_cascade`
+in commit (c) of task 0.2.
+"""
+
+
 def build_cascade_map(root: type) -> dict[type, list[type]]:
     """Build a cascade_map from ``__cascades_soft_delete_to__`` declarations.
 

@@ -226,6 +226,13 @@ class MaterialNode(SoftDeleteMixin, Base):
         "Invalidated up to root on any material change. "
         "Unprocessed materials are skipped during computation",
     )
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
+        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
+        "per-entity formula wired in Phase 2/3. "
+        "Phase 1.1 will collapse legacy node_fingerprint into this column.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -283,6 +290,7 @@ class MaterialEntry(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        Index("ix_material_entries_raw_hash", "raw_hash"),
         {
             "comment": "Raw and processed learning materials "
             "(video, presentation, text, web)",
@@ -369,6 +377,14 @@ class MaterialEntry(SoftDeleteMixin, Base):
     outline_content: Mapped[str | None] = mapped_column(
         Text,
         comment="MaterialOutline JSON (lossless restructuring of processed_content)",
+    )
+
+    # ── Content hash (KD9) ──
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
+        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
+        "per-entity formula wired in Phase 2.",
     )
 
     # ── Pending "receipt" ──
@@ -503,6 +519,12 @@ class MaterialMacroSection(SoftDeleteMixin, Base):
         comment="FK to ExternalServiceCall that produced this section. "
         "NULL for deterministic (text/web) sections",
     )
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
+        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
+        "per-entity formula wired in Phase 1.3 / Phase 2.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -584,6 +606,12 @@ class MaterialSegment(SoftDeleteMixin, Base):
         ForeignKey("external_service_calls.id", ondelete="SET NULL"),
         comment="FK to ExternalServiceCall that produced this segment. "
         "NULL for deterministic (text/web) slices",
+    )
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
+        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
+        "per-entity formula wired in Phase 1.4 / Phase 2.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

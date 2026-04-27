@@ -60,7 +60,7 @@ async def enqueue_ingestion(
 
     job = await job_repo.create(
         tenant_id=tenant_id,
-        materialnode_id=node_id,
+        course_node_id=node_id,
         job_type="ingest",
         priority=priority.value,
         input_params={
@@ -121,7 +121,7 @@ async def enqueue_generation(
     Returns:
         The created Job with ``arq_job_id`` set.
     """
-    # Job.materialnode_id stores the actual target (root if whole tree)
+    # Job.course_node_id stores the actual target (root if whole tree)
     effective_node_id = target_node_id or root_node_id
 
     log = structlog.get_logger().bind(
@@ -132,7 +132,7 @@ async def enqueue_generation(
 
     job = await repo.create(
         tenant_id=tenant_id,
-        materialnode_id=effective_node_id,
+        course_node_id=effective_node_id,
         job_type="generate_structure",
         depends_on=depends_on,
         input_params={
@@ -202,7 +202,7 @@ async def enqueue_reconcile_preview(
 
     job = await repo.create(
         tenant_id=tenant_id,
-        materialnode_id=node_id,
+        course_node_id=node_id,
         job_type="reconcile_preview",
         input_params=input_params,
     )
@@ -268,7 +268,7 @@ async def enqueue_step(
 
     job = await repo.create(
         tenant_id=tenant_id,
-        materialnode_id=target_node_id,
+        course_node_id=target_node_id,
         job_type=step_type,
         depends_on=validated_deps,
         input_params={

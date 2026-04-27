@@ -35,7 +35,8 @@ class TestEnqueueIngestion:
             job = await enqueue_ingestion(
                 redis=arq_redis,
                 session=session,
-                course_id=committed_seeds["course_id"],
+                tenant_id=committed_seeds["tenant_id"],
+                node_id=committed_seeds["course_node_id"],
                 material_id=committed_seeds["material_id"],
                 source_type="web",
                 source_url="https://example.com/test",
@@ -64,7 +65,8 @@ class TestEnqueueIngestion:
             job = await enqueue_ingestion(
                 redis=arq_redis,
                 session=session,
-                course_id=committed_seeds["course_id"],
+                tenant_id=committed_seeds["tenant_id"],
+                node_id=committed_seeds["course_node_id"],
                 material_id=committed_seeds["material_id"],
                 source_type="web",
                 source_url="https://example.com/test",
@@ -92,7 +94,8 @@ class TestEnqueueIngestion:
             job = await enqueue_ingestion(
                 redis=arq_redis,
                 session=session,
-                course_id=committed_seeds["course_id"],
+                tenant_id=committed_seeds["tenant_id"],
+                node_id=committed_seeds["course_node_id"],
                 material_id=committed_seeds["material_id"],
                 source_type="web",
                 source_url="https://example.com/input-params",

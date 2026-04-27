@@ -37,7 +37,7 @@ class JobRepository:
         self,
         *,
         tenant_id: uuid.UUID | None = None,
-        materialnode_id: uuid.UUID | None = None,
+        course_node_id: uuid.UUID | None = None,
         job_type: str,
         priority: str = "normal",
         arq_job_id: str | None = None,
@@ -47,7 +47,7 @@ class JobRepository:
         """Create a new job record."""
         job = Job(
             tenant_id=tenant_id,
-            materialnode_id=materialnode_id,
+            course_node_id=course_node_id,
             job_type=job_type,
             priority=priority,
             arq_job_id=arq_job_id,
@@ -132,13 +132,14 @@ class JobRepository:
     ) -> Job | None:
         """Get a job by ID, ensuring it belongs to the given tenant.
 
-        Joins through ``job.materialnode_id → material_node.tenant_id`` for isolation.
-        Falls back to ``job.tenant_id`` for jobs without a linked node.
+        Joins through ``job.course_node_id → material_node.tenant_id`` for
+        isolation. Falls back to ``job.tenant_id`` for jobs without a
+        linked node.
         """
         # Try node-based isolation first
         stmt = (
             select(Job)
-            .join(MaterialNode, Job.materialnode_id == MaterialNode.id)
+            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
             .where(Job.id == job_id, MaterialNode.tenant_id == tenant_id)
         )
         result = await self._session.execute(stmt)
@@ -155,7 +156,10 @@ class JobRepository:
         """Get all active (queued or running) jobs for a node."""
         stmt = (
             select(Job)
-            .where(Job.materialnode_id == node_id, Job.status.in_(["queued", "active"]))
+            .where(
+                Job.course_node_id == node_id,
+                Job.status.in_(["queued", "active"]),
+            )
             .order_by(Job.queued_at)
         )
         result = await self._session.execute(stmt)
@@ -166,7 +170,7 @@ class JobRepository:
         stmt = (
             select(Job)
             .where(
-                Job.materialnode_id == node_id,
+                Job.course_node_id == node_id,
                 Job.status.in_(["queued", "active"]),
                 Job.job_type == "generate_structure",
             )
@@ -184,7 +188,7 @@ class JobRepository:
         stmt = (
             select(Job)
             .where(
-                Job.materialnode_id.in_(node_ids),
+                Job.course_node_id.in_(node_ids),
                 Job.status.in_(["queued", "active"]),
                 Job.job_type == "generate_structure",
             )

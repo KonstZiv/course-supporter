@@ -97,14 +97,14 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["materialnode_id"]
+        nid = committed_seeds["course_node_id"]
 
         # Create job in DB
         async with session_factory() as session:
             job_repo = JobRepository(session)
             job = await job_repo.create(
                 tenant_id=tid,
-                materialnode_id=nid,
+                course_node_id=nid,
                 job_type="ingest",
             )
             await session.commit()
@@ -164,13 +164,13 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["materialnode_id"]
+        nid = committed_seeds["course_node_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
             job = await job_repo.create(
                 tenant_id=tid,
-                materialnode_id=nid,
+                course_node_id=nid,
                 job_type="ingest",
             )
             await session.commit()
@@ -226,13 +226,13 @@ class TestArqIngestMaterialE2E:
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
-        nid = committed_seeds["materialnode_id"]
+        nid = committed_seeds["course_node_id"]
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
             job = await job_repo.create(
                 tenant_id=tid,
-                materialnode_id=nid,
+                course_node_id=nid,
                 job_type="ingest",
             )
             await session.commit()

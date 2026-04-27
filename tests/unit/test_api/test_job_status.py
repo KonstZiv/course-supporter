@@ -44,7 +44,7 @@ def _make_job_mock(
     job.status = status
     job.tenant_id = uuid.uuid4()
     job.course_id = None  # removed field
-    job.materialnode_id = node_id
+    job.course_node_id = node_id
     job.arq_job_id = arq_job_id
     job.current_stage = None
     job.stage_progress = None

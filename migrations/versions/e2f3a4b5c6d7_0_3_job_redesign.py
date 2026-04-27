@@ -1,11 +1,11 @@
-"""0.3 task: Job model redesign — current_stage, stage_progress, drop estimated_at
+"""0.3 task: Job model redesign — current_stage, stage_progress, drop estimated_at, rename FK
 
 Revision ID: e2f3a4b5c6d7
 Revises: d1e2f3a4b5c6
 Create Date: 2026-04-27 18:00:00.000000
 
-Phase-0 task 0.3 (vision §3 KD13). This migration covers the
-column-level shape changes on ``jobs``:
+Phase-0 task 0.3 (vision §3 KD13). This migration covers all
+schema-level changes on ``jobs`` for the redesign:
 
 * ``+current_stage VARCHAR(50) NULL`` — internal pipeline stage
   marker (``pass_1``/``pass_2a``/... per ``job_type``). Free-form;
@@ -15,13 +15,20 @@ column-level shape changes on ``jobs``:
   per-pipeline and intentionally not enforced at the DB level.
 * ``-estimated_at`` — never set or read by any business logic;
   pure dead column carried from the initial schema.
+* ``materialnode_id → course_node_id`` rename — column, FK
+  constraint (``jobs_materialnode_id_fkey`` →
+  ``jobs_course_node_id_fkey``), and index
+  (``ix_jobs_materialnode_id`` → ``ix_jobs_course_node_id``).
+  PostgreSQL handles the column rename atomically with zero data
+  movement; the constraint and index renames are independent
+  catalog updates. Names verified against the prod DB before
+  scripting.
 
-Commit (b) of task 0.3 will extend the same revision (in a
-follow-up edit on this file) with the
-``materialnode_id → course_node_id`` column/constraint/index
-rename. Splitting them across two commits keeps the git history
-readable; the migration stays a single atomic step on the
-``jobs`` table.
+Commits (a) and (b) of task 0.3 stay separate in the git history,
+but share this single migration file — the column-level changes
+land first, then the rename block is appended. Repository state
+between the two commits is partial-but-valid; the migration is
+always a single atomic step on the ``jobs`` table when applied.
 
 NOT in 0.3 (deferred, see POST-MR-NOTES):
 
@@ -51,7 +58,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Add current_stage + stage_progress; drop estimated_at."""
+    """Add current_stage + stage_progress; drop estimated_at; rename FK column."""
     op.add_column(
         "jobs",
         sa.Column(
@@ -83,9 +90,27 @@ def upgrade() -> None:
     )
     op.drop_column("jobs", "estimated_at")
 
+    # Rename Job.materialnode_id → Job.course_node_id (KD13).
+    # Column rename is atomic; FK constraint and index names need
+    # separate ALTER calls (Postgres does not auto-rename them when
+    # the underlying column changes).
+    op.execute("ALTER TABLE jobs RENAME COLUMN materialnode_id TO course_node_id")
+    op.execute(
+        "ALTER TABLE jobs RENAME CONSTRAINT jobs_materialnode_id_fkey "
+        "TO jobs_course_node_id_fkey"
+    )
+    op.execute("ALTER INDEX ix_jobs_materialnode_id RENAME TO ix_jobs_course_node_id")
+
 
 def downgrade() -> None:
-    """Restore estimated_at; drop current_stage + stage_progress."""
+    """Reverse FK rename; restore estimated_at; drop new columns."""
+    op.execute("ALTER INDEX ix_jobs_course_node_id RENAME TO ix_jobs_materialnode_id")
+    op.execute(
+        "ALTER TABLE jobs RENAME CONSTRAINT jobs_course_node_id_fkey "
+        "TO jobs_materialnode_id_fkey"
+    )
+    op.execute("ALTER TABLE jobs RENAME COLUMN course_node_id TO materialnode_id")
+
     op.add_column(
         "jobs",
         sa.Column(

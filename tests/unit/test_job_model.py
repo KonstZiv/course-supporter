@@ -15,7 +15,7 @@ class TestJobModel:
         expected = {
             "id",
             "tenant_id",
-            "materialnode_id",
+            "course_node_id",
             "job_type",
             "priority",
             "status",
@@ -44,7 +44,7 @@ class TestJobModel:
         for idx in Job.__table__.indexes:
             for col in idx.columns:
                 indexed_cols.add(col.name)
-        assert "materialnode_id" in indexed_cols
+        assert "course_node_id" in indexed_cols
         assert "status" in indexed_cols
         assert "tenant_id" in indexed_cols
 

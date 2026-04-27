@@ -1056,10 +1056,11 @@ class Job(SoftDeleteMixin, Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
-    materialnode_id: Mapped[uuid.UUID | None] = mapped_column(
+    course_node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="SET NULL"),
         index=True,
-        comment="FK to target MaterialNode. NULL for orphaned jobs",
+        comment="FK to target CourseNode (legacy table name material_nodes "
+        "until Phase 1.1 rename). NULL for orphaned jobs.",
     )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")

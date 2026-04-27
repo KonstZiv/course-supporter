@@ -496,7 +496,7 @@ class JobResponse(BaseModel):
     priority: str
     status: str
     tenant_id: uuid.UUID | None
-    materialnode_id: uuid.UUID | None
+    course_node_id: uuid.UUID | None
     arq_job_id: str | None
     current_stage: str | None = None
     stage_progress: dict[str, Any] | None = None

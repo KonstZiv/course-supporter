@@ -54,10 +54,12 @@ class SoftDeleteMixin:
       - ``deleted_at TIMESTAMPTZ NULL`` column on every soft-deletable table.
       - ``ix_<table>_active`` partial index on ``deleted_at IS NULL`` for
         cheap "active-only" queries.
-      - ``BEFORE UPDATE`` trigger that blocks updates of regular columns
-        on already soft-deleted rows (only ``deleted_at``/``updated_at``
-        diffs are permitted, allowing re-deletion idempotency and
-        un-delete).
+      - ``BEFORE UPDATE`` trigger that blocks any UPDATE on already
+        soft-deleted rows except ones that change *only* ``deleted_at``
+        itself (allowing un-delete and idempotent re-delete via raw
+        SQL). Repository-level idempotency is enforced earlier in
+        ``SoftDeleteRepository.soft_delete``, so the trigger is a
+        safety net for direct DB writes.
     """
 
     deleted_at: Mapped[datetime | None] = mapped_column(
@@ -80,9 +82,16 @@ class SoftDeleteMixin:
 # ──────────────────────────────────────────────
 
 
-class Tenant(Base):
+class Tenant(SoftDeleteMixin, Base):
     __tablename__ = "tenants"
-    __table_args__ = {"comment": "Multi-tenant organizations"}
+    __table_args__ = (
+        Index(
+            "ix_tenants_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {"comment": "Multi-tenant organizations"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     name: Mapped[str] = mapped_column(String(200), unique=True)
@@ -105,11 +114,16 @@ class Tenant(Base):
     )
 
 
-class APIKey(Base):
+class APIKey(SoftDeleteMixin, Base):
     __tablename__ = "api_keys"
-    __table_args__ = {
-        "comment": "Authentication keys with scope-based access control",
-    }
+    __table_args__ = (
+        Index(
+            "ix_api_keys_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {"comment": "Authentication keys with scope-based access control"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -158,7 +172,7 @@ class APIKey(Base):
 # ──────────────────────────────────────────────
 
 
-class MaterialNode(Base):
+class MaterialNode(SoftDeleteMixin, Base):
     """Node in the material tree (recursive adjacency list).
 
     Root nodes (parent_materialnode_id IS NULL) serve as "courses" — top-level
@@ -167,12 +181,19 @@ class MaterialNode(Base):
     """
 
     __tablename__ = "material_nodes"
-    __table_args__ = {
-        "comment": (
-            "Hierarchical tree of raw and unprocessed course materials. "
-            "Root node (parent IS NULL) = course"
+    __table_args__ = (
+        Index(
+            "ix_material_nodes_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
-    }
+        {
+            "comment": (
+                "Hierarchical tree of raw and unprocessed course materials. "
+                "Root node (parent IS NULL) = course"
+            ),
+        },
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -247,7 +268,7 @@ class MaterialState(StrEnum):
     ERROR = "error"
 
 
-class MaterialEntry(Base):
+class MaterialEntry(SoftDeleteMixin, Base):
     """A single material attached to a node in the material tree.
 
     Separates raw (uploaded) and processed (ingested) layers with a
@@ -256,10 +277,17 @@ class MaterialEntry(Base):
     """
 
     __tablename__ = "material_entries"
-    __table_args__ = {
-        "comment": "Raw and processed learning materials "
-        "(video, presentation, text, web)",
-    }
+    __table_args__ = (
+        Index(
+            "ix_material_entries_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": "Raw and processed learning materials "
+            "(video, presentation, text, web)",
+        },
+    )
 
     def __repr__(self) -> str:
         return (
@@ -397,7 +425,7 @@ class MacroSectionStatus(StrEnum):
     FAILED = "failed"
 
 
-class MaterialMacroSection(Base):
+class MaterialMacroSection(SoftDeleteMixin, Base):
     """Thematic table-of-contents entry within a MaterialEntry.
 
     One row per logical section (thematic block, slide group, article
@@ -417,6 +445,11 @@ class MaterialMacroSection(Base):
             "ix_material_macro_sections_unready",
             "status",
             postgresql_where=text("status != 'ready'"),
+        ),
+        Index(
+            "ix_material_macro_sections_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
         CheckConstraint("start_pos >= 0", name="ck_macro_start_pos_nonneg"),
         CheckConstraint("end_pos > start_pos", name="ck_macro_end_pos_gt_start"),
@@ -483,7 +516,7 @@ class MaterialMacroSection(Base):
     llm_call: Mapped["ExternalServiceCall | None"] = relationship()
 
 
-class MaterialSegment(Base):
+class MaterialSegment(SoftDeleteMixin, Base):
     """Cleaned/sliced content unit inside a MaterialMacroSection.
 
     Produced by Stage 6 of the ingestion pipeline. For
@@ -509,6 +542,11 @@ class MaterialSegment(Base):
             "ix_material_segments_macro_start_pos",
             "macro_section_id",
             "start_pos",
+        ),
+        Index(
+            "ix_material_segments_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
         CheckConstraint("start_pos >= 0", name="ck_segment_start_pos_nonneg"),
         CheckConstraint("end_pos > start_pos", name="ck_segment_end_pos_gt_start"),
@@ -971,11 +1009,16 @@ class ReconciliationPreview(Base):
 # ──────────────────────────────────────────────
 
 
-class Job(Base):
+class Job(SoftDeleteMixin, Base):
     __tablename__ = "jobs"
-    __table_args__ = {
-        "comment": "Background task queue entries (ingestion, generation)",
-    }
+    __table_args__ = (
+        Index(
+            "ix_jobs_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {"comment": "Background task queue entries (ingestion, generation)"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -1080,10 +1123,15 @@ class HomeworkStatus(StrEnum):
     FAILED = "failed"
 
 
-class Student(Base):
+class Student(SoftDeleteMixin, Base):
     __tablename__ = "students"
     __table_args__ = (
         Index("uq_student_tenant_external", "tenant_id", "external_id", unique=True),
+        Index(
+            "ix_students_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         {"comment": "External students submitting homework"},
     )
 
@@ -1125,11 +1173,16 @@ class Student(Base):
         )
 
 
-class HomeworkSubmission(Base):
+class HomeworkSubmission(SoftDeleteMixin, Base):
     __tablename__ = "homework_submissions"
-    __table_args__ = {
-        "comment": "Homework submissions from external systems for Mentor review",
-    }
+    __table_args__ = (
+        Index(
+            "ix_homework_submissions_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {"comment": "Homework submissions from external systems for Mentor review"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(

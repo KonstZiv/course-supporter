@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 from course_supporter.storage.content_hash import (
+    _MAX_WALK_DEPTH,
     ContentHashService,
     HashableEntity,
     compute_content_hash,
@@ -276,7 +277,11 @@ class TestInvalidateUpCycleSafety:
 class TestInvalidateUpDepthCap:
     async def test_long_chain_does_not_run_away(self) -> None:
         """Chain longer than _MAX_WALK_DEPTH terminates without crash."""
-        chain = [A() for _ in range(40)]
+        # Chain length = cap + 15: comfortably above the cap so the
+        # depth check is guaranteed to fire, but not so long that a
+        # bug producing infinite recursion would be obscured.
+        chain_length = _MAX_WALK_DEPTH + 15
+        chain = [A() for _ in range(chain_length)]
         parent_map: dict[tuple[type, uuid.UUID], FakeHashable | None] = {
             (A, chain[i].id): chain[i + 1] for i in range(len(chain) - 1)
         }
@@ -287,10 +292,12 @@ class TestInvalidateUpDepthCap:
 
         await svc.invalidate_up(chain[0])
 
-        # The walker stops at the cap; not all 40 entities are processed.
-        # Processed count is bounded — verifies the cap fired.
+        # The walker processes at most ``_MAX_WALK_DEPTH + 1`` entities
+        # before the depth check returns; importantly, fewer than the
+        # full chain — the cap fired.
         processed = sum(1 for e in chain if e.content_hash is not None)
-        assert 0 < processed <= 30  # comfortably below the chain length
+        assert 0 < processed <= _MAX_WALK_DEPTH + 1
+        assert processed < chain_length
 
 
 # ── invalidate_subtree — bulk + dedup ─────────────────────────────

@@ -290,7 +290,11 @@ class MaterialEntry(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
-        Index("ix_material_entries_raw_hash", "raw_hash"),
+        Index(
+            "ix_material_entries_raw_hash",
+            "raw_hash",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         {
             "comment": "Raw and processed learning materials "
             "(video, presentation, text, web)",

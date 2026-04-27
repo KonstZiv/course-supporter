@@ -63,6 +63,20 @@ the caller in task 0.3 and in per-entity tasks in later phases.
 """
 
 
+OnInvalidateHashes = Callable[[list[uuid.UUID]], Awaitable[None]]
+"""Hook invoked once per cascade with the full id list whose ``content_hash``
+chains must be recomputed up to the root (vision §3 KD9 + KD12).
+
+Same single-shot, pre-write semantics as :data:`OnCancelJobs`: invoked
+exactly once before any ``deleted_at`` write, so victims are still
+``deleted_at IS NULL`` when the hook runs (and therefore not yet
+blocked by the soft-delete protection trigger). Concrete
+implementations live alongside ``ContentHashService.invalidate_subtree``
+and are wired into :meth:`CascadeDeleteService.soft_delete_with_cascade`
+in commit (c) of task 0.2.
+"""
+
+
 def build_cascade_map(root: type) -> dict[type, list[type]]:
     """Build a cascade_map from ``__cascades_soft_delete_to__`` declarations.
 
@@ -156,6 +170,7 @@ class CascadeDeleteService:
         cascade_map: dict[type, list[type]],
         *,
         on_cancel_jobs: OnCancelJobs | None = None,
+        on_invalidate_hashes: OnInvalidateHashes | None = None,
         now: datetime | None = None,
     ) -> None:
         """Soft-delete ``entity`` and every active descendant.
@@ -165,19 +180,29 @@ class CascadeDeleteService:
         ``visited`` set keyed by ``(type, id)`` so cascade_map cycles
         cannot trigger infinite recursion.
 
-        ``on_cancel_jobs`` is invoked once before any UPDATE with the
-        full list of collected ids. ``now`` overrides the timestamp
-        applied to all rows (defaults to ``datetime.now(UTC)``);
-        useful for deterministic tests.
+        Both pre-write hooks are invoked exactly once with the full
+        collected id list, before any ``deleted_at`` write. They fire
+        in declared parameter order — ``on_cancel_jobs`` first
+        (stop in-flight work) then ``on_invalidate_hashes`` (recompute
+        upstream Merkle hashes per vision §3 KD9 + KD12). A failure
+        in either hook aborts the cascade cleanly: no rows are
+        mutated and no flush happens.
+
+        ``now`` overrides the timestamp applied to all rows
+        (defaults to ``datetime.now(UTC)``); useful for deterministic
+        tests.
         """
         if entity.deleted_at is not None:
             return
 
         ts = now if now is not None else datetime.now(UTC)
         to_delete = await self._collect_all(entity, cascade_map)
+        ids = [e.id for e in to_delete]
 
         if on_cancel_jobs is not None:
-            await on_cancel_jobs([e.id for e in to_delete])
+            await on_cancel_jobs(ids)
+        if on_invalidate_hashes is not None:
+            await on_invalidate_hashes(ids)
 
         for row in to_delete:
             row.deleted_at = ts

@@ -103,6 +103,26 @@ class MaterialEntryRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
+    async def find_by_raw_hash(self, raw_hash: str) -> MaterialEntry | None:
+        """Find the first active MaterialEntry with the given ``raw_hash``.
+
+        Used by ingestion to detect re-uploads of identical content
+        (vision §3 KD9 + KD4). Filters out soft-deleted rows
+        (``deleted_at IS NULL``); v0.20 intentionally allows the same
+        ``raw_hash`` to appear on multiple active rows, so ``.first()``
+        is the right shape rather than ``.scalar_one_or_none()``.
+        Callers needing tenant scoping or "all matches" should issue a
+        custom query — this helper is the simple "did we already see
+        this content" lookup.
+        """
+        stmt = (
+            select(MaterialEntry)
+            .where(MaterialEntry.raw_hash == raw_hash)
+            .where(MaterialEntry.deleted_at.is_(None))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
     async def set_language_if_unset(
         self,
         entry_id: uuid.UUID,

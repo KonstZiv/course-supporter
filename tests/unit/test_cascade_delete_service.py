@@ -203,6 +203,91 @@ class TestCascadeAllOrNothing:
         session.flush.assert_not_awaited()
 
 
+class TestCascadeInvalidateHook:
+    """Mirrors ``TestCascadeHook`` / ``TestCascadeAllOrNothing`` for the
+    ``on_invalidate_hashes`` hook added in task 0.2 (vision §3 KD9 + KD12).
+
+    The hook contract is identical to ``on_cancel_jobs``: single-shot,
+    pre-write, full id list, all-or-nothing on failure. Phase 1.x cascade
+    wiring will bind ``ContentHashService.invalidate_subtree(ids,
+    exclude_ids=ids)`` to it; here we verify the engine plumbing only.
+    """
+
+    async def test_hook_called_once_with_all_collected_ids(self) -> None:
+        a = A()
+        b = B()
+        children = {a.id: {B: [b]}}
+        cmap: dict[type, list[type]] = {A: [B], B: []}
+
+        session = AsyncMock()
+        svc = StubCascadeService(session, children)
+        hook = AsyncMock()
+
+        await svc.soft_delete_with_cascade(a, cmap, on_invalidate_hashes=hook)
+
+        hook.assert_awaited_once()
+        passed_ids = list(hook.call_args.args[0])
+        assert sorted(passed_ids) == sorted([a.id, b.id])
+
+    async def test_hook_runs_before_writes(self) -> None:
+        """Hook must observe entities still NOT marked deleted (KD12 line 645)."""
+        a = A()
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        observed: list[datetime | None] = []
+
+        async def hook(_ids: list[uuid.UUID]) -> None:
+            observed.append(a.deleted_at)
+
+        await svc.soft_delete_with_cascade(a, cmap, on_invalidate_hashes=hook)
+
+        assert observed == [None]
+        assert a.deleted_at is not None
+
+    async def test_failure_aborts_writes(self) -> None:
+        a = A()
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        async def failing_hook(_ids: list[uuid.UUID]) -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await svc.soft_delete_with_cascade(
+                a, cmap, on_invalidate_hashes=failing_hook
+            )
+
+        assert a.deleted_at is None
+        session.flush.assert_not_awaited()
+
+    async def test_both_hooks_fire_in_declared_order(self) -> None:
+        """on_cancel_jobs first (stop work), then on_invalidate_hashes (recompute)."""
+        a = A()
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        order: list[str] = []
+
+        async def cancel_hook(_ids: list[uuid.UUID]) -> None:
+            order.append("cancel")
+
+        async def invalidate_hook(_ids: list[uuid.UUID]) -> None:
+            order.append("invalidate")
+
+        await svc.soft_delete_with_cascade(
+            a,
+            cmap,
+            on_cancel_jobs=cancel_hook,
+            on_invalidate_hashes=invalidate_hook,
+        )
+
+        assert order == ["cancel", "invalidate"]
+
+
 class TestCascadeCycleGuard:
     async def test_cycle_does_not_infinite_loop(self) -> None:
         """A cycle in cascade_map must terminate via the visited set."""

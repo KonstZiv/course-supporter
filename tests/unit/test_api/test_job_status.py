@@ -35,7 +35,6 @@ def _make_job_mock(
     queued_at: datetime | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
-    estimated_at: datetime | None = None,
 ) -> MagicMock:
     """Create a mock Job ORM object."""
     job = MagicMock()
@@ -47,12 +46,13 @@ def _make_job_mock(
     job.course_id = None  # removed field
     job.materialnode_id = node_id
     job.arq_job_id = arq_job_id
+    job.current_stage = None
+    job.stage_progress = None
     job.result_data = None
     job.error_message = error_message
     job.queued_at = queued_at or datetime.now(UTC)
     job.started_at = started_at
     job.completed_at = completed_at
-    job.estimated_at = estimated_at
     return job
 
 

@@ -21,12 +21,13 @@ class TestJobModel:
             "status",
             "arq_job_id",
             "input_params",
+            "current_stage",
+            "stage_progress",
             "depends_on",
             "error_message",
             "queued_at",
             "started_at",
             "completed_at",
-            "estimated_at",
         }
         assert expected.issubset(columns)
 

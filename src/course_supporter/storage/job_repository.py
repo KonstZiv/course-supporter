@@ -43,7 +43,6 @@ class JobRepository:
         arq_job_id: str | None = None,
         input_params: dict[str, object] | None = None,
         depends_on: list[str] | None = None,
-        estimated_at: datetime | None = None,
     ) -> Job:
         """Create a new job record."""
         job = Job(
@@ -54,7 +53,6 @@ class JobRepository:
             arq_job_id=arq_job_id,
             input_params=input_params,
             depends_on=depends_on,
-            estimated_at=estimated_at,
         )
         self._session.add(job)
         await self._session.flush()

@@ -173,7 +173,7 @@ class CascadeDeleteService:
             )
 
         fk_col = fk_cols[0]
-        deleted_at_col: Any = child_cls.deleted_at  # type: ignore[attr-defined]
+        deleted_at_col = child_mapper.local_table.c.deleted_at
         stmt: Any = (
             select(child_cls).where(fk_col == parent.id).where(deleted_at_col.is_(None))
         )

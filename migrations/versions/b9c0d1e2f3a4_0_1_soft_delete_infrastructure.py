@@ -25,6 +25,7 @@ configured here; they are wired with each entity's own phase task
 (1.x, 3.x, 4.x).
 """
 
+import re
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -50,6 +51,26 @@ SOFT_DELETABLE_TABLES: tuple[str, ...] = (
 )
 
 TRIGGER_FUNCTION_NAME = "block_update_on_soft_deleted"
+
+# PostgreSQL DDL cannot use parameter binding for identifiers
+# (``CREATE TRIGGER $1 ON $2`` is not valid SQL — bind params attach
+# values, not object names), so trigger and table names below are
+# interpolated into raw SQL via f-strings. All names come from the
+# hardcoded ``SOFT_DELETABLE_TABLES`` whitelist or ``TRIGGER_FUNCTION_NAME``;
+# user input never reaches these strings. The assertions below make
+# that property executable: if a future contributor adds a non-plain
+# identifier to the whitelist, the migration fails on import rather
+# than emitting unsafe DDL.
+_SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+assert all(_SAFE_IDENT.match(t) for t in SOFT_DELETABLE_TABLES), (
+    "SOFT_DELETABLE_TABLES must contain plain SQL identifiers; got: "
+    f"{[t for t in SOFT_DELETABLE_TABLES if not _SAFE_IDENT.match(t)]}"
+)
+assert _SAFE_IDENT.match(TRIGGER_FUNCTION_NAME), (
+    f"TRIGGER_FUNCTION_NAME must be a plain SQL identifier; got: "
+    f"{TRIGGER_FUNCTION_NAME!r}"
+)
 
 TRIGGER_FUNCTION_SQL = f"""
 CREATE OR REPLACE FUNCTION {TRIGGER_FUNCTION_NAME}()

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.jobs import JobType, validate_job_type
 from course_supporter.storage.orm import Job, MaterialNode
 
 # Valid job status transitions
@@ -38,17 +39,26 @@ class JobRepository:
         *,
         tenant_id: uuid.UUID | None = None,
         course_node_id: uuid.UUID | None = None,
-        job_type: str,
+        job_type: JobType | str,
         priority: str = "normal",
         arq_job_id: str | None = None,
         input_params: dict[str, object] | None = None,
         depends_on: list[str] | None = None,
     ) -> Job:
-        """Create a new job record."""
+        """Create a new job record.
+
+        ``job_type`` accepts either a :class:`JobType` enum (KD13
+        canonical, recommended for new code) or a legacy ``str``
+        (transitional — Phase 2.x will rewrite call-sites). Legacy
+        strings emit a one-shot :class:`DeprecationWarning` per
+        distinct value via :func:`validate_job_type`. The strict
+        DB CHECK constraint that would reject legacy values is
+        deferred to Phase 2.x along with the call-site migration.
+        """
         job = Job(
             tenant_id=tenant_id,
             course_node_id=course_node_id,
-            job_type=job_type,
+            job_type=validate_job_type(job_type),
             priority=priority,
             arq_job_id=arq_job_id,
             input_params=input_params,

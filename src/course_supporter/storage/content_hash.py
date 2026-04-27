@@ -7,30 +7,68 @@ the material tree — a regenerated DocumentSegment changes its own
 hash, which propagates up through DocumentSummary → CourseNode all
 the way to the root.
 
-This module ships the pure compute helpers in commit (a) of task
-0.2; the DB-aware traversal API (``invalidate_up`` /
-``invalidate_subtree``) lands in commit (c) once the column
-additions in commit (b) are in place.
-
 KD9 explicitly forbids lazy / on-read materialisation (vision §3
 line 563): hashes must be computed and persisted at INSERT/UPDATE
 time. The legacy ``FingerprintService`` (anchored on
 ``MaterialEntry.processed_hash``) remains in place for the
 snapshot / reconciliation flows it serves and is collapsed into
 ``ContentHashService`` in Phase 1.1.
+
+**Per-entity formulas in 0.2 are minimal-viable.** The compute
+helpers (``compute_raw_hash`` / ``compute_content_hash``) ship the
+algebra; ``ContentHashService._compute_hash_for`` ships a basic
+formula per entity type that is enough to make
+``invalidate_up`` walk the tree correctly and short-circuit on
+no-op changes. Phase 1.3 / 1.4 / 2 / 3 refine each formula with
+vision-aligned inputs (concepts, positions, additional fields).
 """
 
 from __future__ import annotations
 
 import hashlib
+import uuid
+from datetime import datetime
+from typing import Protocol, cast
 
+import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from course_supporter.storage.orm import (
+    MaterialEntry,
+    MaterialMacroSection,
+    MaterialNode,
+    MaterialSegment,
+)
+
+logger = structlog.get_logger(__name__)
 
 # Separator byte for the Merkle hash. Without an explicit boundary,
 # ``["abc", "def"]`` would hash identically to ``["abcd", "ef"]``.
 # The NUL byte cannot appear inside a hex SHA-256 digest, so it is
 # a safe, unambiguous delimiter that no child hash payload can spoof.
 _HASH_SEPARATOR = b"\x00"
+
+# Defensive cap on walker depth. Real course trees are shallow (a
+# handful of levels), so 25 is comfortable headroom; the cap exists
+# to surface accidentally-introduced cycles in future schema changes
+# rather than to bound legitimate work.
+_MAX_WALK_DEPTH = 25
+
+
+class HashableEntity(Protocol):
+    """Structural type for any model that participates in content_hash.
+
+    Concrete hash-bearing models (``MaterialSegment``,
+    ``MaterialMacroSection``, ``MaterialEntry``, ``MaterialNode``)
+    all expose these three attributes — ``id`` and ``deleted_at``
+    come from existing model contracts and ``content_hash`` is the
+    column added by task 0.2.
+    """
+
+    id: uuid.UUID
+    deleted_at: datetime | None
+    content_hash: str | None
 
 
 def compute_raw_hash(content: bytes) -> str:
@@ -81,24 +119,251 @@ def compute_content_hash(local_content: bytes, child_hashes: list[str]) -> str:
 class ContentHashService:
     """Materialised KD9 content-hash maintenance.
 
-    Commit (a) of task 0.2 ships this class as a thin shell so the
-    pure compute helpers above can be imported and the DB-aware API
-    can attach in commit (c) without re-introducing the class.
-    Commit (c) adds:
+    Walks the material tree bottom-up, recomputing ``content_hash``
+    on each ancestor and short-circuiting when a level's recomputed
+    value equals the stored value (so a metadata-only change on a
+    leaf does not write-storm up the tree). All updates happen
+    in-session; the caller controls the surrounding transaction.
 
-    - ``invalidate_up(session, entity)`` — eager bottom-up walk that
-      recomputes each ancestor's ``content_hash`` from its children
-      and short-circuits when a level's recomputed hash equals the
-      stored hash.
-    - ``invalidate_subtree(session, entity_ids)`` — bulk variant for
-      cascade-soft-delete scenarios; deduplicates ancestor walks via
-      a ``visited`` set so a parent reached from multiple siblings
-      is recomputed exactly once.
+    Per-entity formulas live in :meth:`_compute_hash_for` and are
+    minimal-viable for 0.2 — Phase 1.3 / 1.4 / 2 / 3 will refine
+    each one with vision-aligned inputs. ``_compute_hash_for`` and
+    :meth:`_fetch_parent` are deliberately overrideable so unit
+    tests can drive the walker against in-memory fakes without a
+    DB connection.
 
-    The service is stateless aside from the bound session. Callers
-    construct it inline per request / job; there is no global
-    singleton.
+    The service is stateless aside from the bound session; callers
+    construct it inline per request / job, there is no singleton.
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def invalidate_up(self, entity: HashableEntity) -> None:
+        """Eager Merkle propagation up the tree (vision §3 KD9).
+
+        Recomputes ``content_hash`` for ``entity`` from its active
+        children, then walks to the parent and repeats. Stops at
+        a root node (parent IS NULL) or as soon as a level's
+        recomputed hash equals the stored hash (short-circuit; no
+        write storm on metadata-only changes).
+
+        Soft-deleted entities encountered along the walk are skipped
+        for UPDATE — the soft-delete trigger from task 0.1 would
+        block the write — but their parent is still visited so the
+        parent's hash reflects active siblings.
+
+        Issues a single ``flush()`` after the entire walk completes
+        (no per-level flush). Caller's transaction boundary is
+        unchanged.
+        """
+        visited: set[tuple[type, uuid.UUID]] = set()
+        await self._walk_up(entity, visited, exclude_ids=None)
+        await self._session.flush()
+
+    async def invalidate_subtree(
+        self,
+        entity_ids: list[uuid.UUID],
+        *,
+        exclude_ids: set[uuid.UUID] | None = None,
+    ) -> None:
+        """Bulk Merkle propagation for cascade-soft-delete scenarios.
+
+        Looks up entities by id across the four hash-bearing tables
+        (``MaterialSegment``, ``MaterialMacroSection``,
+        ``MaterialEntry``, ``MaterialNode``) — one ``WHERE id IN``
+        query per type, four total round-trips regardless of
+        ``len(entity_ids)``. For each entity, walks up to the root
+        with a *shared* ``visited`` set so a parent reached from N
+        siblings is recomputed exactly once.
+
+        ``exclude_ids`` lets the caller supply ids that should be
+        treated as "already gone" by parent computations. The
+        primary use case is the ``on_invalidate_hashes`` cascade
+        hook (per task 0.1 A3): it fires *before* writes, so cascade
+        victims still have ``deleted_at IS NULL`` at hook time.
+        Passing ``exclude_ids = {victim ids}`` makes parent hashes
+        recompute as if the victims were already deleted, which is
+        the correct cascade-time semantics. Without ``exclude_ids``
+        the standalone semantics apply (recompute from current
+        ``deleted_at IS NULL`` state).
+
+        Issues a single ``flush()`` after the full bulk walk.
+        Empty ``entity_ids`` short-circuits without DB access.
+        """
+        if not entity_ids:
+            return
+
+        entities: list[HashableEntity] = []
+        for cls in (
+            MaterialSegment,
+            MaterialMacroSection,
+            MaterialEntry,
+            MaterialNode,
+        ):
+            stmt = select(cls).where(cls.id.in_(entity_ids))
+            result = await self._session.execute(stmt)
+            # ORM rows satisfy ``HashableEntity`` structurally (every
+            # hash-bearing model has id + deleted_at + content_hash),
+            # but Protocol variance through ``Sequence[Base]`` is not
+            # inferred — explicit cast for the type checker.
+            entities.extend(cast(list[HashableEntity], list(result.scalars().all())))
+
+        visited: set[tuple[type, uuid.UUID]] = set()
+        for entity in entities:
+            await self._walk_up(entity, visited, exclude_ids=exclude_ids)
+
+        await self._session.flush()
+
+    async def _walk_up(
+        self,
+        start: HashableEntity,
+        visited: set[tuple[type, uuid.UUID]],
+        *,
+        exclude_ids: set[uuid.UUID] | None,
+    ) -> None:
+        """Walk from ``start`` to the root, recomputing hashes as we go.
+
+        Skips UPDATE on entities that are either soft-deleted (the
+        trigger would block) or in ``exclude_ids`` (caller asked us
+        to treat them as gone). In both cases we still walk to the
+        parent so its hash reflects the absence. Cycle-safe via
+        ``visited``; depth-capped at :data:`_MAX_WALK_DEPTH`.
+        """
+        current: HashableEntity | None = start
+        depth = 0
+        while current is not None:
+            if depth > _MAX_WALK_DEPTH:
+                logger.warning(
+                    "content_hash.invalidate_up.depth_exceeded",
+                    entity_type=type(current).__name__,
+                    entity_id=str(current.id),
+                    max_depth=_MAX_WALK_DEPTH,
+                )
+                return
+
+            depth += 1
+            key = (type(current), current.id)
+            if key in visited:
+                return
+            visited.add(key)
+
+            should_update = current.deleted_at is None and (
+                exclude_ids is None or current.id not in exclude_ids
+            )
+            if should_update:
+                new_hash = await self._compute_hash_for(
+                    current, exclude_ids=exclude_ids
+                )
+                if new_hash == current.content_hash:
+                    return
+                current.content_hash = new_hash
+
+            current = await self._fetch_parent(current)
+
+    async def _compute_hash_for(
+        self,
+        entity: HashableEntity,
+        *,
+        exclude_ids: set[uuid.UUID] | None,
+    ) -> str:
+        """Per-entity hash formula (vision §3 KD9, minimal-viable for 0.2).
+
+        Phase 1.3 / 1.4 / 2 / 3 will refine each formula with vision-
+        aligned inputs (concepts, positions, additional own fields).
+        The current shapes:
+
+        - ``MaterialSegment`` — ``content`` bytes, no children. Phase
+          1.4 adds concepts + positions per KD9 line 552.
+        - ``MaterialMacroSection`` — empty local content + sorted
+          active segments' ``content_hash``. Phase 1.3 adds own
+          fields per KD9 line 553.
+        - ``MaterialEntry`` — ``raw_hash`` bytes + sorted active
+          sections' ``content_hash``. ``raw_hash`` anchor matches
+          KD9 line 554. Falls back to ``b""`` while ``raw_hash`` is
+          NULL (Phase 2 will populate it at ingestion time).
+        - ``MaterialNode`` — empty local content + sorted (active
+          entries' + active child nodes') ``content_hash``. Phase
+          1.1 collapses ``node_fingerprint`` into ``content_hash``
+          and switches to the full KD9 formula.
+
+        ``exclude_ids`` is forwarded to the children query so the
+        cascade hook can elide soon-to-be-deleted siblings before
+        they actually have ``deleted_at`` set.
+        """
+        if isinstance(entity, MaterialSegment):
+            local = (entity.content or "").encode("utf-8")
+            return compute_content_hash(local, [])
+
+        if isinstance(entity, MaterialMacroSection):
+            stmt = select(MaterialSegment.content_hash).where(
+                MaterialSegment.macro_section_id == entity.id,
+                MaterialSegment.deleted_at.is_(None),
+            )
+            if exclude_ids:
+                stmt = stmt.where(MaterialSegment.id.notin_(exclude_ids))
+            result = await self._session.execute(stmt)
+            children = [h for (h,) in result.all() if h is not None]
+            return compute_content_hash(b"", children)
+
+        if isinstance(entity, MaterialEntry):
+            local = (entity.raw_hash or "").encode("ascii")
+            stmt = select(MaterialMacroSection.content_hash).where(
+                MaterialMacroSection.material_entry_id == entity.id,
+                MaterialMacroSection.deleted_at.is_(None),
+            )
+            if exclude_ids:
+                stmt = stmt.where(MaterialMacroSection.id.notin_(exclude_ids))
+            result = await self._session.execute(stmt)
+            children = [h for (h,) in result.all() if h is not None]
+            return compute_content_hash(local, children)
+
+        if isinstance(entity, MaterialNode):
+            entry_stmt = select(MaterialEntry.content_hash).where(
+                MaterialEntry.materialnode_id == entity.id,
+                MaterialEntry.deleted_at.is_(None),
+            )
+            if exclude_ids:
+                entry_stmt = entry_stmt.where(MaterialEntry.id.notin_(exclude_ids))
+            entry_result = await self._session.execute(entry_stmt)
+
+            node_stmt = select(MaterialNode.content_hash).where(
+                MaterialNode.parent_materialnode_id == entity.id,
+                MaterialNode.deleted_at.is_(None),
+            )
+            if exclude_ids:
+                node_stmt = node_stmt.where(MaterialNode.id.notin_(exclude_ids))
+            node_result = await self._session.execute(node_stmt)
+
+            children = [h for (h,) in entry_result.all() if h is not None]
+            children += [h for (h,) in node_result.all() if h is not None]
+            return compute_content_hash(b"", children)
+
+        raise TypeError(
+            f"ContentHashService does not support entity type {type(entity).__name__}"
+        )
+
+    async def _fetch_parent(self, entity: HashableEntity) -> HashableEntity | None:
+        """Resolve ``entity``'s parent in the hash chain, or None at root.
+
+        - Segment → MacroSection (via ``macro_section_id``)
+        - MacroSection → MaterialEntry (via ``material_entry_id``)
+        - MaterialEntry → MaterialNode (via ``materialnode_id``)
+        - MaterialNode → MaterialNode (via ``parent_materialnode_id``);
+          NULL = root, walk terminates.
+        """
+        if isinstance(entity, MaterialSegment):
+            return await self._session.get(
+                MaterialMacroSection, entity.macro_section_id
+            )
+        if isinstance(entity, MaterialMacroSection):
+            return await self._session.get(MaterialEntry, entity.material_entry_id)
+        if isinstance(entity, MaterialEntry):
+            return await self._session.get(MaterialNode, entity.materialnode_id)
+        if isinstance(entity, MaterialNode):
+            if entity.parent_materialnode_id is None:
+                return None
+            return await self._session.get(MaterialNode, entity.parent_materialnode_id)
+        raise TypeError(
+            f"ContentHashService does not support entity type {type(entity).__name__}"
+        )

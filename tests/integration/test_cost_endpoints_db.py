@@ -457,3 +457,88 @@ class TestCostCourseE2E:
                     Tenant.__table__.delete().where(Tenant.id == other_tenant_id)
                 )
                 await session.commit()
+
+    async def test_cross_tenant_subtree_leak_protected(
+        self,
+        cost_client: AsyncClient,
+        cost_seed: dict[str, object],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Defense-in-depth: a stray foreign-tenant node parented inside
+        the caller's subtree must not leak into ``by_node``.
+
+        Simulates a data anomaly — manually inserts a ``MaterialNode``
+        belonging to a different tenant whose ``parent_materialnode_id``
+        points at the caller's lesson. The recursive CTE in
+        ``get_descendant_ids`` is now passed ``tenant_id``; the
+        anomalous node must be filtered out at the recursion boundary.
+        Without the fix, any ESC attached to a Job pointing at this
+        intruder node would surface in the caller's drill-down.
+        """
+        async with session_factory() as session:
+            other_tenant = Tenant(name=f"intruder-{uuid.uuid4().hex[:6]}")
+            session.add(other_tenant)
+            await session.flush()
+            intruder_node = MaterialNode(
+                tenant_id=other_tenant.id,
+                title="INTRUDER (foreign tenant)",
+                order=0,
+                # Parent points at the caller's lesson — invariant
+                # violation we are explicitly defending against.
+                parent_materialnode_id=cost_seed["lesson_id"],  # type: ignore[arg-type]
+            )
+            session.add(intruder_node)
+            await session.flush()
+            intruder_job = Job(
+                tenant_id=other_tenant.id,
+                course_node_id=intruder_node.id,
+                job_type="ingest",
+            )
+            session.add(intruder_job)
+            await session.flush()
+            session.add(
+                ExternalServiceCall(
+                    job_id=intruder_job.id,
+                    provider="anthropic",
+                    model_id="claude-sonnet-4",
+                    cost_usd=999.0,
+                    created_at=SAMPLE_TIMESTAMP,
+                )
+            )
+            await session.commit()
+            intruder_node_id = intruder_node.id
+            intruder_job_id = intruder_job.id
+            intruder_tenant_id = other_tenant.id
+
+        try:
+            response = await cost_client.get(
+                f"/api/v1/cost/course/{cost_seed['root_id']}",
+                params={"from": PERIOD_FROM, "to": PERIOD_TO, "no_cache": "true"},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            # Intruder node must NOT appear in the drill-down.
+            node_ids = {n["course_node_id"] for n in data["by_node"]}
+            assert str(intruder_node_id) not in node_ids
+            # Total stays at the legitimate 140 — intruder's 999 USD
+            # was not summed.
+            assert data["total_usd"] == pytest.approx(140.0)
+        finally:
+            async with session_factory() as session:
+                await session.execute(
+                    ExternalServiceCall.__table__.delete().where(
+                        ExternalServiceCall.job_id == intruder_job_id
+                    )
+                )
+                await session.execute(
+                    Job.__table__.delete().where(Job.id == intruder_job_id)
+                )
+                await session.execute(
+                    MaterialNode.__table__.delete().where(
+                        MaterialNode.id == intruder_node_id
+                    )
+                )
+                await session.execute(
+                    Tenant.__table__.delete().where(Tenant.id == intruder_tenant_id)
+                )
+                await session.commit()

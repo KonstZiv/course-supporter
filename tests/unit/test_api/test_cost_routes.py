@@ -144,36 +144,49 @@ class TestCostSummaryHappyPath:
 
 class TestCostSummaryValidation:
     @pytest.mark.parametrize(
-        ("params", "expected_detail_substring"),
+        ("params", "expected_msg"),
         [
-            ({"to": "2026-04-28"}, None),  # missing from
-            ({"from": "2026-01-01"}, None),  # missing to
-            ({"from": "2026-04-28", "to": "2026-01-01"}, "from must be <= to"),
+            # Pydantic-shaped 422s — actual v2 message strings.
+            ({"to": "2026-04-28"}, "Field required"),  # missing from
+            ({"from": "2026-01-01"}, "Field required"),  # missing to
             (
                 {"from": "2026-01-01", "to": "2026-04-28", "limit_courses": "501"},
-                None,
+                "Input should be less than or equal to 500",
             ),
             (
                 {"from": "2026-01-01", "to": "2026-04-28", "offset_courses": "-1"},
-                None,
+                "Input should be greater than or equal to 0",
             ),
             (
                 {"from": "2026-01-01", "to": "2026-04-28", "limit_providers": "501"},
-                None,
+                "Input should be less than or equal to 500",
             ),
-            ({"from": "not-a-date", "to": "2026-04-28"}, None),
+            (
+                {"from": "not-a-date", "to": "2026-04-28"},
+                "Input should be a valid date",
+            ),
+            # Manual HTTPException — string detail, separate shape.
+            ({"from": "2026-04-28", "to": "2026-01-01"}, "from must be <= to"),
         ],
     )
     async def test_returns_422(
         self,
         client: AsyncClient,
         params: dict[str, str],
-        expected_detail_substring: str | None,
+        expected_msg: str,
     ) -> None:
         response = await client.get("/api/v1/cost/summary", params=params)
         assert response.status_code == 422
-        if expected_detail_substring is not None:
-            assert expected_detail_substring in response.json()["detail"]
+
+        detail = response.json()["detail"]
+        # Pydantic 422 → list[ErrorDict]; manual HTTPException → str.
+        if isinstance(detail, list):
+            msgs = [e.get("msg", "") for e in detail]
+            assert any(expected_msg in m for m in msgs), (
+                f"Expected substring {expected_msg!r} in any of {msgs!r}"
+            )
+        else:
+            assert expected_msg in detail
 
 
 class TestCostSummaryCache:
@@ -290,6 +303,27 @@ class TestCostCourseTenantIsolation:
             )
         assert response.status_code == 404
         assert response.json()["detail"] == "Course not found"
+
+    async def test_descendant_resolution_passes_tenant_id(
+        self, client: AsyncClient, patched_course_repo: Any
+    ) -> None:
+        """Defense-in-depth: tenant_id must reach the recursive CTE."""
+        node_get, descendants, repo_methods = patched_course_repo
+        with (
+            node_get,
+            descendants as descendants_mock,
+            repo_methods,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client.get(
+                f"/api/v1/cost/course/{COURSE_ID}",
+                params={"from": "2026-01-01", "to": "2026-04-28"},
+            )
+        assert response.status_code == 200
+        descendants_mock.assert_awaited_once()
+        kwargs = descendants_mock.await_args.kwargs
+        assert kwargs.get("tenant_id") == STUB_TENANT.tenant_id
 
 
 class TestCostCourseValidation:

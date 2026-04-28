@@ -210,21 +210,37 @@ class MaterialNodeRepository:
 
     # ── Tree operations ──
 
-    async def get_descendant_ids(self, root_id: uuid.UUID) -> list[uuid.UUID]:
+    async def get_descendant_ids(
+        self,
+        root_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> list[uuid.UUID]:
         """Return all node IDs in the subtree rooted at ``root_id`` (inclusive).
 
         Single recursive CTE; no ORM hydration. Use for set-based filters
         (``WHERE Job.course_node_id IN (...)``) — cheaper than
         :meth:`get_subtree` when only IDs are needed (e.g., cost-report
         subtree drill-down).
+
+        When ``tenant_id`` is provided, the filter is applied to BOTH the
+        base anchor AND the recursive ``JOIN``. Defense-in-depth: even if
+        a data anomaly produced a child ``MaterialNode`` with a different
+        ``tenant_id`` from its parent, the recursion will not traverse
+        into the foreign tenant's subtree. The route layer always passes
+        the caller's tenant id; ``None`` is reserved for global helpers
+        that legitimately need to walk across tenants.
         """
         base = select(MaterialNode.id).where(MaterialNode.id == root_id)
+        if tenant_id is not None:
+            base = base.where(MaterialNode.tenant_id == tenant_id)
         cte = base.cte(name="descendant_ids", recursive=True)
-        cte = cte.union_all(
-            select(MaterialNode.id).join(
-                cte, MaterialNode.parent_materialnode_id == cte.c.id
-            )
+        recursive = select(MaterialNode.id).join(
+            cte, MaterialNode.parent_materialnode_id == cte.c.id
         )
+        if tenant_id is not None:
+            recursive = recursive.where(MaterialNode.tenant_id == tenant_id)
+        cte = cte.union_all(recursive)
         result = await self._session.execute(select(cte.c.id))
         return list(result.scalars().all())
 

@@ -184,7 +184,12 @@ async def get_cost_course(
 
     # Empty descendant_ids → response with total_usd=0 + empty breakdowns
     # ("course exists but no Jobs in period"). Distinct from 404 above.
-    descendant_ids = await node_repo.get_descendant_ids(course_node_id)
+    # tenant_id passed through as a fourth defense layer — even if a data
+    # anomaly placed a foreign-tenant node under this subtree, recursion
+    # won't traverse into it.
+    descendant_ids = await node_repo.get_descendant_ids(
+        course_node_id, tenant_id=tenant.tenant_id
+    )
 
     repo = ExternalServiceCallRepository(session)
     total = await repo.get_total_for_subtree(

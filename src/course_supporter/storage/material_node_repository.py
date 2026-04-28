@@ -125,6 +125,23 @@ class MaterialNodeRepository:
         """Get a node by primary key."""
         return await self._session.get(MaterialNode, node_id)
 
+    async def get_by_id_for_tenant(
+        self, node_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> MaterialNode | None:
+        """Get a node only if it belongs to the given tenant.
+
+        Returns ``None`` for both non-existent nodes AND nodes owned
+        by other tenants — callers should surface this as 404 to avoid
+        leaking existence of foreign-tenant IDs (mirrors
+        :meth:`JobRepository.get_by_id_for_tenant` from 0.3).
+        """
+        stmt = select(MaterialNode).where(
+            MaterialNode.id == node_id,
+            MaterialNode.tenant_id == tenant_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_root_for(self, node_id: uuid.UUID) -> MaterialNode | None:
         """Walk up the parent chain to find the root (course) node.
 

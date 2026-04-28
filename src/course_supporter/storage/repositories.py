@@ -183,6 +183,38 @@ class ExternalServiceCallRepository:
         # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
         return float(result.scalar_one() or 0.0)
 
+    async def get_total_for_subtree(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        course_node_ids: Sequence[uuid.UUID],
+        from_date: date,
+        to_date: date,
+    ) -> float:
+        """Sum of ESC costs for Jobs whose ``course_node_id`` is in subtree.
+
+        Per-course total for ``/cost/course/{id}`` — distinct from
+        :meth:`get_total_for_period` (tenant-wide). Empty
+        ``course_node_ids`` short-circuits to ``0.0`` (no SQL emitted).
+        """
+        if not course_node_ids:
+            return 0.0
+        stmt = (
+            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.course_node_id.in_(course_node_ids),
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
+        return float(result.scalar_one() or 0.0)
+
     async def get_unattributed_for_period(
         self,
         *,

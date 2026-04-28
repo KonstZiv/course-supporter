@@ -388,7 +388,7 @@ class TestEnqueueGenerationEffectiveNodeId:
             )
 
         create_kw = repo_cls.return_value.create.call_args.kwargs
-        assert create_kw["materialnode_id"] == target_id
+        assert create_kw["course_node_id"] == target_id
 
     async def test_none_target_uses_root(self) -> None:
         """When target_node_id=None, Job.node_id = root_node_id."""
@@ -423,7 +423,7 @@ class TestEnqueueGenerationEffectiveNodeId:
             )
 
         create_kw = repo_cls.return_value.create.call_args.kwargs
-        assert create_kw["materialnode_id"] == root_id
+        assert create_kw["course_node_id"] == root_id
 
     async def test_input_params_store_both_ids(self) -> None:
         """input_params stores root_node_id and target_node_id separately."""
@@ -489,7 +489,7 @@ def _mock_job(
 ) -> MagicMock:
     job = MagicMock()
     job.id = uuid.uuid4()
-    job.materialnode_id = node_id
+    job.course_node_id = node_id
     return job
 
 

@@ -24,6 +24,7 @@ from course_supporter.api.tasks import (
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
+from course_supporter.workers.s3_cleanup import s3_cleanup_task
 
 WorkerCtx = dict[str, Any]
 
@@ -107,6 +108,7 @@ class WorkerSettings:
         arq_execute_step,
         arq_reconcile_preview,
         arq_execute_methodist_step,
+        s3_cleanup_task,
     ]
     on_startup = startup
     on_shutdown = shutdown

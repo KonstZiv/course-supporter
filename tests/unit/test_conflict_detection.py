@@ -20,7 +20,7 @@ def _mock_job(
     """Create a mock Job with id and node_id."""
     job = MagicMock()
     job.id = job_id or uuid.uuid4()
-    job.materialnode_id = node_id
+    job.course_node_id = node_id
     return job
 
 

@@ -15,18 +15,19 @@ class TestJobModel:
         expected = {
             "id",
             "tenant_id",
-            "materialnode_id",
+            "course_node_id",
             "job_type",
             "priority",
             "status",
             "arq_job_id",
             "input_params",
+            "current_stage",
+            "stage_progress",
             "depends_on",
             "error_message",
             "queued_at",
             "started_at",
             "completed_at",
-            "estimated_at",
         }
         assert expected.issubset(columns)
 
@@ -43,7 +44,7 @@ class TestJobModel:
         for idx in Job.__table__.indexes:
             for col in idx.columns:
                 indexed_cols.add(col.name)
-        assert "materialnode_id" in indexed_cols
+        assert "course_node_id" in indexed_cols
         assert "status" in indexed_cols
         assert "tenant_id" in indexed_cols
 

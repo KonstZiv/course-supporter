@@ -58,7 +58,7 @@ async def detect_conflict(
     target_ancestors = _ancestor_set(parent_map, target_node_id)
 
     for job in active_jobs:
-        job_node_id = job.materialnode_id
+        job_node_id = job.course_node_id
         if _scopes_overlap_fast(target_node_id, job_node_id):
             return ConflictInfo(
                 job_id=job.id,

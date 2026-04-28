@@ -1056,10 +1056,11 @@ class Job(SoftDeleteMixin, Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
-    materialnode_id: Mapped[uuid.UUID | None] = mapped_column(
+    course_node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("material_nodes.id", ondelete="SET NULL"),
         index=True,
-        comment="FK to target MaterialNode. NULL for orphaned jobs",
+        comment="FK to target CourseNode (legacy table name material_nodes "
+        "until Phase 1.1 rename). NULL for orphaned jobs.",
     )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")
@@ -1074,10 +1075,29 @@ class Job(SoftDeleteMixin, Base):
     input_params: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="JSONB of task-specific parameters"
     )
+    current_stage: Mapped[str | None] = mapped_column(
+        String(50),
+        comment="Internal pipeline stage marker per vision §3 KD13. "
+        "Free-form per job_type (e.g. pass_1/pass_2a/pass_2b/pass_2c "
+        "for document_processing; bottomup/topdown for "
+        "node_summary_regeneration; safety/sanity/review/delivery for "
+        "homework_processing; unused for s3_cleanup). Validation lives "
+        "at the worker level per pipeline.",
+    )
+    stage_progress: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Per-job-type checkpoint state for resume after retry "
+        "(KD4a in-flight resume + KD13 reactivate). Schema is "
+        "per-pipeline and intentionally not enforced at the DB level.",
+    )
     depends_on: Mapped[list[str] | None] = mapped_column(
         JSONB,
         comment="JSONB array of jobs.id UUIDs (as strings) "
-        "that must complete before this job runs",
+        "that must complete before this job runs. "
+        "DEPRECATED in v0.20 vision (KD13 — one Job = one logical "
+        "action, internal stages via current_stage). To be dropped "
+        "when methodist_orchestrator and generation_orchestrator are "
+        "rewritten to single-Job-with-stages pattern in Phase 2.x.",
     )
     result_data: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"
@@ -1088,7 +1108,6 @@ class Job(SoftDeleteMixin, Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    estimated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
     tenant: Mapped["Tenant | None"] = relationship()

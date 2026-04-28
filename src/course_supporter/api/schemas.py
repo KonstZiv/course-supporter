@@ -496,14 +496,15 @@ class JobResponse(BaseModel):
     priority: str
     status: str
     tenant_id: uuid.UUID | None
-    materialnode_id: uuid.UUID | None
+    course_node_id: uuid.UUID | None
     arq_job_id: str | None
+    current_stage: str | None = None
+    stage_progress: dict[str, Any] | None = None
     result_data: dict[str, Any] | None = None
     error_message: str | None
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
-    estimated_at: datetime | None
 
 
 # --- Structure Generation ---

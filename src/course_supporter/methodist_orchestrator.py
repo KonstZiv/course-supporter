@@ -240,7 +240,7 @@ async def _enqueue_methodist_step(
 
     job = await repo.create(
         tenant_id=tenant_id,
-        materialnode_id=materialnode_id,
+        course_node_id=materialnode_id,
         job_type=f"methodist_{phase}",
         depends_on=validated_deps,
         input_params={

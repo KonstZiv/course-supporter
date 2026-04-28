@@ -47,14 +47,15 @@ def _make_job(
     job.priority = "normal"
     job.status = status
     job.tenant_id = STUB_TENANT.tenant_id
-    job.materialnode_id = NODE_ID
+    job.course_node_id = NODE_ID
     job.arq_job_id = f"arq:{job.id}"
+    job.current_stage = None
+    job.stage_progress = None
     job.result_data = None
     job.error_message = None
     job.queued_at = NOW
     job.started_at = None
     job.completed_at = None
-    job.estimated_at = None
     return job
 
 
@@ -412,6 +413,9 @@ class TestReconcileApply:
 
         assert resp.status_code == 200
         data = resp.json()
+        # NOTE: EditableTreeResponse.materialnode_id refers to
+        # StructureNodeEditable.materialnode_id, not Job.course_node_id.
+        # Renames for that field are Phase 1.1 (MaterialNode → CourseNode).
         assert data["materialnode_id"] == str(NODE_ID)
 
     async def test_422_no_accepted_issues(self, client: AsyncClient) -> None:

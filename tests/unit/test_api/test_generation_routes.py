@@ -58,14 +58,15 @@ def _make_job(
     job.priority = "normal"
     job.status = status
     job.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    job.materialnode_id = node_id or NODE_ID
+    job.course_node_id = node_id or NODE_ID
     job.arq_job_id = f"arq:{job.id}"
+    job.current_stage = None
+    job.stage_progress = None
     job.result_data = None
     job.error_message = None
     job.queued_at = NOW
     job.started_at = None
     job.completed_at = None
-    job.estimated_at = None
     return job
 
 

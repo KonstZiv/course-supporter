@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.jobs import JobType, validate_job_type
 from course_supporter.storage.orm import Job, MaterialNode
 
 # Valid job status transitions
@@ -37,24 +38,31 @@ class JobRepository:
         self,
         *,
         tenant_id: uuid.UUID | None = None,
-        materialnode_id: uuid.UUID | None = None,
-        job_type: str,
+        course_node_id: uuid.UUID | None = None,
+        job_type: JobType | str,
         priority: str = "normal",
         arq_job_id: str | None = None,
         input_params: dict[str, object] | None = None,
         depends_on: list[str] | None = None,
-        estimated_at: datetime | None = None,
     ) -> Job:
-        """Create a new job record."""
+        """Create a new job record.
+
+        ``job_type`` accepts either a :class:`JobType` enum (KD13
+        canonical, recommended for new code) or a legacy ``str``
+        (transitional — Phase 2.x will rewrite call-sites). Legacy
+        strings emit a one-shot :class:`DeprecationWarning` per
+        distinct value via :func:`validate_job_type`. The strict
+        DB CHECK constraint that would reject legacy values is
+        deferred to Phase 2.x along with the call-site migration.
+        """
         job = Job(
             tenant_id=tenant_id,
-            materialnode_id=materialnode_id,
-            job_type=job_type,
+            course_node_id=course_node_id,
+            job_type=validate_job_type(job_type),
             priority=priority,
             arq_job_id=arq_job_id,
             input_params=input_params,
             depends_on=depends_on,
-            estimated_at=estimated_at,
         )
         self._session.add(job)
         await self._session.flush()
@@ -121,6 +129,53 @@ class JobRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def reactivate(self, job_id: uuid.UUID) -> Job:
+        """Re-queue a failed Job for retry (vision §3 KD13).
+
+        Allowed only from ``status='failed'`` on a non-soft-deleted Job.
+        Other states (including soft-deleted) raise :class:`ValueError`;
+        callers map to 4xx (404 for missing, 409 for wrong state).
+
+        DB-side transition only — caller is responsible for enqueuing
+        the new ARQ task and calling :meth:`set_arq_job_id` with the
+        new id, all within the same outer transaction. Mirrors the
+        :meth:`create` / :meth:`set_arq_job_id` split used by
+        ``enqueue_ingestion`` and friends.
+
+        Cleared on transition: ``status`` (→ ``'queued'``),
+        ``error_message``, ``started_at``, ``completed_at``,
+        ``arq_job_id`` (caller will set the new one).
+
+        Preserved on transition:
+
+        * ``queued_at`` — original first-queued time is more meaningful
+          as Job metadata; per-attempt timing lives in
+          ``ExternalServiceCall`` per KD5/KD13.
+        * ``stage_progress`` — worker resumes from KD4a checkpoint.
+          This preservation is the design intent of ``reactivate``
+          (vs creating a new Job from scratch).
+        """
+        job = await self.get_by_id(job_id)
+        if job is None:
+            msg = f"Job {job_id} not found"
+            raise ValueError(msg)
+        if job.deleted_at is not None:
+            msg = f"Cannot reactivate soft-deleted Job {job_id}"
+            raise ValueError(msg)
+        if job.status != "failed":
+            msg = (
+                f"Cannot reactivate Job {job_id} in state {job.status!r}; "
+                f"only 'failed' Jobs can be reactivated."
+            )
+            raise ValueError(msg)
+        job.status = "queued"
+        job.error_message = None
+        job.started_at = None
+        job.completed_at = None
+        job.arq_job_id = None
+        await self._session.flush()
+        return job
+
     async def store_result(
         self, job_id: uuid.UUID, result_data: dict[str, Any]
     ) -> None:
@@ -134,13 +189,14 @@ class JobRepository:
     ) -> Job | None:
         """Get a job by ID, ensuring it belongs to the given tenant.
 
-        Joins through ``job.materialnode_id → material_node.tenant_id`` for isolation.
-        Falls back to ``job.tenant_id`` for jobs without a linked node.
+        Joins through ``job.course_node_id → material_node.tenant_id`` for
+        isolation. Falls back to ``job.tenant_id`` for jobs without a
+        linked node.
         """
         # Try node-based isolation first
         stmt = (
             select(Job)
-            .join(MaterialNode, Job.materialnode_id == MaterialNode.id)
+            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
             .where(Job.id == job_id, MaterialNode.tenant_id == tenant_id)
         )
         result = await self._session.execute(stmt)
@@ -157,7 +213,10 @@ class JobRepository:
         """Get all active (queued or running) jobs for a node."""
         stmt = (
             select(Job)
-            .where(Job.materialnode_id == node_id, Job.status.in_(["queued", "active"]))
+            .where(
+                Job.course_node_id == node_id,
+                Job.status.in_(["queued", "active"]),
+            )
             .order_by(Job.queued_at)
         )
         result = await self._session.execute(stmt)
@@ -168,7 +227,7 @@ class JobRepository:
         stmt = (
             select(Job)
             .where(
-                Job.materialnode_id == node_id,
+                Job.course_node_id == node_id,
                 Job.status.in_(["queued", "active"]),
                 Job.job_type == "generate_structure",
             )
@@ -186,7 +245,7 @@ class JobRepository:
         stmt = (
             select(Job)
             .where(
-                Job.materialnode_id.in_(node_ids),
+                Job.course_node_id.in_(node_ids),
                 Job.status.in_(["queued", "active"]),
                 Job.job_type == "generate_structure",
             )

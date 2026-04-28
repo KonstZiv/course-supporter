@@ -245,6 +245,7 @@ class TestCostSummaryCache:
             patched_summary_repo as m,
             patch.object(cost_module, "get_cached", get_cached_mock),
             patch.object(cost_module, "set_cached", set_cached_mock),
+            patch.object(cost_module, "logger") as mock_logger,
         ):
             response = await client.get(
                 "/api/v1/cost/summary",
@@ -255,10 +256,34 @@ class TestCostSummaryCache:
                 },
             )
         assert response.status_code == 200
+        # Audit-log every cache bypass — even though rate limit bounds
+        # absolute QPS, this gives observability into anomalous traffic
+        # shape (e.g., one tenant always-bypassing).
+        mock_logger.warning.assert_called_once()
+        warning_call = mock_logger.warning.call_args
+        assert warning_call.args[0] == "cost_no_cache_bypass"
+        assert warning_call.kwargs["endpoint"] == "/cost/summary"
         get_cached_mock.assert_not_called()
         set_cached_mock.assert_not_called()
         for method in m.values():
             method.assert_awaited_once()
+
+    async def test_no_warning_on_normal_request(
+        self, client: AsyncClient, patched_summary_repo: Any
+    ) -> None:
+        """Symmetry: WARNING fires *only* on bypass, not on every request."""
+        with (
+            patched_summary_repo,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+            patch.object(cost_module, "logger") as mock_logger,
+        ):
+            response = await client.get(
+                "/api/v1/cost/summary",
+                params={"from": "2026-01-01", "to": "2026-04-28"},
+            )
+        assert response.status_code == 200
+        mock_logger.warning.assert_not_called()
 
 
 # ── /cost/course/{id} ─────────────────────────────────────────────

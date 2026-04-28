@@ -17,6 +17,7 @@ import uuid
 from datetime import date
 from typing import Annotated
 
+import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,8 @@ from course_supporter.services.cost_cache import (
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.repositories import ExternalServiceCallRepository
+
+logger = structlog.get_logger()
 
 router = APIRouter(tags=["cost"])
 
@@ -71,9 +74,27 @@ async def get_cost_summary(
     course-root level. Phase 1+ task may evaluate walk-up CTE or
     schema denormalization (``MaterialNode.root_course_id``) based on
     production query latency.
+
+    Security: ``?no_cache=true`` always hits the DB. Absolute frequency
+    is bounded by the ``require_scope(PREP, CHECK)`` rate limit per
+    plan (so a misbehaving caller cannot exceed their plan's QPS), but
+    every bypassed cache hit multiplies DB load relative to the same
+    rate of cached requests. Each bypass emits a WARNING log
+    (``cost_no_cache_bypass``) for audit. A separate, tighter
+    rate-limit bucket for ``no_cache=true`` traffic is captured as a
+    Phase 1+ follow-up — natural fit alongside the admin-scope work
+    that KD5 defers.
     """
     if from_ > to_:
         raise HTTPException(status_code=422, detail="from must be <= to")
+    if no_cache:
+        logger.warning(
+            "cost_no_cache_bypass",
+            tenant_id=str(tenant.tenant_id),
+            endpoint="/cost/summary",
+            from_=str(from_),
+            to_=str(to_),
+        )
 
     cache_key = make_summary_key(
         tenant_id=tenant.tenant_id,
@@ -156,9 +177,24 @@ async def get_cost_course(
     offset_actions: Annotated[int, Query(ge=0)] = 0,
     no_cache: Annotated[bool, Query(include_in_schema=False)] = False,
 ) -> CourseCostResponse:
-    """Cost drill-down for a single course (subtree drill-down)."""
+    """Cost drill-down for a single course (subtree drill-down).
+
+    Security: ``?no_cache=true`` always hits the DB and additionally
+    re-runs the recursive descendant CTE in ``get_descendant_ids``.
+    Same rate-limit boundedness + audit-log story as ``/cost/summary``;
+    see that endpoint's docstring.
+    """
     if from_ > to_:
         raise HTTPException(status_code=422, detail="from must be <= to")
+    if no_cache:
+        logger.warning(
+            "cost_no_cache_bypass",
+            tenant_id=str(tenant.tenant_id),
+            endpoint="/cost/course",
+            course_node_id=str(course_node_id),
+            from_=str(from_),
+            to_=str(to_),
+        )
 
     node_repo = MaterialNodeRepository(session)
     # Tenant isolation: 404 covers both non-existent IDs AND foreign-tenant

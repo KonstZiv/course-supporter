@@ -327,24 +327,54 @@ class TestCostCourseTenantIsolation:
 
 
 class TestCostCourseValidation:
-    async def test_from_after_to_returns_422(self, client: AsyncClient) -> None:
-        response = await client.get(
-            f"/api/v1/cost/course/{COURSE_ID}",
-            params={"from": "2026-04-28", "to": "2026-01-01"},
-        )
+    @pytest.mark.parametrize(
+        ("params", "expected_msg"),
+        [
+            # Pydantic-shaped 422s — actual v2 message strings.
+            ({"to": "2026-04-28"}, "Field required"),  # missing from
+            ({"from": "2026-01-01"}, "Field required"),  # missing to
+            (
+                {"from": "2026-01-01", "to": "2026-04-28", "limit_nodes": "501"},
+                "Input should be less than or equal to 500",
+            ),
+            (
+                {"from": "2026-01-01", "to": "2026-04-28", "offset_nodes": "-1"},
+                "Input should be greater than or equal to 0",
+            ),
+            (
+                {"from": "2026-01-01", "to": "2026-04-28", "limit_actions": "501"},
+                "Input should be less than or equal to 500",
+            ),
+            (
+                {"from": "2026-01-01", "to": "2026-04-28", "offset_actions": "-1"},
+                "Input should be greater than or equal to 0",
+            ),
+            (
+                {"from": "not-a-date", "to": "2026-04-28"},
+                "Input should be a valid date",
+            ),
+            # Manual HTTPException — string detail, separate shape.
+            ({"from": "2026-04-28", "to": "2026-01-01"}, "from must be <= to"),
+        ],
+    )
+    async def test_returns_422(
+        self,
+        client: AsyncClient,
+        params: dict[str, str],
+        expected_msg: str,
+    ) -> None:
+        response = await client.get(f"/api/v1/cost/course/{COURSE_ID}", params=params)
         assert response.status_code == 422
-        assert "from must be <= to" in response.json()["detail"]
 
-    async def test_limit_over_max_returns_422(self, client: AsyncClient) -> None:
-        response = await client.get(
-            f"/api/v1/cost/course/{COURSE_ID}",
-            params={
-                "from": "2026-01-01",
-                "to": "2026-04-28",
-                "limit_nodes": "501",
-            },
-        )
-        assert response.status_code == 422
+        detail = response.json()["detail"]
+        # Pydantic 422 → list[ErrorDict]; manual HTTPException → str.
+        if isinstance(detail, list):
+            msgs = [e.get("msg", "") for e in detail]
+            assert any(expected_msg in m for m in msgs), (
+                f"Expected substring {expected_msg!r} in any of {msgs!r}"
+            )
+        else:
+            assert expected_msg in detail
 
 
 class TestCostCourseCache:

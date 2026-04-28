@@ -230,6 +230,15 @@ class MaterialNodeRepository:
         into the foreign tenant's subtree. The route layer always passes
         the caller's tenant id; ``None`` is reserved for global helpers
         that legitimately need to walk across tenants.
+
+        Performance note: callers consume the returned list as an
+        IN-clause filter (e.g.,
+        :meth:`ExternalServiceCallRepository.get_by_node` /
+        :meth:`~ExternalServiceCallRepository.get_by_action` /
+        :meth:`~ExternalServiceCallRepository.get_total_for_subtree`).
+        For courses with ≥500 nodes the IN-list size becomes the binding
+        constraint — see the consumer-side performance ceiling note for
+        the decision lever and the inline-CTE mitigation.
         """
         base = select(MaterialNode.id).where(MaterialNode.id == root_id)
         if tenant_id is not None:

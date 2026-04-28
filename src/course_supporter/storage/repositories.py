@@ -196,6 +196,17 @@ class ExternalServiceCallRepository:
         Per-course total for ``/cost/course/{id}`` — distinct from
         :meth:`get_total_for_period` (tenant-wide). Empty
         ``course_node_ids`` short-circuits to ``0.0`` (no SQL emitted).
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return 0.0
@@ -358,6 +369,17 @@ class ExternalServiceCallRepository:
         root, resolved on the route layer via
         :meth:`MaterialNodeRepository.get_descendant_ids`. Empty list →
         empty result (no SQL).
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return []
@@ -408,6 +430,17 @@ class ExternalServiceCallRepository:
 
         Same subtree contract as :meth:`get_by_node`. Empty list →
         empty result.
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return []

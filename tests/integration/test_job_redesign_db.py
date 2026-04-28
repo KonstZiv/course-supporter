@@ -20,9 +20,11 @@ what the worker wrote on its last checkpoint (KD4a + KD13).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Generator
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,7 +35,7 @@ pytestmark = pytest.mark.requires_db
 
 
 @pytest.fixture()
-def sync_engine():  # type: ignore[no-untyped-def]
+def sync_engine() -> Generator[Engine]:
     """Sync engine for catalog inspection (pg_constraint, pg_indexes)."""
     engine = create_engine(get_settings().database_url)
     yield engine
@@ -43,29 +45,29 @@ def sync_engine():  # type: ignore[no-untyped-def]
 class TestSchemaShape:
     """Migration ``e2f3a4b5c6d7`` shipped the expected schema."""
 
-    def test_current_stage_column_exists(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_current_stage_column_exists(self, sync_engine: Engine) -> None:
         cols = {c["name"]: c for c in inspect(sync_engine).get_columns("jobs")}
         assert "current_stage" in cols
         # VARCHAR(50) per migration
         assert cols["current_stage"]["nullable"] is True
 
-    def test_stage_progress_column_exists_as_jsonb(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_stage_progress_column_exists_as_jsonb(self, sync_engine: Engine) -> None:
         cols = {c["name"]: c for c in inspect(sync_engine).get_columns("jobs")}
         assert "stage_progress" in cols
         assert cols["stage_progress"]["nullable"] is True
         # JSONB type (psycopg / SQLA reports it as JSONB)
         assert "JSON" in str(cols["stage_progress"]["type"]).upper()
 
-    def test_estimated_at_column_dropped(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_estimated_at_column_dropped(self, sync_engine: Engine) -> None:
         col_names = {c["name"] for c in inspect(sync_engine).get_columns("jobs")}
         assert "estimated_at" not in col_names
 
-    def test_course_node_id_column_renamed(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_course_node_id_column_renamed(self, sync_engine: Engine) -> None:
         col_names = {c["name"] for c in inspect(sync_engine).get_columns("jobs")}
         assert "course_node_id" in col_names
         assert "materialnode_id" not in col_names
 
-    def test_fk_constraint_renamed(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_fk_constraint_renamed(self, sync_engine: Engine) -> None:
         """``jobs_course_node_id_fkey`` exists; legacy name does not."""
         with sync_engine.connect() as conn:
             rows = conn.execute(
@@ -78,7 +80,7 @@ class TestSchemaShape:
         assert "jobs_course_node_id_fkey" in names
         assert "jobs_materialnode_id_fkey" not in names
 
-    def test_index_renamed(self, sync_engine) -> None:  # type: ignore[no-untyped-def]
+    def test_index_renamed(self, sync_engine: Engine) -> None:
         """``ix_jobs_course_node_id`` exists; legacy name does not."""
         with sync_engine.connect() as conn:
             rows = conn.execute(

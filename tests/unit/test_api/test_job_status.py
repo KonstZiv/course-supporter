@@ -192,10 +192,18 @@ class TestGetJobTenantIsolation:
 # ── POST /api/v1/jobs/{job_id}/reactivate ─────────────────────────
 
 
-def _make_failed_ingest_job(*, node_id: uuid.UUID | None = None) -> MagicMock:
-    """Failed ``ingest`` job with input_params sufficient for the dispatcher."""
+def _make_failed_ingest_job(
+    *, node_id: uuid.UUID | None = None, job_type: str = "ingest"
+) -> MagicMock:
+    """Failed Job with ``input_params`` sufficient for the ingest dispatcher.
+
+    ``job_type`` defaults to ``"ingest"`` (the happy-path dispatcher arm);
+    pass another string to exercise the unsupported-type branch directly
+    instead of patching the attribute on the returned mock.
+    """
     job = _make_job_mock(
         status="failed",
+        job_type=job_type,
         node_id=node_id or uuid.uuid4(),
         error_message="boom",
         completed_at=datetime.now(UTC),
@@ -297,8 +305,7 @@ class TestReactivateJobInputParamsMissing:
 
     async def test_unsupported_job_type_returns_422(self, client: AsyncClient) -> None:
         """job_type outside the dispatcher's match set → 422 with supported list."""
-        job = _make_failed_ingest_job()
-        job.job_type = "unknown_future_type"
+        job = _make_failed_ingest_job(job_type="unknown_future_type")
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
             patch.object(JobRepository, "reactivate", return_value=job),

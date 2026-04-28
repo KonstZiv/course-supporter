@@ -255,3 +255,163 @@ class TestJobQueries:
         fetched = await repo.get_by_id(job.id)
         assert fetched is not None
         assert fetched.arq_job_id == "arq:test:abc123"
+
+
+class TestJobReactivate:
+    """``reactivate`` re-queues failed Jobs for retry (vision §3 KD13).
+
+    Covers happy-path field semantics (cleared vs preserved) and the
+    rejection branches the API layer maps to 4xx (404 / 409). Resume
+    semantics live in ``stage_progress``: it MUST survive reactivate
+    because that is the field the worker reads to skip already-done
+    pipeline stages on retry.
+    """
+
+    async def test_failed_to_queued_clears_run_attempt_state(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: MaterialNode,
+    ) -> None:
+        """status, error_message, started_at, completed_at, arq_job_id reset."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        await repo.set_arq_job_id(job.id, "arq:old:xyz")
+        await repo.update_status(job.id, "active")
+        await repo.update_status(job.id, "failed", error_message="boom")
+
+        # Sanity: pre-state is failed with all the run-attempt fields set
+        before = await repo.get_by_id(job.id)
+        assert before is not None
+        assert before.status == "failed"
+        assert before.error_message == "boom"
+        assert before.started_at is not None
+        assert before.completed_at is not None
+        assert before.arq_job_id == "arq:old:xyz"
+
+        reactivated = await repo.reactivate(job.id)
+
+        assert reactivated.status == "queued"
+        assert reactivated.error_message is None
+        assert reactivated.started_at is None
+        assert reactivated.completed_at is None
+        # New ARQ job_id is the caller's responsibility — reactivate clears
+        # the old one so a stale value can't leak into the next attempt.
+        assert reactivated.arq_job_id is None
+
+    async def test_preserves_stage_progress_and_queued_at(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: MaterialNode,
+    ) -> None:
+        """``stage_progress`` + ``queued_at`` survive reactivate.
+
+        Worker resumes from KD4a checkpoint, so dropping ``stage_progress``
+        would re-do already-completed pipeline stages.
+        """
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        # Simulate worker writing a checkpoint mid-flight
+        progress = {"completed_segments": ["s1"], "next_offset": 4096}
+        job.stage_progress = progress
+        await db_session.flush()
+        original_queued_at = job.queued_at
+
+        await repo.update_status(job.id, "active")
+        await repo.update_status(job.id, "failed")
+
+        reactivated = await repo.reactivate(job.id)
+
+        # The whole point of reactivate (vs creating a new Job): resume
+        assert reactivated.stage_progress == progress
+        # First-queued metadata is more meaningful than per-attempt time
+        assert reactivated.queued_at == original_queued_at
+
+    async def test_missing_job_raises_value_error(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Non-existent job_id → ValueError (API maps to 404)."""
+        repo = JobRepository(db_session)
+        with pytest.raises(ValueError, match="not found"):
+            await repo.reactivate(uuid.uuid4())
+
+    @pytest.mark.parametrize("blocking_status", ["queued", "active", "complete"])
+    async def test_rejects_non_failed_states(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: MaterialNode,
+        blocking_status: str,
+    ) -> None:
+        """Only ``failed`` reactivates — every other state is a 409.
+
+        ``cancelled`` is a deliberate omission: rerunning the worker for
+        a cancelled Job would defeat the cancel signal.
+        """
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        if blocking_status == "active":
+            await repo.update_status(job.id, "active")
+        elif blocking_status == "complete":
+            await repo.update_status(job.id, "active")
+            await repo.update_status(job.id, "complete")
+        # else: blocking_status == "queued" → no transitions needed
+
+        with pytest.raises(ValueError, match="Cannot reactivate Job"):
+            await repo.reactivate(job.id)
+
+    async def test_rejects_cancelled(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: MaterialNode,
+    ) -> None:
+        """Reactivating a cancelled Job would defeat the cancel signal."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        await repo.update_status(job.id, "cancelled")
+        with pytest.raises(ValueError, match="Cannot reactivate Job"):
+            await repo.reactivate(job.id)
+
+    async def test_rejects_soft_deleted(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: MaterialNode,
+    ) -> None:
+        """Soft-deleted Job → ValueError even if status would otherwise allow.
+
+        The check fires before the status check; reactivating a
+        soft-deleted row would also collide with the 0.1
+        ``block_update_on_soft_deleted`` trigger when the worker
+        attempts its first ``update_status``.
+        """
+        from datetime import UTC, datetime
+
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        await repo.update_status(job.id, "active")
+        await repo.update_status(job.id, "failed")
+        # Soft-delete via direct attribute write (cascade service is 0.1
+        # scope; here we just need the deleted_at to be set).
+        job.deleted_at = datetime(2026, 1, 1, tzinfo=UTC)
+        await db_session.flush()
+
+        with pytest.raises(ValueError, match="soft-deleted"):
+            await repo.reactivate(job.id)

@@ -771,3 +771,44 @@ class TestNextSiblingOrder:
         await repo._next_sibling_order(None)
 
         session.execute.assert_awaited_once()
+
+
+class TestGetDescendantIds:
+    """Recursive CTE behavior + optional tenant scoping."""
+
+    async def test_default_no_tenant_filter_in_compiled_sql(self) -> None:
+        """Without ``tenant_id``, neither base nor recursion filters by tenant."""
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[])
+        result = MagicMock()
+        result.scalars = MagicMock(return_value=scalars)
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+
+        repo = MaterialNodeRepository(session)
+        await repo.get_descendant_ids(uuid.uuid4())
+
+        stmt = session.execute.call_args[0][0]
+        sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "tenant_id" not in sql
+
+    async def test_tenant_id_applied_to_base_and_recursion(self) -> None:
+        """With ``tenant_id``, the filter appears TWICE — base + recursion."""
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[])
+        result = MagicMock()
+        result.scalars = MagicMock(return_value=scalars)
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+
+        repo = MaterialNodeRepository(session)
+        tenant_id = uuid.uuid4()
+        await repo.get_descendant_ids(uuid.uuid4(), tenant_id=tenant_id)
+
+        stmt = session.execute.call_args[0][0]
+        sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        # Once in the recursive CTE base anchor, once in the recursive
+        # JOIN — defense-in-depth depends on BOTH being present.
+        # (literal_binds strips dashes from UUIDs; match by column name
+        # to stay stable across formatting variants.)
+        assert sql.count("material_nodes.tenant_id =") == 2

@@ -26,6 +26,7 @@ from course_supporter.models.webhook import (
     WebhookMatchedPayload,
     WebhookReviewedPayload,
 )
+from course_supporter.service_logging import get_current_job_id
 from course_supporter.storage.orm import ExternalServiceCall
 
 if TYPE_CHECKING:
@@ -90,7 +91,6 @@ async def deliver_webhook(
     *,
     url: str,
     payload: WebhookMatchedPayload | WebhookReviewedPayload,
-    tenant_id: uuid.UUID,
     session: AsyncSession,
 ) -> bool:
     """Deliver a webhook payload with retry and audit logging.
@@ -98,7 +98,6 @@ async def deliver_webhook(
     Args:
         url: Target webhook URL.
         payload: Pydantic model to POST as JSON.
-        tenant_id: For audit trail.
         session: DB session for ExternalServiceCall record.
 
     Returns:
@@ -118,7 +117,6 @@ async def deliver_webhook(
         log.warning("webhook_ssrf_blocked")
         _record_attempt(
             session,
-            tenant_id=tenant_id,
             event=payload.event,
             latency_ms=0,
             success=False,
@@ -150,7 +148,6 @@ async def deliver_webhook(
                     )
                     _record_attempt(
                         session,
-                        tenant_id=tenant_id,
                         event=payload.event,
                         latency_ms=latency_ms,
                         success=True,
@@ -205,7 +202,6 @@ async def deliver_webhook(
     )
     _record_attempt(
         session,
-        tenant_id=tenant_id,
         event=payload.event,
         latency_ms=latency_ms,
         success=False,
@@ -217,7 +213,6 @@ async def deliver_webhook(
 def _record_attempt(
     session: AsyncSession,
     *,
-    tenant_id: uuid.UUID,
     event: str,
     latency_ms: int,
     success: bool,
@@ -226,7 +221,7 @@ def _record_attempt(
     """Create an ExternalServiceCall audit record for a webhook attempt."""
     session.add(
         ExternalServiceCall(
-            tenant_id=tenant_id,
+            job_id=get_current_job_id(),
             action=f"webhook_{event}",
             strategy="exponential_backoff",
             provider="httpx",

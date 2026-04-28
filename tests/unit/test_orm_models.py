@@ -45,10 +45,9 @@ class TestORMModels:
         assert "material_nodes.id" in fks
 
     def test_external_service_call_fks(self) -> None:
-        """ExternalServiceCall has FK to tenants and jobs."""
+        """ExternalServiceCall has only the KD5 mandatory FK to jobs."""
         fks = {fk.target_fullname for fk in ExternalServiceCall.__table__.foreign_keys}
-        assert "tenants.id" in fks
-        assert "jobs.id" in fks
+        assert fks == {"jobs.id"}
 
     def test_material_macro_section_fks(self) -> None:
         """MaterialMacroSection has FKs to entry and LLM call."""

@@ -1,8 +1,16 @@
-"""Tests for tenant_id on existing tables (material_nodes, external_service_calls)."""
+"""Tests for tenant_id on existing tables.
+
+ExternalServiceCall coverage moved to integration suite — task 0.4
+drops ``ExternalServiceCall.tenant_id`` per KD5 (tenant attribution
+flows through ``Job`` JOIN). Schema-shape tests for the KD5 ESC live
+in ``tests/integration/test_external_service_call_db.py`` (added in
+0.4 commit (g)) since they assert against ``pg_constraint`` /
+``pg_indexes`` rather than the ORM mapping alone.
+"""
 
 from __future__ import annotations
 
-from course_supporter.storage.orm import ExternalServiceCall, MaterialNode, _uuid7
+from course_supporter.storage.orm import MaterialNode, _uuid7
 
 
 class TestMaterialNodeTenant:
@@ -34,65 +42,3 @@ class TestMaterialNodeTenant:
         table = MaterialNode.__table__
         col = table.c.tenant_id
         assert col.index is True
-
-
-class TestExternalServiceCallTenant:
-    """Tests for tenant_id on ExternalServiceCall model."""
-
-    def test_has_tenant_id_column(self) -> None:
-        """ExternalServiceCall table has nullable tenant_id FK column."""
-        table = ExternalServiceCall.__table__
-        col = table.c.tenant_id
-        assert col is not None
-        assert col.nullable is True
-
-    def test_with_tenant(self) -> None:
-        """ExternalServiceCall accepts tenant_id at construction."""
-        tid = _uuid7()
-        call = ExternalServiceCall(
-            tenant_id=tid, provider="gemini", model_id="gemini-2.0-flash"
-        )
-        assert call.tenant_id == tid
-
-    def test_tenant_fk_set_null(self) -> None:
-        """ExternalServiceCall.tenant_id FK has SET NULL ondelete (audit preserved)."""
-        table = ExternalServiceCall.__table__
-        fks = [fk for fk in table.foreign_keys if fk.column.table.name == "tenants"]
-        assert len(fks) == 1
-        assert fks[0].ondelete == "SET NULL"
-
-    def test_tenant_id_indexed(self) -> None:
-        """ExternalServiceCall.tenant_id has an index."""
-        table = ExternalServiceCall.__table__
-        col = table.c.tenant_id
-        assert col.index is True
-
-    def test_has_job_id_column(self) -> None:
-        """ExternalServiceCall has nullable job_id FK."""
-        table = ExternalServiceCall.__table__
-        col = table.c.job_id
-        assert col is not None
-        assert col.nullable is True
-
-    def test_has_unit_type_column(self) -> None:
-        """ExternalServiceCall has unit_type column."""
-        table = ExternalServiceCall.__table__
-        col = table.c.unit_type
-        assert col is not None
-        assert col.nullable is True
-
-    def test_has_prompt_ref_column(self) -> None:
-        """ExternalServiceCall has prompt_ref (renamed from prompt_version)."""
-        table = ExternalServiceCall.__table__
-        columns = {c.name for c in table.columns}
-        assert "prompt_ref" in columns
-        assert "prompt_version" not in columns
-
-    def test_has_unit_in_out_columns(self) -> None:
-        """ExternalServiceCall has unit_in/unit_out (renamed from tokens_*)."""
-        table = ExternalServiceCall.__table__
-        columns = {c.name for c in table.columns}
-        assert "unit_in" in columns
-        assert "unit_out" in columns
-        assert "tokens_in" not in columns
-        assert "tokens_out" not in columns

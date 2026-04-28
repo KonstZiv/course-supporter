@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
+from typing import NamedTuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import InstrumentedAttribute
 
-from course_supporter.models.reports import CostReport, CostSummary, GroupedCost
-from course_supporter.storage.orm import ExternalServiceCall, SoftDeleteMixin
+from course_supporter.storage.orm import (
+    ExternalServiceCall,
+    Job,
+    MaterialNode,
+    SoftDeleteMixin,
+)
 
 
 class SoftDeleteRepository[ModelT: SoftDeleteMixin]:
@@ -80,133 +85,388 @@ class SoftDeleteRepository[ModelT: SoftDeleteMixin]:
         return entity
 
 
-class ExternalServiceCallRepository:
-    """Repository for external service call analytics and cost reporting.
+class ByCourseRow(NamedTuple):
+    """One course row in /cost/summary by_course breakdown."""
 
-    Scoped by tenant_id: includes records with matching tenant_id
-    AND records with tenant_id=NULL (legacy/pre-tracking records).
-    When tenant_id is None, returns all records.
+    course_node_id: uuid.UUID
+    course_title: str
+    cost_usd: float
+
+
+class ByProviderRow(NamedTuple):
+    """One (provider, model_id) row in /cost/summary by_provider breakdown."""
+
+    provider: str
+    model_id: str
+    cost_usd: float
+
+
+class ByNodeRow(NamedTuple):
+    """One node row in /cost/course/{id} by_node breakdown."""
+
+    course_node_id: uuid.UUID
+    title: str
+    cost_usd: float
+
+
+class ByActionRow(NamedTuple):
+    """One action row in /cost/course/{id} by_action breakdown."""
+
+    action: str
+    cost_usd: float
+
+
+def _to_exclusive(to_date: date) -> date:
+    """Convert inclusive end-date to exclusive (``< to + 1 day``).
+
+    The endpoint contract is inclusive on both bounds (``from..to`` covers
+    all of ``to``-day). Implementing as ``created_at >= :from AND
+    created_at < :to_exclusive`` cleanly handles the time component of
+    ``timestamptz`` without timezone gymnastics.
+    """
+    return to_date + timedelta(days=1)
+
+
+class ExternalServiceCallRepository:
+    """Repository for ExternalServiceCall queries (KD5).
+
+    Cost-reporting query methods that materialise into the Pydantic
+    response models declared in :mod:`course_supporter.models.cost`.
+    All methods are read-only aggregations; ESC writes flow through
+    :func:`course_supporter.service_logging._persist` (single write
+    surface) plus three direct in-transaction writers in
+    ``api/tasks.py`` that need ``esc.id`` for FK back-pointers.
+
+    Common SQL invariants across the breakdown methods:
+
+    * Tenant scope via ``JOIN jobs ON ESC.job_id = jobs.id WHERE
+      jobs.tenant_id = :tenant_id`` — KD5 dropped ``ESC.tenant_id``,
+      attribution flows through Job.
+    * Date range ``ESC.created_at >= :from AND ESC.created_at <
+      :to_exclusive`` where ``:to_exclusive = :to + 1 day`` (inclusive
+      end-of-day).
+    * ``WHERE cost_usd IS NOT NULL`` — NULL means *unknown cost* (failed
+      LLM call before billing computed), not zero. Excluded from sums.
+    * ``ORDER BY SUM(cost_usd) DESC`` on every breakdown — cost-priority
+      first, predictable for UI.
+    * Pagination (``LIMIT/OFFSET``) only on aggregated breakdowns;
+      scalar totals are not paginated.
     """
 
-    def __init__(
-        self, session: AsyncSession, tenant_id: uuid.UUID | None = None
-    ) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._tenant_id = tenant_id
 
-    async def get_summary(self) -> CostSummary:
-        """Get aggregate summary of LLM calls."""
-        stmt = select(
-            func.count().label("total_calls"),
-            func.count()
-            .filter(ExternalServiceCall.success.is_(True))
-            .label("successful_calls"),
-            func.count()
-            .filter(ExternalServiceCall.success.is_(False))
-            .label("failed_calls"),
-            func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                "total_cost_usd"
-            ),
-            func.coalesce(func.sum(ExternalServiceCall.unit_in), 0).label(
-                "total_units_in"
-            ),
-            func.coalesce(func.sum(ExternalServiceCall.unit_out), 0).label(
-                "total_units_out"
-            ),
-            func.coalesce(func.avg(ExternalServiceCall.latency_ms), 0.0).label(
-                "avg_latency_ms"
-            ),
-        ).select_from(ExternalServiceCall)
-        if self._tenant_id is not None:
-            stmt = stmt.where(
-                or_(
-                    ExternalServiceCall.tenant_id == self._tenant_id,
-                    ExternalServiceCall.tenant_id.is_(None),
-                )
-            )
-        result = await self._session.execute(stmt)
-        row = result.one()
-        return CostSummary(
-            total_calls=row.total_calls,
-            successful_calls=row.successful_calls,
-            failed_calls=row.failed_calls,
-            total_cost_usd=float(row.total_cost_usd),
-            total_units_in=int(row.total_units_in),
-            total_units_out=int(row.total_units_out),
-            avg_latency_ms=float(row.avg_latency_ms),
-        )
-
-    async def get_full_report(self) -> CostReport:
-        """Get complete cost report with summary and all breakdowns."""
-        return CostReport(
-            summary=await self.get_summary(),
-            by_action=await self.get_by_action(),
-            by_provider=await self.get_by_provider(),
-            by_model=await self.get_by_model(),
-        )
-
-    async def get_by_action(self) -> list[GroupedCost]:
-        """Get cost breakdown grouped by action."""
-        return await self._grouped_query(ExternalServiceCall.action)
-
-    async def get_by_provider(self) -> list[GroupedCost]:
-        """Get cost breakdown grouped by provider."""
-        return await self._grouped_query(ExternalServiceCall.provider)
-
-    async def get_by_model(self) -> list[GroupedCost]:
-        """Get cost breakdown grouped by model_id."""
-        return await self._grouped_query(ExternalServiceCall.model_id)
-
-    async def _grouped_query(
+    async def get_total_for_period(
         self,
-        group_column: InstrumentedAttribute[str],
-    ) -> list[GroupedCost]:
-        """Run a GROUP BY query on the given column."""
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+    ) -> float:
+        """Sum of attributed and unattributed ESC costs in the period.
+
+        Includes Jobs with ``course_node_id IS NULL`` (orphan jobs).
+        Returns ``0.0`` if no rows match.
+        """
+        stmt = (
+            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
+        return float(result.scalar_one() or 0.0)
+
+    async def get_total_for_subtree(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        course_node_ids: Sequence[uuid.UUID],
+        from_date: date,
+        to_date: date,
+    ) -> float:
+        """Sum of ESC costs for Jobs whose ``course_node_id`` is in subtree.
+
+        Per-course total for ``/cost/course/{id}`` — distinct from
+        :meth:`get_total_for_period` (tenant-wide). Empty
+        ``course_node_ids`` short-circuits to ``0.0`` (no SQL emitted).
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        """
+        if not course_node_ids:
+            return 0.0
+        stmt = (
+            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.course_node_id.in_(course_node_ids),
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
+        return float(result.scalar_one() or 0.0)
+
+    async def get_unattributed_for_period(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+    ) -> float:
+        """Sum of ESC costs for Jobs with ``course_node_id IS NULL``.
+
+        Invariant on the route layer:
+        ``total == sum(by_course.cost_usd) + unattributed``.
+        Returns ``0.0`` if no rows match.
+        """
+        stmt = (
+            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.course_node_id.is_(None),
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
+        return float(result.scalar_one() or 0.0)
+
+    async def get_by_course(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ByCourseRow]:
+        """Cost grouped by ``Job.course_node_id`` (Variant D — direct).
+
+        Groups directly by whichever node the Job points at; if Jobs
+        target sub-course nodes (e.g. lessons), they appear as their
+        own rows. Course-root aggregation is the responsibility of the
+        UI client. See POST-MR-NOTES forward-looking note for the
+        future Phase 1+ walk-up CTE option.
+
+        Excludes orphan Jobs (``course_node_id IS NULL``) — those go
+        into ``unattributed_cost_usd`` via
+        :meth:`get_unattributed_for_period`.
+        """
         stmt = (
             select(
-                group_column.label("group"),
-                func.count().label("calls"),
-                func.count()
-                .filter(ExternalServiceCall.success.is_(True))
-                .label("successful_calls"),
-                func.count()
-                .filter(ExternalServiceCall.success.is_(False))
-                .label("failed_calls"),
+                MaterialNode.id.label("course_node_id"),
+                MaterialNode.title.label("course_title"),
                 func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
                     "cost_usd"
                 ),
-                func.coalesce(func.sum(ExternalServiceCall.unit_in), 0).label(
-                    "units_in"
-                ),
-                func.coalesce(func.sum(ExternalServiceCall.unit_out), 0).label(
-                    "units_out"
-                ),
-                func.coalesce(func.avg(ExternalServiceCall.latency_ms), 0.0).label(
-                    "avg_latency_ms"
+            )
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(MaterialNode.id, MaterialNode.title)
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            ByCourseRow(
+                course_node_id=row.course_node_id,
+                course_title=row.course_title,
+                cost_usd=float(row.cost_usd),
+            )
+            for row in result.all()
+        ]
+
+    async def get_by_provider(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ByProviderRow]:
+        """Cost grouped by ``(ESC.provider, ESC.model_id)``.
+
+        Includes Jobs with ``course_node_id IS NULL`` — provider-level
+        breakdown is independent of course attribution.
+        """
+        stmt = (
+            select(
+                ExternalServiceCall.provider.label("provider"),
+                ExternalServiceCall.model_id.label("model_id"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
                 ),
             )
             .select_from(ExternalServiceCall)
-            .group_by(group_column)
-            .order_by(func.count().desc())
-        )
-        if self._tenant_id is not None:
-            stmt = stmt.where(
-                or_(
-                    ExternalServiceCall.tenant_id == self._tenant_id,
-                    ExternalServiceCall.tenant_id.is_(None),
-                )
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
             )
+            .group_by(ExternalServiceCall.provider, ExternalServiceCall.model_id)
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self._session.execute(stmt)
         return [
-            GroupedCost(
-                group=row.group,
-                calls=row.calls,
-                successful_calls=row.successful_calls,
-                failed_calls=row.failed_calls,
+            ByProviderRow(
+                provider=row.provider,
+                model_id=row.model_id,
                 cost_usd=float(row.cost_usd),
-                units_in=int(row.units_in),
-                units_out=int(row.units_out),
-                avg_latency_ms=float(row.avg_latency_ms),
             )
+            for row in result.all()
+        ]
+
+    async def get_by_node(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        course_node_ids: Sequence[uuid.UUID],
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ByNodeRow]:
+        """Cost grouped by node within a pre-resolved subtree.
+
+        ``course_node_ids`` is the descendant set of the requested course
+        root, resolved on the route layer via
+        :meth:`MaterialNodeRepository.get_descendant_ids`. Empty list →
+        empty result (no SQL).
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        """
+        if not course_node_ids:
+            return []
+        stmt = (
+            select(
+                MaterialNode.id.label("course_node_id"),
+                MaterialNode.title.label("title"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
+                ),
+            )
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.course_node_id.in_(course_node_ids),
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(MaterialNode.id, MaterialNode.title)
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            ByNodeRow(
+                course_node_id=row.course_node_id,
+                title=row.title,
+                cost_usd=float(row.cost_usd),
+            )
+            for row in result.all()
+        ]
+
+    async def get_by_action(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        course_node_ids: Sequence[uuid.UUID],
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ByActionRow]:
+        """Cost grouped by ``ESC.action`` within a pre-resolved subtree.
+
+        Same subtree contract as :meth:`get_by_node`. Empty list →
+        empty result.
+
+        Performance ceiling: ``course_node_ids`` is consumed as
+        ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
+        start to degrade with IN-lists ≳1000 elements (parse cost,
+        planner exploration time). Decision lever: if a tenant ships
+        a course with ≥500 descendant nodes, run ``EXPLAIN ANALYZE``
+        on ``/cost/course/{root}``; if a sequential scan is chosen or
+        IN-list parse latency dominates, inline the recursive
+        descendant CTE into the cost query (single round-trip,
+        eliminates IN-list size as a factor). Producer side note in
+        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        """
+        if not course_node_ids:
+            return []
+        stmt = (
+            select(
+                ExternalServiceCall.action.label("action"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
+                ),
+            )
+            .select_from(ExternalServiceCall)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.course_node_id.in_(course_node_ids),
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(ExternalServiceCall.action)
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            ByActionRow(action=row.action, cost_usd=float(row.cost_usd))
             for row in result.all()
         ]

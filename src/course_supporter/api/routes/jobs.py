@@ -28,11 +28,18 @@ PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 
 
 class _ReenqueueDispatch(NamedTuple):
-    """ARQ task call shape resolved from a failed Job's state."""
+    """ARQ task call shape resolved from a failed Job's state.
+
+    ``args`` are positional task args passed to the ARQ function;
+    ``task_kwargs`` are keyword args (used by tasks with kw-only
+    parameters like :func:`s3_cleanup_task`); ``queue_name`` selects
+    a non-default ARQ queue (e.g. ``"homework"``).
+    """
 
     arq_function: str
     args: list[Any]
     queue_name: str | None = None
+    task_kwargs: dict[str, Any] | None = None
 
 
 def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
@@ -110,6 +117,17 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         p["phase"],
                     ],
                 )
+            case "s3_cleanup":
+                # KD13 s3_cleanup_task uses kw-only args; carried via
+                # task_kwargs rather than positional ``args``.
+                return _ReenqueueDispatch(
+                    arq_function="s3_cleanup_task",
+                    args=[],
+                    task_kwargs={
+                        "file_keys": p["file_keys"],
+                        "job_id": jid,
+                    },
+                )
             case _:
                 raise HTTPException(
                     status_code=422,
@@ -118,7 +136,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         f"{job.job_type!r}. Supported types: ingest, "
                         f"generate_structure, reconcile_preview, generate, "
                         f"reconcile, refine, homework, methodist_bottom_up, "
-                        f"methodist_top_down."
+                        f"methodist_top_down, s3_cleanup."
                     ),
                 )
     except KeyError as exc:
@@ -201,9 +219,13 @@ async def reactivate_job(
     enqueue_kwargs: dict[str, Any] = {}
     if dispatch.queue_name is not None:
         enqueue_kwargs["_queue_name"] = dispatch.queue_name
+    task_kwargs = dispatch.task_kwargs or {}
 
     arq_job = await arq.enqueue_job(
-        dispatch.arq_function, *dispatch.args, **enqueue_kwargs
+        dispatch.arq_function,
+        *dispatch.args,
+        **task_kwargs,
+        **enqueue_kwargs,
     )
     if arq_job is not None:
         await repo.set_arq_job_id(job.id, arq_job.job_id)

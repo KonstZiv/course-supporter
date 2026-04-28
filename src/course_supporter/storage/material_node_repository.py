@@ -193,6 +193,24 @@ class MaterialNodeRepository:
 
     # ── Tree operations ──
 
+    async def get_descendant_ids(self, root_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return all node IDs in the subtree rooted at ``root_id`` (inclusive).
+
+        Single recursive CTE; no ORM hydration. Use for set-based filters
+        (``WHERE Job.course_node_id IN (...)``) — cheaper than
+        :meth:`get_subtree` when only IDs are needed (e.g., cost-report
+        subtree drill-down).
+        """
+        base = select(MaterialNode.id).where(MaterialNode.id == root_id)
+        cte = base.cte(name="descendant_ids", recursive=True)
+        cte = cte.union_all(
+            select(MaterialNode.id).join(
+                cte, MaterialNode.parent_materialnode_id == cte.c.id
+            )
+        )
+        result = await self._session.execute(select(cte.c.id))
+        return list(result.scalars().all())
+
     async def get_subtree(
         self,
         root_id: uuid.UUID,

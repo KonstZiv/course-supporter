@@ -129,6 +129,53 @@ class JobRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def reactivate(self, job_id: uuid.UUID) -> Job:
+        """Re-queue a failed Job for retry (vision §3 KD13).
+
+        Allowed only from ``status='failed'`` on a non-soft-deleted Job.
+        Other states (including soft-deleted) raise :class:`ValueError`;
+        callers map to 4xx (404 for missing, 409 for wrong state).
+
+        DB-side transition only — caller is responsible for enqueuing
+        the new ARQ task and calling :meth:`set_arq_job_id` with the
+        new id, all within the same outer transaction. Mirrors the
+        :meth:`create` / :meth:`set_arq_job_id` split used by
+        ``enqueue_ingestion`` and friends.
+
+        Cleared on transition: ``status`` (→ ``'queued'``),
+        ``error_message``, ``started_at``, ``completed_at``,
+        ``arq_job_id`` (caller will set the new one).
+
+        Preserved on transition:
+
+        * ``queued_at`` — original first-queued time is more meaningful
+          as Job metadata; per-attempt timing lives in
+          ``ExternalServiceCall`` per KD5/KD13.
+        * ``stage_progress`` — worker resumes from KD4a checkpoint.
+          This preservation is the design intent of ``reactivate``
+          (vs creating a new Job from scratch).
+        """
+        job = await self.get_by_id(job_id)
+        if job is None:
+            msg = f"Job {job_id} not found"
+            raise ValueError(msg)
+        if job.deleted_at is not None:
+            msg = f"Cannot reactivate soft-deleted Job {job_id}"
+            raise ValueError(msg)
+        if job.status != "failed":
+            msg = (
+                f"Cannot reactivate Job {job_id} in state {job.status!r}; "
+                f"only 'failed' Jobs can be reactivated."
+            )
+            raise ValueError(msg)
+        job.status = "queued"
+        job.error_message = None
+        job.started_at = None
+        job.completed_at = None
+        job.arq_job_id = None
+        await self._session.flush()
+        return job
+
     async def store_result(
         self, job_id: uuid.UUID, result_data: dict[str, Any]
     ) -> None:

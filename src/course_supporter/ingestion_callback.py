@@ -156,6 +156,7 @@ class IngestionCallback:
 
         from course_supporter.agents.outline import OutlineAgent
         from course_supporter.models.source import SourceDocument
+        from course_supporter.service_logging import get_current_job_id
         from course_supporter.storage.material_entry_repository import (
             MaterialEntryRepository,
         )
@@ -176,6 +177,7 @@ class IngestionCallback:
 
             session.add(
                 ExternalServiceCall(
+                    job_id=get_current_job_id(),
                     action="material_outline",
                     provider=result.response.provider,
                     model_id=result.response.model_id,

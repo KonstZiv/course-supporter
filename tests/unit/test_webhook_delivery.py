@@ -190,7 +190,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="https://example.com/hook",
             payload=payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 
@@ -217,7 +216,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="http://169.254.169.254/metadata",
             payload=payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 
@@ -259,7 +257,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="https://example.com/hook",
             payload=payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 
@@ -292,7 +289,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="https://example.com/hook",
             payload=payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 
@@ -324,7 +320,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="https://example.com/hook",
             payload=payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 
@@ -367,7 +362,6 @@ class TestDeliverWebhook:
         result = await deliver_webhook(
             url="https://example.com/hook",
             payload=reviewed_payload,
-            tenant_id=uuid.uuid4(),
             session=mock_session,
         )
 

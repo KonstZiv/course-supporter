@@ -22,7 +22,11 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.models.source import SourceType
 from course_supporter.models.step import ChildSnapshotContext, NodeSummary
-from course_supporter.service_logging import set_tenant_from_job
+from course_supporter.service_logging import (
+    get_current_job_id,
+    set_job_from_arq,
+    set_tenant_from_job,
+)
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -147,6 +151,7 @@ async def arq_ingest_material(
     )
 
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
     log.info("ingestion_started")
 
     heavy = create_heavy_steps(router=router)
@@ -364,6 +369,7 @@ async def arq_generate_structure(
     log.info("generate_structure_started")
 
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
@@ -432,11 +438,12 @@ async def arq_generate_structure(
                 outline_context=outline_context,
             )
 
-            # Persist LLM metadata as ExternalServiceCall
-            from course_supporter.service_logging import get_current_tenant_id
-
+            # Persist LLM metadata as ExternalServiceCall.
+            # TODO Phase 1+: unify with service_logging._persist after extending
+            # its signature for prompt_ref + returning the ESC entity for
+            # in-session FK use (snap_repo.create needs esc.id within this txn).
             esc = ExternalServiceCall(
-                tenant_id=get_current_tenant_id(),
+                job_id=jid,
                 action="course_structuring",
                 strategy=mode,
                 provider=gen_result.response.provider,
@@ -740,15 +747,18 @@ async def _persist_step_result(
     Returns:
         Created snapshot ID.
     """
-    from course_supporter.service_logging import get_current_tenant_id
     from course_supporter.storage.orm import ExternalServiceCall
     from course_supporter.storage.structure_node_repository import (
         StructureNodeRepository,
     )
     from course_supporter.structure_conversion import convert_to_structure_nodes
 
+    # TODO Phase 1+: unify with service_logging._persist after extending its
+    # signature for prompt_ref + returning the ESC entity for in-session FK
+    # use (snap_repo.create needs esc.id within this txn). Helper has no jid
+    # in scope — read from ContextVar set by the calling ARQ task.
     esc = ExternalServiceCall(
-        tenant_id=get_current_tenant_id(),
+        job_id=get_current_job_id(),
         action="course_structuring",
         strategy=mode,
         provider=step_output.response.provider,
@@ -840,6 +850,7 @@ async def arq_execute_step(
         step_type=step_type,
     )
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
     log.info("execute_step_started")
 
     async with session_factory() as session:
@@ -999,6 +1010,7 @@ async def arq_reconcile_preview(
 
     log = structlog.get_logger().bind(job_id=job_id, node_id=node_id)
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
     log.info("reconcile_preview_started")
 
     async with session_factory() as session:
@@ -1122,6 +1134,7 @@ async def arq_execute_methodist_step(
         phase=phase,
     )
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
     log.info("methodist_step_started")
 
     async with session_factory() as session:
@@ -1252,12 +1265,13 @@ async def arq_execute_methodist_step(
                 material_roles=roles_ctx,
             )
 
-            # 7. Persist output on editable node
-            from course_supporter.service_logging import get_current_tenant_id
+            # 7. Persist output on editable node.
+            # TODO Phase 1+: unify with service_logging._persist after extending
+            # its signature for prompt_ref + returning the ESC entity for
+            # in-session FK use (target.methodist_call_id = esc.id below).
             from course_supporter.storage.orm import ExternalServiceCall
 
             esc = ExternalServiceCall(
-                tenant_id=get_current_tenant_id(),
                 job_id=jid,
                 action="methodist",
                 strategy="default",
@@ -1355,6 +1369,7 @@ async def arq_process_homework(
         submission_id=submission_id,
     )
     await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
     log.info("homework_processing_started")
 
     async with session_factory() as session:
@@ -1524,7 +1539,6 @@ async def arq_process_homework(
                     await deliver_webhook(
                         url=webhook_url,
                         payload=matched_payload,
-                        tenant_id=submission.tenant_id,
                         session=session,
                     )
                     await session.commit()
@@ -1597,7 +1611,6 @@ async def arq_process_homework(
                     delivered = await deliver_webhook(
                         url=webhook_url,
                         payload=reviewed_payload,
-                        tenant_id=submission.tenant_id,
                         session=session,
                     )
                     if delivered:

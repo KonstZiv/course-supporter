@@ -1128,11 +1128,13 @@ class ExternalServiceCall(Base):
     }
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("tenants.id", ondelete="SET NULL"), index=True
-    )
-    job_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="NO ACTION"),
+        index=True,
+        comment="KD5 — only mandatory FK. Tenant + course_node + any other "
+        "context resolves through Job and its input_params. NO ACTION "
+        "(default) protects against accidental hard-delete of Jobs that "
+        "have attached ESCs; soft-delete preserves the FK.",
     )
     action: Mapped[str] = mapped_column(String(100), default="")
     strategy: Mapped[str] = mapped_column(String(50), default="default")
@@ -1151,8 +1153,7 @@ class ExternalServiceCall(Base):
     )
 
     # Relationships
-    tenant: Mapped["Tenant | None"] = relationship()
-    job: Mapped["Job | None"] = relationship()
+    job: Mapped["Job"] = relationship()
 
 
 # ──────────────────────────────────────────────

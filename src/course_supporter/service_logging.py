@@ -34,10 +34,13 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# ── Context variable for per-task tenant isolation ──
+# ── Context variables for per-task tenant + job isolation ──
 
 _current_tenant_id: ContextVar[uuid.UUID | None] = ContextVar(
     "current_tenant_id", default=None
+)
+_current_job_id: ContextVar[uuid.UUID | None] = ContextVar(
+    "current_job_id", default=None
 )
 
 
@@ -51,9 +54,24 @@ def tenant_scope(tenant_id: uuid.UUID) -> Iterator[None]:
         _current_tenant_id.reset(token)
 
 
+@contextmanager
+def job_scope(job_id: uuid.UUID) -> Iterator[None]:
+    """Set job_id for the duration of an ARQ task (test/contract use)."""
+    token = _current_job_id.set(job_id)
+    try:
+        yield
+    finally:
+        _current_job_id.reset(token)
+
+
 def get_current_tenant_id() -> uuid.UUID | None:
     """Read the current tenant_id from context."""
     return _current_tenant_id.get()
+
+
+def get_current_job_id() -> uuid.UUID | None:
+    """Read the current job_id from context."""
+    return _current_job_id.get()
 
 
 async def set_tenant_from_job(
@@ -90,6 +108,17 @@ async def set_tenant_from_job(
         )
 
 
+def set_job_from_arq(job_id: uuid.UUID) -> None:
+    """Pure setter — job_id is known at ARQ task entry, no DB lookup needed.
+
+    Mirrors ``set_tenant_from_job`` contract but skips DB IO; the caller
+    already has the validated UUID from the ARQ task signature. Always
+    overwrites — prevents leakage between sequential ARQ tasks reusing
+    the same worker.
+    """
+    _current_job_id.set(job_id)
+
+
 # ── Persist to DB ──
 
 
@@ -111,11 +140,27 @@ async def _persist(
     """Write a single ExternalServiceCall row.
 
     DB errors are swallowed — call flow is never interrupted.
+
+    Two-layer guard for ``job_id`` (KD5 — only mandatory FK):
+    1. Read ``job_id`` from contextvar (set at ARQ task entry).
+    2. If absent, log WARNING and skip the write — would otherwise
+       violate the post-0.4 ``NOT NULL`` constraint. Production runtime
+       is never blocked through a telemetry hole.
     """
     from course_supporter.storage.orm import ExternalServiceCall
 
+    job_id = get_current_job_id()
+    if job_id is None:
+        logger.warning(
+            "esc_write_skipped_no_job_id",
+            action=action,
+            provider=provider,
+            model_id=model_id,
+        )
+        return
+
     record = ExternalServiceCall(
-        tenant_id=get_current_tenant_id(),
+        job_id=job_id,
         action=action,
         strategy=strategy,
         provider=provider,
@@ -143,7 +188,7 @@ async def _persist(
         )
 
 
-# ── LLM callback (replaces llm/logging.py) ──
+# ── LLM callback ──
 
 
 def create_llm_log_callback(

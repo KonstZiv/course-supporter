@@ -16,9 +16,16 @@ Section format::
   at column 0 (a single ``##`` followed by whitespace and a token).
 * Recognised roles: ``system``, ``user``, ``assistant``
   (case-insensitive).
-* Unknown role headers and their content are silently dropped --
-  this leaves room for editorial sections like ``## Examples``
-  without breaking the parser.
+* Unknown role headers and their content are dropped, but the
+  parser emits a ``prompt_loader_unknown_role`` WARNING the first
+  time it sees a given ``(prompt_ref, role)`` pair so typos like
+  ``## Asssistant`` surface in observability instead of silently
+  swallowing the section. Editorial sections like ``## Examples``
+  produce one warning per process lifetime per file. The dedup
+  state lives in module-local ``_warned_unknown_roles``; in
+  multi-worker deployments (gunicorn with N workers) each worker
+  warns independently on the first hit, so up to N warnings per
+  editorial section per app instance is expected -- not a defect.
 
 Parsing and rendering are split deliberately:
 
@@ -41,12 +48,24 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import structlog
 from jinja2 import StrictUndefined, Template
 
 from course_supporter.llm.error_categories import InvalidPromptError
 
+logger = structlog.get_logger()
+
 _HEADER_PATTERN = re.compile(r"^##\s+(\S+)\s*$", re.MULTILINE)
 _RECOGNISED_ROLES: frozenset[str] = frozenset({"system", "user", "assistant"})
+
+# Dedup state for unknown-role warnings. Process-local set of
+# ``(prompt_ref, role)`` pairs that have already produced a WARNING.
+# Each Python process (e.g. each gunicorn worker) maintains its own
+# set, so a multi-worker deployment will emit up to N warnings per
+# editorial section -- acceptable observability cost vs. the typo-
+# detection benefit. Cleared on process restart, which is fine
+# because prompt files are static between deploys (KD16).
+_warned_unknown_roles: set[tuple[str, str]] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +162,25 @@ def load_prompt(
     )
 
 
+def _warn_unknown_role(prompt_ref: str, role: str) -> None:
+    """Emit a WARNING for an unrecognised role header (deduplicated).
+
+    Same ``(prompt_ref, role)`` pair only warns once per process to
+    keep editorial sections like ``## Examples`` from spamming logs
+    on every per-call ``load_prompt``.
+    """
+    key = (prompt_ref, role)
+    if key in _warned_unknown_roles:
+        return
+    _warned_unknown_roles.add(key)
+    logger.warning(
+        "prompt_loader_unknown_role",
+        prompt_ref=prompt_ref,
+        unknown_role=role,
+        recognised_roles=sorted(_RECOGNISED_ROLES),
+    )
+
+
 def _split_sections(prompt_ref: str, raw: str) -> dict[str, str]:
     """Split markdown into ``{role: body}`` for recognised roles.
 
@@ -167,6 +205,8 @@ def _split_sections(prompt_ref: str, raw: str) -> dict[str, str]:
         body = raw[body_start:body_end].strip()
         if role in _RECOGNISED_ROLES:
             sections[role] = body
+        else:
+            _warn_unknown_role(prompt_ref, role)
 
     if not sections:
         raise InvalidPromptError(

@@ -322,20 +322,30 @@ class StageRouter:
             raise
         finally:
             if self._session_factory is not None:
+                # ESC writes are telemetry; never let them mask a
+                # provider exception or interrupt the router's
+                # control flow. Mirrors the swallow doctrine inside
+                # ``_persist`` itself (SQLAlchemyError / OSError) but
+                # extends to any unexpected failure (logical bug,
+                # async-context violation, etc.) so the original LLM
+                # exception always wins propagation.
                 fallback_latency_ms = int((time.perf_counter() - start) * 1000)
-                await _persist(
-                    self._session_factory,
-                    action=stage_name,
-                    strategy="default",
-                    provider=entry.provider,
-                    model_id=entry.model,
-                    unit_type="tokens",
-                    unit_in=response.tokens_in if response else None,
-                    unit_out=response.tokens_out if response else None,
-                    latency_ms=(
-                        response.latency_ms if response else fallback_latency_ms
-                    ),
-                    cost_usd=response.cost_usd if response else None,
-                    success=response is not None,
-                    error_message=error_message,
-                )
+                try:
+                    await _persist(
+                        self._session_factory,
+                        action=stage_name,
+                        strategy="default",
+                        provider=entry.provider,
+                        model_id=entry.model,
+                        unit_type="tokens",
+                        unit_in=response.tokens_in if response else None,
+                        unit_out=response.tokens_out if response else None,
+                        latency_ms=(
+                            response.latency_ms if response else fallback_latency_ms
+                        ),
+                        cost_usd=response.cost_usd if response else None,
+                        success=response is not None,
+                        error_message=error_message,
+                    )
+                except Exception:
+                    logger.exception("stage_router_esc_persist_failed")

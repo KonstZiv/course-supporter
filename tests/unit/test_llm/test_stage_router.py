@@ -600,3 +600,52 @@ class TestStageNameUnknown:
 
         with pytest.raises(KeyError, match="Unknown stage"):
             await router.execute_for_stage("nope")
+
+
+class TestPersistFailureDoesNotMask:
+    """Commit (g) review fix: an exception inside ``_persist`` must
+    not mask the original LLM exception that triggered the
+    finally-block. Telemetry never interrupts control flow.
+
+    The proof setup wires an INFRASTRUCTURE failure on attempt 1 plus
+    a successful retry on attempt 2 against a single-entry ladder.
+    Without the swallow, the persist-side ``RuntimeError`` would
+    propagate from ``finally`` and replace the rate-limit exception;
+    classify_error would receive the ``RuntimeError`` -> SEMANTIC
+    -> immediate fallback -> single-entry ladder exhausted ->
+    ``LadderExhaustedError``. The fact that the retry runs and the
+    test gets ``"recovered"`` proves the rate-limit exception
+    reached the classifier intact.
+    """
+
+    async def test_persist_failure_does_not_mask_llm_exception(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        async def _failing_persist(_session_factory: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("DB write blew up")
+
+        monkeypatch.setattr(
+            "course_supporter.llm.stage_router._persist",
+            _failing_persist,
+        )
+
+        provider = _failing_provider(
+            side_effects=[_anthropic_rate_limit(), _ok_response("recovered")],
+            classify_as=ErrorCategory.INFRASTRUCTURE,
+        )
+
+        router = StageRouter(
+            _config(),  # single-entry ladder -- no fallback safety net
+            {"anthropic": provider},
+            session_factory=AsyncMock(),  # truthy; persist will be invoked
+        )
+
+        result = await router.execute_for_stage("demo")
+
+        assert result.content == "recovered"
+        assert result.attempt_count == 2  # initial + INFRASTRUCTURE retry
+        assert provider.complete.await_count == 2

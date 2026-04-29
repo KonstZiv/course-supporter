@@ -1,12 +1,18 @@
 """Tests for the KD16 markdown prompt loader."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import structlog
 from jinja2 import UndefinedError
 
 from course_supporter.llm.error_categories import InvalidPromptError
-from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
+from course_supporter.llm.prompt_loader_md import (
+    StagePrompt,
+    _warned_unknown_roles,
+    load_prompt,
+)
 
 
 def _write(path: Path, body: str) -> Path:
@@ -214,3 +220,89 @@ class TestEndToEnd:
         assert "Python" in prompt.system
         assert "Ukrainian" in prompt.system
         assert prompt.user == "What is recursion?"
+
+
+# ── Unknown-role WARNING + dedup (commit (g) review fix) ───────────
+
+
+@pytest.fixture(autouse=False)
+def _reset_unknown_role_dedup() -> Iterator[None]:
+    """Clear the process-local dedup set so tests don't leak state."""
+    _warned_unknown_roles.clear()
+    yield
+    _warned_unknown_roles.clear()
+
+
+class TestUnknownRoleWarning:
+    def test_unknown_role_logs_warning(
+        self,
+        tmp_path: Path,
+        _reset_unknown_role_dedup: None,
+    ) -> None:
+        _write(
+            tmp_path / "p.md",
+            "## System\nsys body\n\n## Examples\nfoo\n\n## User\nu body\n",
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            prompt = load_prompt("p.md", base_path=tmp_path)
+
+        # Recognised sections still parsed correctly.
+        assert prompt.system == "sys body"
+        assert prompt.user == "u body"
+
+        # Exactly one WARNING emitted for the unknown role.
+        warnings = [
+            r for r in captured if r.get("event") == "prompt_loader_unknown_role"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+        assert warnings[0]["unknown_role"] == "examples"
+        assert warnings[0]["prompt_ref"] == "p.md"
+        assert warnings[0]["recognised_roles"] == [
+            "assistant",
+            "system",
+            "user",
+        ]
+
+    def test_unknown_role_warning_deduplicated(
+        self,
+        tmp_path: Path,
+        _reset_unknown_role_dedup: None,
+    ) -> None:
+        _write(
+            tmp_path / "p.md",
+            "## System\nsys\n\n## Examples\nfoo\n\n## User\nu\n",
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            load_prompt("p.md", base_path=tmp_path)
+            load_prompt("p.md", base_path=tmp_path)
+            load_prompt("p.md", base_path=tmp_path)
+
+        warnings = [
+            r for r in captured if r.get("event") == "prompt_loader_unknown_role"
+        ]
+        # Three loads of the same file -> still exactly one warning.
+        assert len(warnings) == 1
+
+    def test_different_unknown_roles_each_warn_once(
+        self,
+        tmp_path: Path,
+        _reset_unknown_role_dedup: None,
+    ) -> None:
+        _write(
+            tmp_path / "p.md",
+            "## System\ns\n\n## Examples\nfoo\n\n## Notes\nbar\n\n## User\nu\n",
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            load_prompt("p.md", base_path=tmp_path)
+            load_prompt("p.md", base_path=tmp_path)
+
+        warnings = [
+            r for r in captured if r.get("event") == "prompt_loader_unknown_role"
+        ]
+        # Two distinct unknown roles -> two warnings even across two loads.
+        roles = sorted(w["unknown_role"] for w in warnings)
+        assert roles == ["examples", "notes"]

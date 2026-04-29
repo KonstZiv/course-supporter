@@ -378,6 +378,46 @@ class TestStructuredLogging:
         assert len(warnings) == 1
         assert warnings[0]["filename"] == "hw.zip"
 
+    def test_charset_decode_fallback_emits_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Non-strict tier-3 fallback must emit a structured
+        # WARNING with filename + detected_charset + error so
+        # production telemetry can detect encoding anomalies in
+        # authored content. Force a fake codec name into the
+        # libmagic-detected charset path so _decode_text raises
+        # LookupError; the orchestrator catches and logs.
+        from course_supporter.security import stage1 as stage1_module
+
+        monkeypatch.setattr(
+            stage1_module,
+            "detect_charset",
+            lambda _content: "totally-fake-encoding-xyz",
+        )
+
+        with capture_logs() as logs:
+            result = run_stage1(
+                filename="lecture.txt",
+                content=CLEAN_TEXT_UTF8,
+                context="authored",  # non-strict
+            )
+
+        fallback_warnings = [
+            log
+            for log in logs
+            if log.get("log_level") == "warning"
+            and log.get("event") == "stage1_charset_decode_fallback"
+        ]
+        assert len(fallback_warnings) == 1
+        record = fallback_warnings[0]
+        assert record["filename"] == "lecture.txt"
+        assert record["detected_charset"] == "totally-fake-encoding-xyz"
+        assert "error" in record and isinstance(record["error"], str)
+
+        # Pipeline still produces a valid Stage1Result -- the
+        # warning is observability, not a rejection signal.
+        assert result.nfc_text is not None
+
 
 # ── 8. ErrorCategory public contract ───────────────────────────────
 
@@ -496,13 +536,28 @@ class TestDecodeText:
         cp1251 = "Привет".encode("cp1251")
         assert _decode_text(cp1251, "windows-1251", strict=False) == "Привет"
 
-    def test_non_strict_falls_back_to_replace(self) -> None:
-        # No valid charset and bytes are not valid UTF-8 -- fallback
-        # path returns text with U+FFFD replacement characters
-        # rather than raising.
+    def test_non_strict_charset_none_falls_back_to_replace(self) -> None:
+        # Tier-3 path: libmagic could not determine a charset
+        # (charset=None). _decode_text returns UTF-8 with U+FFFD
+        # replacement characters; this path never raises.
         garbled = b"\xff\xfe\xfd"
         result = _decode_text(garbled, None, strict=False)
         assert "�" in result
+
+    def test_non_strict_invalid_codec_raises_lookup_error(self) -> None:
+        # Tier-2 propagation: the orchestrator owns the fallback
+        # decision so it can log the failure. _decode_text now
+        # propagates LookupError for unknown codec names instead
+        # of silently swallowing.
+        with pytest.raises(LookupError):
+            _decode_text(b"some bytes", "totally-fake-encoding", strict=False)
+
+    def test_non_strict_decode_error_propagates(self) -> None:
+        # Tier-2 propagation: invalid bytes for the declared codec
+        # raise UnicodeDecodeError so the caller can log + fall
+        # through to UTF-8-with-replacement.
+        with pytest.raises(UnicodeDecodeError):
+            _decode_text(b"\xff\xfe\xfd", "utf-8", strict=False)
 
 
 # ── Sanity: Stage1Result is iterable-friendly ──────────────────────

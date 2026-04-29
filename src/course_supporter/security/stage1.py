@@ -412,7 +412,29 @@ def _run_text_content_checks(
             ),
         )
 
-    text = _decode_text(content, detected, strict=enable_charset_strict)
+    if enable_charset_strict:
+        # Strict: charset gate above guaranteed UTF-8 / ASCII.
+        # A naked UnicodeDecodeError here would mean mid-file
+        # corruption that libmagic's head-only inspection missed;
+        # it propagates unchanged (rare bug-not-policy concern).
+        text = _decode_text(content, detected, strict=True)
+    else:
+        try:
+            text = _decode_text(content, detected, strict=False)
+        except (UnicodeDecodeError, LookupError) as exc:
+            # Non-strict tier-2 failure: libmagic detected a charset
+            # but the bytes do not decode cleanly OR the label is
+            # not a registered Python codec. Lossy UTF-8-with-
+            # replacement fallback preserves the upload but emits a
+            # structured warning so production telemetry can surface
+            # encoding anomalies without blocking authored content.
+            logger.warning(
+                "stage1_charset_decode_fallback",
+                filename=filename,
+                detected_charset=detected,
+                error=str(exc),
+            )
+            text = content.decode("utf-8", errors="replace")
 
     nfkc_text = nfkc_for_security(text)
     check_text_unicode_safety(nfkc_text)
@@ -434,26 +456,27 @@ def _decode_text(content: bytes, charset: str | None, *, strict: bool) -> str:
     confirmed the libmagic label is UTF-8 / ASCII, so this decode
     is expected to succeed; a stray ``UnicodeDecodeError`` would
     indicate a bug or a corrupted middle-of-file (libmagic only
-    inspects the head).
+    inspects the head). Propagated unchanged.
 
     Tier 2 -- non-strict, library-detected charset: try the label
     libmagic reported. Authored content frequently ships in
     Windows-1251 / KOI8-R / ISO-8859 series; honoring the detected
-    label lets the orchestrator preserve content semantics.
+    label lets the orchestrator preserve content semantics. May
+    raise :class:`UnicodeDecodeError` (label valid but bytes do
+    not decode) or :class:`LookupError` (label is not a registered
+    Python codec). The caller in :func:`_run_text_content_checks`
+    catches these and falls through to a UTF-8-with-replacement
+    decode, emitting a structured ``stage1_charset_decode_fallback``
+    warning so production telemetry can detect anomalies.
 
-    Tier 3 -- non-strict fallback: UTF-8 with replacement. Lossy
-    by design; the alternative (raise) would block uploads whose
-    libmagic charset detection itself is wrong (rare but observed
-    on small files where the detection heuristic has too few
-    bytes to decide).
+    Tier 3 -- non-strict fallback (charset is ``None`` here): UTF-8
+    with replacement. Lossy by design; never raises. Reached only
+    when libmagic cannot determine a charset at all.
     """
     if strict:
         return content.decode("utf-8")
 
     if charset is not None:
-        try:
-            return content.decode(charset)
-        except (UnicodeDecodeError, LookupError):
-            pass
+        return content.decode(charset)
 
     return content.decode("utf-8", errors="replace")

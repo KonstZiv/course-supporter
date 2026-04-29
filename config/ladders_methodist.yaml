@@ -1,0 +1,12 @@
+# Methodist agent stage ladders (KD16).
+#
+# Phase 1+ tasks add real stages here as they rewrite the
+# Methodist pipeline: methodist_bottomup, methodist_topdown.
+stages:
+  methodist_example:
+    prompt_ref: "prompts/example/v1.md"
+    ladder:
+      - provider: anthropic
+        model: claude-sonnet-4-20250514
+      - provider: gemini
+        model: gemini-2.5-pro

@@ -1,0 +1,12 @@
+# Mentor agent stage ladders (KD16).
+#
+# Phase 1+ tasks add real stages here as they rewrite Mentor /
+# safety_check / sanity_check.
+stages:
+  mentor_example:
+    prompt_ref: "prompts/example/v1.md"
+    ladder:
+      - provider: deepseek
+        model: deepseek-chat
+      - provider: gemini
+        model: gemini-2.5-flash

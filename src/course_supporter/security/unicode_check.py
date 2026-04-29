@@ -70,10 +70,14 @@ def _classify_suspicious(ch: str) -> str | None:
     """Return suspicious-class name for ``ch`` or ``None`` if benign.
 
     Class names land in the SecurityRejectedError detail so log
-    aggregation can correlate attack patterns. The four returnable
-    class names are part of the public log contract:
-    ``zero_width``, ``bidi_override``, ``tag_character``,
-    ``control_character``.
+    aggregation can correlate attack patterns. The four currently
+    returnable class names -- ``zero_width``, ``bidi_override``,
+    ``tag_character``, ``control_character`` -- are stable within
+    the v1 contract. Future extensions (e.g. archive filename
+    context, additional codepoint families) may add new class names
+    via versioning if the Stage 1 orchestrator needs richer detail;
+    the four values above will not be renamed or removed without a
+    concurrent log-pipeline update.
     """
     cp = ord(ch)
 

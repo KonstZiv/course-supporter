@@ -55,6 +55,12 @@ class ErrorCategory(StrEnum):
       tag / disallowed control characters per vision §KD14.
     * ``PROMPT_INJECTION`` -- regex pre-screen matched a known
       injection pattern after NFKC normalization.
+    * ``CHARSET_VIOLATION`` -- the active context policy has
+      ``enable_charset_strict=True`` and libmagic reports a charset
+      that is neither ``utf-8`` nor ``us-ascii``. Modern submission
+      contexts (homework) baseline UTF-8; legacy encodings reach
+      this category. Authored content keeps the strict flag off and
+      never raises this.
     """
 
     SIZE_LIMIT = "size_limit"
@@ -63,6 +69,7 @@ class ErrorCategory(StrEnum):
     ARCHIVE_VIOLATION = "archive_violation"
     SUSPICIOUS_UNICODE = "suspicious_unicode"
     PROMPT_INJECTION = "prompt_injection"
+    CHARSET_VIOLATION = "charset_violation"
 
 
 class SecurityRejectedError(Exception):

@@ -214,8 +214,12 @@ class TestViolationCategory:
     def test_enum_values_match_strings(self) -> None:
         # Forward-compat for HomeworkSubmission.safety_result JSONB
         # per vision §KD15: enum values must serialise as the literal
-        # strings, not Python enum identifiers.
-        assert ViolationCategory.PROMPT_INJECTION == "prompt_injection"
-        assert ViolationCategory.OFF_TOPIC == "off_topic"
-        assert ViolationCategory.POLICY_VIOLATION == "policy_violation"
-        assert ViolationCategory.SUSPICIOUS_BEHAVIOR == "suspicious_behavior"
+        # strings, not Python enum identifiers. ``.value`` access is
+        # used so mypy resolves the comparison as ``str == str`` --
+        # bare ``StrEnum`` instances compare equal to strings at
+        # runtime but mypy treats them as non-overlapping literal
+        # types and reports a false positive.
+        assert ViolationCategory.PROMPT_INJECTION.value == "prompt_injection"
+        assert ViolationCategory.OFF_TOPIC.value == "off_topic"
+        assert ViolationCategory.POLICY_VIOLATION.value == "policy_violation"
+        assert ViolationCategory.SUSPICIOUS_BEHAVIOR.value == "suspicious_behavior"

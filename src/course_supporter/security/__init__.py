@@ -40,6 +40,7 @@ from course_supporter.security.regex_patterns import (
     match_text,
 )
 from course_supporter.security.schemas import SafetyResult, ViolationCategory
+from course_supporter.security.stage1 import Stage1Result, run_stage1
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 __all__ = [
@@ -53,6 +54,7 @@ __all__ = [
     "SafetyResult",
     "SafetyValidationError",
     "SecurityRejectedError",
+    "Stage1Result",
     "ViolationCategory",
     "check_text_unicode_safety",
     "detect_charset",
@@ -65,5 +67,6 @@ __all__ = [
     "nfkc_for_security",
     "normalize_filename",
     "policy_for",
+    "run_stage1",
     "verify_extension_matches_content",
 ]

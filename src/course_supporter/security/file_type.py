@@ -88,6 +88,9 @@ _EXTENSION_TO_MIME_FAMILIES: dict[str, tuple[str, ...]] = {
         "application/zip",
     ),
     "zip": ("application/zip",),
+    "gz": ("application/gzip",),
+    "tgz": ("application/gzip",),
+    "tar": ("application/x-tar",),
     "png": ("image/png",),
     "jpg": ("image/jpeg",),
     "jpeg": ("image/jpeg",),
@@ -145,8 +148,13 @@ def detect_charset(content: bytes) -> str | None:
     return encoding
 
 
-def _extension_of(filename: str) -> str:
+def extension_of(filename: str) -> str:
     """Return lower-cased extension without leading dot, or empty.
+
+    Returns the lowest-level suffix only (no compound recognition):
+    ``"foo.tar.gz"`` returns ``"gz"``. If compound recognition is
+    required (e.g. for archive-kind detection), implement a separate
+    ``is_compound_archive`` helper -- do not extend this signature.
 
     Operates on the NFKC-normalized filename so compatibility-encoded
     extensions (e.g. full-width Latin "PDF" at U+FF30/U+FF24/U+FF26)
@@ -193,7 +201,7 @@ def verify_extension_matches_content(filename: str, content: bytes) -> None:
             f"empty content for {filename!r}",
         )
 
-    ext = _extension_of(filename)
+    ext = extension_of(filename)
     if not ext:
         raise SecurityRejectedError(
             ErrorCategory.FORBIDDEN_TYPE,

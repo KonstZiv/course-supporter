@@ -7,6 +7,10 @@ later commits add the :class:`SecurityLayer` orchestrator and
 context policy constants.
 """
 
+from course_supporter.security.archive import (
+    ExtractedFile,
+    extract_archive_safely,
+)
 from course_supporter.security.exceptions import (
     ErrorCategory,
     SafetyValidationError,
@@ -15,6 +19,7 @@ from course_supporter.security.exceptions import (
 from course_supporter.security.file_type import (
     detect_charset,
     detect_mime_type,
+    extension_of,
     verify_extension_matches_content,
 )
 from course_supporter.security.normalization import (
@@ -34,6 +39,7 @@ __all__ = [
     "PROMPT_INJECTION_PATTERNS",
     "CompiledPattern",
     "ErrorCategory",
+    "ExtractedFile",
     "SafetyResult",
     "SafetyValidationError",
     "SecurityRejectedError",
@@ -41,6 +47,8 @@ __all__ = [
     "check_text_unicode_safety",
     "detect_charset",
     "detect_mime_type",
+    "extension_of",
+    "extract_archive_safely",
     "match_text",
     "nfc_for_storage",
     "nfkc_for_security",

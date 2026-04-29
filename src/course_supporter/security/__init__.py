@@ -27,6 +27,13 @@ from course_supporter.security.normalization import (
     nfkc_for_security,
     normalize_filename,
 )
+from course_supporter.security.policies import (
+    AUTHORED_POLICY,
+    HOMEWORK_POLICY,
+    ContextPolicy,
+    get_max_size_for_extension,
+    policy_for,
+)
 from course_supporter.security.regex_patterns import (
     PROMPT_INJECTION_PATTERNS,
     CompiledPattern,
@@ -36,8 +43,11 @@ from course_supporter.security.schemas import SafetyResult, ViolationCategory
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 __all__ = [
+    "AUTHORED_POLICY",
+    "HOMEWORK_POLICY",
     "PROMPT_INJECTION_PATTERNS",
     "CompiledPattern",
+    "ContextPolicy",
     "ErrorCategory",
     "ExtractedFile",
     "SafetyResult",
@@ -49,9 +59,11 @@ __all__ = [
     "detect_mime_type",
     "extension_of",
     "extract_archive_safely",
+    "get_max_size_for_extension",
     "match_text",
     "nfc_for_storage",
     "nfkc_for_security",
     "normalize_filename",
+    "policy_for",
     "verify_extension_matches_content",
 ]

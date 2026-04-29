@@ -162,6 +162,26 @@ class TestExtensionMatchesAccepts:
         full_width_pdf = "ＰＤＦ"
         verify_extension_matches_content(f"homework.{full_width_pdf}", PDF_BYTES)
 
+    def test_flac_extension_with_minimal_signature(self) -> None:
+        # FLAC stream marker + minimal STREAMINFO header is enough
+        # for libmagic to classify as audio/flac.
+        flac_bytes = (
+            b"fLaC\x00\x00\x00\x22\x10\x00\x10\x00\x00\x00\x00\x00\x00\x00"
+            + b"\x00" * 100
+        )
+        verify_extension_matches_content("recording.flac", flac_bytes)
+
+    def test_ipynb_extension_with_realistic_json(self) -> None:
+        # .ipynb is a JSON document; libmagic returns application/json
+        # which our families list accepts.
+        ipynb_bytes = (
+            b'{"cells": [], "metadata": {"kernelspec": '
+            b'{"name": "python3", "display_name": "Python 3"}, '
+            b'"language_info": {"name": "python"}}, '
+            b'"nbformat": 4, "nbformat_minor": 5}'
+        )
+        verify_extension_matches_content("homework.ipynb", ipynb_bytes)
+
 
 # ── verify_extension_matches_content — rejects ─────────────────────
 

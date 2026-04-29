@@ -47,6 +47,8 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "Pillow>=10.0",
     "ImageHash>=4.3",
+    # Security: magic-bytes file type detection (KD14)
+    "python-magic>=0.4.27",
 ]
 
 [dependency-groups]
@@ -184,6 +186,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "imagehash.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "magic.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

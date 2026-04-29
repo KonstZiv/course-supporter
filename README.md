@@ -23,6 +23,11 @@ AI-powered system for transforming course materials into structured learning pla
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
 - Docker & Docker Compose
+- libmagic (security file-type detection):
+  - macOS: `brew install libmagic` (Apple Silicon may need
+    `export DYLD_LIBRARY_PATH=/opt/homebrew/lib` if `import magic`
+    can't find the library)
+  - Debian/Ubuntu: `apt-get install libmagic1` (already in Dockerfile)
 
 ### Setup
 

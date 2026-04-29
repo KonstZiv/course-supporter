@@ -22,9 +22,10 @@ COPY scripts/ scripts/
 # ── Runtime stage ──
 FROM python:3.13-slim
 
-# System dependencies for psycopg (libpq)
+# System dependencies: libpq for psycopg, ffmpeg for ingestion,
+# libmagic1 for security file-type detection (KD14).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl ffmpeg \
+    libpq5 curl ffmpeg libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r app && useradd -r -g app -d /app app

@@ -1,11 +1,36 @@
 # Mentor agent stage ladders (KD16).
 #
 # Phase 1+ tasks add real stages here as they rewrite Mentor /
-# safety_check / sanity_check.
+# sanity_check.
 stages:
   mentor_example:
     prompt_ref: "prompts/example/v1.md"
     ladder:
+      - provider: deepseek
+        model: deepseek-chat
+      - provider: gemini
+        model: gemini-2.5-flash
+
+  # Stage 2 LLM safety classifier per vision §KD14. Cheap binary
+  # judgement on student submissions that already passed Stage 1
+  # synchronous validation (size / magic / archive / unicode /
+  # regex). Output is a strict JSON SafetyResult; semantic parse
+  # failure raises terminal SafetyValidationError per 0.6 acceptance.
+  #
+  # Model pick rationale (KD-D cost optimization): mistral-small-latest
+  # is the economical primary because the task is binary classification
+  # against a fixed schema -- frontier reasoning capability would be
+  # overkill. Override of the factory default mistral-large-latest is
+  # intentional; do NOT "fix" by reverting to large unless safety-
+  # accuracy telemetry shows small underperforming. deepseek-chat and
+  # gemini-2.5-flash are equivalent-tier fallbacks for infrastructure
+  # outages on the primary; ladder order is by historical reliability,
+  # not capability.
+  safety_check:
+    prompt_ref: "prompts/safety_check/v1.md"
+    ladder:
+      - provider: mistral
+        model: mistral-small-latest
       - provider: deepseek
         model: deepseek-chat
       - provider: gemini

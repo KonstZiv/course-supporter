@@ -41,6 +41,7 @@ from course_supporter.security.regex_patterns import (
 )
 from course_supporter.security.schemas import SafetyResult, ViolationCategory
 from course_supporter.security.stage1 import Stage1Result, run_stage1
+from course_supporter.security.stage2 import run_stage2_safety_check
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 __all__ = [
@@ -68,5 +69,6 @@ __all__ = [
     "normalize_filename",
     "policy_for",
     "run_stage1",
+    "run_stage2_safety_check",
     "verify_extension_matches_content",
 ]

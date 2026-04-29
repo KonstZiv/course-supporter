@@ -1,0 +1,16 @@
+# Document-processing stage ladders (KD16).
+#
+# Phase 1+ tasks add real stages here as they rewrite each pass:
+#   pass_1_video_vision, pass_2a_mapping, pass_2b_safety,
+#   pass_2c_denoise, etc.
+#
+# The single example stage below proves the loader works and
+# documents the expected shape.
+stages:
+  example_stage:
+    prompt_ref: "prompts/example/v1.md"
+    ladder:
+      - provider: anthropic
+        model: claude-sonnet-4-20250514
+      - provider: gemini
+        model: gemini-2.5-flash

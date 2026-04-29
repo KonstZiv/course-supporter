@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import itertools
+import re
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -19,8 +20,19 @@ import openai
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
+from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+# OpenAI populates BadRequestError.code from body["code"]. The
+# canonical context-overflow code on OpenAI is "context_length_exceeded".
+# DeepSeek / Mistral do not always set body["code"]; fall back to a
+# message scan for those vendors.
+_OPENAI_OVERFLOW_CODES = {"context_length_exceeded"}
+_OPENAI_OVERFLOW_PATTERN = re.compile(
+    r"context length|too long|maximum context|tokens exceed",
+    re.IGNORECASE,
+)
 
 
 def _build_vision_content(
@@ -86,6 +98,39 @@ class OpenAICompatProvider(LLMProvider):
 
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
+
+    def classify_error(self, exc: Exception) -> ErrorCategory:
+        """Classify OpenAI-SDK exceptions into ladder categories.
+
+        Same classifier covers OpenAI, DeepSeek, and Mistral, all of
+        which raise from the ``openai`` package via the shared client.
+
+        Mapping:
+        * RateLimitError / APITimeoutError / APIConnectionError /
+          InternalServerError -> INFRASTRUCTURE.
+        * BadRequestError with code ``context_length_exceeded``, or a
+          message matching a known overflow pattern (DeepSeek /
+          Mistral fallback) -> INPUT_OVERFLOW.
+        * Other BadRequestError -> SEMANTIC.
+        * Anything else -> SEMANTIC (via base).
+        """
+        if isinstance(
+            exc,
+            (
+                openai.RateLimitError,
+                openai.APITimeoutError,
+                openai.APIConnectionError,
+                openai.InternalServerError,
+            ),
+        ):
+            return ErrorCategory.INFRASTRUCTURE
+        if isinstance(exc, openai.BadRequestError):
+            if exc.code in _OPENAI_OVERFLOW_CODES:
+                return ErrorCategory.INPUT_OVERFLOW
+            if _OPENAI_OVERFLOW_PATTERN.search(exc.message or ""):
+                return ErrorCategory.INPUT_OVERFLOW
+            return ErrorCategory.SEMANTIC
+        return super().classify_error(exc)
 
     def _ensure_instructor(self) -> None:
         """Lazily create instructor-patched clients on first use."""

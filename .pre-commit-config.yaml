@@ -25,6 +25,7 @@ repos:
           - pyyaml>=6.0
           - fastapi>=0.128
           - arq>=0.26
+          - jinja2>=3.1
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/

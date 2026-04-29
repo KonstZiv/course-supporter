@@ -1,15 +1,26 @@
 """Google Gemini provider via google-genai SDK."""
 
 import itertools
+import re
 from collections.abc import Iterator, Sequence
 from typing import Any
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 
+from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+# Gemini surfaces context overflow as ClientError code=400 with a
+# message describing the limit; HTTP 413 is also possible. Pattern
+# matches both Google API phrasing variants.
+_GEMINI_OVERFLOW_PATTERN = re.compile(
+    r"too long|token (?:limit|count) exceed|context (?:length|window) exceed",
+    re.IGNORECASE,
+)
 
 # Image MIME signatures (magic bytes). Only the formats Gemini accepts
 # and that we actually produce are listed: VD frame_sampler emits JPEG
@@ -120,6 +131,31 @@ class GeminiProvider(LLMProvider):
 
     def _next_client(self) -> genai.Client:
         return next(self._client_cycle)
+
+    def classify_error(self, exc: Exception) -> ErrorCategory:
+        """Classify google-genai SDK exceptions into ladder categories.
+
+        Mapping:
+        * ServerError (5xx) -> INFRASTRUCTURE.
+        * ClientError code 408 / 429 -> INFRASTRUCTURE.
+        * ClientError code 413 (payload too large) -> INPUT_OVERFLOW.
+        * ClientError code 400 with a message matching a known
+          context-overflow pattern -> INPUT_OVERFLOW.
+        * Other ClientError -> SEMANTIC.
+        * Anything else (including raw httpx transport errors that
+          bypass the SDK error namespace) -> SEMANTIC (via base).
+        """
+        if isinstance(exc, genai_errors.ServerError):
+            return ErrorCategory.INFRASTRUCTURE
+        if isinstance(exc, genai_errors.ClientError):
+            if exc.code in (408, 429):
+                return ErrorCategory.INFRASTRUCTURE
+            if exc.code == 413:
+                return ErrorCategory.INPUT_OVERFLOW
+            if exc.code == 400 and _GEMINI_OVERFLOW_PATTERN.search(str(exc)):
+                return ErrorCategory.INPUT_OVERFLOW
+            return ErrorCategory.SEMANTIC
+        return super().classify_error(exc)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Gemini."""

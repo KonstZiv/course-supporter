@@ -17,16 +17,24 @@ from course_supporter.security.normalization import (
     nfkc_for_security,
     normalize_filename,
 )
+from course_supporter.security.regex_patterns import (
+    PROMPT_INJECTION_PATTERNS,
+    CompiledPattern,
+    match_text,
+)
 from course_supporter.security.schemas import SafetyResult, ViolationCategory
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 __all__ = [
+    "PROMPT_INJECTION_PATTERNS",
+    "CompiledPattern",
     "ErrorCategory",
     "SafetyResult",
     "SafetyValidationError",
     "SecurityRejectedError",
     "ViolationCategory",
     "check_text_unicode_safety",
+    "match_text",
     "nfc_for_storage",
     "nfkc_for_security",
     "normalize_filename",

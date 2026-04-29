@@ -9,8 +9,18 @@ from typing import Any
 import anthropic
 from pydantic import BaseModel
 
+from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+
+# Anthropic returns HTTP 400 with this message shape on context
+# overflow ("prompt is too long: N tokens > M maximum"). The SDK
+# does not expose a dedicated subclass; message-based detection is
+# the only path.
+_ANTHROPIC_OVERFLOW_PATTERN = re.compile(
+    r"prompt is too long|tokens? (?:exceed|>)|context window",
+    re.IGNORECASE,
+)
 
 
 class AnthropicProvider(LLMProvider):
@@ -37,6 +47,34 @@ class AnthropicProvider(LLMProvider):
 
     def _next_client(self) -> anthropic.AsyncAnthropic:
         return next(self._client_cycle)
+
+    def classify_error(self, exc: Exception) -> ErrorCategory:
+        """Classify Anthropic SDK exceptions into ladder categories.
+
+        Mapping:
+        * RateLimitError / APITimeoutError / APIConnectionError /
+          InternalServerError -> INFRASTRUCTURE.
+        * BadRequestError whose message or body matches a known
+          context-overflow pattern -> INPUT_OVERFLOW.
+        * Other BadRequestError (auth, validation, etc.) -> SEMANTIC.
+        * Anything else -> SEMANTIC (via base).
+        """
+        if isinstance(
+            exc,
+            (
+                anthropic.RateLimitError,
+                anthropic.APITimeoutError,
+                anthropic.APIConnectionError,
+                anthropic.InternalServerError,
+            ),
+        ):
+            return ErrorCategory.INFRASTRUCTURE
+        if isinstance(exc, anthropic.BadRequestError):
+            haystack = f"{exc.message or ''} {exc.body or ''}"
+            if _ANTHROPIC_OVERFLOW_PATTERN.search(haystack):
+                return ErrorCategory.INPUT_OVERFLOW
+            return ErrorCategory.SEMANTIC
+        return super().classify_error(exc)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Anthropic."""

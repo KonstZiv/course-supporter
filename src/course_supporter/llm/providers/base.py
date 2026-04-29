@@ -7,6 +7,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ValidationError
 
+from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 logger = structlog.get_logger()
@@ -96,6 +97,19 @@ class LLMProvider(abc.ABC):
             parsed_object is an instance of response_schema.
         """
         ...
+
+    def classify_error(self, exc: Exception) -> ErrorCategory:
+        """Classify provider exception into a ladder fallback category.
+
+        Default returns ``ErrorCategory.SEMANTIC`` -- immediate
+        fallback, no retry. Subclasses should override to identify
+        their SDK's specific infrastructure / structural /
+        input-overflow exceptions.
+
+        Returning SEMANTIC for unknown exceptions is the safe choice:
+        it avoids retry loops on errors the classifier hasn't seen.
+        """
+        return ErrorCategory.SEMANTIC
 
     def _parse_structured(
         self,

@@ -9,12 +9,23 @@ Two read-only endpoints scoped to the calling tenant via the API key:
 Both responses are cached in Redis for 5 minutes (
 :data:`cost_cache.TTL_SECONDS`); ``?no_cache=true`` bypasses both read
 and write paths (admin/debug helper, hidden from OpenAPI).
+
+## Optional date range (0.7)
+
+``from`` / ``to`` are optional. When omitted, lower bound resolves to
+``Tenant.created_at`` (cast to ``date``) and upper bound to
+``datetime.now(UTC).date()``. Resolution happens in-handler via the
+existing session dependency, *not* by extending ``TenantContext``: the
+fallback is needed only on these two cost endpoints, so a one-row
+lookup keeps the auth context lean (KD-B: YAGNI). Cache keys carry
+the resolved values so a "no params" request collides with the
+explicit-dates request that produces the same bounds (KD-F).
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 import structlog
@@ -42,6 +53,7 @@ from course_supporter.services.cost_cache import (
 )
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
+from course_supporter.storage.orm import Tenant
 from course_supporter.storage.repositories import ExternalServiceCallRepository
 
 logger = structlog.get_logger()
@@ -53,13 +65,48 @@ SharedDep = Annotated[
 ]
 
 
+async def _resolve_date_range(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    from_: date | None,
+    to_: date | None,
+) -> tuple[date, date]:
+    """Resolve optional ``from``/``to`` to concrete date bounds.
+
+    * ``from_ is None`` → load ``Tenant`` by id, cast ``created_at`` to
+      ``date`` (``Tenant.created_at`` is ``DateTime(timezone=True)``;
+      day precision is enough — the lower bound includes the entire
+      day the tenant was created).
+    * ``to_ is None`` → ``datetime.now(UTC).date()``. UTC matches the
+      project-wide ``datetime.now(UTC)`` convention used by every
+      other timestamp callsite (``api/deps.py``, ``api/app.py``,
+      ``storage/*_repository.py``, etc.); ``date.today()`` would
+      silently bind to local timezone.
+
+    The tenant lookup never returns ``None`` in practice because the
+    caller's ``TenantContext`` was already authenticated against the
+    same DB. The ``assert`` narrows the type for ``mypy --strict``
+    rather than papering over a real failure mode.
+    """
+    if from_ is None:
+        tenant_record = await session.get(Tenant, tenant_id)
+        assert tenant_record is not None, (
+            "Tenant must exist when TenantContext was authenticated against the same DB"
+        )
+        from_ = tenant_record.created_at.date()
+    if to_ is None:
+        to_ = datetime.now(UTC).date()
+    return from_, to_
+
+
 @router.get("/cost/summary", response_model=CostSummaryResponse)
 async def get_cost_summary(
     tenant: SharedDep,
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[ArqRedis, Depends(get_arq_redis)],
-    from_: Annotated[date, Query(alias="from")],
-    to_: Annotated[date, Query(alias="to")],
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to_: Annotated[date | None, Query(alias="to")] = None,
     limit_courses: Annotated[int, Query(ge=0, le=500)] = 50,
     offset_courses: Annotated[int, Query(ge=0)] = 0,
     limit_providers: Annotated[int, Query(ge=0, le=500)] = 50,
@@ -67,6 +114,11 @@ async def get_cost_summary(
     no_cache: Annotated[bool, Query(include_in_schema=False)] = False,
 ) -> CostSummaryResponse:
     """Tenant-wide cost summary for the requested date range.
+
+    ``from``/``to`` are optional — see module docstring for fallback
+    semantics. The ``from > to`` guard runs on resolved values so the
+    ordering invariant survives both omitted-params and explicit-params
+    callers identically.
 
     The by_course breakdown groups by direct ``Job.course_node_id``
     (Variant D per KD5 §5 row 0.4 deliberation). Jobs targeting
@@ -85,6 +137,12 @@ async def get_cost_summary(
     Phase 1+ follow-up — natural fit alongside the admin-scope work
     that KD5 defers.
     """
+    from_, to_ = await _resolve_date_range(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        from_=from_,
+        to_=to_,
+    )
     if from_ > to_:
         raise HTTPException(status_code=422, detail="from must be <= to")
     if no_cache:
@@ -169,8 +227,8 @@ async def get_cost_course(
     tenant: SharedDep,
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[ArqRedis, Depends(get_arq_redis)],
-    from_: Annotated[date, Query(alias="from")],
-    to_: Annotated[date, Query(alias="to")],
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to_: Annotated[date | None, Query(alias="to")] = None,
     limit_nodes: Annotated[int, Query(ge=0, le=500)] = 50,
     offset_nodes: Annotated[int, Query(ge=0)] = 0,
     limit_actions: Annotated[int, Query(ge=0, le=500)] = 50,
@@ -179,11 +237,20 @@ async def get_cost_course(
 ) -> CourseCostResponse:
     """Cost drill-down for a single course (subtree drill-down).
 
+    ``from``/``to`` are optional with the same fallback semantics as
+    ``/cost/summary`` — see module docstring.
+
     Security: ``?no_cache=true`` always hits the DB and additionally
     re-runs the recursive descendant CTE in ``get_descendant_ids``.
     Same rate-limit boundedness + audit-log story as ``/cost/summary``;
     see that endpoint's docstring.
     """
+    from_, to_ = await _resolve_date_range(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        from_=from_,
+        to_=to_,
+    )
     if from_ > to_:
         raise HTTPException(status_code=422, detail="from must be <= to")
     if no_cache:

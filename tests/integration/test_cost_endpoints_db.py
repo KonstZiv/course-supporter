@@ -47,6 +47,11 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 PERIOD_FROM = "2026-01-01"
 PERIOD_TO = "2026-12-31"
 SAMPLE_TIMESTAMP = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+# Anchor the seeded Tenant.created_at to a date that precedes
+# SAMPLE_TIMESTAMP so omitted-``from`` requests (which fall back to
+# ``tenant.created_at``) cover the full ESC seed without depending on
+# wall-clock time at test runtime.
+TENANT_CREATED_AT = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture()
@@ -77,7 +82,15 @@ async def cost_seed(
     recursive-CTE descendant path covering all three nodes.
     """
     async with session_factory() as session:
-        tenant = Tenant(name=f"cost-e2e-{uuid.uuid4().hex[:6]}")
+        # Pin ``created_at`` so the 0.7 omitted-``from`` fallback
+        # (resolved to ``tenant.created_at.date()``) is deterministic
+        # and precedes ``SAMPLE_TIMESTAMP`` — otherwise the DB
+        # server-default ``now()`` would produce a tenant younger than
+        # the seeded ESCs and exclude them from the all-time aggregate.
+        tenant = Tenant(
+            name=f"cost-e2e-{uuid.uuid4().hex[:6]}",
+            created_at=TENANT_CREATED_AT,
+        )
         session.add(tenant)
         await session.flush()
 
@@ -542,3 +555,58 @@ class TestCostCourseE2E:
                     Tenant.__table__.delete().where(Tenant.id == intruder_tenant_id)
                 )
                 await session.commit()
+
+
+# ── Optional date filter (0.7) ─────────────────────────────────────
+
+
+class TestCostEndpointsFallbackE2E:
+    """Omitted ``from``/``to`` resolves to ``[tenant.created_at, today]``.
+
+    The seed pins ``Tenant.created_at`` to ``TENANT_CREATED_AT``
+    (2026-01-01) and ``ExternalServiceCall.created_at`` to
+    ``SAMPLE_TIMESTAMP`` (2026-04-01), so the resolved range covers
+    every seeded ESC regardless of wall-clock time at test runtime.
+    The endpoint's ``to`` fallback is real ``datetime.now(UTC).date()``
+    (no monkeypatch in integration suite) — assertions only require
+    that ``to`` is on or after the seeded ESC date.
+    """
+
+    async def test_summary_no_params_returns_full_aggregate(
+        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+    ) -> None:
+        response = await cost_client.get(
+            "/api/v1/cost/summary",
+            params={"no_cache": "true"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Resolved bounds reach the response body via Pydantic alias.
+        assert data["from"] == str(TENANT_CREATED_AT.date())
+        assert data["to"] >= str(SAMPLE_TIMESTAMP.date())
+        # Aggregate matches the explicit-dates baseline (KD-F: same
+        # logical period regardless of how it was specified).
+        assert data["total_usd"] == pytest.approx(cost_seed["expected_total"])
+        assert data["unattributed_cost_usd"] == pytest.approx(
+            cost_seed["expected_unattributed"]
+        )
+
+    async def test_course_no_params_returns_full_subtree(
+        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+    ) -> None:
+        response = await cost_client.get(
+            f"/api/v1/cost/course/{cost_seed['root_id']}",
+            params={"no_cache": "true"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["from"] == str(TENANT_CREATED_AT.date())
+        assert data["to"] >= str(SAMPLE_TIMESTAMP.date())
+        # Subtree total = root (85) + lesson (30) + concept (25) = 140.
+        assert data["total_usd"] == pytest.approx(140.0)
+        node_ids = {n["course_node_id"] for n in data["by_node"]}
+        assert node_ids == {
+            str(cost_seed["root_id"]),
+            str(cost_seed["lesson_id"]),
+            str(cost_seed["concept_id"]),
+        }

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from course_supporter.api.routes import cost as cost_module
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.material_node_repository import MaterialNodeRepository
+from course_supporter.storage.orm import Tenant
 from course_supporter.storage.repositories import (
     ByActionRow,
     ByCourseRow,
@@ -147,8 +149,9 @@ class TestCostSummaryValidation:
         ("params", "expected_msg"),
         [
             # Pydantic-shaped 422s — actual v2 message strings.
-            ({"to": "2026-04-28"}, "Field required"),  # missing from
-            ({"from": "2026-01-01"}, "Field required"),  # missing to
+            # NOTE: missing-`from` and missing-`to` cases removed in 0.7
+            # — both are now optional with tenant-scoped fallback. See
+            # TestCostSummaryFallback for the new contract.
             (
                 {"from": "2026-01-01", "to": "2026-04-28", "limit_courses": "501"},
                 "Input should be less than or equal to 500",
@@ -356,8 +359,9 @@ class TestCostCourseValidation:
         ("params", "expected_msg"),
         [
             # Pydantic-shaped 422s — actual v2 message strings.
-            ({"to": "2026-04-28"}, "Field required"),  # missing from
-            ({"from": "2026-01-01"}, "Field required"),  # missing to
+            # NOTE: missing-`from` and missing-`to` cases removed in 0.7
+            # — both are now optional with tenant-scoped fallback. See
+            # TestCostCourseFallback for the new contract.
             (
                 {"from": "2026-01-01", "to": "2026-04-28", "limit_nodes": "501"},
                 "Input should be less than or equal to 500",
@@ -432,3 +436,252 @@ class TestCostCourseCache:
         node_mock.assert_awaited_once()
         descendants_mock.assert_not_awaited()
         set_cached_mock.assert_not_awaited()
+
+
+# ── Optional date filter (0.7) ─────────────────────────────────────
+
+
+# Fallback tests use a deterministic Tenant.created_at and a frozen
+# clock so cache keys + response shapes are reproducible. The Tenant
+# lookup is wired into ``app.dependency_overrides[get_session]`` rather
+# than mocked at the helper boundary — exercising the same code path
+# the request handler runs in production (KD-B: in-handler resolution).
+TENANT_CREATED_AT = datetime(2026, 1, 1, 10, 30, 0, tzinfo=UTC)
+FROZEN_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+
+class _FrozenClock:
+    """Drop-in replacement for ``datetime`` exposing a fixed ``now``.
+
+    Only ``now`` is stubbed — every other ``datetime`` use in
+    ``cost.py`` would have to come from this class too, but the
+    handler only calls ``datetime.now(UTC)``. Using ``__future__``
+    annotations across the project means runtime type lookups won't
+    hit this stub.
+    """
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:
+        return FROZEN_NOW.astimezone(tz) if tz is not None else FROZEN_NOW
+
+
+@pytest.fixture()
+async def client_with_tenant_session() -> AsyncGenerator[AsyncClient]:
+    """Client whose ``session.get(Tenant, ...)`` returns a fixed Tenant.
+
+    Mirrors the production wiring (real ``AsyncSession.get`` is awaitable)
+    by using ``AsyncMock`` on ``.get`` rather than the bare ``MagicMock``
+    used by the broader ``client`` fixture. Other repo calls in the
+    handler are independently patched per-test.
+    """
+    mock_tenant = MagicMock(spec=Tenant)
+    mock_tenant.created_at = TENANT_CREATED_AT
+
+    mock_session = MagicMock()
+    mock_session.get = AsyncMock(return_value=mock_tenant)
+
+    app.dependency_overrides[get_session] = lambda: mock_session
+    app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
+    app.dependency_overrides[get_arq_redis] = lambda: MagicMock()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        yield ac
+    app.dependency_overrides.clear()
+
+
+class TestCostSummaryFallback:
+    """``/cost/summary`` with optional ``from``/``to`` (KD-A through KD-F)."""
+
+    async def test_omitted_from_uses_tenant_created_at(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_summary_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        with (
+            patched_summary_repo,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get(
+                "/api/v1/cost/summary",
+                params={"to": "2026-04-28"},
+            )
+            # ``patch.multiple`` with pre-supplied AsyncMock kwargs
+            # yields an empty mapping on enter, so capture await args
+            # via the patched class attribute *inside* the ``with``
+            # block (the patch is reverted at exit).
+            get_total = ExternalServiceCallRepository.get_total_for_period
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        # Resolved ``from`` must reach the repo as ``2026-01-01``
+        # (TENANT_CREATED_AT.date()), not as None.
+        assert kwargs["from_date"] == TENANT_CREATED_AT.date()
+        assert str(kwargs["to_date"]) == "2026-04-28"
+
+    async def test_omitted_to_uses_now_utc_date(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_summary_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        with (
+            patched_summary_repo,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get(
+                "/api/v1/cost/summary",
+                params={"from": "2026-02-01"},
+            )
+            get_total = ExternalServiceCallRepository.get_total_for_period
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        assert str(kwargs["from_date"]) == "2026-02-01"
+        # Resolved ``to`` is the frozen UTC date, not local ``today``.
+        assert kwargs["to_date"] == FROZEN_NOW.date()
+
+    async def test_both_omitted_uses_full_fallback(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_summary_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        with (
+            patched_summary_repo,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get("/api/v1/cost/summary")
+            get_total = ExternalServiceCallRepository.get_total_for_period
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        data = response.json()
+        # Response body echoes the resolved bounds (Pydantic alias).
+        assert data["from"] == str(TENANT_CREATED_AT.date())
+        assert data["to"] == str(FROZEN_NOW.date())
+        assert kwargs["from_date"] == TENANT_CREATED_AT.date()
+        assert kwargs["to_date"] == FROZEN_NOW.date()
+
+    async def test_cache_key_invariant_no_params_equals_explicit_resolved(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_summary_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """KD-F: cache keys for "no params" and "explicit resolved dates" match.
+
+        Two requests against the same logical period (one omits the
+        bounds, the other passes them explicitly) must produce identical
+        cache keys — otherwise UI clients that sometimes omit params and
+        sometimes pass tenant-relative dates would see ghost cache misses.
+        """
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        observed_keys: list[str] = []
+
+        async def _capture(_redis: Any, key: str, _value: str) -> None:
+            observed_keys.append(key)
+
+        with (
+            patched_summary_repo,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock(side_effect=_capture)),
+        ):
+            r1 = await client_with_tenant_session.get("/api/v1/cost/summary")
+            r2 = await client_with_tenant_session.get(
+                "/api/v1/cost/summary",
+                params={
+                    "from": str(TENANT_CREATED_AT.date()),
+                    "to": str(FROZEN_NOW.date()),
+                },
+            )
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert len(observed_keys) == 2
+        first, second = observed_keys
+        assert first == second, f"Cache-key invariant violated: {first!r} != {second!r}"
+
+
+class TestCostCourseFallback:
+    """``/cost/course/{id}`` with optional ``from``/``to`` (KD-A through KD-F)."""
+
+    async def test_omitted_from_uses_tenant_created_at(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_course_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        node_get, descendants, repo_methods_ctx = patched_course_repo
+        with (
+            node_get,
+            descendants,
+            repo_methods_ctx,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get(
+                f"/api/v1/cost/course/{COURSE_ID}",
+                params={"to": "2026-04-28"},
+            )
+            get_total = ExternalServiceCallRepository.get_total_for_subtree
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        assert kwargs["from_date"] == TENANT_CREATED_AT.date()
+        assert str(kwargs["to_date"]) == "2026-04-28"
+
+    async def test_omitted_to_uses_now_utc_date(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_course_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        node_get, descendants, repo_methods_ctx = patched_course_repo
+        with (
+            node_get,
+            descendants,
+            repo_methods_ctx,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get(
+                f"/api/v1/cost/course/{COURSE_ID}",
+                params={"from": "2026-02-01"},
+            )
+            get_total = ExternalServiceCallRepository.get_total_for_subtree
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        assert str(kwargs["from_date"]) == "2026-02-01"
+        assert kwargs["to_date"] == FROZEN_NOW.date()
+
+    async def test_both_omitted_uses_full_fallback(
+        self,
+        client_with_tenant_session: AsyncClient,
+        patched_course_repo: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cost_module, "datetime", _FrozenClock)
+        node_get, descendants, repo_methods_ctx = patched_course_repo
+        with (
+            node_get,
+            descendants,
+            repo_methods_ctx,
+            patch.object(cost_module, "get_cached", AsyncMock(return_value=None)),
+            patch.object(cost_module, "set_cached", AsyncMock()),
+        ):
+            response = await client_with_tenant_session.get(
+                f"/api/v1/cost/course/{COURSE_ID}",
+            )
+            get_total = ExternalServiceCallRepository.get_total_for_subtree
+            kwargs = get_total.await_args.kwargs
+        assert response.status_code == 200
+        data = response.json()
+        assert data["from"] == str(TENANT_CREATED_AT.date())
+        assert data["to"] == str(FROZEN_NOW.date())
+        assert kwargs["from_date"] == TENANT_CREATED_AT.date()
+        assert kwargs["to_date"] == FROZEN_NOW.date()

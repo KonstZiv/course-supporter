@@ -1,0 +1,4 @@
+Hello! Here is my Python homework solution. I implemented the
+algorithm using a dictionary for O(1) lookups. The function
+handles edge cases including empty input and duplicates. I tested
+on multiple datasets and verified correctness. Please review.

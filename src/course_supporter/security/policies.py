@@ -1,0 +1,185 @@
+"""Per-context security policy constants (vision §KD14).
+
+Two upload contexts -- ``authored`` (course materials uploaded by a
+trusted author / instructor) and ``homework`` (submissions by
+students) -- have distinct trust profiles and therefore distinct
+allow-lists, size limits, archive rules, and Stage 2 LLM safety
+gating.
+
+## URL exclusion
+
+URL ingestion has a separate security path (Phase 2.x web fetch).
+``ContextPolicy`` applies to **file uploads only**; web URLs are
+not modeled here.
+
+## MVP design choice: Final constants, not YAML
+
+Security policies evolve slowly; every change is reviewed. KD16's
+YAML-driven philosophy targets fast-changing items (LLM models,
+prices). Security policy lives as ``Final`` constants until a real
+driver for tenant-specific overrides emerges.
+
+## Vision §KD14 policy table (this module's source of truth)
+
+* **authored**: video (mp4/mov/avi/mkv/webm) + audio
+  (mp3/wav/m4a/ogg/flac) + documents (pdf/pptx/md/docx/txt/html).
+  100 MB default cap, 5 GB for video. No archives. No LLM safety
+  check (trusted author). Charset-strict off (legacy encodings
+  tolerated).
+* **homework**: pdf/md/txt/py/ipynb/zip/gz/tgz. 1 MB cap. Archives
+  capped at 10 MB unzipped, 3 levels nesting. LLM safety check
+  enabled (Stage 2). Charset-strict on (modern UTF-8 baseline).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final, Literal
+
+# Video extensions that get the dedicated ``max_video_size_bytes``
+# cap when present on the active policy. Audio extensions stay on
+# the default ``max_file_size_bytes``; they are bounded enough not
+# to need a separate ceiling.
+_VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset(
+    {"mp4", "mov", "avi", "mkv", "webm"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextPolicy:
+    """Per-context security policy applied at Stage 1 entry.
+
+    Attributes:
+        name: Discriminator -- ``"authored"`` or ``"homework"``.
+        allowed_extensions: Lower-cased extension whitelist. Every
+            entry must exist in
+            :data:`course_supporter.security.file_type._EXTENSION_TO_MIME_FAMILIES`
+            (regression-tested in
+            :class:`tests.unit.security.test_policies.TestPolicyConsistency`).
+        max_file_size_bytes: Default per-file cap for any extension
+            that does not match the video override.
+        max_video_size_bytes: Override cap applied to extensions in
+            :data:`_VIDEO_EXTENSIONS`. ``None`` means video is not
+            allowed in this context (relies on
+            ``allowed_extensions`` to also exclude video).
+        max_archive_unzipped_bytes: Cumulative byte budget for
+            archive extraction (KD-A); ``None`` means archives are
+            not allowed in this context.
+        max_archive_nesting_depth: Maximum archive-within-archive
+            recursion depth; ``None`` means archives are not allowed
+            in this context.
+        enable_llm_safety_check: When ``True``, Stage 1 dispatches
+            to Stage 2 LLM safety check after sync validation
+            passes. Authored content is trusted; homework
+            submissions are checked.
+        enable_charset_strict: When ``True``, Stage 1 rejects text
+            content whose libmagic-detected charset is neither
+            UTF-8 nor US-ASCII. Modern submissions baseline UTF-8;
+            authored content tolerates legacy encodings (Cyrillic
+            in Windows-1251, etc.).
+    """
+
+    name: Literal["authored", "homework"]
+    allowed_extensions: frozenset[str]
+    max_file_size_bytes: int
+    max_video_size_bytes: int | None
+    max_archive_unzipped_bytes: int | None
+    max_archive_nesting_depth: int | None
+    enable_llm_safety_check: bool
+    enable_charset_strict: bool
+
+
+AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
+    name="authored",
+    allowed_extensions=frozenset(
+        {
+            # video (5)
+            "mp4",
+            "mov",
+            "avi",
+            "mkv",
+            "webm",
+            # audio (5)
+            "mp3",
+            "wav",
+            "m4a",
+            "ogg",
+            "flac",
+            # documents (6)
+            "pdf",
+            "pptx",
+            "md",
+            "docx",
+            "txt",
+            "html",
+        }
+    ),
+    max_file_size_bytes=100 * 1024 * 1024,
+    max_video_size_bytes=5 * 1024 * 1024 * 1024,
+    max_archive_unzipped_bytes=None,
+    max_archive_nesting_depth=None,
+    enable_llm_safety_check=False,
+    enable_charset_strict=False,
+)
+
+
+HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
+    name="homework",
+    allowed_extensions=frozenset(
+        {
+            "pdf",
+            "md",
+            "txt",
+            "py",
+            "ipynb",
+            "zip",
+            "gz",
+            "tgz",
+        }
+    ),
+    max_file_size_bytes=1 * 1024 * 1024,
+    max_video_size_bytes=None,
+    max_archive_unzipped_bytes=10 * 1024 * 1024,
+    max_archive_nesting_depth=3,
+    enable_llm_safety_check=True,
+    enable_charset_strict=True,
+)
+
+
+def policy_for(context: Literal["authored", "homework"]) -> ContextPolicy:
+    """Resolve the active :class:`ContextPolicy` for an upload context.
+
+    The ``Literal`` annotation catches typos at type-check time;
+    the runtime ``ValueError`` adds defense-in-depth for callers
+    bypassing the type system (e.g. policy resolution from
+    user-controlled string input).
+
+    Args:
+        context: ``"authored"`` or ``"homework"``.
+
+    Raises:
+        ValueError: on any other value.
+    """
+    match context:
+        case "authored":
+            return AUTHORED_POLICY
+        case "homework":
+            return HOMEWORK_POLICY
+        case _:
+            raise ValueError(f"unknown context {context!r}")
+
+
+def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
+    """Return the per-file size cap applicable to ``extension`` under ``policy``.
+
+    Returns ``policy.max_video_size_bytes`` if the extension is in
+    :data:`_VIDEO_EXTENSIONS` and the policy provides a video
+    override; otherwise ``policy.max_file_size_bytes``.
+
+    The extension argument is lower-cased internally for whitelist
+    comparison; callers may pass either case.
+    """
+    ext = extension.lower()
+    if ext in _VIDEO_EXTENSIONS and policy.max_video_size_bytes is not None:
+        return policy.max_video_size_bytes
+    return policy.max_file_size_bytes

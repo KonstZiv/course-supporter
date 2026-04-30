@@ -1,0 +1,7 @@
+// CVE-2021-42574 Trojan Source — bidi reorder attack
+function isAuthorized(user) {
+  if (user.role === ‮"admin"‬ /* benign-looking comment */) {
+    return true;
+  }
+  return false;
+}

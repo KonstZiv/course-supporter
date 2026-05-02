@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from course_supporter.storage.orm import MaterialNode, MaterialState
+from course_supporter.storage.orm import CourseNode, MaterialState
 
 #: States that block structure generation.
 _STALE_STATES = frozenset({MaterialState.RAW, MaterialState.INTEGRITY_BROKEN})
@@ -55,7 +55,7 @@ class ReadinessService:
         nodes = await self._load_subtree(node_id)
         stale: list[StaleMaterial] = []
         for node in nodes:
-            for entry in node.materials:
+            for entry in node.documents:
                 if entry.state in _STALE_STATES:
                     stale.append(
                         StaleMaterial(
@@ -68,22 +68,20 @@ class ReadinessService:
                     )
         return ReadinessResult(ready=len(stale) == 0, stale=stale)
 
-    async def _load_subtree(self, root_id: uuid.UUID) -> list[MaterialNode]:
+    async def _load_subtree(self, root_id: uuid.UUID) -> list[CourseNode]:
         """Load root node and all descendants with materials eager-loaded.
 
         Uses a recursive CTE to find all descendant node IDs.
         """
-        base = select(MaterialNode.id).where(MaterialNode.id == root_id)
+        base = select(CourseNode.id).where(CourseNode.id == root_id)
         cte = base.cte(name="subtree", recursive=True)
-        recursive = select(MaterialNode.id).join(
-            cte, MaterialNode.parent_materialnode_id == cte.c.id
-        )
+        recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
         cte = cte.union_all(recursive)
 
         stmt = (
-            select(MaterialNode)
-            .where(MaterialNode.id.in_(select(cte.c.id)))
-            .options(selectinload(MaterialNode.materials))
+            select(CourseNode)
+            .where(CourseNode.id.in_(select(cte.c.id)))
+            .options(selectinload(CourseNode.documents))
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

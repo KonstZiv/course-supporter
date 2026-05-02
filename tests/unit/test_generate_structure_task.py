@@ -20,24 +20,24 @@ from course_supporter.tree_utils import find_node_bfs, flatten_subtree
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
-    node_fingerprint: str | None = None,
+    content_hash: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode with required attributes."""
+    """Create a mock CourseNode with required attributes."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.title = title
     node.description = description
     node.order = order
     node.children = children or []
     node.materials = materials or []
-    node.node_fingerprint = node_fingerprint
+    node.content_hash = content_hash
     return node
 
 
@@ -48,7 +48,7 @@ def _make_entry(
     filename: str | None = "test.md",
     source_url: str = "file:///test.md",
 ) -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
     entry.processed_content = processed_content or (
@@ -157,7 +157,7 @@ class _MockDeps:
         # JobRepository
         self.job_repo = AsyncMock()
 
-        # MaterialNodeRepository
+        # CourseNodeRepository
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
@@ -234,7 +234,7 @@ async def _run_task(
             return_value=deps.job_repo,
         ),
         patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
         ),
         patch(
@@ -507,13 +507,13 @@ class TestGuidedModeAgent:
 
         entry = _make_entry(state="ready")
         child = _make_node(title="Lesson 1", description="First lesson")
-        child.parent_materialnode_id = uuid.uuid4()  # has parent
+        child.parent_id = uuid.uuid4()  # has parent
         root = _make_node(
             materials=[entry],
             title="Module A",
             children=[child],
         )
-        root.parent_materialnode_id = None  # root node
+        root.parent_id = None  # root node
 
         deps = _MockDeps(root_nodes=[root])
 

@@ -1,4 +1,4 @@
-"""Utilities for traversing MaterialNode trees."""
+"""Utilities for traversing CourseNode trees."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from course_supporter.models.course import MaterialNodeSummary
-    from course_supporter.storage.orm import MaterialNode
+    from course_supporter.models.course import CourseNodeSummary
+    from course_supporter.storage.orm import CourseNode
 
 
-def flatten_subtree(root: MaterialNode) -> list[MaterialNode]:
+def flatten_subtree(root: CourseNode) -> list[CourseNode]:
     """BFS from root collecting all nodes (children must be populated).
 
     Args:
@@ -20,8 +20,8 @@ def flatten_subtree(root: MaterialNode) -> list[MaterialNode]:
     Returns:
         Flat list of all nodes in the subtree, root first.
     """
-    result: list[MaterialNode] = []
-    queue: deque[MaterialNode] = deque([root])
+    result: list[CourseNode] = []
+    queue: deque[CourseNode] = deque([root])
     while queue:
         node = queue.popleft()
         result.append(node)
@@ -30,9 +30,9 @@ def flatten_subtree(root: MaterialNode) -> list[MaterialNode]:
 
 
 def find_node_bfs(
-    roots: list[MaterialNode],
+    roots: list[CourseNode],
     target_id: uuid.UUID,
-) -> MaterialNode | None:
+) -> CourseNode | None:
     """BFS across roots to find a node by ID.
 
     Args:
@@ -42,7 +42,7 @@ def find_node_bfs(
     Returns:
         The matching node or ``None`` if not found.
     """
-    queue: deque[MaterialNode] = deque(roots)
+    queue: deque[CourseNode] = deque(roots)
     while queue:
         node = queue.popleft()
         if node.id == target_id:
@@ -52,9 +52,9 @@ def find_node_bfs(
 
 
 def resolve_target_nodes(
-    root_nodes: list[MaterialNode],
+    root_nodes: list[CourseNode],
     node_id: uuid.UUID | None = None,
-) -> tuple[MaterialNode | None, list[MaterialNode]]:
+) -> tuple[CourseNode | None, list[CourseNode]]:
     """Resolve target node and flatten its subtree.
 
     Args:
@@ -76,15 +76,15 @@ def resolve_target_nodes(
             raise NodeNotFoundError(msg)
         return target, flatten_subtree(target)
 
-    flat: list[MaterialNode] = []
+    flat: list[CourseNode] = []
     for rn in root_nodes:
         flat.extend(flatten_subtree(rn))
     return None, flat
 
 
 def build_material_tree_summary(
-    flat_nodes: list[MaterialNode],
-) -> list[MaterialNodeSummary]:
+    flat_nodes: list[CourseNode],
+) -> list[CourseNodeSummary]:
     """Build tree summary with material titles for LLM context.
 
     Rebuilds the parent-child hierarchy from ``flat_nodes`` and collects
@@ -97,24 +97,24 @@ def build_material_tree_summary(
             (root first, children eagerly loaded).
 
     Returns:
-        List of root-level :class:`MaterialNodeSummary` nodes.
+        List of root-level :class:`CourseNodeSummary` nodes.
     """
-    from course_supporter.models.course import MaterialNodeSummary
+    from course_supporter.models.course import CourseNodeSummary
     from course_supporter.storage.orm import MaterialState
 
     node_ids = {n.id for n in flat_nodes}
 
-    def _material_titles(node: MaterialNode) -> list[str]:
+    def _material_titles(node: CourseNode) -> list[str]:
         titles: list[str] = []
-        for entry in node.materials:
+        for entry in node.documents:
             if entry.state == MaterialState.READY and (
                 title := (entry.filename or entry.source_url)
             ):
                 titles.append(title)
         return titles
 
-    def _node_to_summary(node: MaterialNode) -> MaterialNodeSummary:
-        return MaterialNodeSummary(
+    def _node_to_summary(node: CourseNode) -> CourseNodeSummary:
+        return CourseNodeSummary(
             title=node.title,
             description=node.description,
             order=node.order,
@@ -126,15 +126,13 @@ def build_material_tree_summary(
         )
 
     roots = [
-        n
-        for n in flat_nodes
-        if n.parent_materialnode_id is None or n.parent_materialnode_id not in node_ids
+        n for n in flat_nodes if n.parent_id is None or n.parent_id not in node_ids
     ]
     return [_node_to_summary(r) for r in roots]
 
 
 def serialize_tree_for_guided(
-    flat_nodes: list[MaterialNode],
+    flat_nodes: list[CourseNode],
 ) -> str:
     """Serialize node tree into a nested JSON outline for guided-mode prompt.
 
@@ -150,7 +148,7 @@ def serialize_tree_for_guided(
     """
     import json
 
-    def _node_to_dict(node: MaterialNode) -> dict[str, object]:
+    def _node_to_dict(node: CourseNode) -> dict[str, object]:
         result: dict[str, object] = {
             "title": node.title,
             "description": node.description,
@@ -160,12 +158,10 @@ def serialize_tree_for_guided(
             result["children"] = [_node_to_dict(c) for c in node.children]
         return result
 
-    # Rebuild from roots: nodes without parent_materialnode_id among flat_nodes
+    # Rebuild from roots: nodes without parent_id among flat_nodes
     root_ids = {n.id for n in flat_nodes}
     roots = [
-        n
-        for n in flat_nodes
-        if n.parent_materialnode_id is None or n.parent_materialnode_id not in root_ids
+        n for n in flat_nodes if n.parent_id is None or n.parent_id not in root_ids
     ]
     tree = [_node_to_dict(r) for r in roots]
     return json.dumps(tree, ensure_ascii=False, indent=2)

@@ -29,8 +29,8 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_homework
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 from course_supporter.storage.student_repository import StudentRepository
 
@@ -93,7 +93,7 @@ async def submit_homework(
     ],
     course_node_id: Annotated[
         uuid.UUID,
-        Form(description="Root MaterialNode UUID representing the course."),
+        Form(description="Root CourseNode UUID representing the course."),
     ],
     node_id: Annotated[
         uuid.UUID,
@@ -155,13 +155,13 @@ async def submit_homework(
         webhook_url = await validate_webhook_url(webhook_url)
 
     # --- Verify nodes belong to tenant ---
-    node_repo = MaterialNodeRepository(session)
+    node_repo = CourseNodeRepository(session)
 
     course_node = await node_repo.get_by_id(course_node_id)
     if course_node is None or course_node.tenant_id != tenant.tenant_id:
         raise HTTPException(status_code=404, detail="Course node not found.")
 
-    if course_node.parent_materialnode_id is not None:
+    if course_node.parent_id is not None:
         raise HTTPException(
             status_code=422,
             detail="course_node_id must be a root node (course level).",

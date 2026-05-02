@@ -1,7 +1,7 @@
 """Material tree node management API endpoints.
 
 Provides CRUD operations for the hierarchical material tree.
-Root nodes (parent_materialnode_id IS NULL) serve as top-level entities (courses).
+Root nodes (parent_id IS NULL) serve as top-level entities (courses).
 Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
@@ -42,8 +42,8 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import MaterialNode
+from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
@@ -58,11 +58,11 @@ SharedDep = Annotated[
 ]
 
 
-def _node_response(node: MaterialNode) -> NodeResponse:
+def _node_response(node: CourseNode) -> NodeResponse:
     """Build NodeResponse with computed children_count and materials_count."""
     resp = NodeResponse.model_validate(node)
     resp.children_count = len(node.children) if node.children else 0
-    resp.materials_count = len(node.materials) if node.materials else 0
+    resp.materials_count = len(node.documents) if node.documents else 0
     return resp
 
 
@@ -77,7 +77,7 @@ async def _require_node_for_tenant(
         HTTPException 404: If the node is not found or
             does not belong to the authenticated tenant.
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -111,7 +111,7 @@ async def create_root_node(
     Root nodes have no parent and appear at the top level.
     The ``order`` is auto-assigned as the next available position.
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.create(
         tenant_id=tenant.tenant_id,
         title=body.title,
@@ -148,7 +148,7 @@ async def list_root_nodes(
 
     Returns a paginated list sorted by creation date (newest first).
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     roots = await repo.list_roots(tenant.tenant_id, limit=limit, offset=offset)
     total = await repo.count_roots(tenant.tenant_id)
     return NodeListResponse(
@@ -175,11 +175,11 @@ async def create_child_node(
     is auto-assigned as the next available position among siblings.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     node = await repo.create(
         tenant_id=tenant.tenant_id,
-        parent_materialnode_id=node_id,
+        parent_id=node_id,
         title=body.title,
         description=body.description,
         default_language=body.default_language,
@@ -189,7 +189,7 @@ async def create_child_node(
     logger.info(
         "child_node_created",
         node_id=str(node.id),
-        parent_materialnode_id=str(node_id),
+        parent_id=str(node_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -210,7 +210,7 @@ async def get_tree(
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     roots = await repo.get_subtree(node_id)
     return [NodeTreeResponse.model_validate(r) for r in roots]
 
@@ -228,8 +228,8 @@ async def get_node_detail(
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    repo = MaterialNodeRepository(session)
-    tree_roots = await repo.get_subtree(node_id, include_materials=True)
+    repo = CourseNodeRepository(session)
+    tree_roots = await repo.get_subtree(node_id, include_documents=True)
     if not tree_roots:
         raise HTTPException(status_code=404, detail="Node not found")
     return NodeWithMaterialsResponse.model_validate(tree_roots[0])
@@ -268,7 +268,7 @@ async def update_node(
     re-ingestion of existing materials.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     # Distinguish "field omitted" from "field set to null"
     update_kwargs: dict[str, str | None] = {}
@@ -295,20 +295,18 @@ async def move_node(
 ) -> NodeResponse:
     """Move a node to a new parent (or to root).
 
-    Cycle detection is enforced. Set ``parent_materialnode_id`` to ``null``
+    Cycle detection is enforced. Set ``parent_id`` to ``null``
     to make the node a root. Returns 422 if the move would create a cycle.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     # Validate target parent belongs to the same tenant
-    if body.parent_materialnode_id is not None:
-        await _require_node_for_tenant(
-            session, tenant.tenant_id, body.parent_materialnode_id
-        )
+    if body.parent_id is not None:
+        await _require_node_for_tenant(session, tenant.tenant_id, body.parent_id)
 
     try:
-        node = await repo.move(node_id, body.parent_materialnode_id)
+        node = await repo.move(node_id, body.parent_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -317,7 +315,7 @@ async def move_node(
     logger.info(
         "node_moved",
         node_id=str(node_id),
-        new_parent_materialnode_id=str(body.parent_materialnode_id),
+        new_parent_id=str(body.parent_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -335,7 +333,7 @@ async def reorder_node(
     number of siblings, it is clamped to the last position.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     try:
         node = await repo.reorder(node_id, body.order)
@@ -365,13 +363,13 @@ async def delete_node(
     deletes them from S3, then cascades DB deletion.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    node_repo = MaterialNodeRepository(session)
+    node_repo = CourseNodeRepository(session)
 
     # Collect S3 keys before DB cascade removes entries
-    subtree = await node_repo.get_subtree(node_id, include_materials=True)
+    subtree = await node_repo.get_subtree(node_id, include_documents=True)
     s3_keys: list[str] = []
     for node in _flatten(subtree):
-        for entry in node.materials:
+        for entry in node.documents:
             key = s3.extract_key(entry.source_url)
             if key is not None:
                 s3_keys.append(key)
@@ -390,9 +388,9 @@ async def delete_node(
     )
 
 
-def _flatten(nodes: Sequence[MaterialNode]) -> list[MaterialNode]:
+def _flatten(nodes: Sequence[CourseNode]) -> list[CourseNode]:
     """Flatten a tree of nodes into a flat list."""
-    result: list[MaterialNode] = []
+    result: list[CourseNode] = []
     stack = list(nodes)
     while stack:
         node = stack.pop()

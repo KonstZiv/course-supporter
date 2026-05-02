@@ -6,7 +6,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 from course_supporter.readiness import ReadinessService, StaleMaterial
-from course_supporter.storage.orm import MaterialEntry, MaterialNode, MaterialState
+from course_supporter.storage.orm import AuthoredDocument, CourseNode, MaterialState
 
 
 def _mock_entry(
@@ -14,8 +14,8 @@ def _mock_entry(
     state: MaterialState = MaterialState.READY,
     filename: str | None = "file.pdf",
 ) -> MagicMock:
-    """Create a mock MaterialEntry with the given derived state."""
-    entry = MagicMock(spec=MaterialEntry)
+    """Create a mock AuthoredDocument with the given derived state."""
+    entry = MagicMock(spec=AuthoredDocument)
     entry.id = uuid.uuid4()
     entry.filename = filename
     entry.state = state
@@ -26,15 +26,15 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     title: str = "Node",
     materials: list[MagicMock] | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
-    node = MagicMock(spec=MaterialNode)
+    """Create a mock CourseNode."""
+    node = MagicMock(spec=CourseNode)
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or uuid.uuid4()
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.title = title
     node.materials = materials or []
     return node
@@ -85,7 +85,7 @@ class TestAllReady:
         )
         child = _mock_node(
             tenant_id=tid,
-            parent_materialnode_id=root.id,
+            parent_id=root.id,
             title="Child",
             materials=[_mock_entry()],
         )
@@ -159,7 +159,7 @@ class TestStaleMaterials:
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="child.mp4")
         child = _mock_node(
             tenant_id=tid,
-            parent_materialnode_id=root.id,
+            parent_id=root.id,
             title="Child",
             materials=[raw_entry],
         )
@@ -178,14 +178,14 @@ class TestStaleMaterials:
         root = _mock_node(tenant_id=tid, title="Root", materials=[])
         child = _mock_node(
             tenant_id=tid,
-            parent_materialnode_id=root.id,
+            parent_id=root.id,
             title="Child",
             materials=[],
         )
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="deep.pdf")
         grandchild = _mock_node(
             tenant_id=tid,
-            parent_materialnode_id=child.id,
+            parent_id=child.id,
             title="Grandchild",
             materials=[raw_entry],
         )
@@ -206,7 +206,7 @@ class TestStaleMaterials:
         root = _mock_node(tenant_id=tid, title="Root", materials=[raw1])
         child = _mock_node(
             tenant_id=tid,
-            parent_materialnode_id=root.id,
+            parent_id=root.id,
             title="Child",
             materials=[_mock_entry(), raw2],
         )

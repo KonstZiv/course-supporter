@@ -18,26 +18,26 @@ from course_supporter.models.step import StepOutput
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     parent: MagicMock | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
-    node_fingerprint: str | None = None,
+    content_hash: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
+    """Create a mock CourseNode."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.parent = parent
     node.title = title
     node.description = description
     node.order = order
     node.children = children or []
     node.materials = materials or []
-    node.node_fingerprint = node_fingerprint
+    node.content_hash = content_hash
     return node
 
 
@@ -47,7 +47,7 @@ def _make_entry(
     processed_content: str | None = None,
     outline_content: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
     entry.processed_content = processed_content or (
@@ -170,7 +170,7 @@ async def _run_task(
             return_value=deps.job_repo,
         ),
         patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
         ),
         patch(
@@ -298,7 +298,7 @@ class TestStepInputAssembly:
 
         entry = _make_entry(state="ready")
         root = _make_node(materials=[entry], title="My Module")
-        root.parent_materialnode_id = None
+        root.parent_id = None
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps, mode="guided")
@@ -326,7 +326,7 @@ class TestChildrenSummaries:
         # so children_summaries path is used instead of children_snapshots.
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
-        child_snap.materialnode_id = child.id
+        child_snap.course_node_id = child.id
         child_snap.summary = "Child covers basics"
         child_snap.core_concepts = ["variables"]
         child_snap.mentioned_concepts = ["functions"]
@@ -468,7 +468,7 @@ def _make_snap_with_summary(
     """Create a mock StructureSnapshot with summary fields."""
     snap = MagicMock()
     snap.id = uuid.uuid4()
-    snap.materialnode_id = node_id
+    snap.course_node_id = node_id
     snap.summary = summary
     snap.core_concepts = core_concepts or []
     snap.mentioned_concepts = mentioned_concepts or []
@@ -489,7 +489,7 @@ class TestReconcileSlidingWindow:
         child = _make_node(
             title="Child",
             materials=[entry],
-            parent_materialnode_id=parent_id,
+            parent_id=parent_id,
         )
         parent = _make_node(
             node_id=parent_id,
@@ -534,11 +534,11 @@ class TestReconcileSlidingWindow:
         target_child = _make_node(
             title="Target",
             materials=[entry],
-            parent_materialnode_id=parent_id,
+            parent_id=parent_id,
         )
         sibling = _make_node(
             title="Sibling",
-            parent_materialnode_id=parent_id,
+            parent_id=parent_id,
         )
         parent = _make_node(
             node_id=parent_id,
@@ -583,7 +583,7 @@ class TestReconcileSlidingWindow:
         child = _make_node(
             title="Child",
             materials=[entry],
-            parent_materialnode_id=parent_id,
+            parent_id=parent_id,
         )
         parent = _make_node(
             node_id=parent_id,
@@ -620,7 +620,7 @@ class TestReconcileSlidingWindow:
         )
         # Root has no parent
         root.parent = None
-        root.parent_materialnode_id = None
+        root.parent_id = None
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -658,7 +658,7 @@ class TestContextCompression:
 
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
-        child_snap.materialnode_id = child.id
+        child_snap.course_node_id = child.id
         child_snap.structure = {"modules": [{"title": "Sub"}]}
         child_snap.summary = "Child covers basics"
         child_snap.core_concepts = ["variables"]
@@ -695,7 +695,7 @@ class TestContextCompression:
 
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
-        child_snap.materialnode_id = child.id
+        child_snap.course_node_id = child.id
         child_snap.structure = {"modules": []}
         child_snap.summary = "Child summary"
         child_snap.core_concepts = []
@@ -787,14 +787,14 @@ class TestDetermineNodePosition:
         from course_supporter.agents.architect import NodePosition
         from course_supporter.api.tasks import _determine_node_position
 
-        node = _make_node(parent_materialnode_id=None, children=[])
+        node = _make_node(parent_id=None, children=[])
         assert _determine_node_position(node) == NodePosition.ROOT
 
     def test_leaf_node(self) -> None:
         from course_supporter.agents.architect import NodePosition
         from course_supporter.api.tasks import _determine_node_position
 
-        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[])
+        node = _make_node(parent_id=uuid.uuid4(), children=[])
         assert _determine_node_position(node) == NodePosition.LEAF
 
     def test_intermediate_node(self) -> None:
@@ -802,5 +802,5 @@ class TestDetermineNodePosition:
         from course_supporter.api.tasks import _determine_node_position
 
         child = _make_node()
-        node = _make_node(parent_materialnode_id=uuid.uuid4(), children=[child])
+        node = _make_node(parent_id=uuid.uuid4(), children=[child])
         assert _determine_node_position(node) == NodePosition.INTERMEDIATE

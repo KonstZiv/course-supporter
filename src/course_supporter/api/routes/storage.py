@@ -22,7 +22,9 @@ from course_supporter.api.schemas import StorageFileResponse, StorageUsageRespon
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
@@ -80,7 +82,7 @@ async def delete_file(
     session: SessionDep,
     s3: S3Dep,
 ) -> None:
-    """Delete a file from S3 and cascade to MaterialEntry.
+    """Delete a file from S3 and cascade to AuthoredDocument.
 
     Verifies the key belongs to the tenant before deletion.
     """
@@ -91,9 +93,9 @@ async def delete_file(
     # Delete from S3
     await s3.delete_object(key)
 
-    # Cascade: find and delete MaterialEntry referencing this key
+    # Cascade: find and delete AuthoredDocument referencing this key
     s3_url = f"{s3._endpoint_url}/{s3._bucket}/{key}"
-    entry_repo = MaterialEntryRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
     entry = await entry_repo.get_by_source_url(s3_url)
     if entry is not None:
         await entry_repo.delete(entry.id)

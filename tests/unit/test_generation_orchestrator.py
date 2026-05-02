@@ -44,14 +44,14 @@ def _make_entry(
     *,
     state: str = "ready",
     entry_id: uuid.UUID | None = None,
-    materialnode_id: uuid.UUID | None = None,
+    course_node_id: uuid.UUID | None = None,
     source_type: str = "text",
     source_url: str = "https://example.com/doc",
     job_id: uuid.UUID | None = None,
 ) -> MagicMock:
     entry = MagicMock()
     entry.id = entry_id or uuid.uuid4()
-    entry.materialnode_id = materialnode_id or uuid.uuid4()
+    entry.course_node_id = course_node_id or uuid.uuid4()
     entry.state = state
     entry.source_type = source_type
     entry.material_role = "educational"
@@ -119,7 +119,7 @@ async def _run(
 
     with (
         patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
         ),
         patch(
@@ -688,7 +688,7 @@ async def _run_refine(
 
     with (
         patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
         ),
         patch(

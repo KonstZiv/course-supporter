@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
     from course_supporter.llm.schemas import LLMResponse
     from course_supporter.models.course import (
+        CourseNodeSummary,
         CourseStructure,
-        MaterialNodeSummary,
         SlideTimecodeRef,
     )
     from course_supporter.models.source import SourceDocument
@@ -111,7 +111,7 @@ class StepInput:
 
     # Generation parameters
     mode: Literal["free", "guided"]
-    material_tree: list[MaterialNodeSummary]
+    material_tree: list[CourseNodeSummary]
 
     # Full child snapshots for parent context (replaces raw child materials)
     children_snapshots: list[ChildSnapshotContext] = field(default_factory=list)

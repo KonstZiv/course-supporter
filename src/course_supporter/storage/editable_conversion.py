@@ -62,7 +62,7 @@ def convert_structure_nodes_to_editables(
 
     Args:
         structure_nodes: Flat list of StructureNode ORM objects.
-        materialnode_id: Target MaterialNode to link editables to.
+        materialnode_id: Target CourseNode to link editables to.
         snapshot_id: Source snapshot for provenance tracking.
 
     Returns:

@@ -147,7 +147,7 @@ class TestAuthMiddleware:
 
         # Patch the repository to return no node
         with patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository.get_by_id",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository.get_by_id",
             return_value=None,
         ):
             response = await client.get(
@@ -171,7 +171,7 @@ class TestAuthMiddleware:
         mock_session.execute.return_value = mock_result
 
         with patch(
-            "course_supporter.storage.material_node_repository.MaterialNodeRepository.get_by_id",
+            "course_supporter.storage.course_node_repository.CourseNodeRepository.get_by_id",
         ) as mock_get:
             mock_get.return_value = None
             response = await client.get(

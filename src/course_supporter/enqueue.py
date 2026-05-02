@@ -10,8 +10,10 @@ from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.job_priority import JobPriority
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 from course_supporter.storage.orm import Job
 
 
@@ -43,8 +45,8 @@ async def enqueue_ingestion(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        node_id: MaterialNode that owns the material entry.
-        material_id: MaterialEntry to ingest.
+        node_id: CourseNode that owns the material entry.
+        material_id: AuthoredDocument to ingest.
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or S3 path to the source file.
         priority: Job priority (NORMAL respects work window).
@@ -56,7 +58,7 @@ async def enqueue_ingestion(
         node_id=str(node_id), material_id=str(material_id)
     )
     job_repo = JobRepository(session)
-    entry_repo = MaterialEntryRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
 
     job = await job_repo.create(
         tenant_id=tenant_id,
@@ -113,7 +115,7 @@ async def enqueue_generation(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        root_node_id: Root MaterialNode UUID of the tree.
+        root_node_id: Root CourseNode UUID of the tree.
         target_node_id: Target node UUID (None = whole tree).
         mode: Generation mode ('free' or 'guided').
         depends_on: List of Job UUIDs (str) this job depends on.
@@ -170,7 +172,7 @@ async def enqueue_reconcile_preview(
     tenant_id: uuid.UUID,
     node_id: uuid.UUID,
     combined_fingerprint: str | None = None,
-    node_fingerprint: str | None = None,
+    content_hash: str | None = None,
     editable_tree_hash: str | None = None,
 ) -> Job:
     """Create a Job record and enqueue reconciliation preview to ARQ.
@@ -181,9 +183,9 @@ async def enqueue_reconcile_preview(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        node_id: MaterialNode whose editable tree to analyze.
+        node_id: CourseNode whose editable tree to analyze.
         combined_fingerprint: Optional fingerprint for idempotency cache.
-        node_fingerprint: Merkle hash of materials at enqueue time.
+        content_hash: Merkle hash of materials at enqueue time.
         editable_tree_hash: SHA-256 of editable tree at enqueue time.
 
     Returns:
@@ -195,8 +197,8 @@ async def enqueue_reconcile_preview(
     input_params: dict[str, object] = {"node_id": str(node_id)}
     if combined_fingerprint is not None:
         input_params["combined_fingerprint"] = combined_fingerprint
-    if node_fingerprint is not None:
-        input_params["node_fingerprint"] = node_fingerprint
+    if content_hash is not None:
+        input_params["content_hash"] = content_hash
     if editable_tree_hash is not None:
         input_params["editable_tree_hash"] = editable_tree_hash
 
@@ -245,7 +247,7 @@ async def enqueue_step(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        root_node_id: Root MaterialNode UUID of the tree.
+        root_node_id: Root CourseNode UUID of the tree.
         target_node_id: Specific node UUID to generate for.
         mode: Generation mode ('free' or 'guided').
         step_type: Step type ('generate', 'reconcile', 'refine').

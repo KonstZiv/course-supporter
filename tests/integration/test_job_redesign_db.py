@@ -4,7 +4,7 @@ Verifies the post-migration on-disk shape of the ``jobs`` table:
 
 * ``current_stage`` (varchar) and ``stage_progress`` (jsonb) columns exist.
 * ``estimated_at`` is dropped.
-* ``materialnode_id`` is renamed to ``course_node_id`` — column, FK
+* ``course_node_id`` is renamed to ``course_node_id`` — column, FK
   constraint (``jobs_course_node_id_fkey``), and index
   (``ix_jobs_course_node_id``) all carry the new names.
 
@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
-from course_supporter.storage.orm import Job, MaterialNode, Tenant
+from course_supporter.storage.orm import CourseNode, Job, Tenant
 
 pytestmark = pytest.mark.requires_db
 
@@ -65,7 +65,7 @@ class TestSchemaShape:
     def test_course_node_id_column_renamed(self, sync_engine: Engine) -> None:
         col_names = {c["name"] for c in inspect(sync_engine).get_columns("jobs")}
         assert "course_node_id" in col_names
-        assert "materialnode_id" not in col_names
+        assert "course_node_id" not in col_names
 
     def test_fk_constraint_renamed(self, sync_engine: Engine) -> None:
         """``jobs_course_node_id_fkey`` exists; legacy name does not."""
@@ -78,7 +78,7 @@ class TestSchemaShape:
             ).all()
         names = {r[0] for r in rows}
         assert "jobs_course_node_id_fkey" in names
-        assert "jobs_materialnode_id_fkey" not in names
+        assert "jobs_course_node_id_fkey" not in names
 
     def test_index_renamed(self, sync_engine: Engine) -> None:
         """``ix_jobs_course_node_id`` exists; legacy name does not."""
@@ -88,7 +88,7 @@ class TestSchemaShape:
             ).all()
         names = {r[0] for r in rows}
         assert "ix_jobs_course_node_id" in names
-        assert "ix_jobs_materialnode_id" not in names
+        assert "ix_jobs_course_node_id" not in names
 
 
 class TestStageProgressRoundTrip:
@@ -163,7 +163,7 @@ class TestForeignKeyEnforcement:
         await db_session.flush()
         job = Job(
             tenant_id=tenant.id,
-            course_node_id=uuid.uuid4(),  # not in material_nodes
+            course_node_id=uuid.uuid4(),  # not in course_nodes
             job_type="ingest",
         )
         db_session.add(job)
@@ -177,7 +177,7 @@ class TestForeignKeyEnforcement:
         tenant = Tenant(name=f"jrd-{uuid.uuid4().hex[:6]}")
         db_session.add(tenant)
         await db_session.flush()
-        node = MaterialNode(tenant_id=tenant.id, title="n", order=0)
+        node = CourseNode(tenant_id=tenant.id, title="n", order=0)
         db_session.add(node)
         await db_session.flush()
         job = Job(

@@ -22,7 +22,7 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-_ENTRY_REPO = "course_supporter.api.routes.storage.MaterialEntryRepository"
+_ENTRY_REPO = "course_supporter.api.routes.storage.AuthoredDocumentRepository"
 
 
 @pytest.fixture()
@@ -126,7 +126,7 @@ class TestDeleteFile:
     async def test_204_deletes_file_with_cascade(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:
-        """Deletes S3 file and cascades to MaterialEntry."""
+        """Deletes S3 file and cascades to AuthoredDocument."""
         key = f"tenants/{STUB_TENANT.tenant_id}/nodes/n/file.pdf"
         mock_entry = MagicMock()
         mock_entry.id = uuid.uuid4()
@@ -143,7 +143,7 @@ class TestDeleteFile:
     async def test_204_no_entry_still_deletes_s3(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:
-        """Deletes S3 file even when no MaterialEntry exists."""
+        """Deletes S3 file even when no AuthoredDocument exists."""
         key = f"tenants/{STUB_TENANT.tenant_id}/orphan.pdf"
 
         with patch(_ENTRY_REPO) as repo_cls:

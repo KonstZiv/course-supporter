@@ -327,52 +327,52 @@ class TestRealFKResolution:
         _resolve_cascade_columns.cache_clear()
 
     def test_resolves_unique_fk(self) -> None:
-        """MaterialEntry -> MaterialMacroSection via material_entry_id."""
+        """AuthoredDocument -> DocumentSummary via authored_document_id."""
         from course_supporter.storage.cascade import _resolve_cascade_columns
         from course_supporter.storage.orm import (
-            MaterialEntry,
-            MaterialMacroSection,
+            AuthoredDocument,
+            DocumentSummary,
         )
 
         fk_col, deleted_at_col = _resolve_cascade_columns(
-            MaterialEntry, MaterialMacroSection
+            AuthoredDocument, DocumentSummary
         )
-        assert fk_col.name == "material_entry_id"
+        assert fk_col.name == "authored_document_id"
         assert deleted_at_col.name == "deleted_at"
-        assert deleted_at_col.table.name == "material_macro_sections"
+        assert deleted_at_col.table.name == "document_summaries"
 
     def test_resolves_self_referential_fk(self) -> None:
-        """MaterialNode -> MaterialNode via parent_materialnode_id."""
+        """CourseNode -> CourseNode via parent_id."""
         from course_supporter.storage.cascade import _resolve_cascade_columns
-        from course_supporter.storage.orm import MaterialNode
+        from course_supporter.storage.orm import CourseNode
 
-        fk_col, deleted_at_col = _resolve_cascade_columns(MaterialNode, MaterialNode)
-        assert fk_col.name == "parent_materialnode_id"
+        fk_col, deleted_at_col = _resolve_cascade_columns(CourseNode, CourseNode)
+        assert fk_col.name == "parent_id"
         assert deleted_at_col.name == "deleted_at"
 
     def test_no_fk_raises_value_error(self) -> None:
-        """MaterialMacroSection has no FK back to tenants."""
+        """DocumentSummary has no FK back to tenants."""
         from course_supporter.storage.cascade import _resolve_cascade_columns
-        from course_supporter.storage.orm import MaterialMacroSection, Tenant
+        from course_supporter.storage.orm import DocumentSummary, Tenant
 
         with pytest.raises(
             ValueError,
-            match=r"No foreign key from MaterialMacroSection to Tenant",
+            match=r"No foreign key from DocumentSummary to Tenant",
         ):
-            _resolve_cascade_columns(Tenant, MaterialMacroSection)
+            _resolve_cascade_columns(Tenant, DocumentSummary)
 
     def test_ambiguous_fks_raise_value_error(self) -> None:
-        """HomeworkSubmission has BOTH course_node_id AND node_id -> material_nodes.
+        """HomeworkSubmission has BOTH course_node_id AND node_id -> course_nodes.
 
         This is the actual code-path that will fire when phase 4 wires
         HomeworkSubmission's cascade. Surfacing it here so the failure
         is loud and early rather than silent and wrong.
         """
         from course_supporter.storage.cascade import _resolve_cascade_columns
-        from course_supporter.storage.orm import HomeworkSubmission, MaterialNode
+        from course_supporter.storage.orm import CourseNode, HomeworkSubmission
 
         with pytest.raises(ValueError, match=r"Ambiguous foreign keys") as excinfo:
-            _resolve_cascade_columns(MaterialNode, HomeworkSubmission)
+            _resolve_cascade_columns(CourseNode, HomeworkSubmission)
         # Both FK column names must be in the error so the operator can
         # decide which one to keep / split.
         msg = str(excinfo.value)
@@ -383,12 +383,12 @@ class TestRealFKResolution:
         """Second call hits the cache and returns the identical objects."""
         from course_supporter.storage.cascade import _resolve_cascade_columns
         from course_supporter.storage.orm import (
-            MaterialEntry,
-            MaterialMacroSection,
+            AuthoredDocument,
+            DocumentSummary,
         )
 
-        first = _resolve_cascade_columns(MaterialEntry, MaterialMacroSection)
-        second = _resolve_cascade_columns(MaterialEntry, MaterialMacroSection)
+        first = _resolve_cascade_columns(AuthoredDocument, DocumentSummary)
+        second = _resolve_cascade_columns(AuthoredDocument, DocumentSummary)
         assert first is second  # `is` proves cache hit, not just equality
 
 
@@ -405,8 +405,8 @@ class TestBatchedFetch:
 
     async def test_single_query_with_in_clause(self) -> None:
         from course_supporter.storage.orm import (
-            MaterialEntry,
-            MaterialMacroSection,
+            AuthoredDocument,
+            DocumentSummary,
         )
 
         parent_ids = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
@@ -417,7 +417,7 @@ class TestBatchedFetch:
 
         svc = CascadeDeleteService(session)
         rows = await svc._fetch_active_children_batch(
-            MaterialEntry, parent_ids, MaterialMacroSection
+            AuthoredDocument, parent_ids, DocumentSummary
         )
 
         assert rows == []
@@ -425,21 +425,21 @@ class TestBatchedFetch:
 
         captured = session.execute.call_args.args[0]
         compiled = str(captured.compile(compile_kwargs={"literal_binds": True}))
-        assert "material_entry_id IN" in compiled
+        assert "authored_document_id IN" in compiled
         assert "deleted_at IS NULL" in compiled
 
     async def test_empty_parent_ids_short_circuits(self) -> None:
         """Empty parent_ids must not produce an empty-IN SQL syntax error."""
         from course_supporter.storage.orm import (
-            MaterialEntry,
-            MaterialMacroSection,
+            AuthoredDocument,
+            DocumentSummary,
         )
 
         session = AsyncMock()
         svc = CascadeDeleteService(session)
 
         rows = await svc._fetch_active_children_batch(
-            MaterialEntry, [], MaterialMacroSection
+            AuthoredDocument, [], DocumentSummary
         )
 
         assert rows == []

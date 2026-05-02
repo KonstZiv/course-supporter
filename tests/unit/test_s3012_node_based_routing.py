@@ -1,4 +1,4 @@
-"""Tests specific to S3-012: Node-based routing (Course → root MaterialNode).
+"""Tests specific to S3-012: Node-based routing (Course → root CourseNode).
 
 Covers:
 1. _find_root_id() — walks parent chain to find root node
@@ -38,17 +38,17 @@ class TestFindRootId:
     """_find_root_id walks up the parent chain to the root."""
 
     async def test_root_returns_itself(self) -> None:
-        """Root node (parent_materialnode_id=None) returns its own id."""
+        """Root node (parent_id=None) returns its own id."""
         from course_supporter.api.routes.generation import _find_root_id
 
         root_id = uuid.uuid4()
         root = MagicMock()
         root.id = root_id
-        root.parent_materialnode_id = None
+        root.parent_id = None
 
         session = AsyncMock()
         with patch(
-            "course_supporter.api.routes.generation.MaterialNodeRepository"
+            "course_supporter.api.routes.generation.CourseNodeRepository"
         ) as repo_cls:
             repo_cls.return_value.get_by_id = AsyncMock(return_value=root)
             result = await _find_root_id(session, root_id)
@@ -64,17 +64,17 @@ class TestFindRootId:
 
         root = MagicMock()
         root.id = root_id
-        root.parent_materialnode_id = None
+        root.parent_id = None
 
         child = MagicMock()
         child.id = child_id
-        child.parent_materialnode_id = root_id
+        child.parent_id = root_id
 
         lookup = {child_id: child, root_id: root}
 
         session = AsyncMock()
         with patch(
-            "course_supporter.api.routes.generation.MaterialNodeRepository"
+            "course_supporter.api.routes.generation.CourseNodeRepository"
         ) as repo_cls:
             repo_cls.return_value.get_by_id = AsyncMock(
                 side_effect=lambda nid: lookup.get(nid)
@@ -91,15 +91,15 @@ class TestFindRootId:
         child_id = uuid.uuid4()
         grandchild_id = uuid.uuid4()
 
-        root = MagicMock(id=root_id, parent_materialnode_id=None)
-        child = MagicMock(id=child_id, parent_materialnode_id=root_id)
-        grandchild = MagicMock(id=grandchild_id, parent_materialnode_id=child_id)
+        root = MagicMock(id=root_id, parent_id=None)
+        child = MagicMock(id=child_id, parent_id=root_id)
+        grandchild = MagicMock(id=grandchild_id, parent_id=child_id)
 
         lookup = {grandchild_id: grandchild, child_id: child, root_id: root}
 
         session = AsyncMock()
         with patch(
-            "course_supporter.api.routes.generation.MaterialNodeRepository"
+            "course_supporter.api.routes.generation.CourseNodeRepository"
         ) as repo_cls:
             repo_cls.return_value.get_by_id = AsyncMock(
                 side_effect=lambda nid: lookup.get(nid)
@@ -118,7 +118,7 @@ class TestFindRootId:
 
         session = AsyncMock()
         with patch(
-            "course_supporter.api.routes.generation.MaterialNodeRepository"
+            "course_supporter.api.routes.generation.CourseNodeRepository"
         ) as repo_cls:
             repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=None,
@@ -148,7 +148,7 @@ class TestRequireNodeForTenantGeneration:
 
         session = AsyncMock()
         with patch(
-            "course_supporter.api.routes.generation.MaterialNodeRepository"
+            "course_supporter.api.routes.generation.CourseNodeRepository"
         ) as repo_cls:
             repo_cls.return_value.get_by_id = AsyncMock(
                 return_value=node,
@@ -168,7 +168,7 @@ class TestRequireNodeForTenantGeneration:
         session = AsyncMock()
         with (
             patch(
-                "course_supporter.api.routes.generation.MaterialNodeRepository"
+                "course_supporter.api.routes.generation.CourseNodeRepository"
             ) as repo_cls,
             pytest.raises(HTTPException) as exc_info,
         ):
@@ -196,7 +196,7 @@ class TestRequireNodeForTenantGeneration:
         session = AsyncMock()
         with (
             patch(
-                "course_supporter.api.routes.generation.MaterialNodeRepository"
+                "course_supporter.api.routes.generation.CourseNodeRepository"
             ) as repo_cls,
             pytest.raises(HTTPException) as exc_info,
         ):
@@ -248,11 +248,11 @@ def _mock_root_node(
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_materialnode_id = None
+    node.parent_id = None
     node.title = title
     node.description = None
     node.order = 0
-    node.node_fingerprint = None
+    node.content_hash = None
     node.default_language = None
     node.children = []
     node.created_at = datetime.now(UTC)
@@ -267,14 +267,14 @@ class TestRootNodeAsCourse:
         self,
         client: AsyncClient,
     ) -> None:
-        """POST /api/v1/nodes creates a root node (parent_materialnode_id=None)."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        """POST /api/v1/nodes creates a root node (parent_id=None)."""
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
         root = _mock_root_node(title="Python Basics")
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "create",
             return_value=root,
         ):
@@ -294,20 +294,20 @@ class TestRootNodeAsCourse:
         client: AsyncClient,
     ) -> None:
         """GET /api/v1/nodes returns only root nodes for the tenant."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
         r1 = _mock_root_node(title="Course A")
         r2 = _mock_root_node(title="Course B")
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "list_roots",
                 return_value=[r1, r2],
             ),
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "count_roots",
                 return_value=2,
             ),
@@ -325,18 +325,18 @@ class TestRootNodeAsCourse:
         client: AsyncClient,
     ) -> None:
         """GET /api/v1/nodes returns empty for tenant with no roots."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "list_roots",
                 return_value=[],
             ),
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "count_roots",
                 return_value=0,
             ),
@@ -474,7 +474,7 @@ def _mock_session_with_tree(
     for nid, pid in nodes.items():
         row = MagicMock()
         row.id = nid
-        row.parent_materialnode_id = pid
+        row.parent_id = pid
         rows.append(row)
 
     exec_result = MagicMock()
@@ -569,15 +569,15 @@ class TestDetectConflictWithRootNodeId:
     async def test_ancestor_descendant_conflict(self) -> None:
         """Active job on parent conflicts with grandchild target."""
         root_id = uuid.uuid4()
-        parent_materialnode_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
         grandchild_id = uuid.uuid4()
         nodes = {
             root_id: None,
-            parent_materialnode_id: root_id,
-            grandchild_id: parent_materialnode_id,
+            parent_id: root_id,
+            grandchild_id: parent_id,
         }
         session = _mock_session_with_tree(nodes)
-        job = _mock_job(node_id=parent_materialnode_id)
+        job = _mock_job(node_id=parent_id)
 
         result = await detect_conflict(
             session,

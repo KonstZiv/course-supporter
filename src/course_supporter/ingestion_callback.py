@@ -1,7 +1,7 @@
-"""Post-ingestion callback: update Job and MaterialEntry records.
+"""Post-ingestion callback: update Job and AuthoredDocument records.
 
 After an ingestion job completes (success or failure), this service:
-1. Updates MaterialEntry processing state.
+1. Updates AuthoredDocument processing state.
 2. Updates Job status (complete/failed).
 3. Invalidates Merkle fingerprints up the tree.
 
@@ -29,7 +29,7 @@ logger = structlog.get_logger()
 
 
 class IngestionCallback:
-    """Handle post-ingestion updates for Job and MaterialEntry records.
+    """Handle post-ingestion updates for Job and AuthoredDocument records.
 
     Encapsulates the two-session pattern: success path uses the
     provided session, failure path opens a fresh session to persist
@@ -57,7 +57,7 @@ class IngestionCallback:
     ) -> None:
         """Handle successful ingestion completion.
 
-        Uses ``MaterialEntryRepository`` (``complete_processing``).
+        Uses ``AuthoredDocumentRepository`` (``complete_processing``).
 
         Args:
             job_id: The Job tracking this ingestion.
@@ -71,11 +71,11 @@ class IngestionCallback:
         async with self._session_factory() as session:
             job_repo = JobRepository(session)
 
-            from course_supporter.storage.material_entry_repository import (
-                MaterialEntryRepository,
+            from course_supporter.storage.authored_document_repository import (
+                AuthoredDocumentRepository,
             )
 
-            entry_repo = MaterialEntryRepository(session)
+            entry_repo = AuthoredDocumentRepository(session)
             processed_hash = hashlib.sha256(content_json.encode()).hexdigest()
             await entry_repo.complete_processing(
                 material_id,
@@ -124,11 +124,11 @@ class IngestionCallback:
             if cascaded:
                 log.info("cascading_failure_propagated", failed_count=len(cascaded))
 
-            from course_supporter.storage.material_entry_repository import (
-                MaterialEntryRepository,
+            from course_supporter.storage.authored_document_repository import (
+                AuthoredDocumentRepository,
             )
 
-            entry_repo = MaterialEntryRepository(session)
+            entry_repo = AuthoredDocumentRepository(session)
             await entry_repo.fail_processing(material_id, error_message=error_message)
 
             await session.commit()
@@ -157,8 +157,8 @@ class IngestionCallback:
         from course_supporter.agents.outline import OutlineAgent
         from course_supporter.models.source import SourceDocument
         from course_supporter.service_logging import get_current_job_id
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
         from course_supporter.storage.orm import ExternalServiceCall
 
@@ -169,7 +169,7 @@ class IngestionCallback:
             agent = OutlineAgent(self._router)
             result = await agent.run_with_metadata(source_doc)
 
-            entry_repo = MaterialEntryRepository(session)
+            entry_repo = AuthoredDocumentRepository(session)
             await entry_repo.save_outline(
                 material_id,
                 outline_json=result.outline.model_dump_json(),

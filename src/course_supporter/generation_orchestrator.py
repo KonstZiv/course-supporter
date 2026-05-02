@@ -22,9 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import (
+        AuthoredDocument,
+        CourseNode,
         Job,
-        MaterialEntry,
-        MaterialNode,
     )
 
 
@@ -51,8 +51,8 @@ class GenerationPlan:
 
 
 def _partition_entries(
-    flat_nodes: list[MaterialNode],
-) -> tuple[list[MaterialEntry], list[MaterialEntry]]:
+    flat_nodes: list[CourseNode],
+) -> tuple[list[AuthoredDocument], list[AuthoredDocument]]:
     """Split all entries into (stale, ready) based on MaterialState.
 
     PENDING entries are counted as stale (ingestion in-flight).
@@ -65,10 +65,10 @@ def _partition_entries(
     """
     from course_supporter.storage.orm import MaterialState
 
-    stale: list[MaterialEntry] = []
-    ready: list[MaterialEntry] = []
+    stale: list[AuthoredDocument] = []
+    ready: list[AuthoredDocument] = []
     for node in flat_nodes:
-        for entry in node.materials:
+        for entry in node.documents:
             if entry.state == MaterialState.READY:
                 ready.append(entry)
             else:
@@ -77,7 +77,7 @@ def _partition_entries(
 
 
 def _collect_job_ids(
-    stale: list[MaterialEntry],
+    stale: list[AuthoredDocument],
 ) -> list[str]:
     """Collect Job UUIDs (as str) for PENDING entries.
 
@@ -93,13 +93,13 @@ def _collect_job_ids(
     return [str(entry.job_id) for entry in stale if entry.job_id is not None]
 
 
-def _post_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
+def _post_order(nodes: list[CourseNode]) -> list[CourseNode]:
     """Flatten tree nodes in post-order (children before parents).
 
     Uses iterative traversal to avoid recursion limits.
     """
-    order: list[MaterialNode] = []
-    stack: list[MaterialNode] = list(reversed(nodes))
+    order: list[CourseNode] = []
+    stack: list[CourseNode] = list(reversed(nodes))
     while stack:
         node = stack.pop()
         order.append(node)
@@ -109,13 +109,13 @@ def _post_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
     return order
 
 
-def _pre_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
+def _pre_order(nodes: list[CourseNode]) -> list[CourseNode]:
     """Flatten tree nodes in pre-order (parents before children).
 
     Uses iterative traversal to avoid recursion limits.
     """
-    order: list[MaterialNode] = []
-    stack: list[MaterialNode] = list(reversed(nodes))
+    order: list[CourseNode] = []
+    stack: list[CourseNode] = list(reversed(nodes))
     while stack:
         node = stack.pop()
         order.append(node)
@@ -125,7 +125,7 @@ def _pre_order(nodes: list[MaterialNode]) -> list[MaterialNode]:
 
 
 def _node_has_content(
-    node: MaterialNode,
+    node: CourseNode,
     children_with_jobs: set[uuid.UUID],
 ) -> bool:
     """Check if a node should get a generation job.
@@ -133,16 +133,16 @@ def _node_has_content(
     A node needs generation if it has own materials (any state)
     or at least one child already has a generation job.
     """
-    return bool(node.materials) or bool(
+    return bool(node.documents) or bool(
         {c.id for c in node.children} & children_with_jobs
     )
 
 
 def _build_parent_map(
-    nodes: list[MaterialNode],
-) -> dict[uuid.UUID, MaterialNode]:
+    nodes: list[CourseNode],
+) -> dict[uuid.UUID, CourseNode]:
     """Build child_id → parent mapping from a list of tree nodes."""
-    parent_map: dict[uuid.UUID, MaterialNode] = {}
+    parent_map: dict[uuid.UUID, CourseNode] = {}
     for n in nodes:
         for child in n.children:
             parent_map[child.id] = n
@@ -150,8 +150,8 @@ def _build_parent_map(
 
 
 def _find_parent_reconcile(
-    node: MaterialNode,
-    parent_map: dict[uuid.UUID, MaterialNode],
+    node: CourseNode,
+    parent_map: dict[uuid.UUID, CourseNode],
     node_reconcile_jobs: dict[uuid.UUID, Job],
 ) -> Job | None:
     """Find the reconcile job of the nearest ancestor that has one.
@@ -174,7 +174,7 @@ async def _build_reconciliation_dag(
     tenant_id: uuid.UUID,
     root_node_id: uuid.UUID,
     mode: Literal["free", "guided"],
-    target_roots: list[MaterialNode],
+    target_roots: list[CourseNode],
     generation_jobs: list[Job],
     node_gen_jobs: dict[uuid.UUID, Job],
 ) -> list[Job]:
@@ -251,7 +251,7 @@ async def trigger_generation(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        root_node_id: Root MaterialNode UUID of the tree.
+        root_node_id: Root CourseNode UUID of the tree.
         target_node_id: Specific subtree node UUID (None = whole tree).
         mode: Generation mode ('free' or 'guided').
 
@@ -269,10 +269,10 @@ async def trigger_generation(
         GenerationConflictError,
         NoReadyMaterialsError,
     )
-    from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
     )
+    from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.orm import MaterialState
     from course_supporter.tree_utils import resolve_target_nodes
 
@@ -284,10 +284,10 @@ async def trigger_generation(
     log.info("trigger_generation_started")
 
     # 1. Load tree and resolve target
-    node_repo = MaterialNodeRepository(session)
-    root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+    node_repo = CourseNodeRepository(session)
+    root_nodes: list[CourseNode] = await node_repo.get_subtree(
         root_node_id,
-        include_materials=True,
+        include_documents=True,
     )
     target, flat_nodes = resolve_target_nodes(root_nodes, target_node_id)
 
@@ -297,7 +297,7 @@ async def trigger_generation(
     from course_supporter.tree_utils import flatten_subtree
 
     if target_node_id is not None and root_nodes:
-        all_tree_flat: list[MaterialNode] = []
+        all_tree_flat: list[CourseNode] = []
         for rn in root_nodes:
             all_tree_flat.extend(flatten_subtree(rn))
         all_tree_node_ids = [n.id for n in all_tree_flat]
@@ -331,7 +331,7 @@ async def trigger_generation(
     for node in processing_order:
         # Per-node ingestion dependencies
         node_deps: list[str] = []
-        for entry in node.materials:
+        for entry in node.documents:
             if entry.state == MaterialState.READY:
                 continue
             if entry.job_id is not None:
@@ -403,16 +403,16 @@ async def trigger_generation(
 
 
 def _ancestor_chain(
-    node: MaterialNode,
-    all_nodes: list[MaterialNode],
-) -> list[MaterialNode]:
+    node: CourseNode,
+    all_nodes: list[CourseNode],
+) -> list[CourseNode]:
     """Walk from node up to root, returning ancestors bottom-up.
 
     Uses a child→parent map built from all_nodes. The result excludes
     the starting node itself.
     """
     parent_map = _build_parent_map(all_nodes)
-    chain: list[MaterialNode] = []
+    chain: list[CourseNode] = []
     current = node
     while current.id in parent_map:
         parent = parent_map[current.id]
@@ -442,7 +442,7 @@ async def trigger_refine(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        root_node_id: Root MaterialNode UUID of the tree.
+        root_node_id: Root CourseNode UUID of the tree.
         target_node_id: The edited node UUID.
         mode: Generation mode ('free' or 'guided').
 
@@ -454,8 +454,8 @@ async def trigger_refine(
     """
     from course_supporter.enqueue import enqueue_step
     from course_supporter.errors import NodeNotFoundError
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
     )
     from course_supporter.tree_utils import flatten_subtree
 
@@ -467,17 +467,17 @@ async def trigger_refine(
     log.info("trigger_refine_started")
 
     # 1. Load tree and find target
-    node_repo = MaterialNodeRepository(session)
-    root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+    node_repo = CourseNodeRepository(session)
+    root_nodes: list[CourseNode] = await node_repo.get_subtree(
         root_node_id,
-        include_materials=True,
+        include_documents=True,
     )
 
-    all_flat: list[MaterialNode] = []
+    all_flat: list[CourseNode] = []
     for rn in root_nodes:
         all_flat.extend(flatten_subtree(rn))
 
-    target: MaterialNode | None = None
+    target: CourseNode | None = None
     for n in all_flat:
         if n.id == target_node_id:
             target = n

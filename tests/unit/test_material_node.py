@@ -1,43 +1,43 @@
-"""Tests for MaterialNode ORM model."""
+"""Tests for CourseNode ORM model."""
 
 from __future__ import annotations
 
 import uuid
 
-from course_supporter.storage.orm import MaterialNode, _uuid7
+from course_supporter.storage.orm import CourseNode, _uuid7
 
 
-class TestMaterialNodeModel:
-    """MaterialNode ORM column/default tests."""
+class TestCourseNodeModel:
+    """CourseNode ORM column/default tests."""
 
     def test_create_root_node(self) -> None:
-        """Root node has parent_materialnode_id=None."""
-        node = MaterialNode(
+        """Root node has parent_id=None."""
+        node = CourseNode(
             tenant_id=_uuid7(),
             title="Module 1",
         )
 
         assert node.title == "Module 1"
-        assert node.parent_materialnode_id is None
+        assert node.parent_id is None
         assert node.description is None
-        assert node.node_fingerprint is None
+        assert node.content_hash is None
 
     def test_create_child_node(self) -> None:
-        """Child node has explicit parent_materialnode_id."""
-        parent_materialnode_id = _uuid7()
-        node = MaterialNode(
+        """Child node has explicit parent_id."""
+        parent_id = _uuid7()
+        node = CourseNode(
             tenant_id=_uuid7(),
-            parent_materialnode_id=parent_materialnode_id,
+            parent_id=parent_id,
             title="Subtopic A",
             description="Details about subtopic A",
         )
 
-        assert node.parent_materialnode_id == parent_materialnode_id
+        assert node.parent_id == parent_id
         assert node.description == "Details about subtopic A"
 
     def test_order_nullable(self) -> None:
         """Order column is nullable; NULL = no preferred sort position."""
-        col = MaterialNode.__table__.c.order
+        col = CourseNode.__table__.c.order
         assert col.nullable is True
         assert col.default is None
         assert col.server_default is None
@@ -48,66 +48,66 @@ class TestMaterialNodeModel:
         assert isinstance(pk, uuid.UUID)
         assert pk.version == 7
 
-    def test_node_fingerprint_nullable(self) -> None:
-        """node_fingerprint is nullable (lazy cached)."""
-        col = MaterialNode.__table__.c.node_fingerprint
+    def test_content_hash_nullable(self) -> None:
+        """content_hash is nullable (lazy cached)."""
+        col = CourseNode.__table__.c.content_hash
         assert col.nullable is True
 
     def test_title_max_length(self) -> None:
         """Title column accepts up to 500 chars."""
-        col = MaterialNode.__table__.c.title
+        col = CourseNode.__table__.c.title
         assert col.type.length == 500  # type: ignore[union-attr]
 
 
-class TestMaterialNodeRelationships:
-    """MaterialNode relationship configuration tests."""
+class TestCourseNodeRelationships:
+    """CourseNode relationship configuration tests."""
 
     def test_self_referential_fk(self) -> None:
-        """parent_materialnode_id FK points to material_nodes.id."""
-        col = MaterialNode.__table__.c.parent_materialnode_id
+        """parent_id FK points to course_nodes.id."""
+        col = CourseNode.__table__.c.parent_id
         fks = list(col.foreign_keys)
         assert len(fks) == 1
-        assert fks[0].target_fullname == "material_nodes.id"
+        assert fks[0].target_fullname == "course_nodes.id"
 
     def test_tenant_fk(self) -> None:
         """tenant_id FK points to tenants.id."""
-        col = MaterialNode.__table__.c.tenant_id
+        col = CourseNode.__table__.c.tenant_id
         fks = list(col.foreign_keys)
         assert len(fks) == 1
         assert fks[0].target_fullname == "tenants.id"
 
     def test_cascade_delete_on_parent(self) -> None:
         """Parent FK uses CASCADE ondelete."""
-        col = MaterialNode.__table__.c.parent_materialnode_id
+        col = CourseNode.__table__.c.parent_id
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
     def test_cascade_delete_on_tenant(self) -> None:
         """Tenant FK uses CASCADE ondelete."""
-        col = MaterialNode.__table__.c.tenant_id
+        col = CourseNode.__table__.c.tenant_id
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
     def test_children_relationship_cascade(self) -> None:
         """children relationship has cascade delete-orphan."""
-        rel = MaterialNode.__mapper__.relationships["children"]
+        rel = CourseNode.__mapper__.relationships["children"]
         assert "delete-orphan" in rel.cascade
 
     def test_parent_relationship_exists(self) -> None:
         """parent relationship is configured."""
-        rel = MaterialNode.__mapper__.relationships["parent"]
+        rel = CourseNode.__mapper__.relationships["parent"]
         assert rel.back_populates == "children"
 
 
-class TestMaterialNodeIndexes:
-    """MaterialNode index/constraint tests."""
+class TestCourseNodeIndexes:
+    """CourseNode index/constraint tests."""
 
     def test_tenant_id_indexed(self) -> None:
         """tenant_id column is indexed."""
-        col = MaterialNode.__table__.c.tenant_id
+        col = CourseNode.__table__.c.tenant_id
         assert col.index is True
 
-    def test_parent_materialnode_id_indexed(self) -> None:
-        """parent_materialnode_id column is indexed."""
-        col = MaterialNode.__table__.c.parent_materialnode_id
+    def test_parent_id_indexed(self) -> None:
+        """parent_id column is indexed."""
+        col = CourseNode.__table__.c.parent_id
         assert col.index is True

@@ -21,8 +21,8 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.api.routes import cost as cost_module
 from course_supporter.auth.context import TenantContext
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import Tenant
 from course_supporter.storage.repositories import (
     ByActionRow,
@@ -91,12 +91,12 @@ def patched_course_repo() -> Any:
     course_node.title = "Python Basics"
     return (
         patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id_for_tenant",
             AsyncMock(return_value=course_node),
         ),
         patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_descendant_ids",
             AsyncMock(return_value=[COURSE_ID, NODE_ID]),
         ),
@@ -321,7 +321,7 @@ class TestCostCourseHappyPath:
 class TestCostCourseTenantIsolation:
     async def test_foreign_tenant_returns_404(self, client: AsyncClient) -> None:
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id_for_tenant",
             AsyncMock(return_value=None),
         ):

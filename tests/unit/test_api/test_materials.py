@@ -1,7 +1,7 @@
 """Tests for material upload validation edge cases.
 
 Covers file extension validation per source_type that is NOT duplicated
-in ``test_material_entries.py`` (which tests CRUD + tenant isolation).
+in ``test_authored_documents.py`` (which tests CRUD + tenant isolation).
 """
 
 import io
@@ -15,9 +15,11 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -51,10 +53,10 @@ def _mock_entry(
     state: str = "raw",
     task_type: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.id = uuid.uuid4()
-    entry.materialnode_id = node_id or uuid.uuid4()
+    entry.course_node_id = node_id or uuid.uuid4()
     entry.source_type = source_type
     entry.material_role = "educational"
     entry.task_type = task_type
@@ -176,11 +178,11 @@ class TestMaterialUploadValidation:
         job = _mock_job()
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 return_value=_mock_node(node_id=node_id),
             ),
-            patch.object(MaterialEntryRepository, "create", return_value=entry),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
@@ -221,11 +223,11 @@ class TestMaterialUploadValidation:
         job = _mock_job()
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 return_value=_mock_node(node_id=node_id),
             ),
-            patch.object(MaterialEntryRepository, "create", return_value=entry),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
@@ -251,11 +253,11 @@ class TestMaterialUploadValidation:
         create_mock = AsyncMock(return_value=entry)
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 return_value=_mock_node(node_id=node_id),
             ),
-            patch.object(MaterialEntryRepository, "create", create_mock),
+            patch.object(AuthoredDocumentRepository, "create", create_mock),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
@@ -302,7 +304,7 @@ class TestGetUploadUrl:
         """Returns presigned URL with key and expiry."""
         mock_s3.generate_presigned_url = AsyncMock(return_value=_S3_PRESIGNED)
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id",
             return_value=_mock_node(node_id=node_id),
         ):
@@ -354,7 +356,7 @@ class TestGetUploadUrl:
 
     async def test_404_node_not_found(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.post(
                 f"/api/v1/nodes/{uuid.uuid4()}/materials/upload-url",
                 json={
@@ -370,7 +372,7 @@ class TestGetUploadUrl:
 
 
 class TestConfirmUpload:
-    """Confirm presigned upload and create MaterialEntry."""
+    """Confirm presigned upload and create AuthoredDocument."""
 
     async def test_201_creates_entry(
         self,
@@ -378,7 +380,7 @@ class TestConfirmUpload:
         node_id: uuid.UUID,
         mock_s3: AsyncMock,
     ) -> None:
-        """Successful confirm creates MaterialEntry with ingestion job."""
+        """Successful confirm creates AuthoredDocument with ingestion job."""
         mock_s3.head_object = AsyncMock(return_value={"ContentLength": 1024})
         mock_s3._endpoint_url = "http://localhost:9000"
         mock_s3._bucket = "course-materials"
@@ -388,11 +390,11 @@ class TestConfirmUpload:
 
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 return_value=_mock_node(node_id=node_id),
             ),
-            patch.object(MaterialEntryRepository, "create", return_value=entry),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             resp = await client.post(
@@ -413,7 +415,7 @@ class TestConfirmUpload:
     ) -> None:
         """Key with wrong tenant prefix returns 403."""
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id",
             return_value=_mock_node(node_id=node_id),
         ):
@@ -437,7 +439,7 @@ class TestConfirmUpload:
         key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/gone.pdf"
 
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id",
             return_value=_mock_node(node_id=node_id),
         ):

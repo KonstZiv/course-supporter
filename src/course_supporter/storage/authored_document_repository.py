@@ -1,4 +1,4 @@
-"""Repository for MaterialEntry CRUD and lifecycle management."""
+"""Repository for AuthoredDocument CRUD and lifecycle management."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole
-from course_supporter.storage.orm import MaterialEntry, MaterialNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 
-class MaterialEntryRepository:
+class AuthoredDocumentRepository:
     """Repository for material entry operations.
 
     Handles CRUD, pending receipt management, and hash invalidation.
@@ -34,11 +34,11 @@ class MaterialEntryRepository:
         material_role: str = "educational",
         task_type: AssignmentType | str | None = None,
         language: str | None = None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Create a new material entry with auto-incremented order.
 
         Args:
-            node_id: FK to the parent MaterialNode.
+            node_id: FK to the parent CourseNode.
             source_type: One of video, presentation, text, web.
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
@@ -51,7 +51,7 @@ class MaterialEntryRepository:
                 auto-detection (which caches its result back here).
 
         Returns:
-            The newly created MaterialEntry.
+            The newly created AuthoredDocument.
         """
         next_order = await self._next_sibling_order(node_id)
         task_type_value: str | None
@@ -59,8 +59,8 @@ class MaterialEntryRepository:
             task_type_value = task_type.value
         else:
             task_type_value = task_type
-        entry = MaterialEntry(
-            materialnode_id=node_id,
+        entry = AuthoredDocument(
+            course_node_id=node_id,
             source_type=source_type,
             source_url=source_url,
             filename=filename,
@@ -74,37 +74,37 @@ class MaterialEntryRepository:
         await self._invalidate_node_chain(node_id)
         return entry
 
-    async def get_by_id(self, entry_id: uuid.UUID) -> MaterialEntry | None:
+    async def get_by_id(self, entry_id: uuid.UUID) -> AuthoredDocument | None:
         """Get an entry by primary key."""
-        return await self._session.get(MaterialEntry, entry_id)
+        return await self._session.get(AuthoredDocument, entry_id)
 
     async def get_for_node(
         self, node_id: uuid.UUID, *, source_type: str | None = None
-    ) -> list[MaterialEntry]:
+    ) -> list[AuthoredDocument]:
         """Get entries for a node, ordered by position.
 
         Args:
-            node_id: FK to the parent MaterialNode.
+            node_id: FK to the parent CourseNode.
             source_type: Optional filter by source type.
         """
         stmt = (
-            select(MaterialEntry)
-            .where(MaterialEntry.materialnode_id == node_id)
-            .order_by(MaterialEntry.order)
+            select(AuthoredDocument)
+            .where(AuthoredDocument.course_node_id == node_id)
+            .order_by(AuthoredDocument.order)
         )
         if source_type is not None:
-            stmt = stmt.where(MaterialEntry.source_type == source_type)
+            stmt = stmt.where(AuthoredDocument.source_type == source_type)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_source_url(self, source_url: str) -> MaterialEntry | None:
+    async def get_by_source_url(self, source_url: str) -> AuthoredDocument | None:
         """Find an entry by its source_url (exact match)."""
-        stmt = select(MaterialEntry).where(MaterialEntry.source_url == source_url)
+        stmt = select(AuthoredDocument).where(AuthoredDocument.source_url == source_url)
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
-    async def find_by_raw_hash(self, raw_hash: str) -> MaterialEntry | None:
-        """Find the oldest active MaterialEntry with the given ``raw_hash``.
+    async def find_by_raw_hash(self, raw_hash: str) -> AuthoredDocument | None:
+        """Find the oldest active AuthoredDocument with the given ``raw_hash``.
 
         Used by ingestion to detect re-uploads of identical content
         (vision §3 KD9 + KD4). Filters out soft-deleted rows
@@ -119,10 +119,10 @@ class MaterialEntryRepository:
         issue a custom query.
         """
         stmt = (
-            select(MaterialEntry)
-            .where(MaterialEntry.raw_hash == raw_hash)
-            .where(MaterialEntry.deleted_at.is_(None))
-            .order_by(MaterialEntry.id)
+            select(AuthoredDocument)
+            .where(AuthoredDocument.raw_hash == raw_hash)
+            .where(AuthoredDocument.deleted_at.is_(None))
+            .order_by(AuthoredDocument.id)
         )
         result = await self._session.execute(stmt)
         return result.scalars().first()
@@ -140,10 +140,10 @@ class MaterialEntryRepository:
         was already set (or the row does not exist).
         """
         stmt = (
-            update(MaterialEntry)
+            update(AuthoredDocument)
             .where(
-                MaterialEntry.id == entry_id,
-                MaterialEntry.language.is_(None),
+                AuthoredDocument.id == entry_id,
+                AuthoredDocument.language.is_(None),
             )
             .values(language=language)
             .execution_options(synchronize_session=False)
@@ -160,7 +160,7 @@ class MaterialEntryRepository:
         job_id: uuid.UUID,
         *,
         now: datetime | None = None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Mark entry as pending ingestion.
 
         Sets job_id and pending_since, clears error_message.
@@ -188,38 +188,19 @@ class MaterialEntryRepository:
         processed_content: str,
         processed_hash: str,
         now: datetime | None = None,
-    ) -> MaterialEntry:
-        """Mark entry as successfully processed.
-
-        Clears pending receipt and sets processed layer.
-
-        Args:
-            entry_id: Entry to update.
-            processed_content: Extracted/processed text content.
-            processed_hash: SHA-256 hash of raw source at processing time.
-            now: Override for current time (testing).
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        now = now or datetime.now(UTC)
-        entry.processed_content = processed_content
-        entry.processed_hash = processed_hash
-        entry.processed_at = now
-        entry.job_id = None
-        entry.pending_since = None
-        entry.error_message = None
-        await self._session.flush()
-        await self._invalidate_node_chain(entry.materialnode_id)
-        return entry
+    ) -> None:
+        # TODO Phase 2.x — Pass 2 pipeline rewrite per vision §3 KD2.
+        # Method preserved as deferral stub during Phase 1 rename pass.
+        # Column targets (processed_content, processed_hash) dropped in
+        # migrations/versions/a1b2c3d4e5f6_phase1_rename_and_kd3.py.
+        return None
 
     async def fail_processing(
         self,
         entry_id: uuid.UUID,
         *,
         error_message: str,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Mark entry as failed processing.
 
         Clears pending receipt and sets error_message.
@@ -244,12 +225,14 @@ class MaterialEntryRepository:
         *,
         source_url: str,
         filename: str | None = None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update source URL and invalidate raw hash.
 
-        When the source changes, raw_hash is cleared to signal that
-        the processed layer is potentially stale. This triggers
-        INTEGRITY_BROKEN state if processed_content exists.
+        When the source changes, ``raw_hash`` is cleared so the next
+        ingestion pass recomputes it from the new bytes. The Phase 2.x
+        Pass 2 pipeline (vision §3 KD2) is responsible for surfacing
+        any downstream staleness via ``content_hash`` invalidation
+        on the parent ``CourseNode`` chain.
 
         Args:
             entry_id: Entry to update.
@@ -265,7 +248,7 @@ class MaterialEntryRepository:
         entry.raw_hash = None
         entry.raw_size_bytes = None
         await self._session.flush()
-        await self._invalidate_node_chain(entry.materialnode_id)
+        await self._invalidate_node_chain(entry.course_node_id)
         return entry
 
     async def ensure_raw_hash(
@@ -273,7 +256,7 @@ class MaterialEntryRepository:
         entry_id: uuid.UUID,
         *,
         raw_bytes: bytes,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Lazily compute and set raw_hash from content bytes.
 
         Only sets the hash if it is currently None.
@@ -297,31 +280,19 @@ class MaterialEntryRepository:
         entry_id: uuid.UUID,
         *,
         outline_json: str,
-    ) -> MaterialEntry:
-        """Save MaterialOutline JSON for a processed entry.
-
-        Stores the lossless restructured outline alongside the raw
-        processed_content. Does not invalidate fingerprints — the
-        outline is a derivative, not a source of identity.
-
-        Args:
-            entry_id: Entry to update.
-            outline_json: Serialized MaterialOutline JSON.
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        entry.outline_content = outline_json
-        await self._session.flush()
-        return entry
+    ) -> None:
+        # TODO Phase 2.x — Pass 2 pipeline rewrite per vision §3 KD2.
+        # Method preserved as deferral stub during Phase 1 rename pass.
+        # Column target (outline_content) dropped in
+        # migrations/versions/a1b2c3d4e5f6_phase1_rename_and_kd3.py.
+        return None
 
     async def update_material_role(
         self,
-        entry: MaterialEntry,
+        entry: AuthoredDocument,
         *,
         material_role: MaterialRole,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update the material_role field on an already-loaded entry.
 
         Args:
@@ -334,10 +305,10 @@ class MaterialEntryRepository:
 
     async def update_task_type(
         self,
-        entry: MaterialEntry,
+        entry: AuthoredDocument,
         *,
         task_type: AssignmentType | None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update the task_type field on an already-loaded entry.
 
         Args:
@@ -355,7 +326,7 @@ class MaterialEntryRepository:
             ValueError: If entry not found.
         """
         entry = await self._require(entry_id)
-        node_id = entry.materialnode_id
+        node_id = entry.course_node_id
         await self._session.delete(entry)
         await self._session.flush()
         await self._invalidate_node_chain(node_id)
@@ -366,22 +337,22 @@ class MaterialEntryRepository:
         """Invalidate fingerprints from node up to root."""
         from course_supporter.fingerprint import FingerprintService
 
-        node = await self._session.get(MaterialNode, node_id)
+        node = await self._session.get(CourseNode, node_id)
         if node is not None:
             await FingerprintService(self._session).invalidate_up(node)
 
-    async def _require(self, entry_id: uuid.UUID) -> MaterialEntry:
+    async def _require(self, entry_id: uuid.UUID) -> AuthoredDocument:
         """Get entry or raise ValueError."""
         entry = await self.get_by_id(entry_id)
         if entry is None:
-            msg = f"MaterialEntry not found: {entry_id}"
+            msg = f"AuthoredDocument not found: {entry_id}"
             raise ValueError(msg)
         return entry
 
     async def _next_sibling_order(self, node_id: uuid.UUID) -> int:
         """Get next order value for entries under the given node."""
-        stmt = select(func.coalesce(func.max(MaterialEntry.order) + 1, 0)).where(
-            MaterialEntry.materialnode_id == node_id,
+        stmt = select(func.coalesce(func.max(AuthoredDocument.order) + 1, 0)).where(
+            AuthoredDocument.course_node_id == node_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()

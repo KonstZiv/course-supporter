@@ -15,9 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.language import detect_response_language
 from course_supporter.models.safety import SubmissionContent
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.student_repository import StudentRepository
 
 if TYPE_CHECKING:
@@ -222,7 +222,7 @@ async def build_mentor_context(
         Populated MentorContext ready for prompt building.
     """
     editable_repo = EditableRepository(session)
-    node_repo = MaterialNodeRepository(session)
+    node_repo = CourseNodeRepository(session)
     hw_repo = HomeworkRepository(session)
     student_repo = StudentRepository(session)
 

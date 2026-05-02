@@ -44,7 +44,7 @@ from course_supporter.errors import (
     NoReadyMaterialsError,
 )
 from course_supporter.generation_orchestrator import trigger_generation, trigger_refine
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import StructureNode, StructureSnapshot
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 from course_supporter.storage.structure_node_repository import StructureNodeRepository
@@ -67,7 +67,7 @@ async def _require_node_for_tenant(
     node_id: uuid.UUID,
 ) -> object:
     """Verify the node exists and belongs to the tenant."""
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -79,7 +79,7 @@ async def _find_root_id(
     node_id: uuid.UUID,
 ) -> uuid.UUID:
     """Walk up parent chain to find the root node ID."""
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     current_id = node_id
     while True:
         node = await repo.get_by_id(current_id)
@@ -88,9 +88,9 @@ async def _find_root_id(
                 status_code=500,
                 detail="Data inconsistency: parent node not found during root lookup",
             )
-        if node.parent_materialnode_id is None:
+        if node.parent_id is None:
             return node.id
-        current_id = node.parent_materialnode_id
+        current_id = node.parent_id
 
 
 @router.post("/nodes/{node_id}/generate", status_code=202)

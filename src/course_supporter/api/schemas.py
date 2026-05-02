@@ -97,15 +97,15 @@ class NodeUpdateRequest(BaseModel):
 class NodeMoveRequest(BaseModel):
     """Request body for moving a node within the tree.
 
-    Move a node to a new parent (or to root by setting ``parent_materialnode_id``
+    Move a node to a new parent (or to root by setting ``parent_id``
     to ``null``). Cycle detection is enforced server-side.
 
     Example::
 
-        {"parent_materialnode_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
+        {"parent_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
     """
 
-    parent_materialnode_id: uuid.UUID | None = Field(
+    parent_id: uuid.UUID | None = Field(
         ...,
         description=(
             "Target parent node ID. Set to ``null`` to move the node to the tree root."
@@ -149,7 +149,7 @@ class NodeResponse(BaseModel):
     parent_id: uuid.UUID | None = Field(
         default=None,
         description="Parent node ID, or ``null`` for root nodes.",
-        validation_alias="parent_materialnode_id",
+        validation_alias="parent_id",
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
@@ -158,7 +158,7 @@ class NodeResponse(BaseModel):
         description=("Default ISO 639-1 language for materials under this subtree."),
     )
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
     children_count: int = Field(
@@ -184,13 +184,13 @@ class NodeTreeResponse(BaseModel):
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
-    parent_materialnode_id: uuid.UUID | None = Field(
+    parent_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
     children: list[NodeTreeResponse] = Field(
@@ -204,7 +204,7 @@ class NodeTreeResponse(BaseModel):
 class NodeListResponse(BaseModel):
     """Paginated list of root nodes (courses).
 
-    Root nodes (parent_materialnode_id IS NULL) serve as top-level entities.
+    Root nodes (parent_id IS NULL) serve as top-level entities.
     """
 
     items: list[NodeResponse] = Field(description="Root nodes for the current page.")
@@ -216,10 +216,10 @@ class NodeListResponse(BaseModel):
 # --- Material Entries ---
 
 
-class MaterialEntrySummaryResponse(BaseModel):
+class AuthoredDocumentSummaryResponse(BaseModel):
     """Compact material entry within the tree detail.
 
-    A lighter version of ``MaterialEntryResponse`` omitting
+    A lighter version of ``AuthoredDocumentResponse`` omitting
     ``job_id`` and ``updated_at`` to keep the tree
     payload concise. Includes the derived ``state`` field.
     """
@@ -268,10 +268,10 @@ class NodeWithMaterialsResponse(BaseModel):
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
-    materials: list[MaterialEntrySummaryResponse] = Field(
+    materials: list[AuthoredDocumentSummaryResponse] = Field(
         default_factory=list,
         description="Materials attached directly to this node.",
     )
@@ -283,7 +283,7 @@ class NodeWithMaterialsResponse(BaseModel):
     updated_at: datetime = Field(description="When this node was last modified.")
 
 
-class MaterialEntryCreateRequest(BaseModel):
+class AuthoredDocumentCreateRequest(BaseModel):
     """Request body for adding a material to a tree node."""
 
     source_type: SourceType = Field(
@@ -335,7 +335,7 @@ class MaterialEntryCreateRequest(BaseModel):
     )
 
 
-class MaterialEntryUpdateRequest(BaseModel):
+class AuthoredDocumentUpdateRequest(BaseModel):
     """Request body for PATCH /materials/{entry_id}.
 
     All fields are optional — only fields present in the request body
@@ -356,13 +356,13 @@ class MaterialEntryUpdateRequest(BaseModel):
     )
 
 
-class MaterialEntryResponse(BaseModel):
+class AuthoredDocumentResponse(BaseModel):
     """Response schema for a single material entry."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(
+    course_node_id: uuid.UUID = Field(
         description="Parent node this material belongs to."
     )
     source_type: str = Field(
@@ -402,7 +402,7 @@ class MaterialEntryResponse(BaseModel):
     updated_at: datetime = Field(description="When this entry was last modified.")
 
 
-class MaterialEntryCreateResponse(BaseModel):
+class AuthoredDocumentCreateResponse(BaseModel):
     """Response for material entry creation.
 
     Extends the base response with ``job_id`` — the ID of the
@@ -412,7 +412,7 @@ class MaterialEntryCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(
+    course_node_id: uuid.UUID = Field(
         description="Parent node this material belongs to."
     )
     source_type: str = Field(
@@ -604,9 +604,9 @@ class SnapshotSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(description="Target node for this snapshot.")
+    course_node_id: uuid.UUID = Field(description="Target node for this snapshot.")
     mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
-    node_fingerprint: str = Field(
+    content_hash: str = Field(
         description="Merkle fingerprint of the target subtree at generation time."
     )
     externalservicecall_id: uuid.UUID | None = Field(
@@ -680,7 +680,7 @@ class EditableNodeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    materialnode_id: uuid.UUID
+    course_node_id: uuid.UUID
     source_snapshot_id: uuid.UUID | None = None
     source_structurenode_id: uuid.UUID | None = None
     node_type: str
@@ -712,9 +712,9 @@ class EditableNodeResponse(BaseModel):
 
 
 class EditableTreeResponse(BaseModel):
-    """Full editable tree for a MaterialNode."""
+    """Full editable tree for a CourseNode."""
 
-    materialnode_id: uuid.UUID
+    course_node_id: uuid.UUID
     source_snapshot_id: uuid.UUID | None = None
     nodes: list[EditableNodeResponse]
 

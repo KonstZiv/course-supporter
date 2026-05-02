@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from course_supporter.errors import NodeNotFoundError
-from course_supporter.models.course import MaterialNodeSummary
+from course_supporter.models.course import CourseNodeSummary
 from course_supporter.tree_utils import (
     build_material_tree_summary,
     resolve_target_nodes,
@@ -23,17 +23,17 @@ from course_supporter.tree_utils import (
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     title: str = "Node",
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
     materials: list[Any] | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
+    """Create a mock CourseNode."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.title = title
     node.description = description
     node.order = order
@@ -48,7 +48,7 @@ def _make_entry(
     filename: str | None = "notes.md",
     source_url: str = "file:///notes.md",
 ) -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
     entry.filename = filename
@@ -114,7 +114,7 @@ class TestBuildMaterialTreeSummary:
 
         child = _make_node(
             node_id=child_id,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Lesson 1",
             order=1,
             materials=[_make_entry(filename="video.mp4")],
@@ -164,13 +164,13 @@ class TestBuildMaterialTreeSummary:
 
         grandchild = _make_node(
             node_id=grandchild_id,
-            parent_materialnode_id=child_id,
+            parent_id=child_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=child_id,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Lesson",
             order=0,
             children=[grandchild],
@@ -189,11 +189,11 @@ class TestBuildMaterialTreeSummary:
         assert result[0].children[0].children[0].title == "Concept"
 
     def test_result_is_pydantic_model(self) -> None:
-        """Result items are MaterialNodeSummary instances."""
+        """Result items are CourseNodeSummary instances."""
         root = _make_node(title="Module")
         result = build_material_tree_summary([root])
 
-        assert isinstance(result[0], MaterialNodeSummary)
+        assert isinstance(result[0], CourseNodeSummary)
 
     def test_serializable(self) -> None:
         """Result can be serialized to JSON (for CourseContext)."""
@@ -212,13 +212,13 @@ class TestBuildMaterialTreeSummary:
         root_id = uuid.uuid4()
         child_in = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Included",
             order=0,
         )
         child_out = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Excluded",
             order=1,
         )
@@ -250,12 +250,12 @@ class TestBuildMaterialTreeSummary:
         root_id = uuid.uuid4()
         child_b = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Second",
             order=2,
         )
         child_a = _make_node(
-            node_id=uuid.uuid4(), parent_materialnode_id=root_id, title="First", order=1
+            node_id=uuid.uuid4(), parent_id=root_id, title="First", order=1
         )
         root = _make_node(
             node_id=root_id,
@@ -355,7 +355,7 @@ class TestSerializeTreeForGuided:
         child = _make_node(
             title="Lesson 1",
             order=0,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
         )
         root = _make_node(
             node_id=root_id,
@@ -401,13 +401,13 @@ class TestSerializeTreeForGuided:
 
         grandchild = _make_node(
             node_id=gc_id,
-            parent_materialnode_id=c_id,
+            parent_id=c_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=c_id,
-            parent_materialnode_id=r_id,
+            parent_id=r_id,
             title="Lesson",
             order=0,
             children=[grandchild],

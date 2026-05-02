@@ -1,19 +1,19 @@
-"""Tests for MaterialState derived property on MaterialEntry."""
+"""Tests for MaterialState derived property on AuthoredDocument."""
 
 from __future__ import annotations
 
-from course_supporter.storage.orm import MaterialEntry, MaterialState, _uuid7
+from course_supporter.storage.orm import AuthoredDocument, MaterialState, _uuid7
 
 
-def _entry(**kwargs: object) -> MaterialEntry:
-    """Create a MaterialEntry with sensible defaults, overriding with kwargs."""
+def _entry(**kwargs: object) -> AuthoredDocument:
+    """Create a AuthoredDocument with sensible defaults, overriding with kwargs."""
     defaults: dict[str, object] = {
-        "materialnode_id": _uuid7(),
+        "course_node_id": _uuid7(),
         "source_type": "web",
         "source_url": "https://example.com",
     }
     defaults.update(kwargs)
-    return MaterialEntry(**defaults)  # type: ignore[arg-type]
+    return AuthoredDocument(**defaults)  # type: ignore[arg-type]
 
 
 class TestMaterialStateEnum:

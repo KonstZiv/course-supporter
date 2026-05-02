@@ -58,7 +58,7 @@ class HomeworkRepository:
         Args:
             tenant_id: Owning tenant UUID.
             student_id: FK to the student record.
-            course_node_id: Root MaterialNode (the course).
+            course_node_id: Root CourseNode (the course).
             node_id: Specific course node the submission targets.
             file_url: S3/B2 path to the uploaded file.
             file_type: MIME type of the uploaded file.

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import MaterialEntry, MaterialNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import StructureNodeEditable
@@ -57,11 +57,11 @@ class FingerprintService:
 
     # ── Public API ──
 
-    async def ensure_material_fp(self, entry: MaterialEntry) -> str:
+    async def ensure_material_fp(self, entry: AuthoredDocument) -> str:
         """Return the material fingerprint (``processed_hash``).
 
         Args:
-            entry: A loaded MaterialEntry ORM instance.
+            entry: A loaded AuthoredDocument ORM instance.
 
         Returns:
             64-char lowercase hex SHA-256 digest.
@@ -72,7 +72,7 @@ class FingerprintService:
         """
         return self._compute_material_fp(entry)
 
-    async def ensure_node_fp(self, node: MaterialNode) -> str:
+    async def ensure_node_fp(self, node: CourseNode) -> str:
         """Lazily compute and cache Merkle fingerprint for a node.
 
         Combines material fingerprints (``m:<hex>``) and child node
@@ -90,19 +90,19 @@ class FingerprintService:
         (no flush on cache hit).
 
         Args:
-            node: A loaded MaterialNode ORM instance with eagerly
+            node: A loaded CourseNode ORM instance with eagerly
                 loaded ``materials`` and ``children``.
 
         Returns:
             64-char lowercase hex SHA-256 digest.
         """
-        if node.node_fingerprint is not None:
-            return node.node_fingerprint
+        if node.content_hash is not None:
+            return node.content_hash
         fp = self._compute_node_fp(node)
         await self._session.flush()
         return fp
 
-    async def ensure_course_fp(self, root_nodes: list[MaterialNode]) -> str:
+    async def ensure_course_fp(self, root_nodes: list[CourseNode]) -> str:
         """Compute Merkle fingerprint for an entire course.
 
         Combines root-node fingerprints into a sorted list and hashes
@@ -113,8 +113,8 @@ class FingerprintService:
         Not stored in DB — computed on the fly from root nodes.
 
         Args:
-            root_nodes: Root-level MaterialNode instances
-                (``parent_materialnode_id is None``) with eagerly loaded subtrees.
+            root_nodes: Root-level CourseNode instances
+                (``parent_id is None``) with eagerly loaded subtrees.
 
         Returns:
             64-char lowercase hex SHA-256 digest.
@@ -128,11 +128,11 @@ class FingerprintService:
         await self._session.flush()
         return digest
 
-    async def invalidate_up(self, node: MaterialNode) -> None:
-        """Clear node_fingerprint from ``node`` up to the root.
+    async def invalidate_up(self, node: CourseNode) -> None:
+        """Clear content_hash from ``node`` up to the root.
 
-        Walks the parent chain using ``parent_materialnode_id``, setting
-        ``node_fingerprint = None`` on every ancestor. Issues a
+        Walks the parent chain using ``parent_id``, setting
+        ``content_hash = None`` on every ancestor. Issues a
         single flush after the full walk.
 
         Safe in async context — loads each parent via
@@ -142,47 +142,45 @@ class FingerprintService:
         Args:
             node: The starting node (e.g. node whose material changed).
         """
-        current: MaterialNode | None = node
+        current: CourseNode | None = node
         while current is not None:
-            current.node_fingerprint = None
-            if current.parent_materialnode_id is None:
+            current.content_hash = None
+            if current.parent_id is None:
                 break
-            current = await self._session.get(
-                MaterialNode, current.parent_materialnode_id
-            )
+            current = await self._session.get(CourseNode, current.parent_id)
         await self._session.flush()
 
     # ── Internal compute (no flush) ──
 
     @staticmethod
-    def _compute_material_fp(entry: MaterialEntry) -> str:
-        """Return ``processed_hash`` as the material fingerprint.
+    def _compute_material_fp(entry: AuthoredDocument) -> str:
+        """Return ``content_hash`` as the material fingerprint.
 
         Raises:
-            ValueError: If ``processed_hash`` is None (not yet processed).
+            ValueError: If ``content_hash`` is None (not yet processed).
         """
-        if entry.processed_hash is not None:
-            return entry.processed_hash
+        if entry.content_hash is not None:
+            return entry.content_hash
 
         msg = (
-            f"Cannot compute fingerprint: MaterialEntry {entry.id} "
-            f"has no processed_hash"
+            f"Cannot compute fingerprint: AuthoredDocument {entry.id} "
+            f"has no content_hash"
         )
         raise ValueError(msg)
 
-    def _compute_node_fp(self, node: MaterialNode) -> str:
+    def _compute_node_fp(self, node: CourseNode) -> str:
         """Compute Merkle fingerprint for a node without flushing.
 
         Recurses into children (bottom-up), then combines all parts.
         """
-        if node.node_fingerprint is not None:
-            return node.node_fingerprint
+        if node.content_hash is not None:
+            return node.content_hash
 
         parts: list[str] = []
 
         # Material fingerprints (skip unprocessed)
-        for mat in node.materials:
-            if mat.processed_hash is not None:
+        for mat in node.documents:
+            if mat.content_hash is not None:
                 fp = self._compute_material_fp(mat)
                 parts.append(f"m:{fp}")
 
@@ -193,5 +191,5 @@ class FingerprintService:
 
         parts.sort()
         digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()
-        node.node_fingerprint = digest
+        node.content_hash = digest
         return digest

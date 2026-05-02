@@ -12,8 +12,8 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.scopes import require_scope
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 
 def _make_tenant(scopes: list[str]) -> TenantContext:
@@ -28,16 +28,16 @@ def _make_tenant(scopes: list[str]) -> TenantContext:
 
 
 def _make_node_mock(tenant_id: uuid.UUID | None = None) -> MagicMock:
-    """Create a mock MaterialNode ORM object."""
+    """Create a mock CourseNode ORM object."""
     node = MagicMock()
     node.id = uuid.uuid4()
     node.tenant_id = tenant_id or uuid.uuid4()
-    node.parent_materialnode_id = None
+    node.parent_id = None
     node.title = "Test"
     node.description = None
     node.default_language = None
     node.order = 0
-    node.node_fingerprint = None
+    node.content_hash = None
     node.created_at = datetime.now(UTC)
     node.updated_at = datetime.now(UTC)
     return node
@@ -65,7 +65,7 @@ class TestScopeEnforcement:
                 base_url="http://test",
             ) as client:
                 with patch.object(
-                    MaterialNodeRepository,
+                    CourseNodeRepository,
                     "create",
                     return_value=_make_node_mock(tenant.tenant_id),
                 ):
@@ -140,9 +140,7 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with patch.object(
-                    MaterialNodeRepository, "get_by_id", return_value=node
-                ):
+                with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
                     response = await client.get(f"/api/v1/nodes/{node.id}")
             assert response.status_code == 200
         finally:
@@ -160,9 +158,7 @@ class TestScopeEnforcement:
                 transport=ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                with patch.object(
-                    MaterialNodeRepository, "get_by_id", return_value=node
-                ):
+                with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
                     response = await client.get(f"/api/v1/nodes/{node.id}")
             assert response.status_code == 200
         finally:
@@ -181,7 +177,7 @@ class TestScopeEnforcement:
             ) as client:
                 # prep endpoint (POST /nodes)
                 with patch.object(
-                    MaterialNodeRepository,
+                    CourseNodeRepository,
                     "create",
                     return_value=_make_node_mock(tenant.tenant_id),
                 ):
@@ -193,9 +189,7 @@ class TestScopeEnforcement:
 
                 # shared endpoint (GET /nodes/{id})
                 node = _make_node_mock(tenant.tenant_id)
-                with patch.object(
-                    MaterialNodeRepository, "get_by_id", return_value=node
-                ):
+                with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
                     resp_shared = await client.get(f"/api/v1/nodes/{node.id}")
                 assert resp_shared.status_code == 200
         finally:

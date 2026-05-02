@@ -9,7 +9,7 @@ from course_supporter.ingestion_callback import IngestionCallback
 
 # Patch targets — imports inside ingestion_callback functions
 _ENTRY_REPO = (
-    "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+    "course_supporter.storage.authored_document_repository.AuthoredDocumentRepository"
 )
 _JOB_REPO = "course_supporter.ingestion_callback.JobRepository"
 
@@ -50,7 +50,7 @@ class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
 
     async def test_material_processing_completed(self) -> None:
-        """MaterialEntry complete_processing called with content and hash."""
+        """AuthoredDocument complete_processing called with content and hash."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -180,7 +180,7 @@ class TestOnFailure:
         )
 
     async def test_material_updated_to_error(self) -> None:
-        """MaterialEntry fail_processing called with error message."""
+        """AuthoredDocument fail_processing called with error message."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -253,11 +253,11 @@ class TestOnSuccessErrors:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.complete_processing = AsyncMock(
-                side_effect=ValueError("MaterialEntry not found: xxx")
+                side_effect=ValueError("AuthoredDocument not found: xxx")
             )
             job_cls.return_value.update_status = AsyncMock()
 
-            with pytest.raises(ValueError, match="MaterialEntry not found"):
+            with pytest.raises(ValueError, match="AuthoredDocument not found"):
                 await callback.on_success(
                     job_id=uuid.uuid4(),
                     material_id=uuid.uuid4(),
@@ -448,7 +448,8 @@ class TestCallbackIntegrationWithArqTask:
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (
-            "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+            "course_supporter.storage.authored_document_repository"
+            ".AuthoredDocumentRepository"
         )
         _factory = "course_supporter.api.tasks.create_processors"
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
@@ -503,7 +504,8 @@ class TestCallbackIntegrationWithArqTask:
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (
-            "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+            "course_supporter.storage.authored_document_repository"
+            ".AuthoredDocumentRepository"
         )
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
         _factory_fn = "course_supporter.api.tasks.create_processors"

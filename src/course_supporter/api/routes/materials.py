@@ -30,10 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
+    AuthoredDocumentCreateResponse,
+    AuthoredDocumentResponse,
+    AuthoredDocumentUpdateRequest,
     ConfirmUploadRequest,
-    MaterialEntryCreateResponse,
-    MaterialEntryResponse,
-    MaterialEntryUpdateRequest,
     PresignedUrlRequest,
     PresignedUrlResponse,
 )
@@ -48,9 +48,11 @@ from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import MaterialEntry
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
+from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 
 logger = structlog.get_logger()
@@ -72,7 +74,7 @@ async def _require_node_for_tenant(
     node_id: uuid.UUID,
 ) -> object:
     """Verify the node exists and belongs to the tenant."""
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -80,20 +82,20 @@ async def _require_node_for_tenant(
 
 
 async def _require_material_for_tenant(
-    entry_repo: MaterialEntryRepository,
-    node_repo: MaterialNodeRepository,
+    entry_repo: AuthoredDocumentRepository,
+    node_repo: CourseNodeRepository,
     entry_id: uuid.UUID,
     tenant_id: uuid.UUID,
-) -> MaterialEntry:
+) -> AuthoredDocument:
     """Verify the material exists and belongs to the tenant.
 
-    Checks MaterialEntry → MaterialNode → tenant_id chain.
+    Checks AuthoredDocument → CourseNode → tenant_id chain.
     """
     entry = await entry_repo.get_by_id(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Material not found")
 
-    node = await node_repo.get_by_id(entry.materialnode_id)
+    node = await node_repo.get_by_id(entry.course_node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Material not found")
     return entry
@@ -156,13 +158,13 @@ async def create_material(
             pattern=r"^[a-z]{2}$",
         ),
     ] = None,
-) -> MaterialEntryCreateResponse:
+) -> AuthoredDocumentCreateResponse:
     """Add a new material to a tree node.
 
     Accepts either a URL or a file upload. If a file is provided,
     it is uploaded to S3/MinIO and the resulting URL is stored.
 
-    Creates a ``MaterialEntry`` and auto-enqueues an ingestion job
+    Creates a ``AuthoredDocument`` and auto-enqueues an ingestion job
     via ARQ. The ``job_id`` in the response can be used to track
     processing status via ``GET /api/v1/jobs/{job_id}``.
     """
@@ -211,7 +213,7 @@ async def create_material(
     elif source_url is not None:
         actual_url = source_url
 
-    entry_repo = MaterialEntryRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
     entry = await entry_repo.create(
         node_id=node_id,
         source_type=source_type,
@@ -240,7 +242,7 @@ async def create_material(
         job_id=str(job.id),
         task_type=task_type,
     )
-    response = MaterialEntryCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(entry)
     response.job_id = job.id
 
     warning = check_platform(source_type, actual_url)
@@ -309,8 +311,8 @@ async def confirm_upload(
     session: SessionDep,
     s3: S3Dep,
     arq: ArqDep,
-) -> MaterialEntryCreateResponse:
-    """Confirm a presigned upload and create the MaterialEntry.
+) -> AuthoredDocumentCreateResponse:
+    """Confirm a presigned upload and create the AuthoredDocument.
 
     Verifies the file exists in S3, creates the database entry,
     and enqueues ingestion.
@@ -337,7 +339,7 @@ async def confirm_upload(
     actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
     s3_url = f"{s3._endpoint_url}/{s3._bucket}/{body.key}"
 
-    entry_repo = MaterialEntryRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
     entry = await entry_repo.create(
         node_id=node_id,
         source_type=body.source_type,
@@ -366,7 +368,7 @@ async def confirm_upload(
         key=body.key,
         job_id=str(job.id),
     )
-    response = MaterialEntryCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(entry)
     response.job_id = job.id
     return response
 
@@ -376,16 +378,16 @@ async def list_materials(
     node_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
-) -> list[MaterialEntryResponse]:
+) -> list[AuthoredDocumentResponse]:
     """List all materials attached to a tree node.
 
     Returns materials ordered by their position (``order`` field).
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    repo = MaterialEntryRepository(session)
+    repo = AuthoredDocumentRepository(session)
     entries = await repo.get_for_node(node_id)
-    return [MaterialEntryResponse.model_validate(e) for e in entries]
+    return [AuthoredDocumentResponse.model_validate(e) for e in entries]
 
 
 @router.get("/materials/{entry_id}")
@@ -393,34 +395,34 @@ async def get_material(
     entry_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
-) -> MaterialEntryResponse:
+) -> AuthoredDocumentResponse:
     """Get a single material entry by ID.
 
     Verified through the node → tenant chain.
     """
-    entry_repo = MaterialEntryRepository(session)
-    node_repo = MaterialNodeRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
     entry = await _require_material_for_tenant(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
-    return MaterialEntryResponse.model_validate(entry)
+    return AuthoredDocumentResponse.model_validate(entry)
 
 
 @router.patch("/materials/{entry_id}")
 async def update_material(
     entry_id: uuid.UUID,
-    body: MaterialEntryUpdateRequest,
+    body: AuthoredDocumentUpdateRequest,
     tenant: PrepDep,
     session: SessionDep,
-) -> MaterialEntryResponse:
+) -> AuthoredDocumentResponse:
     """Update material metadata (material_role and/or task_type).
 
     Only fields explicitly sent in the request body are updated.
     Pass ``task_type: null`` to clear the task flag; omit the field
     to keep the current value.
     """
-    entry_repo = MaterialEntryRepository(session)
-    node_repo = MaterialNodeRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
     entry = await _require_material_for_tenant(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
@@ -449,7 +451,7 @@ async def update_material(
         task_type=body.task_type,
         fields=list(fields_set),
     )
-    return MaterialEntryResponse.model_validate(entry)
+    return AuthoredDocumentResponse.model_validate(entry)
 
 
 @router.delete("/materials/{entry_id}", status_code=204)
@@ -464,8 +466,8 @@ async def delete_material(
     Removes the material from DB and cleans up the S3 object
     if the source_url points to our bucket.
     """
-    entry_repo = MaterialEntryRepository(session)
-    node_repo = MaterialNodeRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
     entry = await _require_material_for_tenant(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
@@ -492,7 +494,7 @@ async def retry_material(
     session: SessionDep,
     arq: ArqDep,
     force: bool = False,
-) -> MaterialEntryCreateResponse:
+) -> AuthoredDocumentCreateResponse:
     """Retry ingestion for a material.
 
     By default only materials in ``error`` state can be retried.
@@ -500,8 +502,8 @@ async def retry_material(
     reprocess a ``ready`` material after pipeline improvements).
     Returns 409 if the material is not retryable without ``force``.
     """
-    entry_repo = MaterialEntryRepository(session)
-    node_repo = MaterialNodeRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
     entry = await _require_material_for_tenant(
         entry_repo, node_repo, entry_id, tenant.tenant_id
     )
@@ -523,7 +525,7 @@ async def retry_material(
         redis=arq,
         session=session,
         tenant_id=tenant.tenant_id,
-        node_id=entry.materialnode_id,
+        node_id=entry.course_node_id,
         material_id=entry.id,
         source_type=entry.source_type,
         source_url=entry.source_url,
@@ -536,6 +538,6 @@ async def retry_material(
         entry_id=str(entry_id),
         job_id=str(job.id),
     )
-    response = MaterialEntryCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(entry)
     response.job_id = job.id
     return response

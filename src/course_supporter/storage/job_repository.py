@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs import JobType, validate_job_type
-from course_supporter.storage.orm import Job, MaterialNode
+from course_supporter.storage.orm import CourseNode, Job
 
 # Valid job status transitions
 JOB_TRANSITIONS: dict[str, set[str]] = {
@@ -28,7 +28,7 @@ class JobRepository:
 
     Not tenant-scoped — jobs are accessed via node_id or directly by id.
     Tenant isolation is enforced via ``get_by_id_for_tenant`` which joins
-    through ``MaterialNode.tenant_id``.
+    through ``CourseNode.tenant_id``.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -196,8 +196,8 @@ class JobRepository:
         # Try node-based isolation first
         stmt = (
             select(Job)
-            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
-            .where(Job.id == job_id, MaterialNode.tenant_id == tenant_id)
+            .join(CourseNode, Job.course_node_id == CourseNode.id)
+            .where(Job.id == job_id, CourseNode.tenant_id == tenant_id)
         )
         result = await self._session.execute(stmt)
         job = result.scalar_one_or_none()

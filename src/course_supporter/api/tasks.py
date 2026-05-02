@@ -32,7 +32,7 @@ from course_supporter.storage.snapshot_repository import SnapshotRepository
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.models.course import MaterialNodeSummary
+    from course_supporter.models.course import CourseNodeSummary
     from course_supporter.models.source import SourceDocument
     from course_supporter.models.step import (
         Correction,
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
         StepType,
     )
     from course_supporter.storage.orm import (
-        MaterialNode,
+        CourseNode,
         StructureNodeEditable,
         StructureSnapshot,
     )
@@ -75,7 +75,7 @@ class _MaterialProxy:
 async def _resolve_s3_url(
     material: _HasSourceUrl,
     s3: S3Client | None,
-) -> AsyncIterator[Any]:  # Any: processor.process_raw() expects MaterialEntry
+) -> AsyncIterator[Any]:  # Any: processor.process_raw() expects AuthoredDocument
     """Download S3 object to temp file, yield a proxy with local path.
 
     The original ORM object is **never mutated**, preventing accidental
@@ -114,7 +114,7 @@ async def arq_ingest_material(
     source_url: str,
     priority: str = "normal",
 ) -> None:
-    """ARQ task: process a MaterialEntry with job tracking.
+    """ARQ task: process a AuthoredDocument with job tracking.
 
     Thin orchestrator: validates priority, transitions to active,
     runs the processor, then delegates completion handling to
@@ -123,20 +123,20 @@ async def arq_ingest_material(
     Args:
         ctx: ARQ worker context (session_factory, model_router, engine).
         job_id: Job UUID as string (ARQ serializes via JSON).
-        material_id: MaterialEntry UUID as string.
+        material_id: AuthoredDocument UUID as string.
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or S3 path to the source file.
         priority: Job priority ('normal' or 'immediate').
     """
     from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
     from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_entry_repository import (
-        MaterialEntryRepository,
-    )
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
-    )
 
     check_work_window(JobPriority(priority))
 
@@ -168,8 +168,8 @@ async def arq_ingest_material(
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
-        entry_repo = MaterialEntryRepository(session)
-        node_repo = MaterialNodeRepository(session)
+        entry_repo = AuthoredDocumentRepository(session)
+        node_repo = CourseNodeRepository(session)
 
         entry = await entry_repo.get_by_id(mid)
         if entry is None:
@@ -180,7 +180,7 @@ async def arq_ingest_material(
         # When None, STT will auto-detect and return detected_language which
         # we persist back to the entry after successful ingestion.
         if entry.language is None:
-            root = await node_repo.get_root_for(entry.materialnode_id)
+            root = await node_repo.get_root_for(entry.course_node_id)
             if root is not None and root.default_language:
                 entry.language = root.default_language
                 log.debug(
@@ -222,7 +222,7 @@ async def arq_ingest_material(
     # where a concurrent PATCH may set language between our check and write.
     if detected_language:
         async with session_factory() as session:
-            entry_repo = MaterialEntryRepository(session)
+            entry_repo = AuthoredDocumentRepository(session)
             updated = await entry_repo.set_language_if_unset(mid, detected_language)
             await session.commit()
             if updated:
@@ -240,9 +240,9 @@ async def arq_ingest_material(
 
 
 def _resolve_target_nodes(
-    root_nodes: list[MaterialNode],
+    root_nodes: list[CourseNode],
     node_id: uuid.UUID | None,
-) -> tuple[MaterialNode | None, list[MaterialNode]]:
+) -> tuple[CourseNode | None, list[CourseNode]]:
     """Resolve target node and flatten its subtree.
 
     Thin wrapper around :func:`tree_utils.resolve_target_nodes`.
@@ -253,7 +253,7 @@ def _resolve_target_nodes(
 
 
 def _collect_ready_documents(
-    flat_nodes: list[MaterialNode],
+    flat_nodes: list[CourseNode],
     *,
     allow_empty: bool = False,
 ) -> list[SourceDocument]:
@@ -277,13 +277,13 @@ def _collect_ready_documents(
 
     documents: list[SourceDocument] = []
     for node in flat_nodes:
-        for entry in node.materials:
+        for entry in node.documents:
             if entry.state == MaterialState.READY:
-                documents.append(
-                    SourceDocument.model_validate_json(
-                        entry.processed_content,  # type: ignore[arg-type]
+                processed_content = getattr(entry, "processed_content", None)
+                if processed_content:
+                    documents.append(
+                        SourceDocument.model_validate_json(processed_content)
                     )
-                )
 
     if not documents and not allow_empty:
         msg = "No READY materials found for generation"
@@ -292,7 +292,7 @@ def _collect_ready_documents(
 
 
 def _collect_outline_context(
-    flat_nodes: list[MaterialNode],
+    flat_nodes: list[CourseNode],
 ) -> str | None:
     """Collect outline_content from READY entries, if any exist.
 
@@ -309,10 +309,13 @@ def _collect_outline_context(
     log = structlog.get_logger()
     parsed: list[dict[str, object]] = []
     for node in flat_nodes:
-        for entry in node.materials:
-            if entry.state == MaterialState.READY and entry.outline_content:
+        for entry in node.documents:
+            if entry.state != MaterialState.READY:
+                continue
+            outline_content = getattr(entry, "outline_content", None)
+            if outline_content:
                 try:
-                    parsed.append(json.loads(entry.outline_content))
+                    parsed.append(json.loads(outline_content))
                 except json.JSONDecodeError:
                     log.warning(
                         "invalid_outline_content",
@@ -342,16 +345,16 @@ async def arq_generate_structure(
     Args:
         ctx: ARQ worker context (session_factory, model_router).
         job_id: Job UUID as string (ARQ JSON serialization).
-        root_node_id: Root MaterialNode UUID as string.
+        root_node_id: Root CourseNode UUID as string.
         target_node_id: Optional target node UUID. None = whole tree.
         mode: Generation mode ('free' or 'guided').
     """
     from course_supporter.fingerprint import FingerprintService
     from course_supporter.ingestion.merge import MergeStep
-    from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
     )
+    from course_supporter.storage.job_repository import JobRepository
 
     jid = uuid.UUID(job_id)
     rid = uuid.UUID(root_node_id)
@@ -378,10 +381,10 @@ async def arq_generate_structure(
             await session.commit()
 
             # Load tree → resolve target → flatten
-            node_repo = MaterialNodeRepository(session)
-            root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+            node_repo = CourseNodeRepository(session)
+            root_nodes: list[CourseNode] = await node_repo.get_subtree(
                 rid,
-                include_materials=True,
+                include_documents=True,
             )
             target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
 
@@ -510,10 +513,10 @@ async def arq_generate_structure(
 
 
 def _snapshot_to_summary(
-    node: MaterialNode,
+    node: CourseNode,
     snap: StructureSnapshot,
 ) -> NodeSummary:
-    """Convert a MaterialNode + its latest snapshot into NodeSummary."""
+    """Convert a CourseNode + its latest snapshot into NodeSummary."""
     return NodeSummary(
         node_id=node.id,
         title=node.title,
@@ -524,17 +527,17 @@ def _snapshot_to_summary(
     )
 
 
-def _determine_node_position(node: MaterialNode) -> NodePosition:
+def _determine_node_position(node: CourseNode) -> NodePosition:
     """Determine node position in the material tree hierarchy.
 
     Args:
-        node: MaterialNode with children relationship loaded.
+        node: CourseNode with children relationship loaded.
 
     Returns:
         NodePosition.ROOT if no parent, LEAF if no children,
         INTERMEDIATE otherwise.
     """
-    if node.parent_materialnode_id is None:
+    if node.parent_id is None:
         return NodePosition.ROOT
     if not node.children:
         return NodePosition.LEAF
@@ -543,13 +546,13 @@ def _determine_node_position(node: MaterialNode) -> NodePosition:
 
 async def _load_children_summaries(
     session: AsyncSession,
-    node: MaterialNode,
+    node: CourseNode,
 ) -> list[NodeSummary]:
     """Load NodeSummary list from latest snapshots of child nodes.
 
     Args:
         session: Active DB session.
-        node: Parent MaterialNode (children relationship loaded).
+        node: Parent CourseNode (children relationship loaded).
 
     Returns:
         List of NodeSummary for children that have snapshots.
@@ -572,7 +575,7 @@ async def _load_children_summaries(
 
 async def _load_children_snapshots(
     session: AsyncSession,
-    node: MaterialNode,
+    node: CourseNode,
 ) -> list[ChildSnapshotContext]:
     """Load full snapshot data from child nodes for parent context.
 
@@ -582,7 +585,7 @@ async def _load_children_snapshots(
 
     Args:
         session: Active DB session.
-        node: Parent MaterialNode (children relationship loaded).
+        node: Parent CourseNode (children relationship loaded).
 
     Returns:
         List of ChildSnapshotContext for children that have snapshots.
@@ -615,22 +618,22 @@ async def _load_children_snapshots(
 
 async def _load_parent_context(
     session: AsyncSession,
-    node: MaterialNode,
+    node: CourseNode,
 ) -> NodeSummary | None:
     """Load NodeSummary for the parent node from its latest snapshot.
 
     Args:
         session: Active DB session.
-        node: Current MaterialNode (parent relationship loaded).
+        node: Current CourseNode (parent relationship loaded).
 
     Returns:
         NodeSummary of the parent, or None if root or no snapshot.
     """
-    if node.parent_materialnode_id is None or node.parent is None:
+    if node.parent_id is None or node.parent is None:
         return None
 
     snap_repo = SnapshotRepository(session)
-    snap = await snap_repo.get_latest_for_node(node.parent_materialnode_id)
+    snap = await snap_repo.get_latest_for_node(node.parent_id)
     if snap is None or snap.summary is None:
         return None
 
@@ -639,13 +642,13 @@ async def _load_parent_context(
 
 async def _load_sibling_summaries(
     session: AsyncSession,
-    node: MaterialNode,
+    node: CourseNode,
 ) -> list[NodeSummary]:
     """Load NodeSummary list for sibling nodes (same parent, excluding self).
 
     Args:
         session: Active DB session.
-        node: Current MaterialNode (parent relationship loaded).
+        node: Current CourseNode (parent relationship loaded).
 
     Returns:
         List of NodeSummary for siblings that have snapshots.
@@ -675,8 +678,8 @@ def _build_step_input(
     effective_node_id: uuid.UUID,
     step_type: StepType,
     documents: list[SourceDocument],
-    tree_summary: list[MaterialNodeSummary],
-    flat_nodes: list[MaterialNode],
+    tree_summary: list[CourseNodeSummary],
+    flat_nodes: list[CourseNode],
     mode: Literal["free", "guided"],
     children_summaries: list[NodeSummary] | None = None,
     parent_context: NodeSummary | None = None,
@@ -822,17 +825,17 @@ async def arq_execute_step(
     Args:
         ctx: ARQ worker context (session_factory, model_router).
         job_id: Job UUID as string (ARQ JSON serialization).
-        root_node_id: Root MaterialNode UUID as string.
+        root_node_id: Root CourseNode UUID as string.
         target_node_id: Optional target node UUID. None = whole tree.
         mode: Generation mode ('free' or 'guided').
         step_type: Step type ('generate', 'reconcile', 'refine').
     """
     from course_supporter.fingerprint import FingerprintService
     from course_supporter.models.step import StepType as _StepType
-    from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
     )
+    from course_supporter.storage.job_repository import JobRepository
 
     jid = uuid.UUID(job_id)
     rid = uuid.UUID(root_node_id)
@@ -860,10 +863,10 @@ async def arq_execute_step(
             await session.commit()
 
             # Load tree → resolve target → flatten
-            node_repo = MaterialNodeRepository(session)
-            root_nodes: list[MaterialNode] = await node_repo.get_subtree(
+            node_repo = CourseNodeRepository(session)
+            root_nodes: list[CourseNode] = await node_repo.get_subtree(
                 rid,
-                include_materials=True,
+                include_documents=True,
             )
             target, flat_nodes = _resolve_target_nodes(root_nodes, nid)
 
@@ -997,7 +1000,7 @@ async def arq_reconcile_preview(
     Args:
         ctx: ARQ worker context (session_factory, model_router).
         job_id: Job UUID as string.
-        node_id: MaterialNode UUID whose editable tree to analyze.
+        node_id: CourseNode UUID whose editable tree to analyze.
     """
     from course_supporter.api.routes.reconciliation import _editable_tree_to_dicts
     from course_supporter.storage.job_repository import JobRepository
@@ -1044,7 +1047,7 @@ async def arq_reconcile_preview(
             job = await job_repo.get_by_id(jid)
             params = job.input_params if job and job.input_params else {}
             combined_fp = params.get("combined_fingerprint")
-            node_fp = params.get("node_fingerprint")
+            node_fp = params.get("content_hash")
             editable_hash = params.get("editable_tree_hash")
 
             if combined_fp and node_fp and editable_hash:
@@ -1087,7 +1090,7 @@ async def arq_reconcile_preview(
 async def arq_execute_methodist_step(
     ctx: dict[str, Any],
     job_id: str,
-    materialnode_id: str,
+    course_node_id: str,
     editable_id: str,
     phase: Literal["bottom_up", "top_down"] = "bottom_up",
 ) -> None:
@@ -1100,7 +1103,7 @@ async def arq_execute_methodist_step(
     Args:
         ctx: ARQ worker context (session_factory, model_router).
         job_id: Job UUID as string.
-        materialnode_id: Root MaterialNode UUID as string.
+        course_node_id: Root CourseNode UUID as string.
         editable_id: StructureNodeEditable UUID to process.
         phase: 'bottom_up' or 'top_down'.
     """
@@ -1113,16 +1116,16 @@ async def arq_execute_methodist_step(
         format_methodist_parent,
         format_methodist_siblings,
     )
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
     from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_entry_repository import (
-        MaterialEntryRepository,
-    )
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
-    )
 
     jid = uuid.UUID(job_id)
-    mn_id = uuid.UUID(materialnode_id)
+    mn_id = uuid.UUID(course_node_id)
     ed_id = uuid.UUID(editable_id)
 
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
@@ -1178,12 +1181,12 @@ async def arq_execute_methodist_step(
                 node_position = "leaf"
 
             # 3. Collect outline context from MaterialEntries
-            node_repo = MaterialNodeRepository(session)
+            node_repo = CourseNodeRepository(session)
             mat_node = await node_repo.get_by_id(mn_id)
             outline_ctx = ""
             material_roles_info: list[tuple[str, str, str, str | None]] = []
             if mat_node is not None:
-                entry_repo = MaterialEntryRepository(session)
+                entry_repo = AuthoredDocumentRepository(session)
                 entries = await entry_repo.get_for_node(mn_id)
                 outlines = []
                 for entry in entries:
@@ -1195,10 +1198,11 @@ async def arq_execute_methodist_step(
                             entry.task_type,
                         )
                     )
-                    if entry.outline_content:
+                    outline_content = getattr(entry, "outline_content", None)
+                    if outline_content:
                         try:
                             outlines.append(
-                                json.loads(entry.outline_content),
+                                json.loads(outline_content),
                             )
                         except json.JSONDecodeError:
                             log.warning(
@@ -1349,12 +1353,12 @@ async def arq_process_homework(
         SecurityContext,
         SecurityViolationError,
     )
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
     from course_supporter.storage.editable_repository import EditableRepository
     from course_supporter.storage.homework_repository import HomeworkRepository
     from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_node_repository import (
-        MaterialNodeRepository,
-    )
     from course_supporter.storage.student_repository import StudentRepository
 
     jid = uuid.UUID(job_id)
@@ -1375,7 +1379,7 @@ async def arq_process_homework(
     async with session_factory() as session:
         job_repo = JobRepository(session)
         hw_repo = HomeworkRepository(session)
-        node_repo = MaterialNodeRepository(session)
+        node_repo = CourseNodeRepository(session)
         try:
             # Load submission
             submission = await hw_repo.get_by_id(sid)

@@ -12,8 +12,8 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -28,21 +28,21 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     title: str = "Test Node",
     description: str | None = None,
     order: int = 0,
     children: list[object] | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode with ORM-compatible attributes."""
+    """Create a mock CourseNode with ORM-compatible attributes."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.title = title
     node.description = description
     node.order = order
-    node.node_fingerprint = None
+    node.content_hash = None
     node.default_language = None
     node.children = children or []
     node.created_at = datetime.now(UTC)
@@ -83,14 +83,14 @@ class TestCreateRootNode:
     async def test_returns_201(self, client: AsyncClient) -> None:
         """Successful root node creation returns 201."""
         node = _mock_node()
-        with patch.object(MaterialNodeRepository, "create", return_value=node):
+        with patch.object(CourseNodeRepository, "create", return_value=node):
             resp = await client.post("/api/v1/nodes", json={"title": "Module 1"})
         assert resp.status_code == 201
 
     async def test_returns_node_fields(self, client: AsyncClient) -> None:
         """Response contains all expected node fields."""
         node = _mock_node(title="Module 1")
-        with patch.object(MaterialNodeRepository, "create", return_value=node):
+        with patch.object(CourseNodeRepository, "create", return_value=node):
             resp = await client.post("/api/v1/nodes", json={"title": "Module 1"})
         data = resp.json()
         assert data["id"] == str(node.id)
@@ -103,7 +103,7 @@ class TestCreateRootNode:
     async def test_with_description(self, client: AsyncClient) -> None:
         """Root node accepts optional description."""
         node = _mock_node(description="Details")
-        with patch.object(MaterialNodeRepository, "create", return_value=node):
+        with patch.object(CourseNodeRepository, "create", return_value=node):
             resp = await client.post(
                 "/api/v1/nodes", json={"title": "Mod", "description": "Details"}
             )
@@ -127,10 +127,10 @@ class TestCreateChildNode:
     async def test_returns_201(self, client: AsyncClient) -> None:
         """Successful child creation returns 201."""
         parent = _mock_node(title="Parent")
-        child = _mock_node(parent_materialnode_id=parent.id, title="Child")
+        child = _mock_node(parent_id=parent.id, title="Child")
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=parent),
-            patch.object(MaterialNodeRepository, "create", return_value=child),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=parent),
+            patch.object(CourseNodeRepository, "create", return_value=child),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{parent.id}/children", json={"title": "Child"}
@@ -140,7 +140,7 @@ class TestCreateChildNode:
 
     async def test_parent_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent parent returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.post(
                 f"/api/v1/nodes/{uuid.uuid4()}/children", json={"title": "Child"}
             )
@@ -150,7 +150,7 @@ class TestCreateChildNode:
     async def test_parent_wrong_tenant_returns_404(self, client: AsyncClient) -> None:
         """Parent belonging to a different tenant returns 404."""
         parent = _mock_node(tenant_id=uuid.uuid4(), title="Wrong tenant parent")
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=parent):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=parent):
             resp = await client.post(
                 f"/api/v1/nodes/{parent.id}/children", json={"title": "Child"}
             )
@@ -164,8 +164,8 @@ class TestGetTree:
         """Node with no children returns empty list."""
         root = _mock_node(title="Root")
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=root),
-            patch.object(MaterialNodeRepository, "get_subtree", return_value=[]),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=root),
+            patch.object(CourseNodeRepository, "get_subtree", return_value=[]),
         ):
             resp = await client.get(f"/api/v1/nodes/{root.id}/tree")
         assert resp.status_code == 200
@@ -177,10 +177,8 @@ class TestGetTree:
         child = _mock_node(title="Child")
         tree_root = _mock_node(title="Root", children=[child])
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=root),
-            patch.object(
-                MaterialNodeRepository, "get_subtree", return_value=[tree_root]
-            ),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=root),
+            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_root]),
         ):
             resp = await client.get(f"/api/v1/nodes/{root.id}/tree")
         data = resp.json()
@@ -191,7 +189,7 @@ class TestGetTree:
 
     async def test_node_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.get(f"/api/v1/nodes/{uuid.uuid4()}/tree")
         assert resp.status_code == 404
 
@@ -202,7 +200,7 @@ class TestGetNode:
     async def test_returns_node(self, client: AsyncClient) -> None:
         """Existing node returned with correct fields."""
         node = _mock_node(title="Node 1", order=2)
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=node):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
             resp = await client.get(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 200
         assert resp.json()["title"] == "Node 1"
@@ -210,7 +208,7 @@ class TestGetNode:
 
     async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.get(f"/api/v1/nodes/{uuid.uuid4()}")
         assert resp.status_code == 404
 
@@ -223,8 +221,8 @@ class TestUpdateNode:
         node = _mock_node(title="Old")
         updated = _mock_node(title="New Title")
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(MaterialNodeRepository, "update", return_value=updated),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "update", return_value=updated),
         ):
             resp = await client.patch(
                 f"/api/v1/nodes/{node.id}", json={"title": "New Title"}
@@ -237,8 +235,8 @@ class TestUpdateNode:
         node = _mock_node(description="Old desc")
         updated = _mock_node(description=None)
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(MaterialNodeRepository, "update", return_value=updated),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "update", return_value=updated),
         ):
             resp = await client.patch(
                 f"/api/v1/nodes/{node.id}", json={"description": None}
@@ -250,15 +248,15 @@ class TestUpdateNode:
         """Empty body (no fields to update) is accepted."""
         node = _mock_node()
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(MaterialNodeRepository, "update", return_value=node),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "update", return_value=node),
         ):
             resp = await client.patch(f"/api/v1/nodes/{node.id}", json={})
         assert resp.status_code == 200
 
     async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.patch(
                 f"/api/v1/nodes/{uuid.uuid4()}", json={"title": "New"}
             )
@@ -272,33 +270,33 @@ class TestMoveNode:
         """Node moved to a new parent."""
         node = _mock_node(title="Movable")
         target = _mock_node(title="Target")
-        moved = _mock_node(parent_materialnode_id=target.id)
+        moved = _mock_node(parent_id=target.id)
 
         def fake_get(nid: uuid.UUID) -> MagicMock | None:
             lookup = {node.id: node, target.id: target}
             return lookup.get(nid)
 
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", side_effect=fake_get),
-            patch.object(MaterialNodeRepository, "move", return_value=moved),
+            patch.object(CourseNodeRepository, "get_by_id", side_effect=fake_get),
+            patch.object(CourseNodeRepository, "move", return_value=moved),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_materialnode_id": str(target.id)},
+                json={"parent_id": str(target.id)},
             )
         assert resp.status_code == 200
         assert resp.json()["parent_id"] == str(target.id)
 
     async def test_move_to_root(self, client: AsyncClient) -> None:
-        """Node moved to root (parent_materialnode_id=null)."""
-        node = _mock_node(parent_materialnode_id=uuid.uuid4())
-        moved = _mock_node(parent_materialnode_id=None)
+        """Node moved to root (parent_id=null)."""
+        node = _mock_node(parent_id=uuid.uuid4())
+        moved = _mock_node(parent_id=None)
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(MaterialNodeRepository, "move", return_value=moved),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "move", return_value=moved),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node.id}/move", json={"parent_materialnode_id": None}
+                f"/api/v1/nodes/{node.id}/move", json={"parent_id": None}
             )
         assert resp.status_code == 200
         assert resp.json()["parent_id"] is None
@@ -313,16 +311,16 @@ class TestMoveNode:
             return lookup.get(nid)
 
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", side_effect=fake_get),
+            patch.object(CourseNodeRepository, "get_by_id", side_effect=fake_get),
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "move",
                 side_effect=ValueError("would create a cycle"),
             ),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_materialnode_id": str(target.id)},
+                json={"parent_id": str(target.id)},
             )
         assert resp.status_code == 422
         assert "cycle" in resp.json()["detail"]
@@ -336,10 +334,10 @@ class TestMoveNode:
             lookup = {node.id: node, target.id: target}
             return lookup.get(nid)
 
-        with patch.object(MaterialNodeRepository, "get_by_id", side_effect=fake_get):
+        with patch.object(CourseNodeRepository, "get_by_id", side_effect=fake_get):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/move",
-                json={"parent_materialnode_id": str(target.id)},
+                json={"parent_id": str(target.id)},
             )
         assert resp.status_code == 404
 
@@ -352,8 +350,8 @@ class TestReorderNode:
         node = _mock_node(order=0)
         reordered = _mock_node(order=2)
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(MaterialNodeRepository, "reorder", return_value=reordered),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "reorder", return_value=reordered),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node.id}/reorder", json={"order": 2}
@@ -378,25 +376,23 @@ class TestDeleteNode:
         tree_node = _mock_node(node_id=node.id)
         tree_node.materials = []
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(
-                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
-            ),
-            patch.object(MaterialNodeRepository, "delete", return_value=None),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
+            patch.object(CourseNodeRepository, "delete", return_value=None),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204
 
     async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.delete(f"/api/v1/nodes/{uuid.uuid4()}")
         assert resp.status_code == 404
 
     async def test_wrong_tenant_returns_404(self, client: AsyncClient) -> None:
         """Node belonging to different tenant returns 404."""
         node = _mock_node(tenant_id=uuid.uuid4())
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=node):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 404
 
@@ -412,11 +408,9 @@ class TestDeleteNode:
         tree_node.children = []
         mock_s3.extract_key = MagicMock(return_value="tenants/t/file.pdf")
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(
-                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
-            ),
-            patch.object(MaterialNodeRepository, "delete", return_value=None),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
+            patch.object(CourseNodeRepository, "delete", return_value=None),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204
@@ -434,11 +428,9 @@ class TestDeleteNode:
         tree_node.children = []
         mock_s3.extract_key = MagicMock(return_value=None)
         with (
-            patch.object(MaterialNodeRepository, "get_by_id", return_value=node),
-            patch.object(
-                MaterialNodeRepository, "get_subtree", return_value=[tree_node]
-            ),
-            patch.object(MaterialNodeRepository, "delete", return_value=None),
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
+            patch.object(CourseNodeRepository, "delete", return_value=None),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204

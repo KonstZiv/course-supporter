@@ -168,28 +168,28 @@ class APIKey(SoftDeleteMixin, Base):
 
 
 # ──────────────────────────────────────────────
-# Material Tree
+# Course Tree (vision §2.2)
 # ──────────────────────────────────────────────
 
 
-class MaterialNode(SoftDeleteMixin, Base):
-    """Node in the material tree (recursive adjacency list).
+class CourseNode(SoftDeleteMixin, Base):
+    """Node in the course tree (recursive adjacency list).
 
-    Root nodes (parent_materialnode_id IS NULL) serve as "courses" — top-level
+    Root nodes (parent_id IS NULL) serve as "courses" — top-level
     entities owned by a tenant. Child nodes form an arbitrary-depth
-    hierarchy for organising materials.
+    hierarchy for organising authored documents.
     """
 
-    __tablename__ = "material_nodes"
+    __tablename__ = "course_nodes"
     __table_args__ = (
         Index(
-            "ix_material_nodes_active",
+            "ix_course_nodes_active",
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         {
             "comment": (
-                "Hierarchical tree of raw and unprocessed course materials. "
+                "Hierarchical course tree (vision §2.2). "
                 "Root node (parent IS NULL) = course"
             ),
         },
@@ -199,8 +199,8 @@ class MaterialNode(SoftDeleteMixin, Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
-    parent_materialnode_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
         comment="Self-referential FK. NULL = root node (course level)",
     )
@@ -219,19 +219,11 @@ class MaterialNode(SoftDeleteMixin, Base):
         "sorted last by created_at. Sort: ORDER BY order ASC NULLS LAST, "
         "created_at ASC.",
     )
-    node_fingerprint: Mapped[str | None] = mapped_column(
-        String(64),
-        comment="Merkle SHA-256 of content subtree. NULL = stale. "
-        "Computed bottom-up from processed materials and child nodes. "
-        "Invalidated up to root on any material change. "
-        "Unprocessed materials are skipped during computation",
-    )
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
         "NULL = never computed / stale. Populated at INSERT/UPDATE; "
-        "per-entity formula wired in Phase 2/3. "
-        "Phase 1.1 will collapse legacy node_fingerprint into this column.",
+        "per-entity formula wired in Phase 2/3.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -242,15 +234,15 @@ class MaterialNode(SoftDeleteMixin, Base):
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
-    parent: Mapped["MaterialNode | None"] = relationship(
+    parent: Mapped["CourseNode | None"] = relationship(
         back_populates="children",
-        remote_side="MaterialNode.id",
+        remote_side="CourseNode.id",
     )
-    children: Mapped[list["MaterialNode"]] = relationship(
+    children: Mapped[list["CourseNode"]] = relationship(
         back_populates="parent",
         cascade="all, delete-orphan",
     )
-    materials: Mapped[list["MaterialEntry"]] = relationship(
+    documents: Mapped[list["AuthoredDocument"]] = relationship(
         back_populates="node",
         cascade="all, delete-orphan",
     )
@@ -266,7 +258,7 @@ class MaterialNode(SoftDeleteMixin, Base):
 
 
 class MaterialState(StrEnum):
-    """Derived state of a MaterialEntry (not stored in DB)."""
+    """Derived state of a AuthoredDocument (not stored in DB)."""
 
     RAW = "raw"
     PENDING = "pending"
@@ -275,7 +267,7 @@ class MaterialState(StrEnum):
     ERROR = "error"
 
 
-class MaterialEntry(SoftDeleteMixin, Base):
+class AuthoredDocument(SoftDeleteMixin, Base):
     """A single material attached to a node in the material tree.
 
     Separates raw (uploaded) and processed (ingested) layers with a
@@ -283,36 +275,44 @@ class MaterialEntry(SoftDeleteMixin, Base):
     State is derived via the ``state`` property — see ``MaterialState``.
     """
 
-    __tablename__ = "material_entries"
+    __tablename__ = "authored_documents"
     __table_args__ = (
         Index(
-            "ix_material_entries_active",
+            "ix_authored_documents_active",
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
-            "ix_material_entries_raw_hash",
+            "ix_authored_documents_raw_hash",
             "raw_hash",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         {
-            "comment": "Raw and processed learning materials "
-            "(video, presentation, text, web)",
+            "comment": "Authored documents (vision §1.2): "
+            "raw uploads of video / audio / presentation / text / web sources",
         },
     )
 
     def __repr__(self) -> str:
         return (
-            f"<MaterialEntry(id={self.id}, "
+            f"<AuthoredDocument(id={self.id}, "
             f"source_type='{self.source_type}', "
-            f"materialnode_id={self.materialnode_id})>"
+            f"course_node_id={self.course_node_id})>"
         )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    materialnode_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
-        comment="FK to parent MaterialNode in the tree",
+        comment="FK to parent CourseNode in the tree",
+    )
+    course_root_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Denormalised root CourseNode id (KD-delta). Computed via "
+        "parent walk to root at INSERT/move; defensive default in "
+        "AuthoredDocumentRepository.create() if caller omits.",
     )
     source_type: Mapped[str] = mapped_column(
         Enum(
@@ -367,21 +367,12 @@ class MaterialEntry(SoftDeleteMixin, Base):
     language: Mapped[str | None] = mapped_column(
         String(10),
         comment="ISO 639-1 language of the material. NULL = inherit from course "
-        "(root MaterialNode.default_language) or auto-detect at STT time. "
+        "(root CourseNode.default_language) or auto-detect at STT time. "
         "Auto-detected language is cached back to this column on first success.",
     )
 
     # ── Processed layer ──
-    processed_hash: Mapped[str | None] = mapped_column(
-        String(64),
-        comment="SHA-256 of processed_content for Merkle tree",
-    )
-    processed_content: Mapped[str | None] = mapped_column(Text)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    outline_content: Mapped[str | None] = mapped_column(
-        Text,
-        comment="MaterialOutline JSON (lossless restructuring of processed_content)",
-    )
 
     # ── Content hash (KD9) ──
     content_hash: Mapped[str | None] = mapped_column(
@@ -406,18 +397,16 @@ class MaterialEntry(SoftDeleteMixin, Base):
 
     @property
     def state(self) -> MaterialState:
-        """Derive current state from entry fields.
+        """Derive current state. Phase 2.x will refine after Pass 2 pipeline.
 
-        Priority: ERROR > PENDING > RAW > INTEGRITY_BROKEN > READY.
+        Priority: ERROR > PENDING > READY. RAW / INTEGRITY_BROKEN states
+        relied on dropped processed_content / processed_hash columns; their
+        new semantics land with the Pass 2 pipeline introduction.
         """
         if self.error_message:
             return MaterialState.ERROR
         if self.job_id is not None:
             return MaterialState.PENDING
-        if self.processed_content is None:
-            return MaterialState.RAW
-        if self.raw_hash and self.processed_hash != self.raw_hash:
-            return MaterialState.INTEGRITY_BROKEN
         return MaterialState.READY
 
     # ── Timestamps ──
@@ -429,82 +418,92 @@ class MaterialEntry(SoftDeleteMixin, Base):
     )
 
     # Relationships
-    node: Mapped["MaterialNode"] = relationship(back_populates="materials")
-    pending_job: Mapped["Job | None"] = relationship(back_populates="material_entries")
-    macro_sections: Mapped[list["MaterialMacroSection"]] = relationship(
-        back_populates="entry",
+    node: Mapped["CourseNode"] = relationship(back_populates="documents")
+    pending_job: Mapped["Job | None"] = relationship(
+        back_populates="authored_documents"
+    )
+    summary: Mapped["DocumentSummary | None"] = relationship(
+        back_populates="authored_document",
         cascade="all, delete-orphan",
+        uselist=False,
     )
 
 
 class MacroSectionStatus(StrEnum):
-    """Processing status of a MaterialMacroSection."""
+    """Processing status of a DocumentSummary."""
 
     PENDING = "pending"
     READY = "ready"
     FAILED = "failed"
 
 
-class MaterialMacroSection(SoftDeleteMixin, Base):
-    """Thematic table-of-contents entry within a MaterialEntry.
+class DocumentSummary(SoftDeleteMixin, Base):
+    """1:1 summary of an AuthoredDocument (vision §1.3).
 
-    One row per logical section (thematic block, slide group, article
-    chapter). Produced by Stage 5 of the ingestion pipeline — LLM call
-    for video/audio/presentation or deterministic ladder for text/web.
-    Immutable after status=ready; regeneration replaces the set.
+    One row per AuthoredDocument (UNIQUE on authored_document_id, KD-theta.2).
+    Produced by Pass 2a of the ingestion pipeline — LLM call for
+    video/audio/presentation or deterministic ladder for text/web.
+    Immutable after status=ready; regeneration replaces the row.
     """
 
-    __tablename__ = "material_macro_sections"
+    __tablename__ = "document_summaries"
     __table_args__ = (
         Index(
-            "ix_material_macro_sections_entry_order",
-            "material_entry_id",
-            "order",
-        ),
-        Index(
-            "ix_material_macro_sections_unready",
+            "ix_document_summaries_unready",
             "status",
             postgresql_where=text("status != 'ready'"),
         ),
         Index(
-            "ix_material_macro_sections_active",
+            "ix_document_summaries_active",
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
-        CheckConstraint("start_pos >= 0", name="ck_macro_start_pos_nonneg"),
-        CheckConstraint("end_pos > start_pos", name="ck_macro_end_pos_gt_start"),
         {
             "comment": (
-                "Table-of-contents level sections within a MaterialEntry "
-                "(Stage 5 output of the ingestion pipeline)"
+                "1:1 summary entity per AuthoredDocument "
+                "(Pass 2a output of the ingestion pipeline)"
             ),
         },
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    material_entry_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_entries.id", ondelete="CASCADE"),
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        unique=True,
         index=True,
-        comment="FK to parent MaterialEntry",
+        comment="FK to parent AuthoredDocument (UNIQUE — 1:1 invariant per KD-theta.2)",
     )
-    order: Mapped[int] = mapped_column(
-        Integer,
-        comment="0-indexed position within the TOC of this material entry",
+    course_root_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Denormalised root CourseNode id (KD-delta). Inherited from "
+        "authored_documents.course_root_id at INSERT.",
     )
     title: Mapped[str] = mapped_column(
-        String(500),
-        comment="Self-contained section title",
+        String(128),
+        comment="Self-contained summary title (≤128 per vision §2.2)",
     )
-    start_pos: Mapped[int] = mapped_column(
-        Integer,
-        comment="Start position in the source-specific unit "
-        "(ms for video/audio, 1-indexed slide for presentation, "
-        "char offset for text/web)",
+    description: Mapped[str | None] = mapped_column(
+        String(512),
+        comment="Optional brief description (≤512 per vision §2.2)",
     )
-    end_pos: Mapped[int] = mapped_column(
+    main_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of concept strings taught in depth (KD-gamma jsonb).",
+    )
+    secondary_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of concept strings mentioned but not taught in depth.",
+    )
+    content_char_count: Mapped[int | None] = mapped_column(
         Integer,
-        comment="End position. Exclusive for video/audio/text/web, "
-        "inclusive for presentation",
+        comment="Total char count over child DocumentSegment.content "
+        "(size-metric for weighting per vision §2.2 line 240).",
     )
     status: Mapped[str] = mapped_column(
         Enum(
@@ -515,62 +514,67 @@ class MaterialMacroSection(SoftDeleteMixin, Base):
             create_type=False,
         ),
         server_default="pending",
-        comment="Lifecycle status: pending → ready | failed",
+        comment="Lifecycle status: pending → ready | failed. "
+        "DB enum type identifier preserved per Phase 1 C2 lock.",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"),
-        comment="FK to ExternalServiceCall that produced this section. "
-        "NULL for deterministic (text/web) sections",
+        comment="FK to ExternalServiceCall that produced this summary. "
+        "NULL for deterministic (text/web) summaries",
     )
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
         "NULL = never computed / stale. Populated at INSERT/UPDATE; "
-        "per-entity formula wired in Phase 1.3 / Phase 2.",
+        "Phase 1.3 formula extends over title + description + concepts.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    entry: Mapped["MaterialEntry"] = relationship(back_populates="macro_sections")
-    segments: Mapped[list["MaterialSegment"]] = relationship(
-        back_populates="macro_section",
+    authored_document: Mapped["AuthoredDocument"] = relationship(
+        back_populates="summary"
+    )
+    segments: Mapped[list["DocumentSegment"]] = relationship(
+        back_populates="document_summary",
         cascade="all, delete-orphan",
     )
     llm_call: Mapped["ExternalServiceCall | None"] = relationship()
 
 
-class MaterialSegment(SoftDeleteMixin, Base):
-    """Cleaned/sliced content unit inside a MaterialMacroSection.
+class DocumentSegment(SoftDeleteMixin, Base):
+    """Cleaned/sliced content unit inside a DocumentSummary (vision §1.4).
 
-    Produced by Stage 6 of the ingestion pipeline. For
+    Produced by Pass 2b of the ingestion pipeline. For
     video/audio/presentation this is LLM-cleaned narrative; for text/web
-    this is a deterministic slice of ``MaterialEntry.processed_content``.
+    this is a deterministic slice of the upstream document content.
 
-    Invariants (enforced at write time, not by DB):
-    - For every segment of a given macro section:
-      ``segment.start_pos >= macro.start_pos AND
-       segment.end_pos <= macro.end_pos``
-    - Segments within a macro section must not overlap
-    - Sum of segment ranges covers the macro range without gaps
+    Concept-search source-of-truth: GIN-indexed jsonb concept columns
+    (KD-gamma) — `main_concepts` and `secondary_concepts` are queried via
+    JSONB containment (`@>`) for "where in the course is concept X
+    explained?" navigation per vision §2.2 lines 273-277.
+
+    Positional invariants (enforced at write time, not by DB):
+    - segment.start_pos >= 0 (CHECK)
+    - segment.end_pos > segment.start_pos (CHECK)
     """
 
-    __tablename__ = "material_segments"
+    __tablename__ = "document_segments"
     __table_args__ = (
         Index(
-            "ix_material_segments_macro_order",
-            "macro_section_id",
+            "ix_document_segments_summary_order",
+            "document_summary_id",
             "order",
         ),
         Index(
-            "ix_material_segments_macro_start_pos",
-            "macro_section_id",
+            "ix_document_segments_summary_start_pos",
+            "document_summary_id",
             "start_pos",
         ),
         Index(
-            "ix_material_segments_active",
+            "ix_document_segments_active",
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
@@ -579,24 +583,31 @@ class MaterialSegment(SoftDeleteMixin, Base):
         {
             "comment": (
                 "Cleaned / sliced content segments inside a "
-                "MaterialMacroSection (Stage 6 output)"
+                "DocumentSummary (Pass 2b output)"
             ),
         },
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
-    macro_section_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_macro_sections.id", ondelete="CASCADE"),
+    document_summary_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_summaries.id", ondelete="CASCADE"),
         index=True,
-        comment="FK to parent MaterialMacroSection",
+        comment="FK to parent DocumentSummary",
+    )
+    course_root_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="Denormalised root CourseNode id (KD-delta). Inherited from "
+        "document_summaries.course_root_id at INSERT.",
     )
     order: Mapped[int] = mapped_column(
         Integer,
-        comment="0-indexed position within the parent macro section",
+        comment="0-indexed position within the parent summary",
     )
     start_pos: Mapped[int] = mapped_column(
         Integer,
-        comment="Absolute start in the source unit (not relative to the macro section)",
+        comment="Absolute start in the source unit (not relative to the summary)",
     )
     end_pos: Mapped[int] = mapped_column(
         Integer,
@@ -605,6 +616,24 @@ class MaterialSegment(SoftDeleteMixin, Base):
     content: Mapped[str] = mapped_column(
         Text,
         comment="Cleaned (LLM) or sliced (text/web) content of this segment",
+    )
+    main_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of concept strings taught in this segment (KD-gamma "
+        "jsonb; GIN-indexed with jsonb_path_ops opclass for @> containment).",
+    )
+    secondary_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of concept strings mentioned but not taught (KD-gamma).",
+    )
+    content_char_count: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Char count of content (size-metric for weighting per vision "
+        "§2.2 lines 236-238; backfilled from length(content) at INSERT).",
     )
     llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"),
@@ -615,14 +644,14 @@ class MaterialSegment(SoftDeleteMixin, Base):
         String(64),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
         "NULL = never computed / stale. Populated at INSERT/UPDATE; "
-        "per-entity formula wired in Phase 1.4 / Phase 2.",
+        "Phase 1.4 formula extends over content + concepts.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    macro_section: Mapped["MaterialMacroSection"] = relationship(
+    document_summary: Mapped["DocumentSummary"] = relationship(
         back_populates="segments"
     )
     llm_call: Mapped["ExternalServiceCall | None"] = relationship()
@@ -751,7 +780,7 @@ class StructureNode(Base):
 class StructureNodeEditable(Base):
     """Mutable working copy of a course structure node.
 
-    Linked to a ``MaterialNode`` (not a snapshot) so it survives
+    Linked to a ``CourseNode`` (not a snapshot) so it survives
     re-generation.  Auto-created from the latest ``StructureSnapshot``
     after each generation run.  Users edit fields here; the
     ``edited_fields`` JSONB list tracks which fields were changed
@@ -768,9 +797,9 @@ class StructureNodeEditable(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     materialnode_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
-        comment="FK to owning MaterialNode (survives re-generation)",
+        comment="FK to owning CourseNode (survives re-generation)",
     )
     source_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("structure_snapshots.id", ondelete="SET NULL"),
@@ -856,7 +885,7 @@ class StructureNodeEditable(Base):
     )
 
     # Relationships
-    material_node: Mapped["MaterialNode"] = relationship(
+    material_node: Mapped["CourseNode"] = relationship(
         back_populates="editables",
         foreign_keys=[materialnode_id],
     )
@@ -886,7 +915,7 @@ class StructureSnapshot(Base):
     LLM metadata (model_id, tokens, cost) is stored in the linked
     ExternalServiceCall record — no duplication in the snapshot.
 
-    ``materialnode_id`` references the root MaterialNode (= course) for
+    ``materialnode_id`` references the root CourseNode (= course) for
     course-level snapshots, or a child node for subtree snapshots.
     """
 
@@ -910,9 +939,9 @@ class StructureSnapshot(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     materialnode_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
-        comment="FK to target MaterialNode (root = whole course)",
+        comment="FK to target CourseNode (root = whole course)",
     )
     externalservicecall_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"), index=True
@@ -961,7 +990,7 @@ class StructureSnapshot(Base):
     )
 
     # Relationships
-    node: Mapped["MaterialNode"] = relationship(back_populates="snapshots")
+    node: Mapped["CourseNode"] = relationship(back_populates="snapshots")
     service_call: Mapped["ExternalServiceCall | None"] = relationship()
     structure_nodes: Mapped[list["StructureNode"]] = relationship(
         back_populates="snapshot", cascade="all, delete-orphan"
@@ -1001,9 +1030,9 @@ class ReconciliationPreview(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     materialnode_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
-        comment="FK to MaterialNode being reconciled",
+        comment="FK to CourseNode being reconciled",
     )
     combined_fingerprint: Mapped[str] = mapped_column(
         String(64),
@@ -1032,7 +1061,7 @@ class ReconciliationPreview(Base):
     )
 
     # Relationships
-    material_node: Mapped["MaterialNode"] = relationship()
+    material_node: Mapped["CourseNode"] = relationship()
     job: Mapped["Job | None"] = relationship()
 
 
@@ -1057,9 +1086,9 @@ class Job(SoftDeleteMixin, Base):
         ForeignKey("tenants.id", ondelete="SET NULL"), index=True
     )
     course_node_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="SET NULL"),
+        ForeignKey("course_nodes.id", ondelete="SET NULL"),
         index=True,
-        comment="FK to target CourseNode (legacy table name material_nodes "
+        comment="FK to target CourseNode (legacy table name course_nodes "
         "until Phase 1.1 rename). NULL for orphaned jobs.",
     )
     job_type: Mapped[str] = mapped_column(String(50))
@@ -1111,7 +1140,7 @@ class Job(SoftDeleteMixin, Base):
 
     # Relationships
     tenant: Mapped["Tenant | None"] = relationship()
-    material_entries: Mapped[list["MaterialEntry"]] = relationship(
+    authored_documents: Mapped[list["AuthoredDocument"]] = relationship(
         back_populates="pending_job"
     )
 
@@ -1244,12 +1273,12 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         ForeignKey("students.id", ondelete="CASCADE"), index=True
     )
     course_node_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
-        comment="Root MaterialNode representing the course",
+        comment="Root CourseNode representing the course",
     )
     node_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("material_nodes.id", ondelete="CASCADE"),
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
         index=True,
         comment="Specific course node the submission targets",
     )
@@ -1334,8 +1363,8 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
     student: Mapped["Student"] = relationship(back_populates="submissions")
-    course_node: Mapped["MaterialNode"] = relationship(foreign_keys=[course_node_id])
-    node: Mapped["MaterialNode"] = relationship(foreign_keys=[node_id])
+    course_node: Mapped["CourseNode"] = relationship(foreign_keys=[course_node_id])
+    node: Mapped["CourseNode"] = relationship(foreign_keys=[node_id])
     matched_task: Mapped["StructureNodeEditable | None"] = relationship()
     job: Mapped["Job | None"] = relationship()
 

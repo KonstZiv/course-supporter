@@ -16,8 +16,8 @@ phases 1, 3, 4):
   pair. This collapses what would otherwise be O(N) per-parent
   queries into O(L * T) where L = depth of the cascade and
   T = number of distinct (parent_type → child_type) pairs at each
-  level. For a typical course tree (Tenant → MaterialNode tree →
-  MaterialEntry → MaterialMacroSection → MaterialSegment) this is a
+  level. For a typical course tree (Tenant → CourseNode tree →
+  AuthoredDocument → DocumentSummary → DocumentSegment) this is a
   small constant number of round-trips regardless of fan-out.
 * **Cached FK resolution.** Mapper inspection runs once per
   ``(parent_cls, child_cls)`` pair across the process via

@@ -11,9 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import (
+    CourseNode,
     ExternalServiceCall,
     Job,
-    MaterialNode,
     SoftDeleteMixin,
 )
 
@@ -206,7 +206,7 @@ class ExternalServiceCallRepository:
         IN-list parse latency dominates, inline the recursive
         descendant CTE into the cost query (single round-trip,
         eliminates IN-list size as a factor). Producer side note in
-        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        :meth:`CourseNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return 0.0
@@ -278,22 +278,22 @@ class ExternalServiceCallRepository:
         """
         stmt = (
             select(
-                MaterialNode.id.label("course_node_id"),
-                MaterialNode.title.label("course_title"),
+                CourseNode.id.label("course_node_id"),
+                CourseNode.title.label("course_title"),
                 func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
                     "cost_usd"
                 ),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
-            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
+            .join(CourseNode, Job.course_node_id == CourseNode.id)
             .where(
                 Job.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
                 ExternalServiceCall.cost_usd.is_not(None),
             )
-            .group_by(MaterialNode.id, MaterialNode.title)
+            .group_by(CourseNode.id, CourseNode.title)
             .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
             .limit(limit)
             .offset(offset)
@@ -367,7 +367,7 @@ class ExternalServiceCallRepository:
 
         ``course_node_ids`` is the descendant set of the requested course
         root, resolved on the route layer via
-        :meth:`MaterialNodeRepository.get_descendant_ids`. Empty list →
+        :meth:`CourseNodeRepository.get_descendant_ids`. Empty list →
         empty result (no SQL).
 
         Performance ceiling: ``course_node_ids`` is consumed as
@@ -379,21 +379,21 @@ class ExternalServiceCallRepository:
         IN-list parse latency dominates, inline the recursive
         descendant CTE into the cost query (single round-trip,
         eliminates IN-list size as a factor). Producer side note in
-        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        :meth:`CourseNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return []
         stmt = (
             select(
-                MaterialNode.id.label("course_node_id"),
-                MaterialNode.title.label("title"),
+                CourseNode.id.label("course_node_id"),
+                CourseNode.title.label("title"),
                 func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
                     "cost_usd"
                 ),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
-            .join(MaterialNode, Job.course_node_id == MaterialNode.id)
+            .join(CourseNode, Job.course_node_id == CourseNode.id)
             .where(
                 Job.tenant_id == tenant_id,
                 Job.course_node_id.in_(course_node_ids),
@@ -401,7 +401,7 @@ class ExternalServiceCallRepository:
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
                 ExternalServiceCall.cost_usd.is_not(None),
             )
-            .group_by(MaterialNode.id, MaterialNode.title)
+            .group_by(CourseNode.id, CourseNode.title)
             .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
             .limit(limit)
             .offset(offset)
@@ -440,7 +440,7 @@ class ExternalServiceCallRepository:
         IN-list parse latency dominates, inline the recursive
         descendant CTE into the cost query (single round-trip,
         eliminates IN-list size as a factor). Producer side note in
-        :meth:`MaterialNodeRepository.get_descendant_ids`.
+        :meth:`CourseNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
             return []

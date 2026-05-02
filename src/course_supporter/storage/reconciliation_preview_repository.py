@@ -72,7 +72,7 @@ class ReconciliationPreviewRepository:
         self,
         materialnode_id: uuid.UUID,
     ) -> ReconciliationPreview | None:
-        """Get the most recent preview for a MaterialNode."""
+        """Get the most recent preview for a CourseNode."""
         stmt = (
             select(ReconciliationPreview)
             .where(ReconciliationPreview.materialnode_id == materialnode_id)

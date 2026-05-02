@@ -112,7 +112,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                     arq_function="arq_execute_methodist_step",
                     args=[
                         jid,
-                        p["materialnode_id"],
+                        p["course_node_id"],
                         p["editable_id"],
                         p["phase"],
                     ],
@@ -186,10 +186,10 @@ async def reactivate_job(
     rolls back, leaving the Job in its original ``failed`` state.
 
     **Per-entity state caveat.** Reactivate transitions only the
-    ``Job`` row — entity-level state (e.g. ``MaterialEntry`` ingestion
+    ``Job`` row — entity-level state (e.g. ``AuthoredDocument`` ingestion
     state, ``HomeworkSubmission`` review state) is NOT touched. Workers
     must defensively reset entity-level state on task entry (e.g.
-    ``MaterialEntryRepository.set_pending`` is called by
+    ``AuthoredDocumentRepository.set_pending`` is called by
     ``arq_ingest_material`` itself for exactly this reason). If a
     worker lacks this guard, entity state may diverge from Job state;
     use the per-entity retry endpoint (e.g. ``materials.py /retry``)

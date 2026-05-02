@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from course_supporter.fingerprint import FingerprintService
-from course_supporter.storage.orm import MaterialEntry, MaterialNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 
 def _make_entry(
@@ -17,8 +17,8 @@ def _make_entry(
     processed_content: str | None = None,
     processed_hash: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialEntry with the specified fields."""
-    entry = MagicMock(spec=MaterialEntry)
+    """Create a mock AuthoredDocument with the specified fields."""
+    entry = MagicMock(spec=AuthoredDocument)
     entry.id = uuid.uuid4()
     entry.processed_content = processed_content
     if processed_hash is None and processed_content is not None:
@@ -31,14 +31,14 @@ def _make_node(
     *,
     materials: list[MagicMock] | None = None,
     children: list[MagicMock] | None = None,
-    node_fingerprint: str | None = None,
+    content_hash: str | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode with materials and children."""
-    node = MagicMock(spec=MaterialNode)
+    """Create a mock CourseNode with materials and children."""
+    node = MagicMock(spec=CourseNode)
     node.id = uuid.uuid4()
     node.materials = materials or []
     node.children = children or []
-    node.node_fingerprint = node_fingerprint
+    node.content_hash = content_hash
     return node
 
 
@@ -109,14 +109,14 @@ class TestRepositoryInvalidation:
 
     async def test_complete_processing_invalidates_node_chain(self) -> None:
         """complete_processing triggers node chain invalidation."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
-        entry = MagicMock(spec=MaterialEntry)
+        entry = MagicMock(spec=AuthoredDocument)
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
         invalidate_mock = AsyncMock()
 
         with pytest.MonkeyPatch.context() as mp:
@@ -128,18 +128,18 @@ class TestRepositoryInvalidation:
                 processed_hash="abc123",
             )
 
-        invalidate_mock.assert_awaited_once_with(entry.materialnode_id)
+        invalidate_mock.assert_awaited_once_with(entry.course_node_id)
 
     async def test_update_source_invalidates_node_chain(self) -> None:
         """update_source triggers node chain invalidation."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
-        entry = MagicMock(spec=MaterialEntry)
+        entry = MagicMock(spec=AuthoredDocument)
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
         invalidate_mock = AsyncMock()
 
         with pytest.MonkeyPatch.context() as mp:
@@ -150,7 +150,7 @@ class TestRepositoryInvalidation:
                 source_url="https://new-url.com",
             )
 
-        invalidate_mock.assert_awaited_once_with(entry.materialnode_id)
+        invalidate_mock.assert_awaited_once_with(entry.course_node_id)
 
 
 class TestEnsureNodeFp:
@@ -166,7 +166,7 @@ class TestEnsureNodeFp:
 
         expected = hashlib.sha256(b"").hexdigest()
         assert result == expected
-        assert node.node_fingerprint == expected
+        assert node.content_hash == expected
         session.flush.assert_awaited()
 
     async def test_single_material(self) -> None:
@@ -242,9 +242,9 @@ class TestEnsureNodeFp:
         assert fp1 == fp2
 
     async def test_cache_hit_returns_existing(self) -> None:
-        """If node_fingerprint is already set, return it without recalc."""
+        """If content_hash is already set, return it without recalc."""
         cached = "b" * 64
-        node = _make_node(node_fingerprint=cached)
+        node = _make_node(content_hash=cached)
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -254,16 +254,16 @@ class TestEnsureNodeFp:
         session.flush.assert_not_awaited()
 
     async def test_invalidation_then_recalculate(self) -> None:
-        """After clearing node_fingerprint, next call recomputes."""
+        """After clearing content_hash, next call recomputes."""
         node = _make_node(materials=[_make_entry(processed_content="data")])
         session = AsyncMock()
         svc = FingerprintService(session)
 
         fp1 = await svc.ensure_node_fp(node)
-        assert node.node_fingerprint == fp1
+        assert node.content_hash == fp1
 
         # Invalidate
-        node.node_fingerprint = None
+        node.content_hash = None
 
         fp2 = await svc.ensure_node_fp(node)
         assert fp2 == fp1  # same data → same hash
@@ -395,14 +395,14 @@ class TestInvalidateUp:
     """Tests for invalidate_up — cascade fingerprint invalidation."""
 
     async def test_leaf_to_root_all_invalidated(self) -> None:
-        """All ancestors from leaf to root get node_fingerprint=None."""
-        leaf = _make_node(node_fingerprint="leaf_fp")
-        mid = _make_node(node_fingerprint="mid_fp")
-        root = _make_node(node_fingerprint="root_fp")
+        """All ancestors from leaf to root get content_hash=None."""
+        leaf = _make_node(content_hash="leaf_fp")
+        mid = _make_node(content_hash="mid_fp")
+        root = _make_node(content_hash="root_fp")
 
-        leaf.parent_materialnode_id = mid.id
-        mid.parent_materialnode_id = root.id
-        root.parent_materialnode_id = None
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -412,31 +412,31 @@ class TestInvalidateUp:
         svc = FingerprintService(session)
         await svc.invalidate_up(leaf)
 
-        assert leaf.node_fingerprint is None
-        assert mid.node_fingerprint is None
-        assert root.node_fingerprint is None
+        assert leaf.content_hash is None
+        assert mid.content_hash is None
+        assert root.content_hash is None
 
     async def test_root_node_only(self) -> None:
         """Root node (no parent) gets invalidated, no further walk."""
-        root = _make_node(node_fingerprint="root_fp")
-        root.parent_materialnode_id = None
+        root = _make_node(content_hash="root_fp")
+        root.parent_id = None
 
         session = AsyncMock()
         svc = FingerprintService(session)
         await svc.invalidate_up(root)
 
-        assert root.node_fingerprint is None
+        assert root.content_hash is None
         session.get.assert_not_awaited()
 
     async def test_siblings_untouched(self) -> None:
         """Sibling nodes are not affected by invalidation."""
-        leaf = _make_node(node_fingerprint="leaf_fp")
-        sibling = _make_node(node_fingerprint="sibling_fp")
-        parent = _make_node(node_fingerprint="parent_fp")
+        leaf = _make_node(content_hash="leaf_fp")
+        sibling = _make_node(content_hash="sibling_fp")
+        parent = _make_node(content_hash="parent_fp")
 
-        leaf.parent_materialnode_id = parent.id
-        sibling.parent_materialnode_id = parent.id
-        parent.parent_materialnode_id = None
+        leaf.parent_id = parent.id
+        sibling.parent_id = parent.id
+        parent.parent_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -446,19 +446,19 @@ class TestInvalidateUp:
         svc = FingerprintService(session)
         await svc.invalidate_up(leaf)
 
-        assert leaf.node_fingerprint is None
-        assert parent.node_fingerprint is None
-        assert sibling.node_fingerprint == "sibling_fp"  # untouched
+        assert leaf.content_hash is None
+        assert parent.content_hash is None
+        assert sibling.content_hash == "sibling_fp"  # untouched
 
     async def test_single_flush_after_walk(self) -> None:
         """Only one flush after the entire chain walk."""
-        leaf = _make_node(node_fingerprint="fp")
-        mid = _make_node(node_fingerprint="fp")
-        root = _make_node(node_fingerprint="fp")
+        leaf = _make_node(content_hash="fp")
+        mid = _make_node(content_hash="fp")
+        root = _make_node(content_hash="fp")
 
-        leaf.parent_materialnode_id = mid.id
-        mid.parent_materialnode_id = root.id
-        root.parent_materialnode_id = None
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -472,13 +472,13 @@ class TestInvalidateUp:
 
     async def test_already_none_still_walks(self) -> None:
         """Even if a node has fingerprint=None, walk continues upward."""
-        leaf = _make_node(node_fingerprint="fp")
-        mid = _make_node(node_fingerprint=None)  # already invalidated
-        root = _make_node(node_fingerprint="root_fp")
+        leaf = _make_node(content_hash="fp")
+        mid = _make_node(content_hash=None)  # already invalidated
+        root = _make_node(content_hash="root_fp")
 
-        leaf.parent_materialnode_id = mid.id
-        mid.parent_materialnode_id = root.id
-        root.parent_materialnode_id = None
+        leaf.parent_id = mid.id
+        mid.parent_id = root.id
+        root.parent_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -488,20 +488,20 @@ class TestInvalidateUp:
         svc = FingerprintService(session)
         await svc.invalidate_up(leaf)
 
-        assert root.node_fingerprint is None  # still reached and cleared
+        assert root.content_hash is None  # still reached and cleared
 
 
 class TestRepositoryCascadeInvalidation:
     """Tests for auto-invalidation in repository CRUD methods (S2-028)."""
 
     async def test_entry_create_invalidates_node(self) -> None:
-        """MaterialEntryRepository.create triggers cascade invalidation."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        """AuthoredDocumentRepository.create triggers cascade invalidation."""
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mock_inv = AsyncMock()
@@ -516,16 +516,16 @@ class TestRepositoryCascadeInvalidation:
         mock_inv.assert_awaited_once()
 
     async def test_entry_complete_processing_invalidates_node(self) -> None:
-        """MaterialEntryRepository.complete_processing triggers cascade."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        """AuthoredDocumentRepository.complete_processing triggers cascade."""
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
-        entry = MagicMock(spec=MaterialEntry)
-        entry.materialnode_id = uuid.uuid4()
+        entry = MagicMock(spec=AuthoredDocument)
+        entry.course_node_id = uuid.uuid4()
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
@@ -535,19 +535,19 @@ class TestRepositoryCascadeInvalidation:
                 entry.id, processed_content="done", processed_hash="abc"
             )
 
-        mock_inv.assert_awaited_once_with(entry.materialnode_id)
+        mock_inv.assert_awaited_once_with(entry.course_node_id)
 
     async def test_entry_update_source_invalidates_node(self) -> None:
-        """MaterialEntryRepository.update_source triggers cascade."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        """AuthoredDocumentRepository.update_source triggers cascade."""
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
-        entry = MagicMock(spec=MaterialEntry)
-        entry.materialnode_id = uuid.uuid4()
+        entry = MagicMock(spec=AuthoredDocument)
+        entry.course_node_id = uuid.uuid4()
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
@@ -555,19 +555,19 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.update_source(entry.id, source_url="https://new.com")
 
-        mock_inv.assert_awaited_once_with(entry.materialnode_id)
+        mock_inv.assert_awaited_once_with(entry.course_node_id)
 
     async def test_entry_delete_invalidates_node(self) -> None:
-        """MaterialEntryRepository.delete triggers cascade."""
-        from course_supporter.storage.material_entry_repository import (
-            MaterialEntryRepository,
+        """AuthoredDocumentRepository.delete triggers cascade."""
+        from course_supporter.storage.authored_document_repository import (
+            AuthoredDocumentRepository,
         )
 
-        entry = MagicMock(spec=MaterialEntry)
-        entry.materialnode_id = uuid.uuid4()
+        entry = MagicMock(spec=AuthoredDocument)
+        entry.course_node_id = uuid.uuid4()
 
         session = AsyncMock()
-        repo = MaterialEntryRepository(session)
+        repo = AuthoredDocumentRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "_require", AsyncMock(return_value=entry))
@@ -575,23 +575,23 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.delete(entry.id)
 
-        mock_inv.assert_awaited_once_with(entry.materialnode_id)
+        mock_inv.assert_awaited_once_with(entry.course_node_id)
 
     async def test_node_move_invalidates_old_and_new_parent(self) -> None:
-        """MaterialNodeRepository.move invalidates both parent chains."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        """CourseNodeRepository.move invalidates both parent chains."""
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
-        old_parent_materialnode_id = uuid.uuid4()
-        new_parent_materialnode_id = uuid.uuid4()
-        node = MagicMock(spec=MaterialNode)
+        old_parent_id = uuid.uuid4()
+        new_parent_id = uuid.uuid4()
+        node = MagicMock(spec=CourseNode)
         node.id = uuid.uuid4()
-        node.parent_materialnode_id = old_parent_materialnode_id
+        node.parent_id = old_parent_id
         node.course_id = uuid.uuid4()
 
         session = AsyncMock()
-        repo = MaterialNodeRepository(session)
+        repo = CourseNodeRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
@@ -599,25 +599,25 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_next_sibling_order", AsyncMock(return_value=0))
             mock_inv = AsyncMock()
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
-            await repo.move(node.id, new_parent_materialnode_id)
+            await repo.move(node.id, new_parent_id)
 
         assert mock_inv.await_count == 2
-        mock_inv.assert_any_await(old_parent_materialnode_id)
-        mock_inv.assert_any_await(new_parent_materialnode_id)
+        mock_inv.assert_any_await(old_parent_id)
+        mock_inv.assert_any_await(new_parent_id)
 
     async def test_node_delete_invalidates_parent(self) -> None:
-        """MaterialNodeRepository.delete invalidates parent chain."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        """CourseNodeRepository.delete invalidates parent chain."""
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
-        parent_materialnode_id = uuid.uuid4()
-        node = MagicMock(spec=MaterialNode)
+        parent_id = uuid.uuid4()
+        node = MagicMock(spec=CourseNode)
         node.id = uuid.uuid4()
-        node.parent_materialnode_id = parent_materialnode_id
+        node.parent_id = parent_id
 
         session = AsyncMock()
-        repo = MaterialNodeRepository(session)
+        repo = CourseNodeRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
@@ -625,20 +625,20 @@ class TestRepositoryCascadeInvalidation:
             mp.setattr(repo, "_invalidate_node_chain", mock_inv)
             await repo.delete(node.id)
 
-        mock_inv.assert_awaited_once_with(parent_materialnode_id)
+        mock_inv.assert_awaited_once_with(parent_id)
 
     async def test_node_delete_root_skips_invalidation(self) -> None:
-        """Deleting a root node (parent_materialnode_id=None) skips invalidation."""
-        from course_supporter.storage.material_node_repository import (
-            MaterialNodeRepository,
+        """Deleting a root node (parent_id=None) skips invalidation."""
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
         )
 
-        node = MagicMock(spec=MaterialNode)
+        node = MagicMock(spec=CourseNode)
         node.id = uuid.uuid4()
-        node.parent_materialnode_id = None
+        node.parent_id = None
 
         session = AsyncMock()
-        repo = MaterialNodeRepository(session)
+        repo = CourseNodeRepository(session)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
@@ -729,11 +729,11 @@ class TestEdgeCases:
         result = await svc.ensure_node_fp(root)
 
         assert len(result) == 64
-        assert root.node_fingerprint == result
+        assert root.content_hash == result
         # Verify all intermediate nodes got fingerprints
         node = root
         for _ in range(10):
-            assert node.node_fingerprint is not None
+            assert node.content_hash is not None
             if node.children:
                 node = node.children[0]
 
@@ -777,21 +777,21 @@ class TestBranchIndependence:
         #    leafA    leafB
         leaf_a = _make_node(
             materials=[_make_entry(processed_content="A")],
-            node_fingerprint="leaf_a_fp",
+            content_hash="leaf_a_fp",
         )
         leaf_b = _make_node(
             materials=[_make_entry(processed_content="B")],
-            node_fingerprint="leaf_b_fp",
+            content_hash="leaf_b_fp",
         )
-        branch_a = _make_node(children=[leaf_a], node_fingerprint="branch_a_fp")
-        branch_b = _make_node(children=[leaf_b], node_fingerprint="branch_b_fp")
-        root = _make_node(children=[branch_a, branch_b], node_fingerprint="root_fp")
+        branch_a = _make_node(children=[leaf_a], content_hash="branch_a_fp")
+        branch_b = _make_node(children=[leaf_b], content_hash="branch_b_fp")
+        root = _make_node(children=[branch_a, branch_b], content_hash="root_fp")
 
-        leaf_a.parent_materialnode_id = branch_a.id
-        branch_a.parent_materialnode_id = root.id
-        leaf_b.parent_materialnode_id = branch_b.id
-        branch_b.parent_materialnode_id = root.id
-        root.parent_materialnode_id = None
+        leaf_a.parent_id = branch_a.id
+        branch_a.parent_id = root.id
+        leaf_b.parent_id = branch_b.id
+        branch_b.parent_id = root.id
+        root.parent_id = None
 
         session = AsyncMock()
         session.get = AsyncMock(
@@ -806,13 +806,13 @@ class TestBranchIndependence:
         await svc.invalidate_up(leaf_a)
 
         # Branch A path invalidated
-        assert leaf_a.node_fingerprint is None
-        assert branch_a.node_fingerprint is None
-        assert root.node_fingerprint is None
+        assert leaf_a.content_hash is None
+        assert branch_a.content_hash is None
+        assert root.content_hash is None
 
         # Branch B untouched
-        assert leaf_b.node_fingerprint == "leaf_b_fp"
-        assert branch_b.node_fingerprint == "branch_b_fp"
+        assert leaf_b.content_hash == "leaf_b_fp"
+        assert branch_b.content_hash == "branch_b_fp"
 
     async def test_different_branches_produce_different_hashes(self) -> None:
         """Two branches with different content have different fingerprints."""
@@ -856,7 +856,7 @@ class TestLazyCalculation:
     async def test_cached_subtree_not_recomputed(self) -> None:
         """Child with cached fingerprint is not recomputed."""
         child_fp = "c" * 64
-        child = _make_node(node_fingerprint=child_fp)
+        child = _make_node(content_hash=child_fp)
         parent = _make_node(children=[child])
         session = AsyncMock()
         svc = FingerprintService(session)
@@ -867,12 +867,12 @@ class TestLazyCalculation:
         expected = hashlib.sha256(f"n:{child_fp}".encode()).hexdigest()
         assert result == expected
         # Child's fingerprint wasn't changed
-        assert child.node_fingerprint == child_fp
+        assert child.content_hash == child_fp
 
     async def test_mixed_cached_and_fresh(self) -> None:
         """Node with one cached child and one fresh child works correctly."""
         cached_fp = "d" * 64
-        cached_child = _make_node(node_fingerprint=cached_fp)
+        cached_child = _make_node(content_hash=cached_fp)
         fresh_child = _make_node(materials=[_make_entry(processed_content="new")])
         parent = _make_node(children=[cached_child, fresh_child])
         session = AsyncMock()
@@ -904,7 +904,7 @@ class TestLazyCalculation:
     async def test_ensure_course_fp_uses_cached_nodes(self) -> None:
         """ensure_course_fp does not recompute cached root nodes."""
         cached_fp = "f" * 64
-        root = _make_node(node_fingerprint=cached_fp)
+        root = _make_node(content_hash=cached_fp)
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -915,7 +915,7 @@ class TestLazyCalculation:
 
     async def test_no_flush_when_all_cached(self) -> None:
         """ensure_node_fp with fully cached node does not flush."""
-        node = _make_node(node_fingerprint="a" * 64)
+        node = _make_node(content_hash="a" * 64)
         session = AsyncMock()
         svc = FingerprintService(session)
 

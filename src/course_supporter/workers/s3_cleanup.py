@@ -23,7 +23,7 @@ owning entity (``AuthoredDocument`` / ``HomeworkSubmission``) to
   ``ClientError`` means we never got an answer (try again).
 
 **Cascade integration is Phase 1+ work.** When ``AuthoredDocument``
-(formerly ``MaterialEntry``) or ``HomeworkSubmission`` cascades
+(formerly ``AuthoredDocument``) or ``HomeworkSubmission`` cascades
 soft-delete the entity row, the cascade enqueues this task with
 the entity's ``file_keys``::
 

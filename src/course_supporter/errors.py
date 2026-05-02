@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class NodeNotFoundError(Exception):
-    """Raised when a MaterialNode is not found in the tree."""
+    """Raised when a CourseNode is not found in the tree."""
 
 
 class NoReadyMaterialsError(Exception):

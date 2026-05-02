@@ -10,35 +10,35 @@ in ``tests/integration/test_external_service_call_db.py`` (added in
 
 from __future__ import annotations
 
-from course_supporter.storage.orm import MaterialNode, _uuid7
+from course_supporter.storage.orm import CourseNode, _uuid7
 
 
-class TestMaterialNodeTenant:
-    """Tests for tenant_id on MaterialNode model."""
+class TestCourseNodeTenant:
+    """Tests for tenant_id on CourseNode model."""
 
     def test_node_has_tenant_id_column(self) -> None:
-        """MaterialNode table has tenant_id FK column."""
-        table = MaterialNode.__table__
+        """CourseNode table has tenant_id FK column."""
+        table = CourseNode.__table__
         col = table.c.tenant_id
         assert col is not None
         assert col.nullable is False
 
     def test_node_with_tenant(self) -> None:
-        """MaterialNode accepts tenant_id at construction."""
+        """CourseNode accepts tenant_id at construction."""
         tid = _uuid7()
-        node = MaterialNode(tenant_id=tid, title="Python 101")
+        node = CourseNode(tenant_id=tid, title="Python 101")
         assert node.tenant_id == tid
         assert node.title == "Python 101"
 
     def test_node_tenant_fk_cascade(self) -> None:
-        """MaterialNode.tenant_id FK has CASCADE ondelete."""
-        table = MaterialNode.__table__
+        """CourseNode.tenant_id FK has CASCADE ondelete."""
+        table = CourseNode.__table__
         fks = [fk for fk in table.foreign_keys if fk.column.table.name == "tenants"]
         assert len(fks) == 1
         assert fks[0].ondelete == "CASCADE"
 
     def test_node_tenant_id_indexed(self) -> None:
-        """MaterialNode.tenant_id has an index."""
-        table = MaterialNode.__table__
+        """CourseNode.tenant_id has an index."""
+        table = CourseNode.__table__
         col = table.c.tenant_id
         assert col.index is True

@@ -77,6 +77,39 @@ in commit (c) of task 0.2.
 """
 
 
+ScrubCallable = Callable[[Any], Awaitable[None]]
+"""Hook applied to the *root* entity to perform per-type field scrubbing
+(vision §3 KD3 / KD-β) atomically with the cascade ``deleted_at`` write.
+
+Single-callable-per-cascade — by design the scrub targets only the root
+entity, not cascade descendants. Per PHASE.md §1.3 audit, descendants of
+the soft-deletable graph either carry no content fields (Tenant cascades
+into APIKey/CourseNode/Student/HomeworkSubmission whose own scrub lists
+are empty per §1.3) or are themselves the root of their own cascade
+(AuthoredDocument is rooted at the ``delete_document`` route, where its
+own ``scrub_authored_document`` callable applies). When a descendant
+type later requires content scrub, the call site for that descendant's
+own cascade is the right place to wire it.
+
+Fires *after* the ``on_cancel_jobs`` and ``on_invalidate_hashes`` hooks
+and *before* the ``deleted_at`` write — same flush boundary, so the
+scrub mutation and the soft-delete mark land atomically.
+"""
+
+
+async def scrub_tenant_webhook_url(tenant: Any) -> None:
+    """KD-β scrub: null out ``Tenant.webhook_url`` on soft-delete.
+
+    ``Tenant`` is otherwise an identification-only model (per PHASE.md
+    §1.3 audit) but carries an externally-configured webhook destination
+    that must not survive soft-delete — vision-side decided KD-β with
+    Option C ("null-out webhook_url"). Invoked by ``CascadeDeleteService``
+    once on the root ``Tenant`` instance before the ``deleted_at`` write,
+    so the NULL and the soft-delete mark land in the same flush.
+    """
+    tenant.webhook_url = None
+
+
 def build_cascade_map(root: type) -> dict[type, list[type]]:
     """Build a cascade_map from ``__cascades_soft_delete_to__`` declarations.
 
@@ -171,22 +204,31 @@ class CascadeDeleteService:
         *,
         on_cancel_jobs: OnCancelJobs | None = None,
         on_invalidate_hashes: OnInvalidateHashes | None = None,
+        scrub_callable: ScrubCallable | None = None,
         now: datetime | None = None,
     ) -> None:
         """Soft-delete ``entity`` and every active descendant.
 
         Idempotent: returns immediately if ``entity`` is already
-        soft-deleted (no UPDATE, no hook call). Cycle-safe via a
-        ``visited`` set keyed by ``(type, id)`` so cascade_map cycles
-        cannot trigger infinite recursion.
+        soft-deleted (no UPDATE, no hook call, no scrub). Cycle-safe
+        via a ``visited`` set keyed by ``(type, id)`` so cascade_map
+        cycles cannot trigger infinite recursion.
 
-        Both pre-write hooks are invoked exactly once with the full
-        collected id list, before any ``deleted_at`` write. They fire
-        in declared parameter order — ``on_cancel_jobs`` first
-        (stop in-flight work) then ``on_invalidate_hashes`` (recompute
-        upstream Merkle hashes per vision §3 KD9 + KD12). A failure
-        in either hook aborts the cascade cleanly: no rows are
-        mutated and no flush happens.
+        Pre-write phases are invoked exactly once before any
+        ``deleted_at`` write, in declared parameter order:
+        ``on_cancel_jobs`` first (stop in-flight work), then
+        ``on_invalidate_hashes`` (recompute upstream Merkle hashes per
+        vision §3 KD9 + KD12), then ``scrub_callable`` on the root
+        entity (vision §3 KD3 / KD-β field scrubbing — applies only
+        to the root, see :data:`ScrubCallable` for the rationale on
+        single-callable-per-cascade). A failure in any of the three
+        aborts the cascade cleanly: no rows are mutated and no flush
+        happens.
+
+        Scrub mutation and ``deleted_at`` write share the single
+        terminal flush so the scrub-NULL and the soft-delete mark land
+        atomically — observers cannot see a soft-deleted row that
+        still carries the un-scrubbed value.
 
         ``now`` overrides the timestamp applied to all rows
         (defaults to ``datetime.now(UTC)``); useful for deterministic
@@ -203,6 +245,8 @@ class CascadeDeleteService:
             await on_cancel_jobs(ids)
         if on_invalidate_hashes is not None:
             await on_invalidate_hashes(ids)
+        if scrub_callable is not None:
+            await scrub_callable(entity)
 
         for row in to_delete:
             row.deleted_at = ts

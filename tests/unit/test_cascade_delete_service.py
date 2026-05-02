@@ -444,3 +444,177 @@ class TestBatchedFetch:
 
         assert rows == []
         session.execute.assert_not_called()
+
+
+# ── KD-β scrub callable (Phase 1 commit (c)) ──────────────────────
+
+
+class TestCascadeScrubCallable:
+    """Per-root scrub callable wired alongside the existing hooks.
+
+    Ships with KD-β (vision §3 KD3) — scrub is applied to the *root*
+    entity only, fires after both pre-write hooks, and shares the
+    terminal flush so the scrub mutation and ``deleted_at`` write land
+    atomically.
+    """
+
+    async def test_scrub_applied_to_root(self) -> None:
+        """Scrub callable receives the root entity and mutates it in-place."""
+        a = A()
+        a.payload = "secret"  # type: ignore[attr-defined]
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        async def scrub(entity: Any) -> None:
+            entity.payload = None
+
+        await svc.soft_delete_with_cascade(a, cmap, scrub_callable=scrub)
+
+        assert a.payload is None  # type: ignore[attr-defined]
+        assert a.deleted_at is not None
+        session.flush.assert_awaited_once()
+
+    async def test_scrub_not_called_for_descendants(self) -> None:
+        """Cascade descendants do NOT receive the root's scrub_callable.
+
+        Per :data:`ScrubCallable` design: scrub is single-callable-per-
+        cascade and applies only to the root. Descendants either carry
+        no content fields or are themselves the root of their own
+        cascade with their own callable.
+        """
+        a = A()
+        b = B()
+        a.payload = "root-secret"  # type: ignore[attr-defined]
+        b.payload = "child-secret"  # type: ignore[attr-defined]
+        children = {a.id: {B: [b]}}
+        cmap: dict[type, list[type]] = {A: [B], B: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, children)
+
+        seen: list[uuid.UUID] = []
+
+        async def scrub(entity: Any) -> None:
+            seen.append(entity.id)
+            entity.payload = None
+
+        await svc.soft_delete_with_cascade(a, cmap, scrub_callable=scrub)
+
+        assert seen == [a.id]
+        assert a.payload is None  # type: ignore[attr-defined]
+        assert b.payload == "child-secret"  # type: ignore[attr-defined]
+        assert a.deleted_at is not None
+        assert b.deleted_at is not None  # still cascaded into
+
+    async def test_scrub_runs_after_invalidate_hashes(self) -> None:
+        """Scrub fires after both hooks: cancel → invalidate → scrub → write."""
+        a = A()
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        order: list[str] = []
+
+        async def cancel_hook(_ids: list[uuid.UUID]) -> None:
+            order.append("cancel")
+
+        async def invalidate_hook(_ids: list[uuid.UUID]) -> None:
+            order.append("invalidate")
+
+        async def scrub(_entity: Any) -> None:
+            order.append("scrub")
+
+        await svc.soft_delete_with_cascade(
+            a,
+            cmap,
+            on_cancel_jobs=cancel_hook,
+            on_invalidate_hashes=invalidate_hook,
+            scrub_callable=scrub,
+        )
+
+        assert order == ["cancel", "invalidate", "scrub"]
+
+    async def test_scrub_shares_flush_with_deleted_at(self) -> None:
+        """Scrub mutation and deleted_at write land in the same flush.
+
+        Records the order of attribute writes vs flush via a custom
+        session that tracks awaited flush against entity attribute
+        state. The scrub-NULL must be visible at flush time.
+        """
+        a = A()
+        a.payload = "before"  # type: ignore[attr-defined]
+        cmap: dict[type, list[type]] = {A: []}
+
+        flush_snapshot: dict[str, Any] = {}
+
+        async def capture_flush() -> None:
+            flush_snapshot["payload"] = a.payload  # type: ignore[attr-defined]
+            flush_snapshot["deleted_at"] = a.deleted_at
+
+        session = AsyncMock()
+        session.flush.side_effect = capture_flush
+        svc = StubCascadeService(session, {})
+
+        async def scrub(entity: Any) -> None:
+            entity.payload = None
+
+        await svc.soft_delete_with_cascade(a, cmap, scrub_callable=scrub)
+
+        # At flush time, BOTH mutations are visible — single atomic write.
+        assert flush_snapshot["payload"] is None
+        assert flush_snapshot["deleted_at"] is not None
+
+    async def test_scrub_failure_aborts_cascade(self) -> None:
+        """If scrub_callable raises, no rows are mutated and no flush happens."""
+        a = A()
+        a.payload = "intact"  # type: ignore[attr-defined]
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        async def failing_scrub(_entity: Any) -> None:
+            raise RuntimeError("scrub blew up")
+
+        with pytest.raises(RuntimeError, match="scrub blew up"):
+            await svc.soft_delete_with_cascade(a, cmap, scrub_callable=failing_scrub)
+
+        assert a.deleted_at is None
+        assert a.payload == "intact"  # type: ignore[attr-defined]
+        session.flush.assert_not_awaited()
+
+    async def test_scrub_skipped_when_root_already_deleted(self) -> None:
+        """Idempotent root: no scrub call, no flush, no mutation."""
+        a = A()
+        a.deleted_at = datetime(2026, 1, 1, tzinfo=UTC)
+        a.payload = "preserve-me"  # type: ignore[attr-defined]
+        cmap: dict[type, list[type]] = {A: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        scrub = AsyncMock()
+        await svc.soft_delete_with_cascade(a, cmap, scrub_callable=scrub)
+
+        scrub.assert_not_awaited()
+        assert a.payload == "preserve-me"  # type: ignore[attr-defined]
+        session.flush.assert_not_awaited()
+
+
+class TestScrubTenantWebhookUrl:
+    """The KD-β concrete scrub callable for ``Tenant.webhook_url``."""
+
+    async def test_nulls_webhook_url(self) -> None:
+        from course_supporter.storage.cascade import scrub_tenant_webhook_url
+
+        tenant = MagicMock()
+        tenant.webhook_url = "https://hooks.example.com/abc"
+        await scrub_tenant_webhook_url(tenant)
+        assert tenant.webhook_url is None
+
+    async def test_handles_already_null(self) -> None:
+        """Idempotent — calling on an already-null webhook_url is fine."""
+        from course_supporter.storage.cascade import scrub_tenant_webhook_url
+
+        tenant = MagicMock()
+        tenant.webhook_url = None
+        await scrub_tenant_webhook_url(tenant)
+        assert tenant.webhook_url is None

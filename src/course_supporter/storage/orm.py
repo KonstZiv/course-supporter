@@ -1377,3 +1377,18 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
             f"HomeworkSubmission(id={self.id!r}, status={self.status!r}, "
             f"student_id={self.student_id!r})"
         )
+
+
+# ──────────────────────────────────────────────
+# Cascade soft-delete topology (vision §3 KD3 + KD12)
+# ──────────────────────────────────────────────
+# Each list enumerates direct cascade descendants whose ``deleted_at``
+# must be set when the parent is soft-deleted. ``build_cascade_map``
+# (storage/cascade.py) walks transitive closure from these declarations.
+# Wiring per Phase 1 PHASE.md §1.2 cascade declaration audit. Self-
+# reference on CourseNode supports recursive course-tree traversal.
+Tenant.__cascades_soft_delete_to__ = [APIKey, CourseNode, Student, HomeworkSubmission]
+CourseNode.__cascades_soft_delete_to__ = [CourseNode, AuthoredDocument]
+AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary]
+DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
+Student.__cascades_soft_delete_to__ = [HomeworkSubmission]

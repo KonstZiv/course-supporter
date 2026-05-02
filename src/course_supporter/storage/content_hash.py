@@ -26,6 +26,7 @@ vision-aligned inputs (concepts, positions, additional fields).
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime
 from typing import Protocol, cast
@@ -114,6 +115,30 @@ def compute_content_hash(local_content: bytes, child_hashes: list[str]) -> str:
         hasher.update(_HASH_SEPARATOR)
         hasher.update(child.encode("ascii"))
     return hasher.hexdigest()
+
+
+def _encode_local_fields(payload: dict[str, object]) -> bytes:
+    """Stable byte encoding of an entity's local-content fields.
+
+    Returns deterministic UTF-8 JSON bytes via ``json.dumps`` with
+    ``sort_keys=True`` and ``separators=(",", ":")`` — keys lay out
+    identically across calls regardless of insertion order, no
+    superfluous whitespace contributes to the hash, and ``ensure_ascii=
+    False`` keeps Unicode strings in their canonical form so the same
+    course content from two providers (e.g. UA vs RU diacritic
+    normalization) does not produce divergent hashes downstream.
+
+    Concept lists are sorted before being added to ``payload`` (LLM
+    output order is non-deterministic; stable hashing requires order
+    normalization at the formula boundary). Concept fields are passed
+    through here as-is — the caller is responsible for the ``sorted(...)``.
+    """
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class ContentHashService:
@@ -267,35 +292,61 @@ class ContentHashService:
         *,
         exclude_ids: set[uuid.UUID] | None,
     ) -> str:
-        """Per-entity hash formula (vision §3 KD9, minimal-viable for 0.2).
+        """Per-entity hash formula (vision §3 KD9).
 
-        Phase 1.3 / 1.4 / 2 / 3 will refine each formula with vision-
-        aligned inputs (concepts, positions, additional own fields).
+        Phase 1 commit (e) extends ``DocumentSegment`` and
+        ``DocumentSummary`` with own content fields per Gap 2 of the
+        sprint deferred debt; ``AuthoredDocument`` and ``CourseNode``
+        formulas are unchanged here (Phase 2 / Phase 3 territory).
         The current shapes:
 
-        - ``DocumentSegment`` — ``content`` bytes, no children. Phase
-          1.4 adds concepts + positions per KD9 line 552.
-        - ``DocumentSummary`` — empty local content + sorted
-          active segments' ``content_hash``. Phase 1.3 adds own
-          fields per KD9 line 553.
+        - ``DocumentSegment`` — local content covers ``content`` plus
+          sorted ``main_concepts`` + sorted ``secondary_concepts``;
+          no children. ``content_char_count`` is excluded as a derived
+          field (= ``len(content)``) and would double-count the same
+          input. FK references and timestamps are excluded.
+        - ``DocumentSummary`` — local content covers ``title`` +
+          ``description`` + sorted ``main_concepts`` + sorted
+          ``secondary_concepts``; children = sorted active segments'
+          ``content_hash`` (Merkle aggregation per KD9). Same exclusion
+          rules as ``DocumentSegment``.
         - ``AuthoredDocument`` — ``raw_hash`` bytes + sorted active
-          sections' ``content_hash``. ``raw_hash`` anchor matches
+          summaries' ``content_hash``. ``raw_hash`` anchor matches
           KD9 line 554. Falls back to ``b""`` while ``raw_hash`` is
           NULL (Phase 2 will populate it at ingestion time).
         - ``CourseNode`` — empty local content + sorted (active
-          entries' + active child nodes') ``content_hash``. Phase
+          documents' + active child nodes') ``content_hash``. Phase
           1.1 collapses ``node_fingerprint`` into ``content_hash``
           and switches to the full KD9 formula.
+
+        Concept list ordering is normalized via ``sorted(...)`` at the
+        formula boundary because LLM output order is non-deterministic;
+        without normalization a producer reshuffle would spuriously
+        invalidate every downstream Merkle ancestor.
 
         ``exclude_ids`` is forwarded to the children query so the
         cascade hook can elide soon-to-be-deleted siblings before
         they actually have ``deleted_at`` set.
         """
         if isinstance(entity, DocumentSegment):
-            local = (entity.content or "").encode("utf-8")
+            local = _encode_local_fields(
+                {
+                    "content": entity.content or "",
+                    "main_concepts": sorted(entity.main_concepts or []),
+                    "secondary_concepts": sorted(entity.secondary_concepts or []),
+                }
+            )
             return compute_content_hash(local, [])
 
         if isinstance(entity, DocumentSummary):
+            local = _encode_local_fields(
+                {
+                    "title": entity.title or "",
+                    "description": entity.description or "",
+                    "main_concepts": sorted(entity.main_concepts or []),
+                    "secondary_concepts": sorted(entity.secondary_concepts or []),
+                }
+            )
             stmt = select(DocumentSegment.content_hash).where(
                 DocumentSegment.document_summary_id == entity.id,
                 DocumentSegment.deleted_at.is_(None),
@@ -304,7 +355,7 @@ class ContentHashService:
                 stmt = stmt.where(DocumentSegment.id.notin_(exclude_ids))
             result = await self._session.execute(stmt)
             children = [h for (h,) in result.all() if h is not None]
-            return compute_content_hash(b"", children)
+            return compute_content_hash(local, children)
 
         if isinstance(entity, AuthoredDocument):
             local = (entity.raw_hash or "").encode("ascii")

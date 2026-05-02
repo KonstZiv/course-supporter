@@ -273,25 +273,51 @@ class CourseNodeRepository:
         root_id: uuid.UUID,
         *,
         include_documents: bool = False,
+        tenant_id: uuid.UUID | None = None,
     ) -> list[CourseNode]:
         """Load entire subtree rooted at *root_id* and return with children populated.
 
         Uses a recursive CTE to find all descendant node IDs, then loads
         full ORM objects in a single query. Tree assembly happens in Python.
 
+        When ``tenant_id`` is provided, the filter is applied to BOTH the
+        base anchor AND the recursive ``JOIN`` of the CTE — Gap 1 fix
+        (mirrors :meth:`get_descendant_ids` shape from task 0.4 + KD-δ
+        ``get_root_for`` from Phase 1 commit (f)). Schema does NOT enforce
+        the parent-child tenant invariant, so a malformed parent pointer
+        across tenants would otherwise silently expose a foreign tenant's
+        subtree to the caller's session. The dual-side filter terminates
+        the walk at the tenant boundary; cross-tenant queries return
+        empty even when ``root_id`` is a valid id from another tenant
+        (defense-in-depth per rule #12). The route layer always passes
+        the caller's tenant id; ``None`` is reserved for global helpers
+        that legitimately need to walk across tenants.
+
         Args:
             root_id: UUID of the root node.
             include_documents: If True, eager-load ``AuthoredDocument``
                 relationships for each node.
+            tenant_id: When set, restrict the recursion to nodes owned
+                by this tenant. ``None`` (default) preserves the legacy
+                cross-tenant walk for callers that have already enforced
+                isolation upstream.
 
         Returns:
             List containing the root node with ``children`` populated
-            recursively. Returns empty list if root_id not found.
+            recursively. Returns empty list if ``root_id`` is not found
+            or — when ``tenant_id`` is supplied — does not belong to
+            the named tenant.
         """
-        # Recursive CTE: start from root_id, walk down via parent_id
+        # Recursive CTE: start from root_id, walk down via parent_id.
+        # Both the base anchor and the recursive step apply the tenant
+        # filter when supplied — see Gap 1 docstring above.
         base = select(CourseNode.id).where(CourseNode.id == root_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
         cte = base.cte(name="subtree", recursive=True)
         recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
         cte = cte.union_all(recursive)
 
         # Load full node objects

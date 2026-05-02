@@ -63,17 +63,32 @@ the caller in task 0.3 and in per-entity tasks in later phases.
 """
 
 
-OnInvalidateHashes = Callable[[list[uuid.UUID]], Awaitable[None]]
+OnInvalidateHashes = Callable[[list[uuid.UUID], set[uuid.UUID]], Awaitable[None]]
 """Hook invoked once per cascade with the full id list whose ``content_hash``
 chains must be recomputed up to the root (vision §3 KD9 + KD12).
 
-Same single-shot, pre-write semantics as :data:`OnCancelJobs`: invoked
-exactly once before any ``deleted_at`` write, so victims are still
-``deleted_at IS NULL`` when the hook runs (and therefore not yet
-blocked by the soft-delete protection trigger). Concrete
-implementations live alongside ``ContentHashService.invalidate_subtree``
-and are wired into :meth:`CascadeDeleteService.soft_delete_with_cascade`
-in commit (c) of task 0.2.
+Single-shot pre-write semantics — invoked exactly once before any
+``deleted_at`` write, so victims are still ``deleted_at IS NULL`` at
+hook time.
+
+The second argument is the **set of cascade victim ids** — the same
+ids the hook just received as the first argument, repackaged as a
+set for membership-test efficiency. Hook implementations forward
+this set through to :meth:`ContentHashService.invalidate_subtree`'s
+kw-only ``exclude_ids`` parameter (already present from task 0.2),
+which treats the victims as "already gone" when recomputing
+ancestor hashes. Without this signal the parent walk would issue
+UPDATE statements on the victims themselves, and the soft-delete
+protection trigger would trip the *next* mutation in the same
+flush — by then the row carries the just-set ``deleted_at`` and
+the trigger sees an UPDATE happen on a soft-deleted row. Passing
+``exclude_ids = victim_ids`` short-circuits the UPDATE on victims
+while still walking past them so their (surviving) parents
+recompute as if the victims were already deleted.
+
+Concrete implementations are wired in Phase 1 commit (k)/(l)/(m)
+KD3-adoption handlers; the cascade-side signature extension here
+is the Gap 3 fix.
 """
 
 
@@ -108,6 +123,40 @@ async def scrub_tenant_webhook_url(tenant: Any) -> None:
     so the NULL and the soft-delete mark land in the same flush.
     """
     tenant.webhook_url = None
+
+
+async def scrub_authored_document(document: Any) -> None:
+    """KD3 scrub: clear ``filename`` + ``source_url`` on AuthoredDocument soft-delete.
+
+    Per PHASE.md §1.3 audit, ``AuthoredDocument`` carries two
+    operationally-meaningful fields whose values must not survive
+    soft-delete: ``filename`` (often the original-uploaded name —
+    can leak naming conventions, course-internal taxonomy, or
+    student-facing identifiers) and ``source_url`` (S3 object key
+    or signed URL — leaks bucket layout and may carry signed-token
+    residuals depending on which presigned variant was persisted
+    at upload time). On soft-delete the file itself is being
+    asynchronously hard-deleted via the ``s3_cleanup`` ARQ task
+    (Phase 1 KD3 adoption); the URL has zero post-deletion
+    operational value.
+
+    ``filename`` is nullable in the schema and becomes ``NULL``;
+    ``source_url`` is NOT NULL so the scrub sentinel is the empty
+    string. The empty string is intentional rather than a marker
+    like ``"[scrubbed]"``: it is the most database-idiomatic
+    "no-value" representation for a NOT NULL text column, avoids
+    allocating a magic literal that future readers must learn,
+    and a query for ``source_url = ''`` is the canonical way to
+    spot scrubbed rows in triage.
+
+    Invoked by :class:`CascadeDeleteService` once on the root
+    ``AuthoredDocument`` instance before the ``deleted_at`` write,
+    so the scrub mutations and the soft-delete mark land in the
+    same flush — observers cannot see a soft-deleted row that
+    still carries the un-scrubbed values.
+    """
+    document.filename = None
+    document.source_url = ""
 
 
 def build_cascade_map(root: type) -> dict[type, list[type]]:
@@ -273,7 +322,13 @@ class CascadeDeleteService:
         if on_cancel_jobs is not None:
             await on_cancel_jobs(ids)
         if on_invalidate_hashes is not None:
-            await on_invalidate_hashes(ids)
+            # Gap 3: pass the victim id-set as ``exclude_ids`` so the
+            # parent-hash walk treats victims as "already gone" and
+            # avoids issuing UPDATE on a row that is about to flip to
+            # ``deleted_at IS NOT NULL`` in the same flush. See the
+            # ``OnInvalidateHashes`` docstring for the trigger-trip
+            # rationale.
+            await on_invalidate_hashes(ids, set(ids))
         if scrub_callable is not None:
             await scrub_callable(entity)
 

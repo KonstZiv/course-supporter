@@ -227,7 +227,12 @@ class TestCascadeInvalidateHook:
 
         hook.assert_awaited_once()
         passed_ids = list(hook.call_args.args[0])
+        passed_excludes = hook.call_args.args[1]
         assert sorted(passed_ids) == sorted([a.id, b.id])
+        # Gap 3: cascade engine forwards the victim id-set as
+        # ``exclude_ids`` so the parent-hash walk skips UPDATE on
+        # rows about to flip to ``deleted_at IS NOT NULL``.
+        assert passed_excludes == {a.id, b.id}
 
     async def test_hook_runs_before_writes(self) -> None:
         """Hook must observe entities still NOT marked deleted (KD12 line 645)."""
@@ -238,7 +243,7 @@ class TestCascadeInvalidateHook:
 
         observed: list[datetime | None] = []
 
-        async def hook(_ids: list[uuid.UUID]) -> None:
+        async def hook(_ids: list[uuid.UUID], _exclude: set[uuid.UUID]) -> None:
             observed.append(a.deleted_at)
 
         await svc.soft_delete_with_cascade(a, cmap, on_invalidate_hashes=hook)
@@ -252,7 +257,7 @@ class TestCascadeInvalidateHook:
         session = AsyncMock()
         svc = StubCascadeService(session, {})
 
-        async def failing_hook(_ids: list[uuid.UUID]) -> None:
+        async def failing_hook(_ids: list[uuid.UUID], _exclude: set[uuid.UUID]) -> None:
             raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
@@ -275,7 +280,9 @@ class TestCascadeInvalidateHook:
         async def cancel_hook(_ids: list[uuid.UUID]) -> None:
             order.append("cancel")
 
-        async def invalidate_hook(_ids: list[uuid.UUID]) -> None:
+        async def invalidate_hook(
+            _ids: list[uuid.UUID], _exclude: set[uuid.UUID]
+        ) -> None:
             order.append("invalidate")
 
         await svc.soft_delete_with_cascade(
@@ -593,7 +600,9 @@ class TestCascadeScrubCallable:
         async def cancel_hook(_ids: list[uuid.UUID]) -> None:
             order.append("cancel")
 
-        async def invalidate_hook(_ids: list[uuid.UUID]) -> None:
+        async def invalidate_hook(
+            _ids: list[uuid.UUID], _exclude: set[uuid.UUID]
+        ) -> None:
             order.append("invalidate")
 
         async def scrub(_entity: Any) -> None:

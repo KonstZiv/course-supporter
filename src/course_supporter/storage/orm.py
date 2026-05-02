@@ -110,7 +110,11 @@ class Tenant(SoftDeleteMixin, Base):
 
     # Relationships
     api_keys: Mapped[list["APIKey"]] = relationship(
-        back_populates="tenant", cascade="all, delete-orphan"
+        # KD-alpha: stripped ``delete-orphan`` so ORM-level ``session.delete``
+        # cannot bypass the soft-delete cascade. Soft-deletion flows
+        # exclusively through ``CascadeDeleteService`` per vision §3 KD3.
+        back_populates="tenant",
+        cascade="save-update, merge",
     )
 
 
@@ -239,19 +243,29 @@ class CourseNode(SoftDeleteMixin, Base):
         remote_side="CourseNode.id",
     )
     children: Mapped[list["CourseNode"]] = relationship(
+        # KD-alpha: stripped ``delete-orphan`` (self-ref tree). Subtree
+        # soft-deletion flows through ``CascadeDeleteService`` per
+        # ``__cascades_soft_delete_to__ = [CourseNode, ...]``.
         back_populates="parent",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
     )
     documents: Mapped[list["AuthoredDocument"]] = relationship(
+        # KD-alpha: stripped ``delete-orphan``. Document soft-deletion is
+        # routed through ``delete_document`` → ``CascadeDeleteService``
+        # so ``s3_cleanup`` enqueue and KD-β scrub stay in the loop.
         back_populates="node",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
         foreign_keys="AuthoredDocument.course_node_id",
     )
     snapshots: Mapped[list["StructureSnapshot"]] = relationship(
+        # Phase-5-bound legacy entity — ``cascade="all, delete-orphan"``
+        # preserved intentionally; deletion semantics revisit when
+        # the StructureSnapshot family is removed.
         back_populates="node",
         cascade="all, delete-orphan",
     )
     editables: Mapped[list["StructureNodeEditable"]] = relationship(
+        # Phase-5-bound legacy entity (see ``snapshots`` note).
         back_populates="material_node",
         cascade="all, delete-orphan",
         foreign_keys="StructureNodeEditable.materialnode_id",
@@ -427,8 +441,12 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         back_populates="authored_documents"
     )
     summary: Mapped["DocumentSummary | None"] = relationship(
+        # KD-alpha: stripped ``delete-orphan`` from the 1:1 summary (uselist=
+        # False since commit (b)). DocumentSummary soft-deletion routes
+        # through ``CascadeDeleteService`` per ``AuthoredDocument
+        # .__cascades_soft_delete_to__ = [DocumentSummary]``.
         back_populates="authored_document",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
         uselist=False,
     )
 
@@ -542,8 +560,11 @@ class DocumentSummary(SoftDeleteMixin, Base):
         back_populates="summary"
     )
     segments: Mapped[list["DocumentSegment"]] = relationship(
+        # KD-alpha: stripped ``delete-orphan``. Segment soft-deletion routes
+        # through ``CascadeDeleteService`` per ``DocumentSummary
+        # .__cascades_soft_delete_to__ = [DocumentSegment]``.
         back_populates="document_summary",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
     )
     llm_call: Mapped["ExternalServiceCall | None"] = relationship()
 
@@ -1248,7 +1269,11 @@ class Student(SoftDeleteMixin, Base):
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
     submissions: Mapped[list["HomeworkSubmission"]] = relationship(
-        back_populates="student", cascade="all, delete-orphan"
+        # KD-alpha: stripped ``delete-orphan``. HomeworkSubmission soft-
+        # deletion routes through ``CascadeDeleteService`` per
+        # ``Student.__cascades_soft_delete_to__ = [HomeworkSubmission]``.
+        back_populates="student",
+        cascade="save-update, merge",
     )
 
     def __repr__(self) -> str:

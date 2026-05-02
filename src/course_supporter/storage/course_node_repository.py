@@ -142,12 +142,29 @@ class CourseNodeRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_root_for(self, node_id: uuid.UUID) -> CourseNode | None:
+    async def get_root_for(
+        self,
+        node_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> CourseNode | None:
         """Walk up the parent chain to find the root (course) node.
 
-        Uses a recursive CTE to traverse ``parent_id`` links
-        to the first node whose parent is NULL. Returns None if the
-        starting node does not exist.
+        Uses a recursive CTE to traverse ``parent_id`` links to the
+        first node whose parent is NULL. Returns ``None`` if the
+        starting node does not exist or — when ``tenant_id`` is
+        supplied — if the chain leaves the tenant before reaching a
+        root.
+
+        When ``tenant_id`` is provided, the filter is applied to BOTH
+        the base anchor AND the recursive step (defense-in-depth per
+        rule #12). A malformed tree where a child node carries a
+        ``parent_id`` that points at a different tenant's node will
+        terminate the walk early and return ``None`` rather than
+        silently resolving to the wrong tenant's root. ``None`` is
+        reserved for global helpers that legitimately need to walk
+        across tenants. Mirrors the same pattern used by
+        :meth:`get_descendant_ids`.
 
         Performance note: a single recursive CTE query is preferred over
         an iterative loop of round-trips because course trees are shallow
@@ -155,20 +172,22 @@ class CourseNodeRepository:
         N sequential ``session.get`` calls over the wire.
         """
         # Recursive CTE: start at node_id, climb up via parent FK.
-        ancestor_cte = (
-            select(
-                CourseNode.id,
-                CourseNode.parent_id,
-            )
-            .where(CourseNode.id == node_id)
-            .cte(name="ancestors", recursive=True)
-        )
-        ancestor_cte = ancestor_cte.union_all(
-            select(
-                CourseNode.id,
-                CourseNode.parent_id,
-            ).where(CourseNode.id == ancestor_cte.c.parent_id),
-        )
+        base = select(
+            CourseNode.id,
+            CourseNode.parent_id,
+        ).where(CourseNode.id == node_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        ancestor_cte = base.cte(name="ancestors", recursive=True)
+
+        recursive = select(
+            CourseNode.id,
+            CourseNode.parent_id,
+        ).where(CourseNode.id == ancestor_cte.c.parent_id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        ancestor_cte = ancestor_cte.union_all(recursive)
+
         root_id_stmt = (
             select(ancestor_cte.c.id).where(ancestor_cte.c.parent_id.is_(None)).limit(1)
         )

@@ -34,6 +34,7 @@ class AuthoredDocumentRepository:
         material_role: str = "educational",
         task_type: AssignmentType | str | None = None,
         language: str | None = None,
+        course_root_id: uuid.UUID | None = None,
     ) -> AuthoredDocument:
         """Create a new material entry with auto-incremented order.
 
@@ -49,10 +50,25 @@ class AuthoredDocumentRepository:
             language: Optional ISO 639-1 language override. When None,
                 the course default is used and STT falls back to
                 auto-detection (which caches its result back here).
+            course_root_id: Optional KD-delta denormalized root id. When
+                omitted, the repository walks ``node_id``'s parent chain
+                to derive it (defense-in-depth: walk is tenant-scoped to
+                the parent's tenant per rule #12 — a malformed parent
+                pointing at a different tenant terminates the walk
+                early and raises). Callers that already have the root
+                in scope (e.g. ingestion pipeline working from the
+                course context) can pass it directly to skip the walk.
 
         Returns:
             The newly created AuthoredDocument.
+
+        Raises:
+            ValueError: If ``node_id`` does not exist, or
+                ``course_root_id`` is not provided and the parent walk
+                cannot resolve a root within the parent's tenant.
         """
+        if course_root_id is None:
+            course_root_id = await self._resolve_course_root_id(node_id)
         next_order = await self._next_sibling_order(node_id)
         task_type_value: str | None
         if isinstance(task_type, AssignmentType):
@@ -61,6 +77,7 @@ class AuthoredDocumentRepository:
             task_type_value = task_type
         entry = AuthoredDocument(
             course_node_id=node_id,
+            course_root_id=course_root_id,
             source_type=source_type,
             source_url=source_url,
             filename=filename,
@@ -73,6 +90,41 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         await self._invalidate_node_chain(node_id)
         return entry
+
+    async def _resolve_course_root_id(self, node_id: uuid.UUID) -> uuid.UUID:
+        """Compute the KD-delta root id for ``node_id`` via parent walk.
+
+        Loads the parent ``CourseNode`` to extract its ``tenant_id``,
+        then delegates to :meth:`CourseNodeRepository.get_root_for`
+        with the tenant filter applied to both the base and recursive
+        steps of the CTE. Tenant-scoped walking is defence-in-depth
+        per rule #12: a malformed tree where ``node_id``'s parent
+        chain crosses tenants returns ``None`` rather than silently
+        resolving to a foreign tenant's root.
+
+        Raises:
+            ValueError: If ``node_id`` does not exist, or the
+                tenant-scoped walk cannot reach a root (cross-tenant
+                ``parent_id`` corruption).
+        """
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
+        )
+
+        parent_node = await self._session.get(CourseNode, node_id)
+        if parent_node is None:
+            msg = f"CourseNode not found: {node_id}"
+            raise ValueError(msg)
+        node_repo = CourseNodeRepository(self._session)
+        root = await node_repo.get_root_for(node_id, tenant_id=parent_node.tenant_id)
+        if root is None:
+            msg = (
+                f"Cannot resolve course_root_id for {node_id}: parent walk "
+                f"did not reach a tenant-{parent_node.tenant_id} root "
+                f"(possible cross-tenant parent_id corruption)"
+            )
+            raise ValueError(msg)
+        return root.id
 
     async def get_by_id(self, entry_id: uuid.UUID) -> AuthoredDocument | None:
         """Get an entry by primary key."""

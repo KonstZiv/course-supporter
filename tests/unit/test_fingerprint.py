@@ -605,49 +605,15 @@ class TestRepositoryCascadeInvalidation:
         mock_inv.assert_any_await(old_parent_id)
         mock_inv.assert_any_await(new_parent_id)
 
-    async def test_node_delete_invalidates_parent(self) -> None:
-        """CourseNodeRepository.delete invalidates parent chain."""
-        from course_supporter.storage.course_node_repository import (
-            CourseNodeRepository,
-        )
-
-        parent_id = uuid.uuid4()
-        node = MagicMock(spec=CourseNode)
-        node.id = uuid.uuid4()
-        node.parent_id = parent_id
-
-        session = AsyncMock()
-        repo = CourseNodeRepository(session)
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
-            mock_inv = AsyncMock()
-            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
-            await repo.delete(node.id)
-
-        mock_inv.assert_awaited_once_with(parent_id)
-
-    async def test_node_delete_root_skips_invalidation(self) -> None:
-        """Deleting a root node (parent_id=None) skips invalidation."""
-        from course_supporter.storage.course_node_repository import (
-            CourseNodeRepository,
-        )
-
-        node = MagicMock(spec=CourseNode)
-        node.id = uuid.uuid4()
-        node.parent_id = None
-
-        session = AsyncMock()
-        repo = CourseNodeRepository(session)
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(repo, "get_by_id", AsyncMock(return_value=node))
-            mock_inv = AsyncMock()
-            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
-            await repo.delete(node.id)
-
-        # _invalidate_node_chain called with None → returns immediately
-        mock_inv.assert_awaited_once_with(None)
+    # NOTE: ``CourseNodeRepository.delete()`` removed in Phase 1
+    # commit (k) per KD3 adoption — tests
+    # ``test_node_delete_invalidates_parent`` and
+    # ``test_node_delete_root_skips_invalidation`` removed alongside.
+    # The fingerprint-invalidation responsibility now lives in the
+    # cascade engine's ``on_invalidate_hashes`` hook bound to
+    # :meth:`ContentHashService.invalidate_subtree` (Gap 3 fix —
+    # commit (i)). Coverage moves to
+    # ``tests/storage/test_cascade_invalidation.py``.
 
 
 class TestKnownHash:

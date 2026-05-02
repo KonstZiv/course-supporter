@@ -682,29 +682,13 @@ class TestUpdate:
         assert node.description == "Original desc"
 
 
-class TestDelete:
-    """CourseNodeRepository.delete tests."""
-
-    async def test_delete_not_found(self) -> None:
-        """ValueError if node doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = CourseNodeRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.delete(uuid.uuid4())
-
-    async def test_delete_calls_session_delete(self) -> None:
-        """Delegates to session.delete + flush."""
-        node = _mock_node()
-        session = AsyncMock()
-        session.get.return_value = node
-
-        repo = CourseNodeRepository(session)
-        await repo.delete(node.id)
-
-        session.delete.assert_awaited_once_with(node)
-        session.flush.assert_awaited()
+# NOTE: ``CourseNodeRepository.delete()`` removed in Phase 1 commit (k)
+# per KD3 adoption. Soft-delete is now driven by
+# ``CascadeDeleteService.soft_delete_with_cascade`` rooted at the
+# CourseNode; tests for that flow live alongside the cascade engine
+# (``tests/unit/test_cascade_delete_service.py``,
+# ``tests/storage/test_cascade_invalidation.py``) and the route
+# (``tests/api/test_nodes.py``).
 
 
 class TestNextSiblingOrder:

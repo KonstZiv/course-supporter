@@ -165,9 +165,9 @@ class NodeResponse(BaseModel):
         default=0,
         description="Number of direct child nodes.",
     )
-    materials_count: int = Field(
+    authored_documents_count: int = Field(
         default=0,
-        description="Number of material entries attached to this node.",
+        description="Number of authored documents attached to this node.",
     )
     created_at: datetime = Field(description="When this node was created.")
     updated_at: datetime = Field(description="When this node was last modified.")
@@ -271,9 +271,10 @@ class NodeWithMaterialsResponse(BaseModel):
     content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
-    materials: list[AuthoredDocumentSummaryResponse] = Field(
+    authored_documents: list[AuthoredDocumentSummaryResponse] = Field(
         default_factory=list,
-        description="Materials attached directly to this node.",
+        description="Authored documents attached directly to this node.",
+        validation_alias="documents",
     )
     children: list[NodeWithMaterialsResponse] = Field(
         default_factory=list,

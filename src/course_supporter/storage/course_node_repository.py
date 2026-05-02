@@ -502,20 +502,16 @@ class CourseNodeRepository:
         await self._session.flush()
         return node
 
-    async def delete(self, node_id: uuid.UUID) -> None:
-        """Delete a node (children cascade via ORM) and invalidate parent.
-
-        Raises:
-            ValueError: If node not found.
-        """
-        node = await self.get_by_id(node_id)
-        if node is None:
-            msg = f"CourseNode not found: {node_id}"
-            raise ValueError(msg)
-        parent_id = node.parent_id
-        await self._session.delete(node)
-        await self._session.flush()
-        await self._invalidate_node_chain(parent_id)
+    # NOTE: ``delete()`` REMOVED in Phase 1 commit (k) per KD3 adoption.
+    # Hard-delete + ORM-cascade is replaced by
+    # :meth:`CascadeDeleteService.soft_delete_with_cascade` rooted at
+    # the CourseNode. The cascade engine drives both the BFS soft-
+    # delete AND per-victim ``__scrub_callable__`` dispatch (clearing
+    # KD3 content fields on every CourseNode + AuthoredDocument
+    # descendant in the same flush as the ``deleted_at`` write).
+    # ``delete_node`` route handler in ``api/routes/nodes.py`` is the
+    # canonical caller; ad-hoc hard delete (e.g. test cleanup) must
+    # bypass the repository entirely via direct ``DELETE FROM``.
 
     # ── Private helpers ──
 

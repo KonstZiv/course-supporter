@@ -25,10 +25,11 @@ from collections.abc import Sequence
 from typing import Annotated
 
 import structlog
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_s3_client, get_session
+from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
     NodeCreateRequest,
     NodeListResponse,
@@ -42,6 +43,9 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
+from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
+from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.s3 import S3Client
@@ -52,6 +56,7 @@ router = APIRouter(tags=["nodes"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
@@ -59,10 +64,10 @@ SharedDep = Annotated[
 
 
 def _node_response(node: CourseNode) -> NodeResponse:
-    """Build NodeResponse with computed children_count and materials_count."""
+    """Build NodeResponse with computed children_count and authored_documents_count."""
     resp = NodeResponse.model_validate(node)
     resp.children_count = len(node.children) if node.children else 0
-    resp.materials_count = len(node.documents) if node.documents else 0
+    resp.authored_documents_count = len(node.documents) if node.documents else 0
     return resp
 
 
@@ -356,35 +361,103 @@ async def delete_node(
     tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
+    arq: ArqDep,
 ) -> None:
-    """Delete a node, all descendants, and their S3 files.
+    """KD3 soft-delete the node and its full subtree (vision §3 KD3).
 
-    Collects S3 keys from all material entries in the subtree,
-    deletes them from S3, then cascades DB deletion.
+    Cascade flow per Phase 1 KD3 adoption:
+
+    1. Verify the node exists and belongs to the caller's tenant
+       (404 otherwise — same shape as the rest of the route).
+    2. Walk the subtree via ``get_subtree(include_documents=True,
+       tenant_id=...)`` and collect S3 keys from every descendant
+       AuthoredDocument's ``source_url`` BEFORE cascade fires.
+       Order matters: the cascade engine dispatches
+       ``scrub_authored_document`` per descendant which sets
+       ``source_url = ''`` — collecting keys after cascade would
+       miss them all.
+    3. Issue ``CascadeDeleteService.soft_delete_with_cascade`` rooted
+       at the node. The engine drives both the BFS soft-delete and
+       per-victim scrub dispatch via class-level ``__scrub_callable__``
+       (CourseNode → ``scrub_course_node`` clearing ``title`` +
+       ``description``; AuthoredDocument → ``scrub_authored_document``
+       clearing ``filename`` + ``source_url``). Gap 3 hook bridges
+       ``ContentHashService.invalidate_subtree`` so parent-hash
+       recompute treats victims as already gone.
+    4. Hand off to ``enqueue_s3_cleanup`` — helper persists a
+       ``s3_cleanup`` Job row, commits cascade + Job atomically
+       (QQ5 boundary), then dispatches the ARQ task post-commit
+       and records the resolved ``arq_job_id``. Empty key list
+       short-circuits — no Job row, no ARQ enqueue.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
     node_repo = CourseNodeRepository(session)
 
-    # Collect S3 keys before DB cascade removes entries
-    subtree = await node_repo.get_subtree(node_id, include_documents=True)
-    s3_keys: list[str] = []
+    # (2) Collect S3 keys before cascade scrub blanks ``source_url``.
+    # Tenant-scoped subtree (Gap 1 — commit (j)) defends against any
+    # corrupt parent_id chain pulling foreign-tenant docs into the
+    # cleanup batch. ``include_documents=True`` eager-loads the
+    # AuthoredDocument relationship per node so the iteration runs
+    # without lazy IO (and without colliding with the cascade flush).
+    subtree = await node_repo.get_subtree(
+        node_id,
+        include_documents=True,
+        tenant_id=tenant.tenant_id,
+    )
+    file_keys: list[str] = []
     for node in _flatten(subtree):
-        for entry in node.documents:
-            key = s3.extract_key(entry.source_url)
+        for doc in node.documents:
+            key = s3.extract_key(doc.source_url)
             if key is not None:
-                s3_keys.append(key)
+                file_keys.append(key)
 
-    await node_repo.delete(node_id)
-    await session.commit()
+    # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
+    # dispatch (models-fix-3) clears KD3 fields on root + every
+    # descendant in the same flush as the ``deleted_at`` write.
+    cascade_service = CascadeDeleteService(session)
+    cascade_map = build_cascade_map(CourseNode)
+    content_hash_service = ContentHashService(session)
 
-    # Clean up S3 after successful DB commit
-    for key in s3_keys:
-        await s3.delete_object(key)
+    async def invalidate_hook(
+        ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
+    ) -> None:
+        await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
+
+    # ``subtree[0]`` is the loaded root with eager-loaded relationships
+    # — reuse it as the cascade entry point so we don't issue another
+    # ``SELECT`` for the same row. Empty subtree should never reach
+    # here (``_require_node_for_tenant`` already failed if so).
+    root_node = subtree[0]
+    await cascade_service.soft_delete_with_cascade(
+        root_node,
+        cascade_map,
+        on_invalidate_hashes=invalidate_hook,
+    )
+
+    # (4) Persist the s3_cleanup Job + dispatch ARQ task. Helper owns
+    # the QQ5 commit boundary; we pass ``course_node_id=node_id`` so
+    # tenant scope on the Job row is recoverable via the
+    # ``Job.course_node_id → CourseNode.tenant_id`` join even after
+    # the cascade scrub clears the row's content fields.
+    s3_files_cleaned = len(file_keys)
+    if file_keys:
+        await enqueue_s3_cleanup(
+            session=session,
+            arq=arq,
+            file_keys=file_keys,
+            tenant_id=tenant.tenant_id,
+            course_node_id=node_id,
+        )
+    else:
+        # No S3 keys to clean (pure-text/web subtree or leaf with no
+        # documents) — still need to commit the cascade soft-delete
+        # since the helper would have done it for us otherwise.
+        await session.commit()
 
     logger.info(
         "node_deleted",
         node_id=str(node_id),
-        s3_files_cleaned=len(s3_keys),
+        s3_files_cleaned=s3_files_cleaned,
     )
 
 

@@ -10,7 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_current_tenant, get_s3_client
+from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
@@ -65,10 +65,29 @@ def mock_s3() -> AsyncMock:
 
 
 @pytest.fixture()
-async def client(mock_session: AsyncMock, mock_s3: AsyncMock) -> AsyncClient:
+def mock_arq() -> AsyncMock:
+    """Mock ARQ Redis: ``enqueue_job`` returns a stub with a job_id.
+
+    Used by the ``delete_node`` route after Phase 1 KD3 adoption — the
+    handler hands off to ``enqueue_s3_cleanup`` which invokes ARQ.
+    Tests patch the helper directly when they need to assert call
+    shape; this fixture exists so the FastAPI dep injection succeeds
+    when the helper is NOT patched (e.g. tests where the handler
+    short-circuits before reaching the helper).
+    """
+    arq = AsyncMock()
+    arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-test-id"))
+    return arq
+
+
+@pytest.fixture()
+async def client(
+    mock_session: AsyncMock, mock_s3: AsyncMock, mock_arq: AsyncMock
+) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     app.dependency_overrides[get_s3_client] = lambda: mock_s3
+    app.dependency_overrides[get_arq_redis] = lambda: mock_arq
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -368,17 +387,35 @@ class TestReorderNode:
 
 
 class TestDeleteNode:
-    """DELETE /api/v1/nodes/{nid}"""
+    """DELETE /api/v1/nodes/{nid} — Phase 1 commit (k) KD3 cascade
+    soft-delete + s3_cleanup orchestration.
+
+    The handler now: (1) collects S3 keys from descendant
+    AuthoredDocuments BEFORE cascade fires (cascade scrub clears
+    ``source_url`` to ``""``), (2) issues
+    ``CascadeDeleteService.soft_delete_with_cascade`` which
+    auto-dispatches ``__scrub_callable__`` per victim type
+    (CourseNode + AuthoredDocument), and (3) hands off to
+    ``enqueue_s3_cleanup`` which owns the QQ5 commit boundary.
+    """
 
     async def test_returns_204(self, client: AsyncClient) -> None:
-        """Successful deletion returns 204 No Content."""
+        """Empty subtree (no descendants, no documents) — 204."""
         node = _mock_node()
         tree_node = _mock_node(node_id=node.id)
-        tree_node.materials = []
+        tree_node.documents = []
         with (
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
-            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
-            patch.object(CourseNodeRepository, "delete", return_value=None),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree",
+                return_value=[tree_node],
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                AsyncMock(),
+            ),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204
@@ -396,42 +433,86 @@ class TestDeleteNode:
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 404
 
-    async def test_cleans_s3_files(
+    async def test_collects_keys_before_cascade_and_enqueues_cleanup(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:
-        """S3 files from subtree materials are deleted after DB cascade."""
-        entry = MagicMock()
-        entry.source_url = "http://localhost:9000/bucket/tenants/t/file.pdf"
+        """File keys extracted from ``node.documents`` and forwarded to
+        ``enqueue_s3_cleanup`` along with tenant/course_node anchors.
+        Locks the QQ5 ordering (collect → cascade → enqueue) at the
+        unit level — the cascade engine integration test in
+        ``tests/storage/test_cascade_invalidation.py`` locks the
+        scrub-then-collect-impossible failure mode.
+        """
+        doc = MagicMock()
+        doc.source_url = "http://localhost:9000/bucket/tenants/t/file.pdf"
         node = _mock_node()
         tree_node = _mock_node(node_id=node.id)
-        tree_node.materials = [entry]
+        tree_node.documents = [doc]
         tree_node.children = []
         mock_s3.extract_key = MagicMock(return_value="tenants/t/file.pdf")
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
         with (
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
-            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
-            patch.object(CourseNodeRepository, "delete", return_value=None),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree",
+                return_value=[tree_node],
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.nodes.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204
-        mock_s3.delete_object.assert_awaited_once_with("tenants/t/file.pdf")
+        cascade_mock.assert_awaited_once()
+        enqueue_mock.assert_awaited_once()
+        kwargs = enqueue_mock.call_args.kwargs
+        assert kwargs["file_keys"] == ["tenants/t/file.pdf"]
+        assert kwargs["course_node_id"] == node.id
+        assert kwargs["tenant_id"] == STUB_TENANT.tenant_id
 
-    async def test_no_s3_cleanup_for_external_urls(
+    async def test_no_enqueue_when_no_s3_keys(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:
-        """External URLs (non-S3) are not deleted from S3."""
-        entry = MagicMock()
-        entry.source_url = "https://example.com/video.mp4"
+        """External URLs (extract_key returns None) yield empty
+        ``file_keys`` — handler skips ``enqueue_s3_cleanup`` and
+        commits the cascade directly. Avoids creating a wasteful
+        Job row + ARQ task with empty payload.
+        """
+        doc = MagicMock()
+        doc.source_url = "https://example.com/video.mp4"
         node = _mock_node()
         tree_node = _mock_node(node_id=node.id)
-        tree_node.materials = [entry]
+        tree_node.documents = [doc]
         tree_node.children = []
         mock_s3.extract_key = MagicMock(return_value=None)
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
         with (
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
-            patch.object(CourseNodeRepository, "get_subtree", return_value=[tree_node]),
-            patch.object(CourseNodeRepository, "delete", return_value=None),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree",
+                return_value=[tree_node],
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.nodes.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
         ):
             resp = await client.delete(f"/api/v1/nodes/{node.id}")
         assert resp.status_code == 204
-        mock_s3.delete_object.assert_not_awaited()
+        cascade_mock.assert_awaited_once()
+        enqueue_mock.assert_not_awaited()

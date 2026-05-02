@@ -245,6 +245,7 @@ class CourseNode(SoftDeleteMixin, Base):
     documents: Mapped[list["AuthoredDocument"]] = relationship(
         back_populates="node",
         cascade="all, delete-orphan",
+        foreign_keys="AuthoredDocument.course_node_id",
     )
     snapshots: Mapped[list["StructureSnapshot"]] = relationship(
         back_populates="node",
@@ -418,7 +419,10 @@ class AuthoredDocument(SoftDeleteMixin, Base):
     )
 
     # Relationships
-    node: Mapped["CourseNode"] = relationship(back_populates="documents")
+    node: Mapped["CourseNode"] = relationship(
+        back_populates="documents",
+        foreign_keys="AuthoredDocument.course_node_id",
+    )
     pending_job: Mapped["Job | None"] = relationship(
         back_populates="authored_documents"
     )

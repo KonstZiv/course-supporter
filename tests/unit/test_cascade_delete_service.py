@@ -683,6 +683,205 @@ class TestCascadeScrubCallable:
         session.flush.assert_not_awaited()
 
 
+class TestClassLevelScrubDispatch:
+    """models-fix-3: ``CascadeDeleteService`` dispatches class-level
+    ``__scrub_callable__`` per victim during BFS so descendants in the
+    cascade clear their KD3 content fields, not just the root.
+
+    Choice 1 (commit (c)) was root-only; the correction here recognises
+    that PHASE.md §1.3 lists scrub fields on multiple cascade levels
+    (``CourseNode``, ``AuthoredDocument``) so a descendant must also
+    fire its declared scrub. Per-call ``scrub_callable=`` is preserved
+    as a root-only override for route-specific scrubs (e.g. KD-β).
+    """
+
+    async def test_class_level_scrub_fires_on_root(self) -> None:
+        """Single-entity cascade with class-level declaration on the
+        root: scrub fires before flush, no per-call param needed.
+        """
+
+        class _RootWithScrub(FakeEntity):
+            payload: str = "secret"
+
+        async def _root_scrub(entity: Any) -> None:
+            entity.payload = None
+
+        _RootWithScrub.__scrub_callable__ = _root_scrub  # type: ignore[attr-defined]
+
+        a = _RootWithScrub()
+        cmap: dict[type, list[type]] = {_RootWithScrub: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        await svc.soft_delete_with_cascade(a, cmap)
+
+        assert a.payload is None
+        assert a.deleted_at is not None
+        session.flush.assert_awaited_once()
+
+    async def test_class_level_scrub_fires_on_descendants(self) -> None:
+        """Multi-level cascade: scrub fires on EVERY victim that
+        declares ``__scrub_callable__`` — root + each descendant.
+        Locks the Choice 1 correction for the canonical
+        ``delete_node`` cascade pattern (root CourseNode + descendant
+        CourseNodes + descendant AuthoredDocuments all scrubbed).
+        """
+
+        class _Parent(FakeEntity):
+            payload: str = "parent-secret"
+
+        class _Child(FakeEntity):
+            payload: str = "child-secret"
+
+        scrubbed: list[uuid.UUID] = []
+
+        async def _parent_scrub(entity: Any) -> None:
+            entity.payload = None
+            scrubbed.append(entity.id)
+
+        async def _child_scrub(entity: Any) -> None:
+            entity.payload = None
+            scrubbed.append(entity.id)
+
+        _Parent.__scrub_callable__ = _parent_scrub  # type: ignore[attr-defined]
+        _Child.__scrub_callable__ = _child_scrub  # type: ignore[attr-defined]
+
+        root = _Parent()
+        c1 = _Child()
+        c2 = _Child()
+        children = {root.id: {_Child: [c1, c2]}}
+        cmap: dict[type, list[type]] = {_Parent: [_Child], _Child: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, children)
+
+        await svc.soft_delete_with_cascade(root, cmap)
+
+        # All three victims got their class-level scrub called.
+        assert sorted(scrubbed) == sorted([root.id, c1.id, c2.id])
+        assert root.payload is None
+        assert c1.payload is None
+        assert c2.payload is None
+
+    async def test_descendant_without_declaration_no_op(self) -> None:
+        """A descendant class without ``__scrub_callable__`` is silently
+        skipped — supports the Phase 1 deferral of
+        ``DocumentSummary``/``DocumentSegment`` callables to Phase 2.x
+        first writes (declarations land alongside pipeline code).
+        """
+
+        class _Root(FakeEntity):
+            payload: str = "root-secret"
+
+        class _LeafNoScrub(FakeEntity):
+            payload: str = "leaf-untouched"
+
+        async def _root_scrub(entity: Any) -> None:
+            entity.payload = None
+
+        _Root.__scrub_callable__ = _root_scrub  # type: ignore[attr-defined]
+        # _LeafNoScrub deliberately has no declaration.
+
+        root = _Root()
+        leaf = _LeafNoScrub()
+        children = {root.id: {_LeafNoScrub: [leaf]}}
+        cmap: dict[type, list[type]] = {_Root: [_LeafNoScrub], _LeafNoScrub: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, children)
+
+        await svc.soft_delete_with_cascade(root, cmap)
+
+        # Root scrubbed, leaf untouched but cascaded into.
+        assert root.payload is None
+        assert leaf.payload == "leaf-untouched"
+        assert root.deleted_at is not None
+        assert leaf.deleted_at is not None
+
+    async def test_per_call_scrub_callable_takes_precedence_for_root(
+        self,
+    ) -> None:
+        """When BOTH per-call ``scrub_callable=`` AND class-level
+        ``__scrub_callable__`` are present, the per-call parameter
+        wins for the ROOT entity. Descendants always use class-level.
+
+        Locks the Tenant→KD-β override pattern: Tenant has no class-
+        level declaration but the route passes ``scrub_callable=
+        scrub_tenant_webhook_url``; this test exercises the more
+        general rule that per-call wins on the root regardless.
+        """
+        observed: dict[str, bool] = {"per_call": False, "class_level": False}
+
+        class _RootWithBoth(FakeEntity):
+            pass
+
+        async def _class_level_scrub(_entity: Any) -> None:
+            observed["class_level"] = True
+
+        async def _per_call_scrub(_entity: Any) -> None:
+            observed["per_call"] = True
+
+        _RootWithBoth.__scrub_callable__ = _class_level_scrub  # type: ignore[attr-defined]
+
+        a = _RootWithBoth()
+        cmap: dict[type, list[type]] = {_RootWithBoth: []}
+        session = AsyncMock()
+        svc = StubCascadeService(session, {})
+
+        await svc.soft_delete_with_cascade(a, cmap, scrub_callable=_per_call_scrub)
+
+        assert observed["per_call"] is True
+        assert observed["class_level"] is False
+        assert a.deleted_at is not None
+
+    async def test_class_level_scrub_runs_in_same_flush_as_deleted_at(
+        self,
+    ) -> None:
+        """Atomicity invariant lock: at flush time, BOTH the class-
+        level scrub mutations AND the ``deleted_at`` writes are
+        visible. Choice 2 (commit (c)) preserved across all cascade
+        depths after the models-fix-3 dispatch extension.
+        """
+
+        class _Parent(FakeEntity):
+            payload: str = "parent-secret"
+
+        class _Child(FakeEntity):
+            payload: str = "child-secret"
+
+        async def _parent_scrub(entity: Any) -> None:
+            entity.payload = None
+
+        async def _child_scrub(entity: Any) -> None:
+            entity.payload = None
+
+        _Parent.__scrub_callable__ = _parent_scrub  # type: ignore[attr-defined]
+        _Child.__scrub_callable__ = _child_scrub  # type: ignore[attr-defined]
+
+        root = _Parent()
+        leaf = _Child()
+        children = {root.id: {_Child: [leaf]}}
+        cmap: dict[type, list[type]] = {_Parent: [_Child], _Child: []}
+
+        flush_snapshot: dict[str, Any] = {}
+
+        async def capture_flush() -> None:
+            flush_snapshot["root_payload"] = root.payload
+            flush_snapshot["leaf_payload"] = leaf.payload
+            flush_snapshot["root_deleted_at"] = root.deleted_at
+            flush_snapshot["leaf_deleted_at"] = leaf.deleted_at
+
+        session = AsyncMock()
+        session.flush.side_effect = capture_flush
+        svc = StubCascadeService(session, children)
+
+        await svc.soft_delete_with_cascade(root, cmap)
+
+        # All four observations made at flush time — single atomic write.
+        assert flush_snapshot["root_payload"] is None
+        assert flush_snapshot["leaf_payload"] is None
+        assert flush_snapshot["root_deleted_at"] is not None
+        assert flush_snapshot["leaf_deleted_at"] is not None
+
+
 class TestScrubTenantWebhookUrl:
     """The KD-β concrete scrub callable for ``Tenant.webhook_url``."""
 

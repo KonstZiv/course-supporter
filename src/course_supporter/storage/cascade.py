@@ -93,22 +93,48 @@ is the Gap 3 fix.
 
 
 ScrubCallable = Callable[[Any], Awaitable[None]]
-"""Hook applied to the *root* entity to perform per-type field scrubbing
+"""Hook applied per-victim to perform per-type field scrubbing
 (vision §3 KD3 / KD-β) atomically with the cascade ``deleted_at`` write.
 
-Single-callable-per-cascade — by design the scrub targets only the root
-entity, not cascade descendants. Per PHASE.md §1.3 audit, descendants of
-the soft-deletable graph either carry no content fields (Tenant cascades
-into APIKey/CourseNode/Student/HomeworkSubmission whose own scrub lists
-are empty per §1.3) or are themselves the root of their own cascade
-(AuthoredDocument is rooted at the ``delete_document`` route, where its
-own ``scrub_authored_document`` callable applies). When a descendant
-type later requires content scrub, the call site for that descendant's
-own cascade is the right place to wire it.
+Two dispatch paths (models-fix-3 — Choice 1 correction):
 
-Fires *after* the ``on_cancel_jobs`` and ``on_invalidate_hashes`` hooks
-and *before* the ``deleted_at`` write — same flush boundary, so the
-scrub mutation and the soft-delete mark land atomically.
+* **Class-level** ``__scrub_callable__: ClassVar[ScrubCallable | None]``
+  declared on each soft-deletable class with content scrub fields.
+  :class:`CascadeDeleteService` dispatches per-victim during BFS —
+  every descendant in the cascade fires its declared scrub callable
+  before the ``deleted_at`` write. This is the primary path for KD3
+  adoption: each entity self-describes its scrub list, so a cascade
+  rooted at any level automatically scrubs all victim types
+  (e.g. ``delete_node`` cascade fires ``scrub_course_node`` on the
+  root and every descendant CourseNode AND ``scrub_authored_document``
+  on every descendant AuthoredDocument). Mirrors the existing
+  ``__cascades_soft_delete_to__`` and ``__cascade_fk_from__``
+  declarative patterns.
+
+* **Per-call** ``scrub_callable=`` parameter on
+  :meth:`CascadeDeleteService.soft_delete_with_cascade` overrides the
+  class-level dispatch for the **ROOT** entity only. Used for route-
+  specific scrubs that don't belong on the class itself (e.g.
+  ``Tenant→KD-β`` where the ``webhook_url`` scrub is policy attached
+  to the cascade rooted at Tenant, not a class attribute, so Tenant
+  has no class-level declaration). Descendants always use class-level
+  declarations even when the per-call parameter is set.
+
+The original Choice 1 docstring (commit (c)) asserted "single-callable-
+per-cascade — root only" based on a misread §1.3 audit summary; the
+audit actually lists ``title`` + ``description`` scrub fields on
+CourseNode and ``filename`` + ``source_url`` on AuthoredDocument,
+both of which appear as DESCENDANTS in the most common cascade
+(``delete_node``: CourseNode root → CourseNode subtree →
+AuthoredDocument descendants). Choice 1 has been corrected via the
+class-level dispatch path; the per-call override remains as the
+named-route escape hatch for KD-β.
+
+All scrub callables fire AFTER ``on_cancel_jobs`` and
+``on_invalidate_hashes`` hooks and BEFORE the ``deleted_at`` write —
+same flush boundary, so scrub mutations and the soft-delete mark
+land atomically. Observers cannot see a soft-deleted row that still
+carries the un-scrubbed values.
 """
 
 
@@ -123,6 +149,28 @@ async def scrub_tenant_webhook_url(tenant: Any) -> None:
     so the NULL and the soft-delete mark land in the same flush.
     """
     tenant.webhook_url = None
+
+
+async def scrub_course_node(node: Any) -> None:
+    """KD3 scrub: clear ``title`` + ``description`` on CourseNode soft-delete.
+
+    Per PHASE.md §1.3 audit, ``CourseNode`` carries two operationally-
+    meaningful fields whose values must not survive soft-delete:
+    ``title`` (NOT NULL string — replaced with the empty-string
+    sentinel ``""``) and ``description`` (nullable text — set to
+    ``None``). Empty-string for ``title`` follows the same rationale
+    as :func:`scrub_authored_document`'s ``source_url`` scrub: it is
+    DB-idiomatic for NOT NULL text columns, avoids a magic literal
+    that future readers must learn, and ``WHERE title = ''`` is the
+    canonical triage query for spotting scrubbed nodes.
+
+    Wired as the class-level ``__scrub_callable__`` on ``CourseNode``
+    (per models-fix-3); fires on the root and every CourseNode
+    descendant in the cascade victim set (e.g. course-level
+    ``delete_node`` cascading the entire tree).
+    """
+    node.title = ""
+    node.description = None
 
 
 async def scrub_authored_document(document: Any) -> None:
@@ -149,11 +197,14 @@ async def scrub_authored_document(document: Any) -> None:
     and a query for ``source_url = ''`` is the canonical way to
     spot scrubbed rows in triage.
 
-    Invoked by :class:`CascadeDeleteService` once on the root
-    ``AuthoredDocument`` instance before the ``deleted_at`` write,
-    so the scrub mutations and the soft-delete mark land in the
-    same flush — observers cannot see a soft-deleted row that
-    still carries the un-scrubbed values.
+    Wired as the class-level ``__scrub_callable__`` on
+    ``AuthoredDocument`` (per models-fix-3); fires on the root and
+    every AuthoredDocument descendant in the cascade victim set
+    (e.g. course-level ``delete_node`` cascading from CourseNode →
+    AuthoredDocument descendants in the subtree). Scrub mutations
+    and the soft-delete mark land in the same flush — observers
+    cannot see a soft-deleted row that still carries the un-scrubbed
+    values.
     """
     document.filename = None
     document.source_url = ""
@@ -296,17 +347,27 @@ class CascadeDeleteService:
         ``deleted_at`` write, in declared parameter order:
         ``on_cancel_jobs`` first (stop in-flight work), then
         ``on_invalidate_hashes`` (recompute upstream Merkle hashes per
-        vision §3 KD9 + KD12), then ``scrub_callable`` on the root
-        entity (vision §3 KD3 / KD-β field scrubbing — applies only
-        to the root, see :data:`ScrubCallable` for the rationale on
-        single-callable-per-cascade). A failure in any of the three
-        aborts the cascade cleanly: no rows are mutated and no flush
-        happens.
+        vision §3 KD9 + KD12), then per-victim scrub dispatch (vision
+        §3 KD3 / KD-β field scrubbing). A failure in any phase aborts
+        the cascade cleanly: no rows are mutated and no flush happens.
 
-        Scrub mutation and ``deleted_at`` write share the single
-        terminal flush so the scrub-NULL and the soft-delete mark land
+        Scrub dispatch (models-fix-3): for each collected victim, the
+        cascade engine resolves the scrub callable as follows. For the
+        ROOT entity, the per-call ``scrub_callable=`` parameter (when
+        supplied) takes precedence — used for route-specific scrubs
+        like ``Tenant→KD-β``. For all other victims (and the root when
+        no per-call override is given), the engine reads the class-
+        level ``__scrub_callable__`` declaration on ``type(victim)``
+        and invokes it on the victim. Classes without a declaration
+        contribute no scrub — silently no-op, supporting the Phase 1
+        deferral of DocumentSummary/DocumentSegment scrub callables
+        to Phase 2.x first writes. See :data:`ScrubCallable` for the
+        full dispatch semantics.
+
+        Scrub mutations and the ``deleted_at`` write share the single
+        terminal flush so the scrubs and the soft-delete mark land
         atomically — observers cannot see a soft-deleted row that
-        still carries the un-scrubbed value.
+        still carries un-scrubbed values.
 
         ``now`` overrides the timestamp applied to all rows
         (defaults to ``datetime.now(UTC)``); useful for deterministic
@@ -329,8 +390,22 @@ class CascadeDeleteService:
             # ``OnInvalidateHashes`` docstring for the trigger-trip
             # rationale.
             await on_invalidate_hashes(ids, set(ids))
-        if scrub_callable is not None:
-            await scrub_callable(entity)
+
+        # Per-victim scrub dispatch (models-fix-3).
+        # Per-call ``scrub_callable=`` overrides class-level for the
+        # ROOT entity only — used for route-specific scrubs that
+        # don't belong on the class itself (e.g. Tenant→KD-β where
+        # webhook_url scrub is policy attached to the cascade-rooted-
+        # at-Tenant route, not a class attribute). Descendants always
+        # use class-level ``__scrub_callable__`` declarations.
+        for victim in to_delete:
+            cb: ScrubCallable | None
+            if victim is entity and scrub_callable is not None:
+                cb = scrub_callable
+            else:
+                cb = getattr(type(victim), "__scrub_callable__", None)
+            if cb is not None:
+                await cb(victim)
 
         for row in to_delete:
             row.deleted_at = ts

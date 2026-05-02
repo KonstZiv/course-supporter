@@ -23,6 +23,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from course_supporter.storage.cascade import (
+    ScrubCallable,
+    scrub_authored_document,
+    scrub_course_node,
+)
+
 
 def _uuid7() -> uuid.UUID:
     """Generate a UUIDv7 (time-ordered) for use as default PK value."""
@@ -74,6 +80,25 @@ class SoftDeleteMixin:
     """Descendant model classes that cascade-delete from this entity.
 
     Populated per-entity in subsequent phase tasks.
+    """
+
+    __scrub_callable__: ClassVar[ScrubCallable | None] = None
+    """Per-class scrub callable for KD3 content-field clearing on cascade
+    soft-delete (models-fix-3 — corrects Choice 1's root-only assertion).
+
+    ``None`` (default) means this class contributes no scrub on cascade
+    — appropriate for identification-only models (``APIKey``, ``Job``,
+    ``Tenant``) and for entities whose scrub is wired Phase 2.x+
+    (``DocumentSummary``, ``DocumentSegment`` — pipeline does not run
+    in Phase 1, tables stay empty, cascade traversal through them is
+    no-op anyway). Concrete scrub callables for ``CourseNode`` and
+    ``AuthoredDocument`` are runtime-assigned at module bottom (same
+    pattern as ``__cascades_soft_delete_to__``).
+
+    :class:`CascadeDeleteService` reads this attribute via
+    ``getattr(type(victim), "__scrub_callable__", None)`` for every
+    victim in the cascade BFS — see :data:`ScrubCallable` for the
+    dispatch semantics including the per-call override path.
     """
 
 
@@ -1425,3 +1450,19 @@ CourseNode.__cascades_soft_delete_to__ = [CourseNode, AuthoredDocument]
 AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary]
 DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
 Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
+
+
+# ──────────────────────────────────────────────
+# Per-class scrub callables (vision §3 KD3 — models-fix-3)
+# ──────────────────────────────────────────────
+# CascadeDeleteService dispatches these per-victim during BFS so
+# every entity in the cascade clears its KD3 content fields before
+# the ``deleted_at`` write — see :data:`ScrubCallable` for the
+# dispatch semantics. Tenant deliberately has no class-level
+# declaration: KD-β ``webhook_url`` scrub is route-specific (per-
+# call ``scrub_callable=`` on the Tenant-rooted cascade) rather than
+# a class invariant. DocumentSummary + DocumentSegment scrub
+# callables deferred to Phase 2.x first pipeline writes — Phase 1
+# tables stay empty, cascade traversal through them is no-op.
+CourseNode.__scrub_callable__ = scrub_course_node
+AuthoredDocument.__scrub_callable__ = scrub_authored_document

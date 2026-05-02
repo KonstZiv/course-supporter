@@ -367,3 +367,100 @@ class TestGap3ExcludeIdsRegression:
         assert captured["exclude_ids"] == {root_id, child_id}
 
         await _cleanup_tenant(gap3_session_factory, [tenant_id])
+
+
+@pytest.mark.requires_db
+class TestCascadeScrubCompleteness:
+    """models-fix-3 integration: cascade soft-delete from a CourseNode
+    root scrubs ALL victim types declaring ``__scrub_callable__`` —
+    locks PHASE.md §3.2 step 24 (descendant CourseNode title scrubbed)
+    + step 25 (descendant AuthoredDocument filename + source_url
+    scrubbed) at the engine integration level.
+    """
+
+    async def test_multilevel_cascade_scrubs_all_victim_types(
+        self,
+        gap3_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Build CourseNode root → mid → leaf with an AuthoredDocument
+        attached under ``mid``. Cascade soft-delete from root via
+        ``CascadeDeleteService``. Assert every CourseNode has its
+        ``title`` scrubbed to ``""`` + ``description`` to ``NULL`` AND
+        the AuthoredDocument has ``filename`` to ``NULL`` + ``source_url``
+        to ``""``. All four rows soft-deleted.
+        """
+        async with gap3_session_factory() as session:
+            tenant = await _make_tenant(session, "scrub-completeness")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            mid = await _make_node(
+                session, tenant_id=tenant.id, parent_id=root.id, title="mid"
+            )
+            leaf = await _make_node(
+                session, tenant_id=tenant.id, parent_id=mid.id, title="leaf"
+            )
+            doc = AuthoredDocument(
+                id=uuid.uuid4(),
+                course_node_id=mid.id,
+                course_root_id=root.id,
+                source_type="text",
+                source_url="https://bucket/tenants/x/files/doc.md",
+                filename="doc.md",
+            )
+            mid.description = "mid-description"
+            doc.filename = "doc.md"
+            session.add(doc)
+            await session.flush()
+            await session.commit()
+            tenant_id = tenant.id
+            root_id, mid_id, leaf_id, doc_id = root.id, mid.id, leaf.id, doc.id
+
+        async with gap3_session_factory() as session:
+            cascade_service = CascadeDeleteService(session)
+            cascade_map = build_cascade_map(CourseNode)
+            content_hash_service = ContentHashService(session)
+
+            async def invalidate_hook(
+                ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
+            ) -> None:
+                await content_hash_service.invalidate_subtree(
+                    ids, exclude_ids=exclude_ids
+                )
+
+            root_attached = await session.get(CourseNode, root_id)
+            assert root_attached is not None
+            await cascade_service.soft_delete_with_cascade(
+                root_attached,
+                cascade_map,
+                on_invalidate_hashes=invalidate_hook,
+            )
+            await session.commit()
+
+        # All three CourseNodes scrubbed + soft-deleted.
+        async with gap3_session_factory() as session:
+            for node_id in (root_id, mid_id, leaf_id):
+                node = await session.get(CourseNode, node_id)
+                assert node is not None
+                assert node.deleted_at is not None
+                assert node.title == "", (
+                    f"CourseNode {node_id} title not scrubbed: {node.title!r}"
+                )
+                assert node.description is None, (
+                    f"CourseNode {node_id} description not scrubbed: "
+                    f"{node.description!r}"
+                )
+
+            # AuthoredDocument descendant scrubbed + soft-deleted.
+            persisted_doc = await session.get(AuthoredDocument, doc_id)
+            assert persisted_doc is not None
+            assert persisted_doc.deleted_at is not None
+            assert persisted_doc.filename is None, (
+                f"AuthoredDocument filename not scrubbed: {persisted_doc.filename!r}"
+            )
+            assert persisted_doc.source_url == "", (
+                f"AuthoredDocument source_url not scrubbed: "
+                f"{persisted_doc.source_url!r}"
+            )
+
+        await _cleanup_tenant(gap3_session_factory, [tenant_id])

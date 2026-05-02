@@ -213,11 +213,11 @@ class NodeListResponse(BaseModel):
     offset: int = Field(description="Number of items skipped (as requested).")
 
 
-# --- Material Entries ---
+# --- Authored Documents ---
 
 
 class AuthoredDocumentSummaryResponse(BaseModel):
-    """Compact material entry within the tree detail.
+    """Compact authored document within the tree detail.
 
     A lighter version of ``AuthoredDocumentResponse`` omitting
     ``job_id`` and ``updated_at`` to keep the tree
@@ -337,7 +337,7 @@ class AuthoredDocumentCreateRequest(BaseModel):
 
 
 class AuthoredDocumentUpdateRequest(BaseModel):
-    """Request body for PATCH /materials/{entry_id}.
+    """Request body for PATCH /documents/{document_id}.
 
     All fields are optional — only fields present in the request body
     are updated. Field presence is detected via ``model_fields_set``.
@@ -358,7 +358,7 @@ class AuthoredDocumentUpdateRequest(BaseModel):
 
 
 class AuthoredDocumentResponse(BaseModel):
-    """Response schema for a single material entry."""
+    """Response schema for a single authored document."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -404,7 +404,7 @@ class AuthoredDocumentResponse(BaseModel):
 
 
 class AuthoredDocumentCreateResponse(BaseModel):
-    """Response for material entry creation.
+    """Response for authored document creation.
 
     Extends the base response with ``job_id`` — the ID of the
     ingestion job that was auto-enqueued.
@@ -766,7 +766,7 @@ class EditableInitRequest(BaseModel):
 
 
 class PresignedUrlRequest(BaseModel):
-    """Request body for POST /nodes/{node_id}/materials/upload-url."""
+    """Request body for POST /nodes/{node_id}/documents/upload-url."""
 
     filename: str = Field(
         min_length=1,
@@ -789,7 +789,7 @@ class PresignedUrlRequest(BaseModel):
 
 
 class PresignedUrlResponse(BaseModel):
-    """Response for POST /nodes/{node_id}/materials/upload-url."""
+    """Response for POST /nodes/{node_id}/documents/upload-url."""
 
     upload_url: str = Field(description="Presigned PUT URL for direct S3 upload.")
     key: str = Field(description="S3 object key to use in confirm-upload.")
@@ -797,7 +797,7 @@ class PresignedUrlResponse(BaseModel):
 
 
 class ConfirmUploadRequest(BaseModel):
-    """Request body for POST /nodes/{node_id}/materials/confirm-upload."""
+    """Request body for POST /nodes/{node_id}/documents/confirm-upload."""
 
     key: str = Field(
         min_length=1,

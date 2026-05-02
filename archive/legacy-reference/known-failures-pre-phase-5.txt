@@ -6,8 +6,10 @@
 # NOT in this list constitutes a real regression introduced post-baseline.
 # Reference: POST-MERGE-NOTES amendment 17.
 #
-# Total: 21 failures
+# Total: 23 failures
 #
+tests/unit/test_api/test_generation_routes.py::TestGetSnapshot::test_200_existing
+tests/unit/test_api/test_generation_routes.py::TestGetSnapshot::test_200_with_recursive_tree
 tests/unit/test_fingerprint.py::TestBranchIndependence::test_different_branches_produce_different_hashes
 tests/unit/test_fingerprint.py::TestCourseFpDeepTree::test_course_fp_with_deep_nested_tree
 tests/unit/test_fingerprint.py::TestEdgeCases::test_empty_string_content

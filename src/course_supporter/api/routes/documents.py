@@ -1,21 +1,22 @@
-"""Material entry management API endpoints.
+"""Authored document management API endpoints.
 
-Provides CRUD operations for materials attached to tree nodes.
-Each material goes through a lifecycle (RAW → PENDING → READY/ERROR)
-tracked via the derived ``state`` property. Ingestion is auto-enqueued
-on creation and can be retried on failure.
+Provides CRUD operations for authored documents attached to course
+tree nodes. Each document goes through a lifecycle (RAW → PENDING →
+READY/ERROR) tracked via the derived ``state`` property. Ingestion
+is auto-enqueued on creation and can be retried on failure.
 
 Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
 ------
-- ``POST   /nodes/{nid}/materials``              — Add material to node
-- ``POST   /nodes/{nid}/materials/upload-url``    — Get presigned upload URL
-- ``POST   /nodes/{nid}/materials/confirm-upload``— Confirm presigned upload
-- ``GET    /nodes/{nid}/materials``               — List materials for node
-- ``GET    /materials/{mid}``                     — Get single material
-- ``DELETE /materials/{mid}``                     — Delete material
-- ``POST   /materials/{mid}/retry``               — Retry failed ingestion
+- ``POST   /nodes/{nid}/documents``                — Add document to node
+- ``POST   /nodes/{nid}/documents/upload-url``     — Get presigned upload URL
+- ``POST   /nodes/{nid}/documents/confirm-upload`` — Confirm presigned upload
+- ``GET    /nodes/{nid}/documents``                — List documents for node
+- ``GET    /documents/{did}``                      — Get single document
+- ``PATCH  /documents/{did}``                      — Update document
+- ``DELETE /documents/{did}``                      — Delete document (KD3 cascade)
+- ``POST   /documents/{did}/retry``                — Retry failed ingestion
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from typing import Annotated
 
 import structlog
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
@@ -48,16 +49,18 @@ from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
+from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
+from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 
 logger = structlog.get_logger()
 
-router = APIRouter(tags=["materials"])
+router = APIRouter(tags=["documents"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
@@ -81,28 +84,28 @@ async def _require_node_for_tenant(
     return node
 
 
-async def _require_material_for_tenant(
-    entry_repo: AuthoredDocumentRepository,
+async def _require_document_for_tenant(
+    document_repo: AuthoredDocumentRepository,
     node_repo: CourseNodeRepository,
-    entry_id: uuid.UUID,
+    document_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> AuthoredDocument:
-    """Verify the material exists and belongs to the tenant.
+    """Verify the document exists and belongs to the tenant.
 
     Checks AuthoredDocument → CourseNode → tenant_id chain.
     """
-    entry = await entry_repo.get_by_id(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Material not found")
+    document = await document_repo.get_by_id(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
 
-    node = await node_repo.get_by_id(entry.course_node_id)
+    node = await node_repo.get_by_id(document.course_node_id)
     if node is None or node.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Material not found")
-    return entry
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
 
 
-@router.post("/nodes/{node_id}/materials", status_code=201)
-async def create_material(
+@router.post("/nodes/{node_id}/documents", status_code=201)
+async def create_document(
     node_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
@@ -110,7 +113,7 @@ async def create_material(
     arq: ArqDep,
     source_type: Annotated[
         SourceType,
-        Form(description="Material type: video, presentation, text, or web."),
+        Form(description="Document type: video, presentation, text, or web."),
     ],
     material_role: Annotated[
         MaterialRole,
@@ -123,15 +126,15 @@ async def create_material(
         AssignmentType | None,
         Form(
             description=(
-                "Mark the material as a concrete task of the given taxonomy "
+                "Mark the document as a concrete task of the given taxonomy "
                 "tier (test, short_task, task, project). Omit for regular "
-                "materials."
+                "documents."
             ),
         ),
     ] = None,
     source_url: Annotated[
         str | None,
-        Form(description="URL to the source material. Required if no file."),
+        Form(description="URL to the source document. Required if no file."),
     ] = None,
     file: Annotated[
         UploadFile | None,
@@ -159,12 +162,12 @@ async def create_material(
         ),
     ] = None,
 ) -> AuthoredDocumentCreateResponse:
-    """Add a new material to a tree node.
+    """Add a new authored document to a tree node.
 
     Accepts either a URL or a file upload. If a file is provided,
     it is uploaded to S3/MinIO and the resulting URL is stored.
 
-    Creates a ``AuthoredDocument`` and auto-enqueues an ingestion job
+    Creates an ``AuthoredDocument`` and auto-enqueues an ingestion job
     via ARQ. The ``job_id`` in the response can be used to track
     processing status via ``GET /api/v1/jobs/{job_id}``.
     """
@@ -213,8 +216,8 @@ async def create_material(
     elif source_url is not None:
         actual_url = source_url
 
-    entry_repo = AuthoredDocumentRepository(session)
-    entry = await entry_repo.create(
+    document_repo = AuthoredDocumentRepository(session)
+    document = await document_repo.create(
         node_id=node_id,
         source_type=source_type,
         source_url=actual_url,
@@ -229,20 +232,20 @@ async def create_material(
         session=session,
         tenant_id=tenant.tenant_id,
         node_id=node_id,
-        material_id=entry.id,
+        material_id=document.id,
         source_type=source_type,
         source_url=actual_url,
     )
     await session.commit()
 
     logger.info(
-        "material_entry_created",
-        entry_id=str(entry.id),
+        "document_created",
+        document_id=str(document.id),
         node_id=str(node_id),
         job_id=str(job.id),
         task_type=task_type,
     )
-    response = AuthoredDocumentCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
 
     warning = check_platform(source_type, actual_url)
@@ -255,7 +258,7 @@ async def create_material(
 PRESIGNED_URL_EXPIRY = 900  # 15 minutes
 
 
-@router.post("/nodes/{node_id}/materials/upload-url")
+@router.post("/nodes/{node_id}/documents/upload-url")
 async def get_upload_url(
     node_id: uuid.UUID,
     body: PresignedUrlRequest,
@@ -266,7 +269,7 @@ async def get_upload_url(
     """Generate a presigned URL for direct S3 upload.
 
     The client should PUT the file content to the returned URL,
-    then call ``POST /nodes/{nid}/materials/confirm-upload`` with
+    then call ``POST /nodes/{nid}/documents/confirm-upload`` with
     the returned key.
     """
     if body.source_type == SourceType.WEB:
@@ -303,7 +306,7 @@ async def get_upload_url(
     )
 
 
-@router.post("/nodes/{node_id}/materials/confirm-upload", status_code=201)
+@router.post("/nodes/{node_id}/documents/confirm-upload", status_code=201)
 async def confirm_upload(
     node_id: uuid.UUID,
     body: ConfirmUploadRequest,
@@ -339,8 +342,8 @@ async def confirm_upload(
     actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
     s3_url = f"{s3._endpoint_url}/{s3._bucket}/{body.key}"
 
-    entry_repo = AuthoredDocumentRepository(session)
-    entry = await entry_repo.create(
+    document_repo = AuthoredDocumentRepository(session)
+    document = await document_repo.create(
         node_id=node_id,
         source_type=body.source_type,
         source_url=s3_url,
@@ -355,7 +358,7 @@ async def confirm_upload(
         session=session,
         tenant_id=tenant.tenant_id,
         node_id=node_id,
-        material_id=entry.id,
+        material_id=document.id,
         source_type=body.source_type,
         source_url=s3_url,
     )
@@ -363,68 +366,68 @@ async def confirm_upload(
 
     logger.info(
         "presigned_upload_confirmed",
-        entry_id=str(entry.id),
+        document_id=str(document.id),
         node_id=str(node_id),
         key=body.key,
         job_id=str(job.id),
     )
-    response = AuthoredDocumentCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
     return response
 
 
-@router.get("/nodes/{node_id}/materials")
-async def list_materials(
+@router.get("/nodes/{node_id}/documents")
+async def list_documents(
     node_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
 ) -> list[AuthoredDocumentResponse]:
-    """List all materials attached to a tree node.
+    """List all authored documents attached to a tree node.
 
-    Returns materials ordered by their position (``order`` field).
+    Returns documents ordered by their position (``order`` field).
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
     repo = AuthoredDocumentRepository(session)
-    entries = await repo.get_for_node(node_id)
-    return [AuthoredDocumentResponse.model_validate(e) for e in entries]
+    documents = await repo.get_for_node(node_id)
+    return [AuthoredDocumentResponse.model_validate(d) for d in documents]
 
 
-@router.get("/materials/{entry_id}")
-async def get_material(
-    entry_id: uuid.UUID,
+@router.get("/documents/{document_id}")
+async def get_document(
+    document_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
 ) -> AuthoredDocumentResponse:
-    """Get a single material entry by ID.
+    """Get a single authored document by ID.
 
     Verified through the node → tenant chain.
     """
-    entry_repo = AuthoredDocumentRepository(session)
+    document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
-    entry = await _require_material_for_tenant(
-        entry_repo, node_repo, entry_id, tenant.tenant_id
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
     )
-    return AuthoredDocumentResponse.model_validate(entry)
+    return AuthoredDocumentResponse.model_validate(document)
 
 
-@router.patch("/materials/{entry_id}")
-async def update_material(
-    entry_id: uuid.UUID,
+@router.patch("/documents/{document_id}")
+async def update_document(
+    document_id: uuid.UUID,
     body: AuthoredDocumentUpdateRequest,
     tenant: PrepDep,
     session: SessionDep,
 ) -> AuthoredDocumentResponse:
-    """Update material metadata (material_role and/or task_type).
+    """Update document metadata (material_role and/or task_type).
 
     Only fields explicitly sent in the request body are updated.
     Pass ``task_type: null`` to clear the task flag; omit the field
     to keep the current value.
     """
-    entry_repo = AuthoredDocumentRepository(session)
+    document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
-    entry = await _require_material_for_tenant(
-        entry_repo, node_repo, entry_id, tenant.tenant_id
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
     )
 
     fields_set = body.model_fields_set
@@ -435,109 +438,179 @@ async def update_material(
         )
 
     if "material_role" in fields_set and body.material_role is not None:
-        entry = await entry_repo.update_material_role(
-            entry, material_role=body.material_role
+        document = await document_repo.update_material_role(
+            document, material_role=body.material_role
         )
 
     if "task_type" in fields_set:
-        entry = await entry_repo.update_task_type(entry, task_type=body.task_type)
+        document = await document_repo.update_task_type(
+            document, task_type=body.task_type
+        )
 
     await session.commit()
 
     logger.info(
-        "material_updated",
-        entry_id=str(entry_id),
+        "document_updated",
+        document_id=str(document_id),
         material_role=body.material_role,
         task_type=body.task_type,
         fields=list(fields_set),
     )
-    return AuthoredDocumentResponse.model_validate(entry)
+    return AuthoredDocumentResponse.model_validate(document)
 
 
-@router.delete("/materials/{entry_id}", status_code=204)
-async def delete_material(
-    entry_id: uuid.UUID,
+@router.delete("/documents/{document_id}", status_code=204)
+async def delete_document(
+    document_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
+    arq: ArqDep,
 ) -> None:
-    """Delete a material entry and its S3 file if applicable.
+    """KD3 soft-delete the document and any descendants (vision §3 KD3).
 
-    Removes the material from DB and cleans up the S3 object
-    if the source_url points to our bucket.
+    Cascade flow per Phase 1 KD3 adoption — mirrors commit (k)
+    ``delete_node`` shape with the cascade rooted at AuthoredDocument
+    instead of CourseNode:
+
+    1. Verify the document exists and belongs to the caller's tenant
+       (404 otherwise — same shape as the rest of the route).
+    2. Extract the S3 key from ``document.source_url`` BEFORE cascade
+       fires. Order matters: the cascade engine dispatches
+       ``scrub_authored_document`` which sets ``source_url = ''`` —
+       collecting the key after cascade would miss it.
+    3. Issue ``CascadeDeleteService.soft_delete_with_cascade`` rooted
+       at the document. The engine drives both the BFS soft-delete and
+       per-victim scrub dispatch via class-level ``__scrub_callable__``
+       (AuthoredDocument → ``scrub_authored_document`` clearing
+       ``filename`` + ``source_url``). DocumentSummary + DocumentSegment
+       descendants are no-op in Phase 1 — Amendment 16 defers their
+       scrub callables to Phase 2.x and pipeline does not write to
+       these tables yet, so cascade traversal through them yields
+       zero victims.
+    4. Hand off to ``enqueue_s3_cleanup`` — helper persists a
+       ``s3_cleanup`` Job row, commits cascade + Job atomically
+       (QQ5 boundary), then dispatches the ARQ task post-commit and
+       records the resolved ``arq_job_id``. Empty key list (external
+       URL or already-scrubbed source_url) short-circuits — no Job
+       row, no ARQ enqueue.
     """
-    entry_repo = AuthoredDocumentRepository(session)
+    document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
-    entry = await _require_material_for_tenant(
-        entry_repo, node_repo, entry_id, tenant.tenant_id
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
     )
 
-    # Clean up S3 file if source_url is an S3 path
-    s3_key = s3.extract_key(entry.source_url)
+    # (2) Capture the S3 key before cascade scrub blanks ``source_url``.
+    # ``extract_key`` returns ``None`` for external URLs that don't
+    # belong to our bucket — those rows have no S3 cleanup work.
+    course_node_id = document.course_node_id
+    file_keys: list[str] = []
+    s3_key = s3.extract_key(document.source_url)
     if s3_key is not None:
-        await s3.delete_object(s3_key)
+        file_keys.append(s3_key)
 
-    await entry_repo.delete(entry.id)
-    await session.commit()
+    # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
+    # dispatch (models-fix-3) clears KD3 fields on the AuthoredDocument
+    # in the same flush as the ``deleted_at`` write. Phase 1 cascade
+    # map for AuthoredDocument resolves to [DocumentSummary,
+    # DocumentSegment] — both empty in Phase 1 per Amendment 16.
+    cascade_service = CascadeDeleteService(session)
+    cascade_map = build_cascade_map(AuthoredDocument)
+    await cascade_service.soft_delete_with_cascade(document, cascade_map)
+
+    # (4) Persist the s3_cleanup Job + dispatch ARQ task. Helper owns
+    # the QQ5 commit boundary; we pass ``course_node_id`` so tenant
+    # scope on the Job row is recoverable via the
+    # ``Job.course_node_id → CourseNode.tenant_id`` join even after
+    # the cascade scrub clears the document's content fields.
+    s3_files_cleaned = len(file_keys)
+    if file_keys:
+        await enqueue_s3_cleanup(
+            session=session,
+            arq=arq,
+            file_keys=file_keys,
+            tenant_id=tenant.tenant_id,
+            course_node_id=course_node_id,
+        )
+    else:
+        # No S3 key (external URL or already scrubbed) — still need to
+        # commit the cascade soft-delete since the helper would have
+        # done it for us otherwise.
+        await session.commit()
 
     logger.info(
-        "material_entry_deleted",
-        entry_id=str(entry_id),
-        s3_cleaned=s3_key is not None,
+        "document_deleted",
+        document_id=str(document_id),
+        course_node_id=str(course_node_id),
+        s3_files_cleaned=s3_files_cleaned,
     )
 
 
-@router.post("/materials/{entry_id}/retry")
-async def retry_material(
-    entry_id: uuid.UUID,
+@router.post("/documents/{document_id}/retry")
+async def retry_document(
+    document_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
     arq: ArqDep,
     force: bool = False,
 ) -> AuthoredDocumentCreateResponse:
-    """Retry ingestion for a material.
+    """Retry ingestion for a document.
 
-    By default only materials in ``error`` state can be retried.
+    By default only documents in ``error`` state can be retried.
     Pass ``?force=true`` to re-ingest from any state (e.g. to
-    reprocess a ``ready`` material after pipeline improvements).
-    Returns 409 if the material is not retryable without ``force``.
+    reprocess a ``ready`` document after pipeline improvements).
+    Returns 409 if the document is not retryable without ``force``.
+    Returns 410 Gone (vision §6 QQ6) if the document is soft-deleted —
+    retry on a soft-deleted target is permanently unavailable, never
+    transient.
     """
-    entry_repo = AuthoredDocumentRepository(session)
+    document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
-    entry = await _require_material_for_tenant(
-        entry_repo, node_repo, entry_id, tenant.tenant_id
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
     )
 
-    if not force and entry.state != "error":
+    # QQ6: HTTP 410 Gone on retry of soft-deleted target. Fires BEFORE
+    # the state check so a soft-deleted ``error``-state row also yields
+    # 410, not 200 (the row's been logically removed; re-ingestion is
+    # not a recovery path).
+    if document.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Document has been deleted; retry is no longer available.",
+        )
+
+    if not force and document.state != "error":
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Cannot retry: material is in '{entry.state}' state, "
+                f"Cannot retry: document is in '{document.state}' state, "
                 f"expected 'error'. Use ?force=true to re-ingest."
             ),
         )
 
     # Clear error and re-enqueue
-    entry.error_message = None
+    document.error_message = None
     await session.flush()
 
     job = await enqueue_ingestion(
         redis=arq,
         session=session,
         tenant_id=tenant.tenant_id,
-        node_id=entry.course_node_id,
-        material_id=entry.id,
-        source_type=entry.source_type,
-        source_url=entry.source_url,
+        node_id=document.course_node_id,
+        material_id=document.id,
+        source_type=document.source_type,
+        source_url=document.source_url,
     )
-    # enqueue_ingestion already flipped the entry to PENDING synchronously.
+    # enqueue_ingestion already flipped the document to PENDING synchronously.
     await session.commit()
 
     logger.info(
-        "material_entry_retry",
-        entry_id=str(entry_id),
+        "document_retry",
+        document_id=str(document_id),
         job_id=str(job.id),
     )
-    response = AuthoredDocumentCreateResponse.model_validate(entry)
+    response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
     return response

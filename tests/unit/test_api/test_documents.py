@@ -1,4 +1,4 @@
-"""Tests for material upload validation edge cases.
+"""Tests for document upload validation edge cases.
 
 Covers file extension validation per source_type that is NOT duplicated
 in ``test_authored_documents.py`` (which tests CRUD + tenant isolation).
@@ -29,7 +29,7 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-ENQUEUE_FUNC = "course_supporter.api.routes.materials.enqueue_ingestion"
+ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
 
 
 def _mock_node(
@@ -125,15 +125,15 @@ async def client(
     app.dependency_overrides.clear()
 
 
-class TestMaterialUploadValidation:
-    """File extension validation edge cases for POST /nodes/{nid}/materials."""
+class TestDocumentUploadValidation:
+    """File extension validation edge cases for POST /nodes/{nid}/documents."""
 
     async def test_video_rejects_pdf_file(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials rejects .pdf file for source_type 'video'."""
+        """POST /documents rejects .pdf file for source_type 'video'."""
         response = await client.post(
-            f"/api/v1/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/documents",
             data={"source_type": "video"},
             files={
                 "file": (
@@ -150,9 +150,9 @@ class TestMaterialUploadValidation:
     async def test_presentation_rejects_mp4_file(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials rejects .mp4 file for source_type 'presentation'."""
+        """POST /documents rejects .mp4 file for source_type 'presentation'."""
         response = await client.post(
-            f"/api/v1/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/documents",
             data={"source_type": "presentation"},
             files={
                 "file": (
@@ -168,7 +168,7 @@ class TestMaterialUploadValidation:
     async def test_text_accepts_docx(
         self, client: AsyncClient, node_id: uuid.UUID, mock_s3: AsyncMock
     ) -> None:
-        """POST /materials accepts .docx for source_type 'text'."""
+        """POST /documents accepts .docx for source_type 'text'."""
         entry = _mock_entry(
             node_id=node_id,
             source_type="text",
@@ -186,7 +186,7 @@ class TestMaterialUploadValidation:
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
-                f"/api/v1/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/documents",
                 data={"source_type": "text"},
                 files={
                     "file": (
@@ -201,9 +201,9 @@ class TestMaterialUploadValidation:
     async def test_file_without_extension_rejected(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials rejects file without extension."""
+        """POST /documents rejects file without extension."""
         response = await client.post(
-            f"/api/v1/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/documents",
             data={"source_type": "video"},
             files={
                 "file": (
@@ -215,10 +215,10 @@ class TestMaterialUploadValidation:
         )
         assert response.status_code == 422
 
-    async def test_create_material_returns_state(
+    async def test_create_document_returns_state(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """Created material includes state in response."""
+        """Created document includes state in response."""
         entry = _mock_entry(node_id=node_id, state="raw")
         job = _mock_job()
         with (
@@ -231,7 +231,7 @@ class TestMaterialUploadValidation:
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
-                f"/api/v1/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/documents",
                 data={
                     "source_type": "web",
                     "source_url": "https://example.com",
@@ -240,10 +240,10 @@ class TestMaterialUploadValidation:
         assert response.status_code == 201
         assert response.json()["state"] == "raw"
 
-    async def test_create_material_accepts_task_type(
+    async def test_create_document_accepts_task_type(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials forwards task_type to the repository."""
+        """POST /documents forwards task_type to the repository."""
         entry = _mock_entry(
             node_id=node_id,
             source_type="text",
@@ -261,7 +261,7 @@ class TestMaterialUploadValidation:
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             response = await client.post(
-                f"/api/v1/nodes/{node_id}/materials",
+                f"/api/v1/nodes/{node_id}/documents",
                 data={
                     "source_type": "text",
                     "source_url": "https://example.com/hw.md",
@@ -274,12 +274,12 @@ class TestMaterialUploadValidation:
         call_kwargs = create_mock.call_args.kwargs
         assert call_kwargs["task_type"] == "short_task"
 
-    async def test_create_material_rejects_invalid_task_type(
+    async def test_create_document_rejects_invalid_task_type(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /materials rejects task_type outside the taxonomy."""
+        """POST /documents rejects task_type outside the taxonomy."""
         response = await client.post(
-            f"/api/v1/nodes/{node_id}/materials",
+            f"/api/v1/nodes/{node_id}/documents",
             data={
                 "source_type": "text",
                 "source_url": "https://example.com/x.md",
@@ -289,7 +289,7 @@ class TestMaterialUploadValidation:
         assert response.status_code == 422
 
 
-# -- POST /nodes/{nid}/materials/upload-url --
+# -- POST /nodes/{nid}/documents/upload-url --
 
 
 _S3_PRESIGNED = "https://s3.example.com/bucket/key?sig=abc"
@@ -309,7 +309,7 @@ class TestGetUploadUrl:
             return_value=_mock_node(node_id=node_id),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node_id}/materials/upload-url",
+                f"/api/v1/nodes/{node_id}/documents/upload-url",
                 json={
                     "filename": "slides.pdf",
                     "content_type": "application/pdf",
@@ -330,7 +330,7 @@ class TestGetUploadUrl:
     ) -> None:
         """source_type 'web' is rejected."""
         resp = await client.post(
-            f"/api/v1/nodes/{node_id}/materials/upload-url",
+            f"/api/v1/nodes/{node_id}/documents/upload-url",
             json={
                 "filename": "page.html",
                 "content_type": "text/html",
@@ -344,7 +344,7 @@ class TestGetUploadUrl:
     ) -> None:
         """Wrong extension for source_type is rejected."""
         resp = await client.post(
-            f"/api/v1/nodes/{node_id}/materials/upload-url",
+            f"/api/v1/nodes/{node_id}/documents/upload-url",
             json={
                 "filename": "video.mp4",
                 "content_type": "video/mp4",
@@ -358,7 +358,7 @@ class TestGetUploadUrl:
         """Non-existent node returns 404."""
         with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.post(
-                f"/api/v1/nodes/{uuid.uuid4()}/materials/upload-url",
+                f"/api/v1/nodes/{uuid.uuid4()}/documents/upload-url",
                 json={
                     "filename": "doc.md",
                     "content_type": "text/markdown",
@@ -368,7 +368,7 @@ class TestGetUploadUrl:
         assert resp.status_code == 404
 
 
-# -- POST /nodes/{nid}/materials/confirm-upload --
+# -- POST /nodes/{nid}/documents/confirm-upload --
 
 
 class TestConfirmUpload:
@@ -398,7 +398,7 @@ class TestConfirmUpload:
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node_id}/materials/confirm-upload",
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
                 json={
                     "key": key,
                     "source_type": "presentation",
@@ -420,7 +420,7 @@ class TestConfirmUpload:
             return_value=_mock_node(node_id=node_id),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node_id}/materials/confirm-upload",
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
                 json={
                     "key": "tenants/WRONG/nodes/x/file.pdf",
                     "source_type": "presentation",
@@ -444,7 +444,7 @@ class TestConfirmUpload:
             return_value=_mock_node(node_id=node_id),
         ):
             resp = await client.post(
-                f"/api/v1/nodes/{node_id}/materials/confirm-upload",
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
                 json={
                     "key": key,
                     "source_type": "presentation",

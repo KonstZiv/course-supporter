@@ -308,6 +308,14 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         },
     )
 
+    # Cascade engine FK disambiguation. AuthoredDocument carries two
+    # FKs to ``course_nodes``: ``course_node_id`` (parent FK — the
+    # tree edge) and ``course_root_id`` (KD-delta denormalized root
+    # FK). Without this declaration ``cascade._resolve_cascade_columns``
+    # cannot pick which to use when CourseNode → AuthoredDocument
+    # cascades fire. Parent FK is the cascade-relevant one.
+    __cascade_fk_from__: ClassVar[dict[str, str]] = {"CourseNode": "course_node_id"}
+
     def __repr__(self) -> str:
         return (
             f"<AuthoredDocument(id={self.id}, "

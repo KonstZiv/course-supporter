@@ -146,12 +146,25 @@ def _resolve_cascade_columns(parent_cls: type, child_cls: type) -> tuple[Any, An
     inspected at most once per process. The cache key is the pair of
     classes themselves (both hashable).
 
+    **Multi-FK disambiguation.** When ``child_cls`` has more than one
+    FK to ``parent_cls``'s table (e.g. :class:`AuthoredDocument` carries
+    both ``course_node_id`` parent FK and ``course_root_id`` denormalized
+    root FK to ``course_nodes`` per KD-δ), the entity must declare
+    ``__cascade_fk_from__: ClassVar[dict[str, str]]`` on the child class
+    mapping ``parent_cls.__name__`` to the FK-column name to use for
+    cascade resolution. String keys (rather than type objects) avoid
+    forward-reference issues at module-load time and match SQLAlchemy's
+    own ``relationship("ClassName", ...)`` convention. Without the
+    declaration the call raises ``ValueError`` with a remediation hint
+    naming the exact entry to add.
+
     Raises:
         ValueError: when ``child_cls`` has no foreign key to
-            ``parent_cls`` (cascade misconfigured) or when it has more
-            than one (ambiguous cascade — must be made explicit by the
-            caller, e.g. by splitting the descendant or by omitting it
-            from the cascade map).
+            ``parent_cls`` (cascade misconfigured), or when it has
+            more than one and no ``__cascade_fk_from__`` entry is
+            declared (the message names the entry to add), or when
+            ``__cascade_fk_from__`` declares a column name that does
+            not match any of the FK columns found.
     """
     parent_mapper = cast(Mapper[Any], inspect(parent_cls))
     child_mapper = cast(Mapper[Any], inspect(child_cls))
@@ -168,10 +181,26 @@ def _resolve_cascade_columns(parent_cls: type, child_cls: type) -> tuple[Any, An
             f"No foreign key from {child_cls.__name__} to {parent_cls.__name__}"
         )
     if len(fk_cols) > 1:
-        raise ValueError(
-            f"Ambiguous foreign keys from {child_cls.__name__} "
-            f"to {parent_cls.__name__}: {[c.name for c in fk_cols]}"
-        )
+        disambig = getattr(child_cls, "__cascade_fk_from__", {})
+        parent_name = parent_cls.__name__
+        if parent_name in disambig:
+            target_name = disambig[parent_name]
+            matching = [c for c in fk_cols if c.name == target_name]
+            if not matching:
+                raise ValueError(
+                    f"__cascade_fk_from__[{parent_name!r}] = {target_name!r} "
+                    f"on {child_cls.__name__} does not match any FK column. "
+                    f"Available FKs to {parent_name}: "
+                    f"{[c.name for c in fk_cols]}."
+                )
+            fk_cols = matching
+        else:
+            raise ValueError(
+                f"Ambiguous foreign keys from {child_cls.__name__} "
+                f"to {parent_cls.__name__}: {[c.name for c in fk_cols]}. "
+                f'Add {{"{parent_cls.__name__}": "<fk_col_name>"}} entry '
+                f"to {child_cls.__name__}.__cascade_fk_from__."
+            )
 
     fk_col = fk_cols[0]
     deleted_at_col = child_mapper.local_table.c.deleted_at

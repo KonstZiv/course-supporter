@@ -392,6 +392,81 @@ class TestRealFKResolution:
         assert first is second  # `is` proves cache hit, not just equality
 
 
+class TestMultiFKDisambiguation:
+    """models-fix-2: multi-FK child entities use ``__cascade_fk_from__``
+    to disambiguate which FK the cascade engine follows.
+
+    AuthoredDocument carries two FKs to ``course_nodes``
+    (``course_node_id`` parent + ``course_root_id`` KD-delta denormalized
+    root); a CourseNode → AuthoredDocument cascade must follow the
+    parent edge, not the root denormalization. Without an explicit
+    declaration the engine raises with a remediation hint naming the
+    exact ``__cascade_fk_from__`` entry to add.
+    """
+
+    def setup_method(self) -> None:
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+
+        _resolve_cascade_columns.cache_clear()
+
+    def test_single_fk_baseline_unaffected(self) -> None:
+        """Baseline: a child with a single FK never consults the
+        disambiguation table — the disambig branch only fires on
+        ``len(fk_cols) > 1``. Locks the pre-existing single-FK
+        behaviour against accidental regression as the disambig
+        path is added.
+        """
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import (
+            AuthoredDocument,
+            DocumentSummary,
+        )
+
+        fk_col, deleted_at_col = _resolve_cascade_columns(
+            AuthoredDocument, DocumentSummary
+        )
+        assert fk_col.name == "authored_document_id"
+        assert deleted_at_col.table.name == "document_summaries"
+
+    def test_multi_fk_with_declaration_picks_named_column(self) -> None:
+        """Positive case: ``AuthoredDocument.__cascade_fk_from__`` declares
+        ``{"CourseNode": "course_node_id"}`` so the cascade engine picks
+        the parent FK over ``course_root_id``.
+        """
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import AuthoredDocument, CourseNode
+
+        fk_col, deleted_at_col = _resolve_cascade_columns(CourseNode, AuthoredDocument)
+        assert fk_col.name == "course_node_id"
+        assert deleted_at_col.table.name == "authored_documents"
+
+    def test_multi_fk_without_declaration_raises_with_remediation_hint(
+        self,
+    ) -> None:
+        """Negative case: ``HomeworkSubmission`` has two FKs to
+        ``course_nodes`` (``course_node_id`` + ``node_id``) but no
+        ``__cascade_fk_from__`` declaration. The engine raises with a
+        diagnostic hint naming the exact remediation entry — saves
+        bisect time for future Phase 3+/4+ multi-FK additions.
+        """
+        import re
+
+        from course_supporter.storage.cascade import _resolve_cascade_columns
+        from course_supporter.storage.orm import CourseNode, HomeworkSubmission
+
+        with pytest.raises(ValueError) as excinfo:
+            _resolve_cascade_columns(CourseNode, HomeworkSubmission)
+        msg = str(excinfo.value)
+        # Refinement 3 contract: the message names the exact
+        # remediation pattern so the operator does not have to grep
+        # for the convention.
+        assert re.search(r"Add .* to .*\.__cascade_fk_from__\.", msg), (
+            f"diagnostic hint missing in error: {msg!r}"
+        )
+        assert "HomeworkSubmission" in msg
+        assert "CourseNode" in msg
+
+
 # ── Batched fetch wire-format ─────────────────────────────────────
 
 

@@ -371,17 +371,23 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
-    async def delete(self, entry_id: uuid.UUID) -> None:
-        """Delete an entry and invalidate parent node fingerprints.
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        node_id = entry.course_node_id
-        await self._session.delete(entry)
-        await self._session.flush()
-        await self._invalidate_node_chain(node_id)
+    # ``delete()`` removed in Phase 1 sub-area ``kd3`` commit (m) — the
+    # last remaining caller (``routes/storage.py::delete_file``) was
+    # rewritten to use :class:`CascadeDeleteService.soft_delete_with_cascade`
+    # so the KD3 contract (soft-delete + scrub) and QQ5 contract
+    # (DB → commit → ARQ enqueue via ``enqueue_s3_cleanup``) hold uniformly
+    # across all 3 KD3-violating handlers (delete_node + delete_document +
+    # delete_file). The legacy hard-delete path is now structurally
+    # unreachable from the public API surface; cascade-driven soft-delete
+    # is the canonical replacement.
+    #
+    # The ``_invalidate_node_chain`` and ``_require`` private helpers
+    # below are PRESERVED — they remain active callers from ``create()``
+    # (initial fingerprint propagation) and ``update_source()`` (raw_hash
+    # invalidation). Phase 5 sweep migrates ``_invalidate_node_chain``
+    # off legacy ``FingerprintService.invalidate_up`` onto
+    # :class:`ContentHashService.invalidate_subtree` alongside the
+    # FingerprintService module deletion.
 
     # ── Private helpers ──
 

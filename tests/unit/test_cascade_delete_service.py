@@ -901,3 +901,166 @@ class TestScrubTenantWebhookUrl:
         tenant.webhook_url = None
         await scrub_tenant_webhook_url(tenant)
         assert tenant.webhook_url is None
+
+
+class TestKD3MarkerFormat:
+    """KD3 author-content scrub marker contract per vision §3 KD3.
+
+    Locks: every author-content scrub callable (``scrub_course_node`` +
+    ``scrub_authored_document``) writes the formatted Ukrainian-language
+    marker ``'інформація видалена автором DD-MM-YYYY HH:MM:SS'`` to
+    every author-content column it touches. Tested at the callable
+    level (mock-isolated entity) so the assertions don't depend on the
+    cascade engine, ORM, or the column nullability — pure scrub-output
+    contract.
+
+    Amendment 23 (vision-implementer contract gap recorded) +
+    Amendment 24 (hotfix-4 disposition: marker overrides nullability).
+    """
+
+    _MARKER_REGEX: ClassVar[str] = (
+        r"^інформація видалена автором "
+        r"(\d{2})-(\d{2})-(\d{4}) "
+        r"(\d{2}):(\d{2}):(\d{2})$"
+    )
+    _TIMESTAMP_TOLERANCE_SECONDS: ClassVar[int] = 5
+
+    @staticmethod
+    def _parse_marker_timestamp(marker: str) -> datetime:
+        """Parse the embedded timestamp from a marker string."""
+        import re
+
+        match = re.match(TestKD3MarkerFormat._MARKER_REGEX, marker)
+        assert match is not None, f"Marker did not match contract: {marker!r}"
+        day, month, year, hour, minute, second = match.groups()
+        return datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            tzinfo=UTC,
+        )
+
+    def _assert_marker_recent(self, marker: str) -> None:
+        """Assert the marker timestamp is within tolerance of now."""
+        parsed = self._parse_marker_timestamp(marker)
+        now = datetime.now(UTC)
+        drift = abs((now - parsed).total_seconds())
+        assert drift <= self._TIMESTAMP_TOLERANCE_SECONDS, (
+            f"Marker timestamp drift {drift}s exceeds tolerance "
+            f"{self._TIMESTAMP_TOLERANCE_SECONDS}s "
+            f"(parsed={parsed}, now={now})"
+        )
+
+    async def test_format_helper_emits_kd3_marker_with_default_now(self) -> None:
+        """``_format_deleted_marker()`` with no argument computes its
+        own ``datetime.now(UTC)`` and returns the contract format.
+        """
+        from course_supporter.storage.cascade import _format_deleted_marker
+
+        marker = _format_deleted_marker()
+        self._assert_marker_recent(marker)
+
+    async def test_format_helper_honors_provided_now(self) -> None:
+        """``_format_deleted_marker(now=...)`` uses the supplied
+        timestamp verbatim — pinned timestamp for deterministic tests.
+        """
+        from course_supporter.storage.cascade import _format_deleted_marker
+
+        pinned = datetime(2026, 5, 4, 11, 44, 3, tzinfo=UTC)
+        marker = _format_deleted_marker(now=pinned)
+        assert marker == "інформація видалена автором 04-05-2026 11:44:03"
+
+    async def test_scrub_course_node_stamps_title_with_marker(self) -> None:
+        """``scrub_course_node`` writes the KD3 marker to ``title``."""
+        from course_supporter.storage.cascade import scrub_course_node
+
+        node = MagicMock()
+        node.title = "Original Course Title"
+        node.description = "Original description text"
+        await scrub_course_node(node)
+        self._assert_marker_recent(node.title)
+
+    async def test_scrub_course_node_stamps_description_with_marker(self) -> None:
+        """``scrub_course_node`` writes the KD3 marker to ``description``
+        even though the column is nullable — Amendment 24 ruling
+        overrides nullability semantics.
+        """
+        from course_supporter.storage.cascade import scrub_course_node
+
+        node = MagicMock()
+        node.title = "Original Course Title"
+        node.description = "Original description text"
+        await scrub_course_node(node)
+        self._assert_marker_recent(node.description)
+
+    async def test_scrub_course_node_columns_share_marker(self) -> None:
+        """Single scrub invocation produces ONE marker reused across
+        both author-content columns of the same row — timestamps
+        identical, no second-level drift between ``title`` and
+        ``description`` of the same node.
+        """
+        from course_supporter.storage.cascade import scrub_course_node
+
+        node = MagicMock()
+        node.title = "x"
+        node.description = "y"
+        await scrub_course_node(node)
+        assert node.title == node.description
+
+    async def test_scrub_authored_document_stamps_filename_with_marker(
+        self,
+    ) -> None:
+        """``scrub_authored_document`` writes the KD3 marker to
+        ``filename`` even though the column is nullable.
+        """
+        from course_supporter.storage.cascade import scrub_authored_document
+
+        doc = MagicMock()
+        doc.filename = "lecture-01.pdf"
+        doc.source_url = "https://s3.example.com/bucket/lecture-01.pdf"
+        await scrub_authored_document(doc)
+        self._assert_marker_recent(doc.filename)
+
+    async def test_scrub_authored_document_stamps_source_url_with_marker(
+        self,
+    ) -> None:
+        """``scrub_authored_document`` writes the KD3 marker to
+        ``source_url``.
+        """
+        from course_supporter.storage.cascade import scrub_authored_document
+
+        doc = MagicMock()
+        doc.filename = "lecture-01.pdf"
+        doc.source_url = "https://s3.example.com/bucket/lecture-01.pdf"
+        await scrub_authored_document(doc)
+        self._assert_marker_recent(doc.source_url)
+
+    async def test_scrub_authored_document_columns_share_marker(self) -> None:
+        """Single scrub invocation produces ONE marker reused across
+        both author-content columns of the same row.
+        """
+        from course_supporter.storage.cascade import scrub_authored_document
+
+        doc = MagicMock()
+        doc.filename = "x"
+        doc.source_url = "y"
+        await scrub_authored_document(doc)
+        assert doc.filename == doc.source_url
+
+    async def test_marker_uses_dd_mm_yyyy_not_iso_format(self) -> None:
+        """KD3 specifies ``DD-MM-YYYY HH:MM:SS`` — guard against an
+        accidental shift to ISO ``YYYY-MM-DD`` or ``MM-DD-YYYY``.
+        """
+        from course_supporter.storage.cascade import _format_deleted_marker
+
+        # Use a date where day, month, year are all distinct so format
+        # ambiguity is detectable: 03-07-2026 in DD-MM-YYYY = 3 July 2026.
+        pinned = datetime(2026, 7, 3, 12, 34, 56, tzinfo=UTC)
+        marker = _format_deleted_marker(now=pinned)
+        assert "03-07-2026" in marker
+        # Negative checks: ISO + US shapes must NOT appear.
+        assert "2026-07-03" not in marker
+        assert "07-03-2026" not in marker

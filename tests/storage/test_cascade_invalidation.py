@@ -1,5 +1,7 @@
 """Tests for Gap 3 (``on_invalidate_hashes`` exclude_ids signature) +
-``scrub_authored_document`` callable shipped in Phase 1 commit (i).
+``scrub_authored_document`` callable shipped in Phase 1 commit (i),
+updated for the KD3 author-content marker contract per hotfix-4
+(Amendment 23 + 24).
 
 Gap 3 closes a latent race between cascade soft-delete and the
 content_hash invalidation walk: the hook fires *before* victims'
@@ -15,9 +17,15 @@ their (surviving) parents.
 The scrub-callable lives in ``cascade.py`` because it is wired by
 the same engine that fires the cascade — the scrub is a one-shot
 mutation on the root entity that must land in the same flush as the
-``deleted_at`` write. Unit tests here lock the field-level
-expectations from PHASE.md §1.3 (``filename`` → ``NULL``,
-``source_url`` → ``""``).
+``deleted_at`` write. Unit tests here lock the marker contract
+(vision §3 KD3 + Amendment 24): every author-content column on a
+soft-deleted ``AuthoredDocument`` carries the formatted Ukrainian
+marker ``'інформація видалена автором DD-MM-YYYY HH:MM:SS'``,
+regardless of nullability — Amendment 24 ratified that nullable
+columns receive the marker too, since NULL conflates "автор не
+заповнив" with "автор видалив". Original commit (i) shipped the
+older "filename → NULL, source_url → ''" contract; hotfix-4
+supersedes it.
 
 Both invariants land alongside production code in commit (i) per
 rule #13 — atomic commits over artificial bisect-separation.
@@ -25,8 +33,10 @@ rule #13 — atomic commits over artificial bisect-separation.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -52,16 +62,62 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 
+# ── KD3 marker contract helpers (duplicated from canonical site) ──
+#
+# Canonical regex + recency assertion live in
+# ``tests/unit/test_cascade_delete_service.py::TestKD3MarkerFormat``
+# (unit-level scrub callable contract). Duplicated here because this
+# file exercises a different concern (cascade-engine integration)
+# and the regex is small enough to keep inline rather than extract
+# a shared test-helper module. Update both sites in lock-step on
+# contract changes (Amendment 23/24 anchor).
+
+_MARKER_REGEX = (
+    r"^інформація видалена автором "
+    r"(\d{2})-(\d{2})-(\d{4}) "
+    r"(\d{2}):(\d{2}):(\d{2})$"
+)
+_TIMESTAMP_TOLERANCE_SECONDS = 5
+
+
+def _assert_marker_recent(value: str) -> None:
+    """Assert ``value`` matches the KD3 marker contract with a recent
+    timestamp (within ``_TIMESTAMP_TOLERANCE_SECONDS`` of now).
+    """
+    match = re.match(_MARKER_REGEX, value)
+    assert match is not None, f"Value did not match marker contract: {value!r}"
+    day, month, year, hour, minute, second = match.groups()
+    parsed = datetime(
+        int(year),
+        int(month),
+        int(day),
+        int(hour),
+        int(minute),
+        int(second),
+        tzinfo=UTC,
+    )
+    drift = abs((datetime.now(UTC) - parsed).total_seconds())
+    assert drift <= _TIMESTAMP_TOLERANCE_SECONDS, (
+        f"Marker timestamp drift {drift}s exceeds tolerance "
+        f"{_TIMESTAMP_TOLERANCE_SECONDS}s"
+    )
+
+
 # ── Unit-level: scrub_authored_document field semantics ───────────
 
 
 class TestScrubAuthoredDocument:
-    """Per PHASE.md §1.3, ``AuthoredDocument`` carries two scrub
-    fields: ``filename`` (nullable) → ``NULL``, ``source_url``
-    (NOT NULL) → ``""``.
+    """Per vision §3 KD3 + Amendment 24, ``AuthoredDocument`` carries
+    two scrub columns: ``filename`` (nullable) and ``source_url``
+    (NOT NULL). Both receive the formatted Ukrainian-language marker
+    ``'інформація видалена автором DD-MM-YYYY HH:MM:SS'`` regardless
+    of nullability — hotfix-4 supersedes the original commit (i)
+    contract (filename → NULL, source_url → '') because NULL
+    conflates "author never filled the field" with "author actively
+    deleted".
     """
 
-    async def test_scrub_clears_filename_to_null(self) -> None:
+    async def test_scrub_writes_marker_to_filename(self) -> None:
         doc = _StubDocument(
             filename="lecture-1-secrets.md",
             source_url="https://bucket/tenants/abc/files/123.md",
@@ -69,9 +125,10 @@ class TestScrubAuthoredDocument:
 
         await scrub_authored_document(doc)
 
-        assert doc.filename is None
+        assert doc.filename is not None
+        _assert_marker_recent(doc.filename)
 
-    async def test_scrub_replaces_source_url_with_empty_string(self) -> None:
+    async def test_scrub_writes_marker_to_source_url(self) -> None:
         doc = _StubDocument(
             filename="something.md",
             source_url="https://bucket/tenants/abc/files/123.md",
@@ -79,23 +136,31 @@ class TestScrubAuthoredDocument:
 
         await scrub_authored_document(doc)
 
-        # Empty string — NOT a magic sentinel like ``"[scrubbed]"``.
-        # See ``scrub_authored_document`` docstring for rationale.
-        assert doc.source_url == ""
+        _assert_marker_recent(doc.source_url)
 
-    async def test_scrub_idempotent_on_already_null_filename(self) -> None:
+    async def test_scrub_idempotent_re_stamps_marker(self) -> None:
+        """Idempotency under the marker contract means a second scrub
+        invocation is safe to call (no exception, columns end in a
+        valid marker state) — NOT that a pre-scrub NULL is preserved.
+        Both columns receive the marker regardless of pre-state.
+        """
         doc = _StubDocument(filename=None, source_url="https://example.com")
 
         await scrub_authored_document(doc)
 
-        assert doc.filename is None
-        assert doc.source_url == ""
+        assert doc.filename is not None
+        _assert_marker_recent(doc.filename)
+        _assert_marker_recent(doc.source_url)
 
     async def test_scrub_does_not_touch_unrelated_attributes(self) -> None:
         """Scrub list is exactly ``filename`` + ``source_url`` — other
         attributes (``id``, ``course_node_id``, ``source_type``, etc.)
         survive untouched so the soft-deleted row remains diagnosable
-        via FK references and audit lookups.
+        via FK references and audit lookups. Includes regression-guard
+        assertions on the scrubbed columns: a silent revert to the
+        pre-Amendment-24 contract (filename → NULL, source_url → "")
+        would slip past the surviving-attribute assertions, so we
+        explicitly check that both columns now carry the KD3 marker.
         """
         original_id = uuid.uuid4()
         original_node_id = uuid.uuid4()
@@ -109,9 +174,17 @@ class TestScrubAuthoredDocument:
 
         await scrub_authored_document(doc)
 
+        # Surviving attributes — outside the scrub set.
         assert doc.id == original_id
         assert doc.course_node_id == original_node_id
         assert doc.source_type == "video"
+        # Regression guard against silent revert to NULL/'' contract.
+        assert doc.filename is not None
+        assert doc.filename != "x.mp4"
+        assert doc.source_url != ""
+        assert doc.source_url != "https://example.com/x.mp4"
+        _assert_marker_recent(doc.filename)
+        _assert_marker_recent(doc.source_url)
 
 
 class _StubDocument:
@@ -373,9 +446,10 @@ class TestGap3ExcludeIdsRegression:
 class TestCascadeScrubCompleteness:
     """models-fix-3 integration: cascade soft-delete from a CourseNode
     root scrubs ALL victim types declaring ``__scrub_callable__`` —
-    locks PHASE.md §3.2 step 24 (descendant CourseNode title scrubbed)
-    + step 25 (descendant AuthoredDocument filename + source_url
-    scrubbed) at the engine integration level.
+    locks the KD3 marker contract (vision §3 KD3 + Amendment 24) at
+    the engine integration level: descendant CourseNode title +
+    description AND descendant AuthoredDocument filename + source_url
+    all carry the formatted marker post-cascade.
     """
 
     async def test_multilevel_cascade_scrubs_all_victim_types(
@@ -385,9 +459,9 @@ class TestCascadeScrubCompleteness:
         """Build CourseNode root → mid → leaf with an AuthoredDocument
         attached under ``mid``. Cascade soft-delete from root via
         ``CascadeDeleteService``. Assert every CourseNode has its
-        ``title`` scrubbed to ``""`` + ``description`` to ``NULL`` AND
-        the AuthoredDocument has ``filename`` to ``NULL`` + ``source_url``
-        to ``""``. All four rows soft-deleted.
+        ``title`` + ``description`` stamped with the KD3 marker AND
+        the AuthoredDocument has ``filename`` + ``source_url`` stamped
+        with the KD3 marker. All four rows soft-deleted.
         """
         async with gap3_session_factory() as session:
             tenant = await _make_tenant(session, "scrub-completeness")
@@ -443,24 +517,26 @@ class TestCascadeScrubCompleteness:
                 node = await session.get(CourseNode, node_id)
                 assert node is not None
                 assert node.deleted_at is not None
-                assert node.title == "", (
-                    f"CourseNode {node_id} title not scrubbed: {node.title!r}"
+                assert node.title is not None, (
+                    f"CourseNode {node_id} title unexpectedly NULL"
                 )
-                assert node.description is None, (
-                    f"CourseNode {node_id} description not scrubbed: "
-                    f"{node.description!r}"
+                _assert_marker_recent(node.title)
+                assert node.description is not None, (
+                    f"CourseNode {node_id} description unexpectedly NULL "
+                    f"(Amendment 24 ruling: nullable column receives marker)"
                 )
+                _assert_marker_recent(node.description)
 
             # AuthoredDocument descendant scrubbed + soft-deleted.
             persisted_doc = await session.get(AuthoredDocument, doc_id)
             assert persisted_doc is not None
             assert persisted_doc.deleted_at is not None
-            assert persisted_doc.filename is None, (
-                f"AuthoredDocument filename not scrubbed: {persisted_doc.filename!r}"
+            assert persisted_doc.filename is not None, (
+                f"AuthoredDocument filename unexpectedly NULL "
+                f"(Amendment 24 ruling: nullable column receives marker): "
+                f"{persisted_doc.filename!r}"
             )
-            assert persisted_doc.source_url == "", (
-                f"AuthoredDocument source_url not scrubbed: "
-                f"{persisted_doc.source_url!r}"
-            )
+            _assert_marker_recent(persisted_doc.filename)
+            _assert_marker_recent(persisted_doc.source_url)
 
         await _cleanup_tenant(gap3_session_factory, [tenant_id])

@@ -147,55 +147,93 @@ async def scrub_tenant_webhook_url(tenant: Any) -> None:
     Option C ("null-out webhook_url"). Invoked by ``CascadeDeleteService``
     once on the root ``Tenant`` instance before the ``deleted_at`` write,
     so the NULL and the soft-delete mark land in the same flush.
+
+    Different contract from author-content scrub callables below: KD-β
+    is "erase the value" (NULL), whereas KD3 author-content scrub is
+    "replace with marker" (per :func:`_format_deleted_marker`). Tenant
+    is unaffected by the marker contract.
     """
     tenant.webhook_url = None
 
 
-async def scrub_course_node(node: Any) -> None:
-    """KD3 scrub: clear ``title`` + ``description`` on CourseNode soft-delete.
+def _format_deleted_marker(now: datetime | None = None) -> str:
+    """Return the KD3 author-content scrub marker (vision §3 KD3).
 
-    Per PHASE.md §1.3 audit, ``CourseNode`` carries two operationally-
-    meaningful fields whose values must not survive soft-delete:
-    ``title`` (NOT NULL string — replaced with the empty-string
-    sentinel ``""``) and ``description`` (nullable text — set to
-    ``None``). Empty-string for ``title`` follows the same rationale
-    as :func:`scrub_authored_document`'s ``source_url`` scrub: it is
-    DB-idiomatic for NOT NULL text columns, avoids a magic literal
-    that future readers must learn, and ``WHERE title = ''`` is the
-    canonical triage query for spotting scrubbed nodes.
+    Replaces author-content fields on soft-delete with a visible
+    "автор видалив" signal — distinguishes a row whose author actively
+    deleted the content from a row whose author never filled the field
+    (NULL). The latter is preserved as NULL by other code paths;
+    KD3 explicitly overrides nullability semantics for the scrub case
+    so observers can read intent without a JOIN against ``deleted_at``.
+
+    Format (per vision §3 KD3 verbatim):
+        ``інформація видалена автором DD-MM-YYYY HH:MM:SS``
+
+    Localization: hardcoded Ukrainian per vision contract — the marker
+    is a data artifact persisted to the DB, not UI text, so it does
+    NOT participate in runtime i18n. Helper is English-named per
+    project convention; the emitted string is Ukrainian.
+
+    Timestamp source: defaults to ``datetime.now(UTC)`` when ``now``
+    is omitted. Cascade engine writes ``deleted_at`` AFTER scrub fires
+    per the locked hook ordering (state.md §4: cancel → invalidate →
+    scrub → write deleted_at → flush) — scrub callables do not have
+    access to the eventual ``deleted_at`` value at the time they run,
+    so each computes its own timestamp. Sub-second drift between the
+    marker and ``deleted_at`` is invisible at second-level resolution.
+    The optional ``now`` parameter exists for tests to pin a known
+    timestamp; production code paths leave it default.
+
+    Records vision-implementer contract gap closure per Amendment 23
+    (PHASE.md §1.3 enumerated scrub COLUMNS but never propagated the
+    marker FORMAT) + Amendment 24 (hotfix-4 disposition).
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    return f"інформація видалена автором {now.strftime('%d-%m-%Y %H:%M:%S')}"
+
+
+async def scrub_course_node(node: Any) -> None:
+    """KD3 scrub: stamp ``title`` + ``description`` with the deletion
+    marker on CourseNode soft-delete.
+
+    Per vision §3 KD3, both author-content fields receive the
+    formatted marker (:func:`_format_deleted_marker`) regardless of
+    nullability. ``description`` is nullable but the contract still
+    emits the marker — NULL means "автор не заповнив", which has
+    different semantics from "автор видалив" and conflicts with KD3
+    intent (vision-side ruling per Amendment 24).
 
     Wired as the class-level ``__scrub_callable__`` on ``CourseNode``
     (per models-fix-3); fires on the root and every CourseNode
     descendant in the cascade victim set (e.g. course-level
     ``delete_node`` cascading the entire tree).
+
+    Both columns share the same marker instance — single
+    ``datetime.now(UTC)`` call per scrub invocation so the timestamp
+    is identical across columns of the same row.
     """
-    node.title = ""
-    node.description = None
+    marker = _format_deleted_marker()
+    node.title = marker
+    node.description = marker
 
 
 async def scrub_authored_document(document: Any) -> None:
-    """KD3 scrub: clear ``filename`` + ``source_url`` on AuthoredDocument soft-delete.
+    """KD3 scrub: stamp ``filename`` + ``source_url`` with the deletion
+    marker on AuthoredDocument soft-delete.
 
-    Per PHASE.md §1.3 audit, ``AuthoredDocument`` carries two
-    operationally-meaningful fields whose values must not survive
-    soft-delete: ``filename`` (often the original-uploaded name —
-    can leak naming conventions, course-internal taxonomy, or
-    student-facing identifiers) and ``source_url`` (S3 object key
-    or signed URL — leaks bucket layout and may carry signed-token
-    residuals depending on which presigned variant was persisted
-    at upload time). On soft-delete the file itself is being
-    asynchronously hard-deleted via the ``s3_cleanup`` ARQ task
-    (Phase 1 KD3 adoption); the URL has zero post-deletion
-    operational value.
+    Per vision §3 KD3, both author-content fields receive the
+    formatted marker (:func:`_format_deleted_marker`) regardless of
+    nullability. ``filename`` is nullable but the contract still
+    emits the marker per Amendment 24 ruling — NULL would conflate
+    "author never named the file" with "author deleted the file".
 
-    ``filename`` is nullable in the schema and becomes ``NULL``;
-    ``source_url`` is NOT NULL so the scrub sentinel is the empty
-    string. The empty string is intentional rather than a marker
-    like ``"[scrubbed]"``: it is the most database-idiomatic
-    "no-value" representation for a NOT NULL text column, avoids
-    allocating a magic literal that future readers must learn,
-    and a query for ``source_url = ''`` is the canonical way to
-    spot scrubbed rows in triage.
+    On soft-delete the underlying S3 object is asynchronously
+    hard-deleted via the ``s3_cleanup`` ARQ task (Phase 1 KD3
+    adoption); the persisted ``source_url`` has zero post-deletion
+    operational value but the marker provides positive evidence
+    that the row was scrubbed by the author rather than NULL by
+    happenstance.
 
     Wired as the class-level ``__scrub_callable__`` on
     ``AuthoredDocument`` (per models-fix-3); fires on the root and
@@ -205,9 +243,14 @@ async def scrub_authored_document(document: Any) -> None:
     and the soft-delete mark land in the same flush — observers
     cannot see a soft-deleted row that still carries the un-scrubbed
     values.
+
+    Both columns share the same marker instance — single
+    ``datetime.now(UTC)`` call per scrub invocation so the timestamp
+    is identical across columns of the same row.
     """
-    document.filename = None
-    document.source_url = ""
+    marker = _format_deleted_marker()
+    document.filename = marker
+    document.source_url = marker
 
 
 def build_cascade_map(root: type) -> dict[type, list[type]]:

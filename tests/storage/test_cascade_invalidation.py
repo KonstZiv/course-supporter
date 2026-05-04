@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from course_supporter.config import get_settings
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.cascade import (
     CascadeDeleteService,
     OnInvalidateHashes,
@@ -59,6 +60,7 @@ from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    Job,
     Tenant,
 )
 
@@ -539,4 +541,120 @@ class TestCascadeScrubCompleteness:
             _assert_marker_recent(persisted_doc.filename)
             _assert_marker_recent(persisted_doc.source_url)
 
+        await _cleanup_tenant(gap3_session_factory, [tenant_id])
+
+
+@pytest.mark.requires_db
+class TestKD13CancelHookIntegration:
+    """Hotfix-5 integration: cascade soft-delete from a CourseNode root
+    fires :class:`JobCancellationService.cancel_jobs_for_entities` as
+    the ``on_cancel_jobs`` hook BEFORE scrub + ``deleted_at`` write.
+    Locks vision §KD13 binding contract at the cascade-engine
+    integration level.
+
+    Critical invariants:
+    - In-progress Jobs scoped to a victim CourseNode flip to
+      ``status='cancelled'`` + ``completed_at = now()``.
+    - Job ``deleted_at`` REMAINS NULL — Job is sibling-cancelled, NOT
+      cascade soft-deleted (per PHASE.md §1.2 audit: Job ∉ any
+      ``__cascades_soft_delete_to__`` chain).
+    - Cascade still works alongside cancel: root + descendants
+      soft-deleted with KD3 marker.
+
+    Provides production-side coverage of the wiring shipped in
+    hotfix-5 — the unit-level mock tests assert closure shape +
+    augmentation; this test exercises the live engine + JCS + Job
+    table together.
+    """
+
+    async def test_cascade_cancels_in_progress_job_for_victim_node(
+        self,
+        gap3_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Build CourseNode root → child + an in-progress
+        ``ingest`` Job referencing the child via ``course_node_id``.
+        Cascade soft-delete from root with
+        ``on_cancel_jobs=JobCancellationService(...).cancel_jobs_for_entities``
+        bound directly (mirrors ``delete_node`` handler pattern).
+        Assert the Job flipped to cancelled but its row remains
+        soft-delete-NULL.
+        """
+        async with gap3_session_factory() as session:
+            tenant = await _make_tenant(session, "kd13-cancel")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            child = await _make_node(
+                session, tenant_id=tenant.id, parent_id=root.id, title="child"
+            )
+            job = Job(
+                id=uuid.uuid4(),
+                tenant_id=tenant.id,
+                course_node_id=child.id,
+                job_type="ingest",
+                priority="normal",
+                status="running",
+                input_params={"course_node_id": str(child.id)},
+            )
+            session.add(job)
+            await session.commit()
+            tenant_id = tenant.id
+            root_id, child_id, job_id = root.id, child.id, job.id
+
+        async with gap3_session_factory() as session:
+            cascade_service = CascadeDeleteService(session)
+            cascade_map = build_cascade_map(CourseNode)
+            content_hash_service = ContentHashService(session)
+            job_cancellation_service = JobCancellationService(session)
+
+            async def invalidate_hook(
+                ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
+            ) -> None:
+                await content_hash_service.invalidate_subtree(
+                    ids, exclude_ids=exclude_ids
+                )
+
+            root_attached = await session.get(CourseNode, root_id)
+            assert root_attached is not None
+            await cascade_service.soft_delete_with_cascade(
+                root_attached,
+                cascade_map,
+                on_cancel_jobs=(job_cancellation_service.cancel_jobs_for_entities),
+                on_invalidate_hashes=invalidate_hook,
+            )
+            await session.commit()
+
+        async with gap3_session_factory() as session:
+            persisted_job = await session.get(Job, job_id)
+            assert persisted_job is not None, (
+                "Job row unexpectedly hard-deleted — KD13 says cancel, not delete"
+            )
+            assert persisted_job.status == "cancelled", (
+                f"Job.status not flipped: got {persisted_job.status!r}, "
+                "expected 'cancelled' per vision §KD13"
+            )
+            assert persisted_job.completed_at is not None, (
+                "Job.completed_at not set — JCS must stamp completion "
+                "timestamp on cancel"
+            )
+            assert persisted_job.deleted_at is None, (
+                "Job.deleted_at unexpectedly set — Job is sibling-"
+                "cancelled, NOT cascade soft-deleted (per PHASE.md "
+                "§1.2: Job ∉ any __cascades_soft_delete_to__ chain)"
+            )
+
+            # Cascade also still works: root + descendant CourseNodes
+            # soft-deleted alongside Job cancellation.
+            for node_id in (root_id, child_id):
+                node = await session.get(CourseNode, node_id)
+                assert node is not None
+                assert node.deleted_at is not None, (
+                    f"CourseNode {node_id} not soft-deleted — cascade "
+                    "regressed alongside KD13 wiring"
+                )
+
+        # Cleanup also removes the Job row to keep the test DB clean.
+        async with gap3_session_factory() as session:
+            await session.execute(delete(Job).where(Job.id == job_id))
+            await session.commit()
         await _cleanup_tenant(gap3_session_factory, [tenant_id])

@@ -47,6 +47,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
@@ -54,6 +55,7 @@ from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
+from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
@@ -480,14 +482,37 @@ async def delete_document(
        ``scrub_authored_document`` which sets ``source_url = ''`` —
        collecting the key after cascade would miss it.
     3. Issue ``CascadeDeleteService.soft_delete_with_cascade`` rooted
-       at the document. The engine drives both the BFS soft-delete and
-       per-victim scrub dispatch via class-level ``__scrub_callable__``
-       (AuthoredDocument → ``scrub_authored_document`` clearing
-       ``filename`` + ``source_url``). DocumentSummary + DocumentSegment
-       descendants are no-op in Phase 1 — Amendment 16 defers their
-       scrub callables to Phase 2.x and pipeline does not write to
-       these tables yet, so cascade traversal through them yields
-       zero victims.
+       at the document. The engine drives the four-phase hook chain
+       (cancel → invalidate → scrub → write deleted_at → flush) plus
+       per-victim scrub dispatch:
+
+       * ``on_cancel_jobs`` — closure-augmented binding to
+         :class:`JobCancellationService.cancel_jobs_for_entities`
+         per vision §KD13. Cascade engine passes the document id as
+         the victim list, but JCS lookup paths are course_node_id-
+         keyed (``Job.course_node_id`` IN, ``Job.input_params @>
+         {course_node_id}``, ``Job.tenant_id`` IN); a raw bind would
+         silent-no-op. Closure injects ``document.course_node_id``
+         so the Job.course_node_id path matches active node-scoped
+         ingestion jobs. KD13 cancel semantics:
+         ``status='cancelled'`` + ``completed_at = now()``;
+         ``deleted_at`` REMAINS NULL — Job is sibling-cancelled, not
+         cascade soft-deleted (per PHASE.md §1.2 audit: Job ∉ any
+         ``__cascades_soft_delete_to__`` chain).
+       * ``on_invalidate_hashes`` — Gap 3 hook bridging
+         :class:`ContentHashService.invalidate_subtree` so parent-
+         CourseNode ``content_hash`` recompute treats the document as
+         already gone. Closes a tangential gap in commit (l) where
+         this hook was omitted entirely (cf. ``nodes.py`` +
+         ``storage.py`` mirror sites — hotfix-5 ratified per rule #13
+         atomicity).
+       * Class-level ``__scrub_callable__`` (AuthoredDocument →
+         ``scrub_authored_document`` emitting KD3 marker per
+         hotfix-4) clears ``filename`` + ``source_url``.
+         DocumentSummary + DocumentSegment descendants are no-op in
+         Phase 1 — Amendment 16 defers their scrub callables to
+         Phase 2.x and pipeline does not write to these tables yet,
+         so cascade traversal through them yields zero victims.
     4. Hand off to ``enqueue_s3_cleanup`` — helper persists a
        ``s3_cleanup`` Job row, commits cascade + Job atomically
        (QQ5 boundary), then dispatches the ARQ task post-commit and
@@ -515,9 +540,31 @@ async def delete_document(
     # in the same flush as the ``deleted_at`` write. Phase 1 cascade
     # map for AuthoredDocument resolves to [DocumentSummary,
     # DocumentSegment] — both empty in Phase 1 per Amendment 16.
+    # Hook chain per cascade engine ordering invariant: cancel →
+    # invalidate → scrub → write deleted_at → flush. See route
+    # docstring step (3) for the closure-augmentation rationale on
+    # ``cancel_hook`` (cascade victim ids are document-keyed; JCS
+    # lookup paths are course_node_id-keyed).
     cascade_service = CascadeDeleteService(session)
     cascade_map = build_cascade_map(AuthoredDocument)
-    await cascade_service.soft_delete_with_cascade(document, cascade_map)
+    content_hash_service = ContentHashService(session)
+    job_cancellation_service = JobCancellationService(session)
+
+    async def invalidate_hook(
+        ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
+    ) -> None:
+        await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
+
+    async def cancel_hook(victim_ids: list[uuid.UUID]) -> None:
+        augmented = [*victim_ids, course_node_id]
+        await job_cancellation_service.cancel_jobs_for_entities(augmented)
+
+    await cascade_service.soft_delete_with_cascade(
+        document,
+        cascade_map,
+        on_cancel_jobs=cancel_hook,
+        on_invalidate_hashes=invalidate_hook,
+    )
 
     # (4) Persist the s3_cleanup Job + dispatch ARQ task. Helper owns
     # the QQ5 commit boundary; we pass ``course_node_id`` so tenant

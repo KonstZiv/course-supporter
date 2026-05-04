@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.database import get_session
 
 STUB_TENANT = TenantContext(
@@ -289,3 +290,103 @@ class TestDeleteFile:
             await client.delete(f"/api/v1/storage/files/{key}")
 
         mock_s3.delete_object.assert_not_awaited()
+
+    async def test_mode_a_passes_cancel_hook_with_course_node_augmentation(
+        self, client: AsyncClient
+    ) -> None:
+        """Hotfix-5 contract — Mode A handler wires ``on_cancel_jobs``
+        as a closure that augments the cascade-engine victim id list
+        with ``document.course_node_id`` before forwarding to JCS.
+        Mirrors the ``delete_document`` augmentation pattern; cascade
+        victim ids are document-keyed and JCS lookup paths are
+        course_node_id-keyed.
+        """
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/n/file.pdf"
+        course_node_id = uuid.uuid4()
+        document_id = uuid.uuid4()
+
+        document = MagicMock()
+        document.id = document_id
+        document.course_node_id = course_node_id
+        document.source_url = f"http://localhost:9000/course-materials/{key}"
+
+        cascade_mock = AsyncMock()
+        jcs_method_mock = AsyncMock()
+
+        with (
+            patch(_ENTRY_REPO) as repo_cls,
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.storage.enqueue_s3_cleanup",
+                AsyncMock(),
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                jcs_method_mock,
+            ),
+        ):
+            repo_cls.return_value.get_by_source_url = AsyncMock(return_value=document)
+            resp = await client.delete(f"/api/v1/storage/files/{key}")
+
+            assert resp.status_code == 204
+            cascade_mock.assert_awaited_once()
+            on_cancel_jobs = cascade_mock.call_args.kwargs.get("on_cancel_jobs")
+            assert on_cancel_jobs is not None, (
+                "Mode A on_cancel_jobs missing — KD13 gap"
+            )
+
+            # Invoke the closure with sample victim ids; verify
+            # augmentation injects course_node_id so JCS lookup path
+            # matches. MUST run inside the patch.object block so the
+            # JCS class patch is still active when the closure
+            # dispatches the call.
+            await on_cancel_jobs([document_id])
+            jcs_method_mock.assert_awaited_once()
+            passed_ids = jcs_method_mock.call_args.args[0]
+            assert document_id in passed_ids
+            assert course_node_id in passed_ids, (
+                "course_node_id missing from augmented ids — JCS lookup "
+                "would silent-no-op for document-rooted cascades"
+            )
+
+    async def test_mode_b_does_not_invoke_job_cancellation(
+        self, client: AsyncClient
+    ) -> None:
+        """Mode B (force-orphan) has no cascade and no JCS instantiation.
+        Locks the wiring distinction: only Mode A wires KD13 cancel —
+        Mode B has nothing to cancel against (no DB row, no cascade,
+        no entity_ids).
+        """
+        key = f"tenants/{STUB_TENANT.tenant_id}/orphan.pdf"
+        cascade_mock = AsyncMock()
+        jcs_method_mock = AsyncMock()
+
+        with (
+            patch(_ENTRY_REPO) as repo_cls,
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.storage.enqueue_s3_cleanup",
+                AsyncMock(),
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                jcs_method_mock,
+            ),
+        ):
+            repo_cls.return_value.get_by_source_url = AsyncMock(return_value=None)
+            resp = await client.delete(f"/api/v1/storage/files/{key}")
+
+        assert resp.status_code == 204
+        # No cascade, no cancel sweep — Mode B is force-orphan.
+        cascade_mock.assert_not_awaited()
+        jcs_method_mock.assert_not_awaited()

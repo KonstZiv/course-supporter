@@ -26,6 +26,7 @@ from course_supporter.api.schemas import StorageFileResponse, StorageUsageRespon
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -100,13 +101,19 @@ async def delete_file(
     no DB row):
 
     - **Mode A — with DB row.** ``get_by_source_url`` resolves to an
-      ``AuthoredDocument``; cascade soft-delete dispatches class-level
-      ``__scrub_callable__`` (clearing ``filename`` + ``source_url``);
-      ``on_invalidate_hashes`` cascade hook bridges
-      :class:`ContentHashService.invalidate_subtree` so parent-chain
-      hash recompute treats victims as already gone (Gap 3 from commit
-      (i)). DocumentSummary + DocumentSegment cascade chain is no-op
-      in Phase 1 per Amendment 16.
+      ``AuthoredDocument``; cascade soft-delete dispatches the four-
+      phase hook chain (cancel → invalidate → scrub → write deleted_at
+      → flush per cascade engine invariant). ``on_cancel_jobs`` flips
+      active Jobs scoped to the document's parent CourseNode to
+      ``status='cancelled'`` per vision §KD13 (closure-augmented with
+      ``course_node_id`` since cascade victim ids are document-keyed —
+      mirrors ``delete_document``). ``on_invalidate_hashes`` cascade
+      hook bridges :class:`ContentHashService.invalidate_subtree` so
+      parent-chain hash recompute treats victims as already gone
+      (Gap 3 from commit (i)). Class-level ``__scrub_callable__``
+      clears ``filename`` + ``source_url`` (KD3 marker per hotfix-4).
+      DocumentSummary + DocumentSegment cascade chain is no-op in
+      Phase 1 per Amendment 16.
     - **Mode B — force-orphan.** No ``AuthoredDocument`` references the
       URL (e.g. an upload that crashed before the row landed, or a
       manually placed file). No cascade work; ``enqueue_s3_cleanup``
@@ -140,17 +147,29 @@ async def delete_file(
         document_id = document.id
 
         content_hash_service = ContentHashService(session)
+        job_cancellation_service = JobCancellationService(session)
 
         async def invalidate_hook(
             ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
         ) -> None:
             await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
 
+        async def cancel_hook(victim_ids: list[uuid.UUID]) -> None:
+            # KD13 closure-augmentation: cascade victim ids are
+            # ``[document_id]`` but JCS lookup paths are
+            # course_node_id-keyed; inject ``course_node_id`` so the
+            # Job.course_node_id path matches node-scoped ingestion
+            # jobs. Mirrors the delete_document handler at
+            # ``api/routes/documents.py``.
+            augmented = [*victim_ids, course_node_id]
+            await job_cancellation_service.cancel_jobs_for_entities(augmented)
+
         cascade_service = CascadeDeleteService(session)
         cascade_map = build_cascade_map(AuthoredDocument)
         await cascade_service.soft_delete_with_cascade(
             document,
             cascade_map,
+            on_cancel_jobs=cancel_hook,
             on_invalidate_hashes=invalidate_hook,
         )
 

@@ -43,6 +43,7 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
 from course_supporter.storage.content_hash import ContentHashService
@@ -377,13 +378,31 @@ async def delete_node(
        ``source_url = ''`` — collecting keys after cascade would
        miss them all.
     3. Issue ``CascadeDeleteService.soft_delete_with_cascade`` rooted
-       at the node. The engine drives both the BFS soft-delete and
-       per-victim scrub dispatch via class-level ``__scrub_callable__``
-       (CourseNode → ``scrub_course_node`` clearing ``title`` +
-       ``description``; AuthoredDocument → ``scrub_authored_document``
-       clearing ``filename`` + ``source_url``). Gap 3 hook bridges
-       ``ContentHashService.invalidate_subtree`` so parent-hash
-       recompute treats victims as already gone.
+       at the node. The engine drives the four-phase hook chain
+       (cancel → invalidate → scrub → write deleted_at → flush) plus
+       per-victim scrub dispatch:
+
+       * ``on_cancel_jobs`` — direct-bind to
+         :class:`JobCancellationService.cancel_jobs_for_entities`
+         per vision §KD13. Subtree victim ids are course_node_id-keyed
+         (cascade traverses ``CourseNode → CourseNode → AuthoredDocument``
+         so the victim list includes the full subtree CourseNode set),
+         matching the JCS ``Job.course_node_id`` IN lookup path
+         directly — no closure augmentation needed (the augmentation
+         pattern in ``documents.py`` + ``storage.py`` is reserved for
+         delete sites where victim ids are document-keyed). KD13 cancel
+         semantics: ``status='cancelled'`` + ``completed_at = now()``;
+         ``deleted_at`` REMAINS NULL (Job ∉ any
+         ``__cascades_soft_delete_to__`` chain per PHASE.md §1.2 audit).
+       * ``on_invalidate_hashes`` — Gap 3 hook bridging
+         :class:`ContentHashService.invalidate_subtree` so parent-hash
+         recompute treats victims as already gone.
+       * Class-level ``__scrub_callable__`` dispatch (models-fix-3)
+         clears KD3 fields per type: CourseNode →
+         ``scrub_course_node`` (``title`` + ``description`` ← KD3
+         marker per hotfix-4); AuthoredDocument →
+         ``scrub_authored_document`` (``filename`` + ``source_url`` ←
+         KD3 marker).
     4. Hand off to ``enqueue_s3_cleanup`` — helper persists a
        ``s3_cleanup`` Job row, commits cascade + Job atomically
        (QQ5 boundary), then dispatches the ARQ task post-commit
@@ -417,6 +436,7 @@ async def delete_node(
     cascade_service = CascadeDeleteService(session)
     cascade_map = build_cascade_map(CourseNode)
     content_hash_service = ContentHashService(session)
+    job_cancellation_service = JobCancellationService(session)
 
     async def invalidate_hook(
         ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
@@ -431,6 +451,7 @@ async def delete_node(
     await cascade_service.soft_delete_with_cascade(
         root_node,
         cascade_map,
+        on_cancel_jobs=job_cancellation_service.cancel_jobs_for_entities,
         on_invalidate_hashes=invalidate_hook,
     )
 

@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -570,6 +571,117 @@ class TestDeleteDocument:
         assert resp.status_code == 204
         cascade_mock.assert_awaited_once()
         enqueue_mock.assert_not_awaited()
+
+    async def test_passes_cancel_hook_with_course_node_augmentation(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """Hotfix-5 contract — handler wires ``on_cancel_jobs`` as a
+        closure that augments the cascade-engine victim id list with
+        ``document.course_node_id`` before forwarding to JCS. JCS lookup
+        paths are course_node_id-keyed; raw victim ids (just the
+        document id) would silent-no-op. Closure invocation invokes
+        :meth:`JobCancellationService.cancel_jobs_for_entities` with
+        ``[document_id, course_node_id]``.
+        """
+        entry = _mock_entry(
+            node_id=node_id,
+            source_url="https://example.com/doc.md",
+        )
+        mock_s3.extract_key = MagicMock(return_value=None)
+        cascade_mock = AsyncMock()
+        jcs_method_mock = AsyncMock()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                jcs_method_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/documents/{entry.id}")
+            assert resp.status_code == 204
+            cascade_mock.assert_awaited_once()
+            # Closure passed (not the bound JCS method directly — that
+            # is the nodes.py pattern; documents.py uses closure
+            # augmentation).
+            on_cancel_jobs = cascade_mock.call_args.kwargs.get("on_cancel_jobs")
+            assert on_cancel_jobs is not None, "on_cancel_jobs missing — KD13 gap"
+            assert not hasattr(on_cancel_jobs, "__func__") or (
+                on_cancel_jobs.__func__
+                is not (JobCancellationService.cancel_jobs_for_entities)
+            ), (
+                "delete_document must use closure augmentation, not "
+                "direct-bind — see KD13 closure-augmentation rationale "
+                "in route docstring"
+            )
+            # Invoke the closure with sample victim ids and assert the
+            # augmented call to JCS includes course_node_id. MUST run
+            # inside the patch.object block so the JCS class patch is
+            # still active when the closure dispatches the call.
+            sample_victims = [entry.id]
+            await on_cancel_jobs(sample_victims)
+            jcs_method_mock.assert_awaited_once()
+            passed_ids = jcs_method_mock.call_args.args[0]
+            assert entry.id in passed_ids, "victim id stripped by augmentation"
+            assert node_id in passed_ids, (
+                "course_node_id missing from augmented ids — "
+                "JCS lookup would silent-no-op"
+            )
+
+    async def test_passes_on_invalidate_hashes_hook(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """Hotfix-5 contract — closes tangential gap from commit (l)
+        where ``on_invalidate_hashes`` was omitted entirely from
+        ``delete_document`` (mirrors of this hook are present in
+        ``delete_node`` (commit (k)) and ``delete_file`` (commit (m))).
+        Regression guard: a future revert to a 2-arg cascade call would
+        re-introduce stale parent-CourseNode content_hash bug.
+        """
+        entry = _mock_entry(
+            node_id=node_id,
+            source_url="https://example.com/doc.md",
+        )
+        mock_s3.extract_key = MagicMock(return_value=None)
+        cascade_mock = AsyncMock()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/documents/{entry.id}")
+        assert resp.status_code == 204
+        cascade_mock.assert_awaited_once()
+        on_invalidate_hashes = cascade_mock.call_args.kwargs.get("on_invalidate_hashes")
+        assert on_invalidate_hashes is not None, (
+            "on_invalidate_hashes missing — tangential gap from commit "
+            "(l) regressed; parent-CourseNode content_hash recompute "
+            "would treat the document as still present"
+        )
 
 
 class TestRetryDocument:

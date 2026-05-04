@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
 
@@ -516,3 +517,49 @@ class TestDeleteNode:
         assert resp.status_code == 204
         cascade_mock.assert_awaited_once()
         enqueue_mock.assert_not_awaited()
+
+    async def test_passes_on_cancel_jobs_and_on_invalidate_hashes(
+        self, client: AsyncClient
+    ) -> None:
+        """Hotfix-5 contract — handler wires BOTH ``on_cancel_jobs``
+        (vision §KD13 cancel signals) AND ``on_invalidate_hashes``
+        (Gap 3 hook) into the cascade call. ``on_cancel_jobs`` is
+        the bound :meth:`JobCancellationService.cancel_jobs_for_entities`
+        method directly — subtree victim ids are course_node_id-keyed
+        so no closure augmentation is needed (the augmentation pattern
+        is reserved for ``delete_document`` + ``delete_file`` Mode A
+        where victim ids are document-keyed).
+        """
+        node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.documents = []
+        tree_node.children = []
+        cascade_mock = AsyncMock()
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree",
+                return_value=[tree_node],
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/nodes/{node.id}")
+        assert resp.status_code == 204
+        cascade_mock.assert_awaited_once()
+        kwargs = cascade_mock.call_args.kwargs
+        on_cancel_jobs = kwargs.get("on_cancel_jobs")
+        on_invalidate_hashes = kwargs.get("on_invalidate_hashes")
+        assert on_cancel_jobs is not None, "on_cancel_jobs missing — KD13 gap"
+        assert on_invalidate_hashes is not None, (
+            "on_invalidate_hashes missing — Gap 3 regression"
+        )
+        # Direct-bind to JCS bound method (no closure) — locks the
+        # nodes.py-vs-documents.py wiring distinction.
+        assert on_cancel_jobs.__func__ is (
+            JobCancellationService.cancel_jobs_for_entities
+        )

@@ -356,3 +356,145 @@ class TestNodeResponseAuthoredDocumentsCountFilter:
         assert response.authored_documents_count == 2
 
         await _cleanup_tenant(hotfix7_session_factory, [tenant_id])
+
+
+@pytest.mark.requires_db
+class TestGetSubtreeWithActiveDocumentsFiltersDeletedNodes:
+    """Hotfix-8: ``get_subtree_with_active_documents`` filters soft-
+    deleted ``CourseNode`` rows from the recursive CTE walk.
+
+    Regression M (caught at CHECKPOINT 2 Step 8): a cascade-deleted
+    Module/Topic chain leaked into the subtree through ``node.children``
+    because the recursive CTE walk did not constrain
+    ``CourseNode.deleted_at IS NULL``. Hotfix-7 only filtered
+    ``AuthoredDocument`` at the loader-option level; the second leak
+    axis (``CourseNode`` traversal) was uncovered by the same kind of
+    UI exposure (deleted nodes rendered with the KD3 marker as title).
+
+    The fix mirrors the dual-side discipline already used for the Gap 1
+    ``tenant_id`` filter — base anchor AND recursive arm both apply
+    ``deleted_at IS NULL``. This independent path deserves its own
+    fixture per Amendment 33: the relationship loader filter (hotfix-7)
+    and the CTE walk filter (hotfix-8) sit at distinct points in the
+    SQL composition and have distinct regression surfaces.
+    """
+
+    async def test_sibling_deleted_child_excluded(
+        self,
+        hotfix7_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Root has two children — one active, one soft-deleted. The
+        helper returns the root with only the active child in
+        ``children``.
+        """
+        async with hotfix7_session_factory() as session:
+            tenant = await _make_tenant(session, "node-filter-sibling")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            active_child = await _make_node(
+                session,
+                tenant_id=tenant.id,
+                parent_id=root.id,
+                title="active-child",
+            )
+            deleted_child = await _make_node(
+                session,
+                tenant_id=tenant.id,
+                parent_id=root.id,
+                title="to-be-deleted",
+            )
+            deleted_child.deleted_at = datetime.now(UTC)
+            await session.commit()
+            tenant_id, root_id, active_child_id = (
+                tenant.id,
+                root.id,
+                active_child.id,
+            )
+
+        async with hotfix7_session_factory() as session:
+            repo = CourseNodeRepository(session)
+            tree = await repo.get_subtree_with_active_documents(root_id)
+
+        assert len(tree) == 1
+        loaded_root = tree[0]
+        assert loaded_root.id == root_id
+        loaded_child_ids = {c.id for c in loaded_root.children}
+        assert loaded_child_ids == {active_child_id}
+
+        await _cleanup_tenant(hotfix7_session_factory, [tenant_id])
+
+    async def test_cascade_deleted_descendant_chain_excluded(
+        self,
+        hotfix7_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Root → Module → Topic chain with both Module and Topic
+        soft-deleted (e.g. cascade soft-delete from Module). The
+        recursive CTE walk terminates at the active root — neither
+        Module nor Topic appears in ``children``. This is the canonical
+        regression-M lock: cascade-deleted descendants do NOT leak
+        through ``node.children`` after the fix.
+        """
+        async with hotfix7_session_factory() as session:
+            tenant = await _make_tenant(session, "node-filter-cascade")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            module = await _make_node(
+                session,
+                tenant_id=tenant.id,
+                parent_id=root.id,
+                title="module",
+            )
+            topic = await _make_node(
+                session,
+                tenant_id=tenant.id,
+                parent_id=module.id,
+                title="topic",
+            )
+            cascade_ts = datetime.now(UTC)
+            module.deleted_at = cascade_ts
+            topic.deleted_at = cascade_ts
+            await session.commit()
+            tenant_id, root_id = tenant.id, root.id
+
+        async with hotfix7_session_factory() as session:
+            repo = CourseNodeRepository(session)
+            tree = await repo.get_subtree_with_active_documents(root_id)
+
+        assert len(tree) == 1
+        loaded_root = tree[0]
+        assert loaded_root.id == root_id
+        # Recursive CTE walk terminates at the deleted Module — Topic
+        # is unreachable through the active-only walk even though its
+        # parent_id still points at Module on disk.
+        assert loaded_root.children == []
+
+        await _cleanup_tenant(hotfix7_session_factory, [tenant_id])
+
+    async def test_soft_deleted_root_returns_empty(
+        self,
+        hotfix7_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Caller passes a ``root_id`` that points to an already
+        soft-deleted node — the base-anchor filter rejects it and the
+        helper returns an empty list. Locks the symmetric base-side
+        filter (would otherwise return the deleted root with empty
+        children, leaking the row's existence).
+        """
+        async with hotfix7_session_factory() as session:
+            tenant = await _make_tenant(session, "node-filter-root-deleted")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            root.deleted_at = datetime.now(UTC)
+            await session.commit()
+            tenant_id, root_id = tenant.id, root.id
+
+        async with hotfix7_session_factory() as session:
+            repo = CourseNodeRepository(session)
+            tree = await repo.get_subtree_with_active_documents(root_id)
+
+        assert tree == []
+
+        await _cleanup_tenant(hotfix7_session_factory, [tenant_id])

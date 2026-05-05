@@ -388,6 +388,14 @@ class CourseNodeRepository:
         loader-option kwarg) would touch the internal-consumer contract
         that hotfix-7 deliberately keeps stable.
 
+        Hotfix-8 (regression M): the recursive CTE walk also filters
+        ``CourseNode.deleted_at IS NULL`` on BOTH the base anchor and
+        the recursive arm — same dual-side discipline as the Gap 1
+        tenant filter. Without this, soft-deleted nodes (e.g. a
+        cascade-deleted Module/Topic chain) leak into the subtree
+        through ``node.children`` and surface in user-facing
+        responses with their KD3 marker text rendered as title.
+
         Args:
             root_id: UUID of the root node.
             tenant_id: When set, restrict the recursion to nodes owned
@@ -396,15 +404,24 @@ class CourseNodeRepository:
 
         Returns:
             List containing the root node with ``children`` populated
-            recursively, and each node's ``documents`` collection
+            recursively (active nodes only — ``deleted_at IS NULL``),
+            and each node's ``documents`` collection likewise
             restricted to active (``deleted_at IS NULL``) rows.
-            Returns empty list if ``root_id`` is not found.
+            Returns empty list if ``root_id`` is not found OR is
+            itself soft-deleted.
         """
-        base = select(CourseNode.id).where(CourseNode.id == root_id)
+        base = select(CourseNode.id).where(
+            CourseNode.id == root_id,
+            CourseNode.deleted_at.is_(None),
+        )
         if tenant_id is not None:
             base = base.where(CourseNode.tenant_id == tenant_id)
         cte = base.cte(name="subtree_active_docs", recursive=True)
-        recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
+        recursive = (
+            select(CourseNode.id)
+            .join(cte, CourseNode.parent_id == cte.c.id)
+            .where(CourseNode.deleted_at.is_(None))
+        )
         if tenant_id is not None:
             recursive = recursive.where(CourseNode.tenant_id == tenant_id)
         cte = cte.union_all(recursive)

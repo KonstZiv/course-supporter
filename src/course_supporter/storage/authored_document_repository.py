@@ -237,15 +237,40 @@ class AuthoredDocumentRepository:
         self,
         entry_id: uuid.UUID,
         *,
-        processed_content: str,
-        processed_hash: str,
         now: datetime | None = None,
-    ) -> None:
-        # TODO Phase 2.x — Pass 2 pipeline rewrite per vision §3 KD2.
-        # Method preserved as deferral stub during Phase 1 rename pass.
-        # Column targets (processed_content, processed_hash) dropped in
-        # migrations/versions/a1b2c3d4e5f6_phase1_rename_and_kd3.py.
-        return None
+    ) -> AuthoredDocument:
+        """Transition a document from PENDING to READY.
+
+        Symmetric to :meth:`set_pending` (writes the receipt) and
+        :meth:`fail_processing` (clears the receipt with an error).
+        Clears the pending receipt and stamps ``processed_at``; the
+        ``state`` derivation property (``orm.AuthoredDocument.state``)
+        reads ``job_id IS NULL`` as READY.
+
+        Vision §1.2 explicitly removes ``processed_content`` /
+        ``outline_content`` / ``processed_hash`` columns from the
+        authored layer — processed content lives in DocumentSummary +
+        DocumentSegment after the Phase 2.x KD2 Pass 2 pipeline lands.
+        Until then this method only flips the state; no content is
+        persisted on the AuthoredDocument row itself.
+
+        Args:
+            entry_id: AuthoredDocument id to mark READY.
+            now: Override for current time (testing).
+
+        Returns:
+            The updated AuthoredDocument.
+
+        Raises:
+            ValueError: If the entry is not found.
+        """
+        entry = await self._require(entry_id)
+        entry.job_id = None
+        entry.pending_since = None
+        entry.error_message = None
+        entry.processed_at = now or datetime.now(UTC)
+        await self._session.flush()
+        return entry
 
     async def fail_processing(
         self,
@@ -326,18 +351,6 @@ class AuthoredDocumentRepository:
             entry.raw_size_bytes = len(raw_bytes)
             await self._session.flush()
         return entry
-
-    async def save_outline(
-        self,
-        entry_id: uuid.UUID,
-        *,
-        outline_json: str,
-    ) -> None:
-        # TODO Phase 2.x — Pass 2 pipeline rewrite per vision §3 KD2.
-        # Method preserved as deferral stub during Phase 1 rename pass.
-        # Column target (outline_content) dropped in
-        # migrations/versions/a1b2c3d4e5f6_phase1_rename_and_kd3.py.
-        return None
 
     async def update_material_role(
         self,

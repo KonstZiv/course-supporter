@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import delete
@@ -34,7 +35,7 @@ from course_supporter.config import get_settings
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
-from course_supporter.storage.orm import AuthoredDocument, CourseNode, Tenant
+from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
 
 
 @pytest.fixture(scope="module")
@@ -330,3 +331,150 @@ class TestCreateCourseRootIdDefensive:
                     source_type="text",
                     source_url="https://example.com/missing",
                 )
+
+
+@pytest.mark.requires_db
+class TestCompleteProcessingStateTransition:
+    """``complete_processing`` flips the document from PENDING to READY.
+
+    Hotfix-9 (regression D re-classified): the prior body was a no-op
+    stub left over from Phase 1 rename pass — caller expected it to
+    drive the state transition but it returned ``None`` silently,
+    leaving every successfully-ingested document stuck in PENDING. The
+    new body clears the pending receipt (``job_id`` + ``pending_since``
+    + defensive ``error_message``) and stamps ``processed_at``; the
+    ``state`` derivation property reads ``job_id IS NULL`` as READY.
+
+    Vision §1.2 explicitly removes ``processed_content`` /
+    ``outline_content`` / ``processed_hash`` columns from the authored
+    layer (Phase 2.x KD2 will populate DocumentSummary + DocumentSegment
+    instead) — the method signature drops those parameters in this
+    hotfix. State transition is the entire current-Phase responsibility.
+
+    Tests run against the real database (``requires_db`` marker) per
+    Amendment 33: state derivation depends on actual row state across
+    a session boundary, and the existing ``set_pending`` / ``fail_processing``
+    counterparts already lock to the same fixture pattern.
+    """
+
+    async def test_clears_pending_receipt_and_stamps_processed_at(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Canonical pending → ready transition:
+
+        * ``job_id`` cleared (state.PENDING pivot)
+        * ``pending_since`` cleared (receipt blanked)
+        * ``error_message`` cleared (defensive; survives a prior failed try)
+        * ``processed_at`` set to a non-NULL timestamp
+        * ``state`` property returns ``MaterialState.READY``
+        """
+        from course_supporter.storage.orm import MaterialState
+
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "complete-processing")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            job = Job(
+                id=uuid.uuid4(),
+                tenant_id=tenant.id,
+                course_node_id=root.id,
+                job_type="ingest",
+                status="active",
+            )
+            session.add(job)
+            await session.flush()
+            await session.commit()
+            tenant_id, root_id, job_id = tenant.id, root.id, job.id
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root_id,
+                source_type="text",
+                source_url="https://example.com/transition",
+            )
+            # Mimic an in-flight ingestion: receipt set, optional prior
+            # error from a previous failed attempt.
+            doc.job_id = job_id
+            doc.pending_since = datetime.now(UTC)
+            doc.error_message = "previous-attempt-error"
+            await session.commit()
+            doc_id = doc.id
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            updated = await repo.complete_processing(doc_id)
+            await session.commit()
+
+            assert updated.id == doc_id
+            assert updated.job_id is None
+            assert updated.pending_since is None
+            assert updated.error_message is None
+            assert updated.processed_at is not None
+            assert updated.state == MaterialState.READY
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_now_override_is_honoured(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The optional ``now`` parameter pins ``processed_at`` for
+        deterministic testing — mirrors :meth:`set_pending` and
+        :meth:`fail_processing` patterns.
+        """
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "complete-now-override")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            job = Job(
+                id=uuid.uuid4(),
+                tenant_id=tenant.id,
+                course_node_id=root.id,
+                job_type="ingest",
+                status="active",
+            )
+            session.add(job)
+            await session.flush()
+            await session.commit()
+            tenant_id, root_id, job_id = tenant.id, root.id, job.id
+
+        fixed = datetime(2026, 5, 5, 17, 0, 0, tzinfo=UTC)
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root_id,
+                source_type="text",
+                source_url="https://example.com/now-override",
+            )
+            doc.job_id = job_id
+            doc.pending_since = datetime(2026, 5, 5, 16, 0, 0, tzinfo=UTC)
+            await session.commit()
+            doc_id = doc.id
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            updated = await repo.complete_processing(doc_id, now=fixed)
+            await session.commit()
+
+            assert updated.processed_at == fixed
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_raises_when_entry_does_not_exist(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Symmetric guard with the rest of the repository — a missing
+        entry yields a clean ValueError rather than crashing on a NULL
+        attribute access mid-transition.
+        """
+        nonexistent = uuid.uuid4()
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            with pytest.raises(ValueError):
+                await repo.complete_processing(nonexistent)

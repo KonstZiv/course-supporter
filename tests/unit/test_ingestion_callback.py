@@ -50,7 +50,12 @@ class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
 
     async def test_material_processing_completed(self) -> None:
-        """AuthoredDocument complete_processing called with content and hash."""
+        """AuthoredDocument complete_processing called with the entry id only.
+
+        Hotfix-9 dropped ``processed_content`` + ``processed_hash`` kwargs —
+        per vision §1.2 those columns no longer live on AuthoredDocument.
+        Method is now a pure state transition (pending → ready).
+        """
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -66,10 +71,9 @@ class TestOnSuccess:
             await callback.on_success(job_id=jid, material_id=mid, content_json=content)
 
         entry_cls.return_value.complete_processing.assert_awaited_once()
-        call_kwargs = entry_cls.return_value.complete_processing.call_args
-        assert call_kwargs.args[0] == mid
-        assert call_kwargs.kwargs["processed_content"] == content
-        assert len(call_kwargs.kwargs["processed_hash"]) == 64  # SHA-256 hex
+        call_args = entry_cls.return_value.complete_processing.call_args
+        assert call_args.args[0] == mid
+        assert call_args.kwargs == {}
 
     async def test_job_updated_to_complete(self) -> None:
         """Job status transitions to 'complete'."""
@@ -316,100 +320,6 @@ class TestHooksAreNoOp:
         callback, _ = _make_callback()
         session = AsyncMock()
         await callback._invalidate_fingerprints(session, material_id=uuid.uuid4())
-
-
-class TestOutlineGeneration:
-    """Tests for _generate_outline in on_success."""
-
-    async def test_outline_generated_when_router_provided(self) -> None:
-        """on_success generates outline when router is available."""
-        factory = _mock_session_factory()
-        router = AsyncMock()
-        callback = IngestionCallback(factory, router=router)
-        mid = uuid.uuid4()
-        content = '{"source_type": "text", "source_url": "f:///t.md", "chunks": []}'
-
-        mock_outline = MagicMock()
-        mock_outline.model_dump_json.return_value = '{"title": "Test"}'
-        mock_outline.sections = [MagicMock()]
-        mock_response = MagicMock()
-        mock_response.provider = "deepseek"
-        mock_response.model_id = "deepseek-chat"
-        mock_response.tokens_in = 100
-        mock_response.tokens_out = 50
-        mock_response.latency_ms = 1000
-        mock_response.cost_usd = 0.001
-        mock_result = MagicMock()
-        mock_result.outline = mock_outline
-        mock_result.prompt_version = "v1_outline"
-        mock_result.response = mock_response
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            patch("course_supporter.agents.outline.OutlineAgent") as agent_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            entry_cls.return_value.save_outline = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-            agent_cls.return_value.run_with_metadata = AsyncMock(
-                return_value=mock_result
-            )
-
-            await callback.on_success(
-                job_id=uuid.uuid4(), material_id=mid, content_json=content
-            )
-
-        entry_cls.return_value.save_outline.assert_awaited_once()
-        save_kwargs = entry_cls.return_value.save_outline.call_args
-        assert save_kwargs.args[0] == mid
-        assert save_kwargs.kwargs["outline_json"] == '{"title": "Test"}'
-
-    async def test_outline_skipped_when_no_router(self) -> None:
-        """on_success skips outline when router is None."""
-        callback, _ = _make_callback()  # no router
-        mid = uuid.uuid4()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            patch("course_supporter.agents.outline.OutlineAgent") as agent_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(), material_id=mid, content_json="{}"
-            )
-
-        agent_cls.assert_not_called()
-
-    async def test_outline_failure_does_not_break_ingestion(self) -> None:
-        """Outline generation failure is swallowed — ingestion succeeds."""
-        factory = _mock_session_factory()
-        router = AsyncMock()
-        callback = IngestionCallback(factory, router=router)
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            patch("course_supporter.agents.outline.OutlineAgent") as agent_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-            agent_cls.return_value.run_with_metadata = AsyncMock(
-                side_effect=RuntimeError("LLM timeout")
-            )
-
-            # Should NOT raise
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                content_json='{"source_type": "text", "source_url": "f:///t.md"}',
-            )
-
-        # Job still completed despite outline failure
-        job_cls.return_value.update_status.assert_awaited_once()
 
 
 class TestCallbackIntegrationWithArqTask:

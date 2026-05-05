@@ -144,7 +144,7 @@ async def arq_ingest_material(
     mid = uuid.UUID(material_id)
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     router: ModelRouter = ctx["model_router"]
-    callback = IngestionCallback(session_factory, router=router)
+    callback = IngestionCallback(session_factory)
 
     log = structlog.get_logger().bind(
         job_id=job_id, material_id=material_id, source_type=source_type

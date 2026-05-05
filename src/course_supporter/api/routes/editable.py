@@ -59,12 +59,25 @@ async def _require_node_for_tenant(
 
 
 def _orm_to_response(node: StructureNodeEditable) -> EditableNodeResponse:
-    """Convert ORM object to response, bypassing lazy-loaded relationships."""
-    data = {
-        k: getattr(node, k)
-        for k in EditableNodeResponse.model_fields
-        if k != "children"
-    }
+    """Convert ORM object to response, bypassing lazy-loaded relationships.
+
+    3-layer contract: ORM column ↔ Pydantic field ↔ handler dict-input.
+    StructureNodeEditable still holds the legacy Phase 2.x column
+    ``materialnode_id`` (DB rename deferred to Phase 2.x). The companion
+    bridge in ``schemas.py`` declares ``course_node_id`` with
+    ``validation_alias="materialnode_id"`` + ``populate_by_name=True``.
+    Here we mirror that bridge: when iterating Pydantic field names to
+    build the dict, redirect lookup to the alias on the ORM side so
+    ``getattr`` hits the existing column. ``isinstance(alias, str)``
+    guards against future ``AliasChoices`` usage.
+    """
+    data = {}
+    for field_name, field_info in EditableNodeResponse.model_fields.items():
+        if field_name == "children":
+            continue
+        alias = field_info.validation_alias
+        src_attr = alias if isinstance(alias, str) else field_name
+        data[field_name] = getattr(node, src_attr)
     return EditableNodeResponse.model_validate({**data, "children": []})
 
 

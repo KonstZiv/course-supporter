@@ -605,10 +605,14 @@ class SnapshotSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
-    course_node_id: uuid.UUID = Field(description="Target node for this snapshot.")
+    course_node_id: uuid.UUID = Field(
+        description="Target node for this snapshot.",
+        validation_alias="materialnode_id",
+    )
     mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
     content_hash: str = Field(
-        description="Merkle fingerprint of the target subtree at generation time."
+        description="Merkle fingerprint of the target subtree at generation time.",
+        validation_alias="node_fingerprint",
     )
     externalservicecall_id: uuid.UUID | None = Field(
         description="Linked ExternalServiceCall UUID."
@@ -678,10 +682,15 @@ class SnapshotListResponse(BaseModel):
 class EditableNodeResponse(BaseModel):
     """Single editable structure node with edit-tracking metadata."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # populate_by_name=True required because the handler
+    # _orm_to_response (editable.py:60-66) constructs a dict with
+    # field-name keys and calls model_validate(dict). Dict input
+    # doesn't trigger from_attributes alias resolution; both alias
+    # and field-name must be accepted by Pydantic.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
-    course_node_id: uuid.UUID
+    course_node_id: uuid.UUID = Field(validation_alias="materialnode_id")
     source_snapshot_id: uuid.UUID | None = None
     source_structurenode_id: uuid.UUID | None = None
     node_type: str

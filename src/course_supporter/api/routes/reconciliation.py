@@ -98,9 +98,12 @@ async def _compute_current_fingerprints(
     (e.g. materials not processed). Returns (node_fp, None) if no editable
     tree exists.
     """
-    # Node fingerprint — need materials + children loaded
+    # Node fingerprint — need materials + children loaded.
+    # User-facing fingerprint must reflect ACTIVE state only — soft-
+    # deleted documents are excluded from the hash basis (Phase 1 KD3
+    # user-facing contract; hotfix-7 regression H).
     node_repo = CourseNodeRepository(session)
-    subtree = await node_repo.get_subtree(node_id, include_documents=True)
+    subtree = await node_repo.get_subtree_with_active_documents(node_id)
     if not subtree:
         return None, None
 

@@ -409,7 +409,7 @@ class TestDeleteNode:
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 CourseNodeRepository,
-                "get_subtree",
+                "get_subtree_with_active_documents",
                 return_value=[tree_node],
             ),
             patch(
@@ -457,7 +457,7 @@ class TestDeleteNode:
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 CourseNodeRepository,
-                "get_subtree",
+                "get_subtree_with_active_documents",
                 return_value=[tree_node],
             ),
             patch(
@@ -500,7 +500,7 @@ class TestDeleteNode:
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 CourseNodeRepository,
-                "get_subtree",
+                "get_subtree_with_active_documents",
                 return_value=[tree_node],
             ),
             patch(
@@ -539,7 +539,7 @@ class TestDeleteNode:
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch.object(
                 CourseNodeRepository,
-                "get_subtree",
+                "get_subtree_with_active_documents",
                 return_value=[tree_node],
             ),
             patch(

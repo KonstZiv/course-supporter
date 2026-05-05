@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
-from course_supporter.storage.orm import CourseNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 # Lazy import helper to avoid circular dependency at module load time.
 # FingerprintService → orm.py ← CourseNodeRepository → FingerprintService
@@ -337,6 +337,94 @@ class CourseNodeRepository:
         all_nodes = list(result.scalars().all())
 
         # Build lookup and assemble tree
+        by_id: dict[uuid.UUID, CourseNode] = {n.id: n for n in all_nodes}
+        roots: list[CourseNode] = []
+
+        for node in all_nodes:
+            if hasattr(node, "_sa_instance_state"):
+                set_committed_value(node, "children", [])
+                set_committed_value(node, "parent", None)
+            else:
+                node.children = []
+                node.parent = None
+
+        for node in all_nodes:
+            if node.parent_id is None or node.parent_id not in by_id:
+                roots.append(node)
+            else:
+                parent = by_id.get(node.parent_id)
+                if parent is not None:
+                    parent.children.append(node)
+                    if hasattr(node, "_sa_instance_state"):
+                        set_committed_value(node, "parent", parent)
+                    else:
+                        node.parent = parent
+
+        return roots
+
+    async def get_subtree_with_active_documents(
+        self,
+        root_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> list[CourseNode]:
+        """Subtree variant that eager-loads ONLY active (non-soft-deleted)
+        ``AuthoredDocument`` rows per node.
+
+        Soft-deleted documents stay in the database for cascade + audit
+        per the Phase 1 KD3 contract. User-facing endpoints must NOT
+        expose them — this helper centralises the ``deleted_at IS NULL``
+        filter at the loader-option level so callsites cannot leak
+        deleted docs through ``node.documents`` iteration.
+
+        Internal callsites that legitimately need the unfiltered
+        relationship (cascade engine descent, scrub callable iteration,
+        fingerprint computation against full state, methodist
+        orchestration) keep using ``get_subtree(include_documents=True,
+        ...)``. The relationship definition itself stays unchanged.
+
+        Mirror of :meth:`get_subtree` body intentionally — the
+        alternative (refactoring ``get_subtree`` to accept a
+        loader-option kwarg) would touch the internal-consumer contract
+        that hotfix-7 deliberately keeps stable.
+
+        Args:
+            root_id: UUID of the root node.
+            tenant_id: When set, restrict the recursion to nodes owned
+                by this tenant (mirrors :meth:`get_subtree` Gap 1
+                discipline — dual-side filter on base + recursive arm).
+
+        Returns:
+            List containing the root node with ``children`` populated
+            recursively, and each node's ``documents`` collection
+            restricted to active (``deleted_at IS NULL``) rows.
+            Returns empty list if ``root_id`` is not found.
+        """
+        base = select(CourseNode.id).where(CourseNode.id == root_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        cte = base.cte(name="subtree_active_docs", recursive=True)
+        recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        cte = cte.union_all(recursive)
+
+        stmt = (
+            select(CourseNode)
+            .where(CourseNode.id.in_(select(cte.c.id)))
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+            .options(
+                selectinload(
+                    CourseNode.documents.and_(AuthoredDocument.deleted_at.is_(None))
+                ),
+            )
+        )
+        result = await self._session.execute(stmt)
+        all_nodes = list(result.scalars().all())
+
         by_id: dict[uuid.UUID, CourseNode] = {n.id: n for n in all_nodes}
         roots: list[CourseNode] = []
 

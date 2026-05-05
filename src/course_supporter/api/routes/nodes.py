@@ -68,7 +68,12 @@ def _node_response(node: CourseNode) -> NodeResponse:
     """Build NodeResponse with computed children_count and authored_documents_count."""
     resp = NodeResponse.model_validate(node)
     resp.children_count = len(node.children) if node.children else 0
-    resp.authored_documents_count = len(node.documents) if node.documents else 0
+    # Soft-deleted documents stay on the relationship for cascade/audit
+    # (Phase 1 KD3 contract) — exclude them from the user-facing count.
+    active_documents = (
+        [d for d in node.documents if d.deleted_at is None] if node.documents else []
+    )
+    resp.authored_documents_count = len(active_documents)
     return resp
 
 
@@ -235,7 +240,10 @@ async def get_node_detail(
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
     repo = CourseNodeRepository(session)
-    tree_roots = await repo.get_subtree(node_id, include_documents=True)
+    # User-facing endpoint — filter soft-deleted documents at the loader
+    # so the response never exposes them (Phase 1 KD3 user-facing
+    # contract; hotfix-7 regression H).
+    tree_roots = await repo.get_subtree_with_active_documents(node_id)
     if not tree_roots:
         raise HTTPException(status_code=404, detail="Node not found")
     return NodeWithMaterialsResponse.model_validate(tree_roots[0])
@@ -415,12 +423,16 @@ async def delete_node(
     # (2) Collect S3 keys before cascade scrub blanks ``source_url``.
     # Tenant-scoped subtree (Gap 1 — commit (j)) defends against any
     # corrupt parent_id chain pulling foreign-tenant docs into the
-    # cleanup batch. ``include_documents=True`` eager-loads the
-    # AuthoredDocument relationship per node so the iteration runs
-    # without lazy IO (and without colliding with the cascade flush).
-    subtree = await node_repo.get_subtree(
+    # cleanup batch. ``get_subtree_with_active_documents`` eager-loads
+    # only active (``deleted_at IS NULL``) AuthoredDocuments per node
+    # — already-deleted docs have already been scrub-cleaned + their
+    # S3 keys enqueued via their own ``delete_document`` path, so
+    # re-collecting their keys here would either no-op (extract_key
+    # returns None on the KD3 marker) or duplicate cleanup work.
+    # Active-only filter keeps the batch precisely what cascade-scrub
+    # is about to blank in the same flush.
+    subtree = await node_repo.get_subtree_with_active_documents(
         node_id,
-        include_documents=True,
         tenant_id=tenant.tenant_id,
     )
     file_keys: list[str] = []

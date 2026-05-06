@@ -1,4 +1,10 @@
-"""Tests for AuthoredDocumentRepository."""
+"""Unit tests for AuthoredDocumentRepository — MagicMock-based, fast.
+
+Tests Python flow + signature contract + parameter handling.
+Does NOT verify DB behavior, FK constraints, or persistence — those
+are covered in ``tests/storage/test_authored_document_repository.py``
+(real-DB, Amendment 33-aligned).
+"""
 
 from __future__ import annotations
 
@@ -34,8 +40,6 @@ def _mock_entry(
     order: int = 0,
     raw_hash: str | None = None,
     raw_size_bytes: int | None = None,
-    processed_content: str | None = None,
-    processed_hash: str | None = None,
     processed_at: datetime | None = None,
     job_id: uuid.UUID | None = None,
     pending_since: datetime | None = None,
@@ -52,8 +56,6 @@ def _mock_entry(
     entry.order = order
     entry.raw_hash = raw_hash
     entry.raw_size_bytes = raw_size_bytes
-    entry.processed_content = processed_content
-    entry.processed_hash = processed_hash
     entry.processed_at = processed_at
     entry.job_id = job_id
     entry.pending_since = pending_since
@@ -310,51 +312,6 @@ class TestSetPending:
         assert before <= entry.pending_since <= after
 
 
-class TestCompleteProcessing:
-    """AuthoredDocumentRepository.complete_processing tests."""
-
-    async def test_completes_successfully(self) -> None:
-        """Sets processed fields and clears pending receipt."""
-        job_id = uuid.uuid4()
-        entry = _mock_entry(
-            job_id=job_id,
-            pending_since=datetime(2026, 1, 1, tzinfo=UTC),
-            error_message="old",
-        )
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        now = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
-        result = await repo.complete_processing(
-            entry.id,
-            processed_content='{"sections": []}',
-            processed_hash="a" * 64,
-            now=now,
-        )
-
-        assert result.processed_content == '{"sections": []}'
-        assert result.processed_hash == "a" * 64
-        assert result.processed_at == now
-        assert result.job_id is None
-        assert result.pending_since is None
-        assert result.error_message is None
-        session.flush.assert_awaited()
-
-    async def test_not_found(self) -> None:
-        """ValueError if entry doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = AuthoredDocumentRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.complete_processing(
-                uuid.uuid4(),
-                processed_content="text",
-                processed_hash="a" * 64,
-            )
-
-
 class TestFailProcessing:
     """AuthoredDocumentRepository.fail_processing tests."""
 
@@ -480,152 +437,3 @@ class TestEnsureRawHash:
         repo = AuthoredDocumentRepository(session)
         with pytest.raises(ValueError, match="not found"):
             await repo.ensure_raw_hash(uuid.uuid4(), raw_bytes=b"data")
-
-
-class TestSaveOutline:
-    """AuthoredDocumentRepository.save_outline tests."""
-
-    async def test_saves_outline_json(self) -> None:
-        """Sets outline_content and flushes."""
-        entry = _mock_entry(processed_content='{"chunks": []}')
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        result = await repo.save_outline(
-            entry.id,
-            outline_json='{"title": "Python Basics"}',
-        )
-
-        assert result.outline_content == '{"title": "Python Basics"}'
-        session.flush.assert_awaited()
-
-    async def test_not_found(self) -> None:
-        """ValueError if entry doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = AuthoredDocumentRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.save_outline(
-                uuid.uuid4(),
-                outline_json='{"title": "x"}',
-            )
-
-    async def test_overwrites_existing_outline(self) -> None:
-        """Calling save_outline twice overwrites previous value."""
-        entry = _mock_entry()
-        entry.outline_content = '{"title": "old"}'
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        result = await repo.save_outline(
-            entry.id,
-            outline_json='{"title": "new"}',
-        )
-
-        assert result.outline_content == '{"title": "new"}'
-
-
-class TestDelete:
-    """AuthoredDocumentRepository.delete tests."""
-
-    async def test_delete_calls_session_delete(self) -> None:
-        """Delegates to session.delete + flush."""
-        entry = _mock_entry()
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        await repo.delete(entry.id)
-
-        session.delete.assert_awaited_once_with(entry)
-        session.flush.assert_awaited()
-
-    async def test_delete_not_found(self) -> None:
-        """ValueError if entry doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = AuthoredDocumentRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.delete(uuid.uuid4())
-
-
-class TestLifecycle:
-    """Full lifecycle: RAW → PENDING → READY."""
-
-    async def test_raw_to_pending_to_ready(self) -> None:
-        """Full success lifecycle through repository operations."""
-        # Start with a RAW entry (real ORM object for state property)
-        from course_supporter.storage.orm import _uuid7
-
-        node_id = _uuid7()
-        entry = AuthoredDocument(
-            course_node_id=node_id,
-            source_type="web",
-            source_url="https://example.com",
-        )
-        assert entry.state.value == "raw"
-
-        # Simulate set_pending
-        job_id = _uuid7()
-        entry.job_id = job_id
-        entry.pending_since = datetime.now(UTC)
-        entry.error_message = None
-        assert entry.state.value == "pending"
-
-        # Simulate complete_processing
-        entry.processed_content = '{"sections": []}'
-        entry.processed_hash = "a" * 64
-        entry.processed_at = datetime.now(UTC)
-        entry.job_id = None
-        entry.pending_since = None
-        assert entry.state.value == "ready"
-
-    async def test_raw_to_pending_to_error(self) -> None:
-        """Failure lifecycle through repository operations."""
-        from course_supporter.storage.orm import _uuid7
-
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="text",
-            source_url="s3://bucket/notes.md",
-        )
-        assert entry.state.value == "raw"
-
-        # Simulate set_pending
-        entry.job_id = _uuid7()
-        entry.pending_since = datetime.now(UTC)
-        assert entry.state.value == "pending"
-
-        # Simulate fail_processing
-        entry.job_id = None
-        entry.pending_since = None
-        entry.error_message = "LLM timeout"
-        assert entry.state.value == "error"
-
-    async def test_update_source_invalidates(self) -> None:
-        """Source update triggers hash invalidation."""
-        from course_supporter.storage.orm import _uuid7
-
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="web",
-            source_url="https://old.com",
-            raw_hash="a" * 64,
-            processed_content='{"sections": []}',
-            processed_hash="a" * 64,
-        )
-        assert entry.state.value == "ready"
-
-        # Simulate update_source (invalidate raw_hash)
-        entry.source_url = "https://new.com"
-        entry.raw_hash = None
-        entry.raw_size_bytes = None
-        # processed_hash still set but raw_hash is gone
-        # State depends on processed_hash vs raw_hash comparison
-        # raw_hash is None, processed_hash is set -> READY
-        # (raw_hash falsy → skip integrity check)
-        assert entry.state.value == "ready"

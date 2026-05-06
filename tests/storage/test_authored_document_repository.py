@@ -1,4 +1,4 @@
-"""Tests for AuthoredDocumentRepository.create() KD-delta defensive default.
+"""Real-DB tests for AuthoredDocumentRepository — Amendment 33-aligned.
 
 Phase 1 commit (f) extends ``AuthoredDocumentRepository.create`` with
 an optional ``course_root_id`` kwarg per vision §3 KD-delta. When the
@@ -14,6 +14,9 @@ Tests run against the real database (``requires_db`` marker) because
 the resolution path is a recursive CTE walking ``parent_id`` over real
 PostgreSQL — an in-memory SQLite surrogate would not honour the same
 dialect or recursive CTE semantics.
+
+Complement: ``tests/unit/test_authored_document_repository.py`` covers
+Python flow + signature contracts via MagicMock (fast, no DB).
 """
 
 from __future__ import annotations

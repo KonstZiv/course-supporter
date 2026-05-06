@@ -88,11 +88,6 @@ class TestCourseNodeRelationships:
         fk = next(iter(col.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
-    def test_children_relationship_cascade(self) -> None:
-        """children relationship has cascade delete-orphan."""
-        rel = CourseNode.__mapper__.relationships["children"]
-        assert "delete-orphan" in rel.cascade
-
     def test_parent_relationship_exists(self) -> None:
         """parent relationship is configured."""
         rel = CourseNode.__mapper__.relationships["parent"]

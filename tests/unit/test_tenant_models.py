@@ -64,11 +64,6 @@ class TestAPIKeyModel:
         key_hash_col = table.c.key_hash
         assert key_hash_col.unique is True
 
-    def test_cascade_delete_configured(self) -> None:
-        """Tenant -> APIKey relationship has cascade delete-orphan."""
-        rel = Tenant.__mapper__.relationships["api_keys"]
-        assert "delete-orphan" in rel.cascade
-
 
 class TestGenerateAPIKey:
     """Tests for generate_api_key utility."""

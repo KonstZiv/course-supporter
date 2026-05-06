@@ -47,7 +47,7 @@ class TestCreate:
 
         result = await repo.create(
             node_id=uuid.uuid4(),
-            content_hash="abc123",
+            node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
         )
@@ -61,7 +61,7 @@ class TestCreate:
 
         await repo.create(
             node_id=uuid.uuid4(),
-            content_hash="abc123",
+            node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
         )
@@ -75,7 +75,7 @@ class TestCreate:
 
         await repo.create(
             node_id=uuid.uuid4(),
-            content_hash="abc123",
+            node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
         )
@@ -91,7 +91,7 @@ class TestCreate:
 
         result = await repo.create(
             node_id=uuid.uuid4(),
-            content_hash="abc123",
+            node_fingerprint="abc123",
             mode="guided",
             structure={"title": "Test"},
             externalservicecall_id=esc_id,
@@ -107,12 +107,12 @@ class TestCreate:
 
         result = await repo.create(
             node_id=node_id,
-            content_hash="abc123",
+            node_fingerprint="abc123",
             mode="free",
             structure={"title": "Test"},
         )
 
-        assert result.course_node_id == node_id
+        assert result.materialnode_id == node_id
 
 
 class TestGetById:
@@ -158,7 +158,7 @@ class TestFindByIdentity:
 
         result = await repo.find_by_identity(
             node_id=snap.course_node_id,
-            content_hash=snap.content_hash,
+            node_fingerprint=snap.content_hash,
             mode=snap.mode,
         )
 
@@ -174,7 +174,7 @@ class TestFindByIdentity:
 
         result = await repo.find_by_identity(
             node_id=uuid.uuid4(),
-            content_hash="nonexistent",
+            node_fingerprint="nonexistent",
             mode="free",
         )
 

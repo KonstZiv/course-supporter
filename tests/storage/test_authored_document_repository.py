@@ -133,58 +133,103 @@ class TestCreateCourseRootIdDefensive:
     """``AuthoredDocumentRepository.create`` resolves ``course_root_id``
     via parent walk when not supplied (KD-delta default)."""
 
-    async def test_create_with_explicit_course_root_id(
+    async def test_create_with_explicit_same_tenant_course_root_id(
         self,
         kd_delta_session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        """Caller-supplied value is persisted unchanged — repository
-        must NOT override it via the parent walk.
+        """Caller-supplied same-tenant value is persisted unchanged.
+
+        Verifies the trusted-caller pass-through path (e.g. ingestion
+        pipeline that already has the root in scope from authenticated
+        tenant context). Repository must NOT override the caller's
+        value via the parent walk when explicit ``course_root_id`` is
+        provided AND belongs to the same tenant as ``node_id``.
+
+        Cross-tenant ``course_root_id`` is rejected — see
+        :meth:`test_create_rejects_cross_tenant_course_root_id`.
         """
         async with kd_delta_session_factory() as session:
-            tenant = await _make_tenant(session, "explicit")
+            tenant = await _make_tenant(session, "explicit-same")
             root = await _make_node(
                 session, tenant_id=tenant.id, parent_id=None, title="root"
             )
             child = await _make_node(
                 session, tenant_id=tenant.id, parent_id=root.id, title="child"
             )
-            # Sentinel: pass an *unrelated* root id to prove the
-            # repository honours the caller's value rather than
-            # quietly recomputing.
-            sentinel_root = uuid.uuid4()
-            # Need this id to actually exist as a CourseNode for the
-            # FK constraint — create a second tenant + root.
-            other_tenant = await _make_tenant(session, "other")
-            await _make_node(
+            # Sentinel: a second root in the SAME tenant. Repository
+            # must honour the caller's choice (skip parent walk) but
+            # still reject cross-tenant attempts.
+            extra_root = await _make_node(
                 session,
-                tenant_id=other_tenant.id,
+                tenant_id=tenant.id,
                 parent_id=None,
-                title="other-root",
+                title="extra-root-same-tenant",
             )
-            # Re-using the explicit id pattern: use other_tenant's root id.
-            other_root = await _make_node(
-                session,
-                tenant_id=other_tenant.id,
-                parent_id=None,
-                title="explicit-target",
-            )
-            sentinel_root = other_root.id
             await session.commit()
-            tenant_id, other_tenant_id = tenant.id, other_tenant.id
+            tenant_id = tenant.id
             child_id = child.id
+            extra_root_id = extra_root.id
 
         async with kd_delta_session_factory() as session:
             repo = AuthoredDocumentRepository(session)
             doc = await repo.create(
                 node_id=child_id,
                 source_type="text",
-                source_url="https://example.com/explicit",
-                course_root_id=sentinel_root,
+                source_url="https://example.com/explicit-same",
+                course_root_id=extra_root_id,
             )
             await session.commit()
-            assert doc.course_root_id == sentinel_root
+            # Caller value honoured: extra_root_id NOT child's parent
+            # walk-derived root; repository did not recompute.
+            assert doc.course_root_id == extra_root_id
 
-        await _cleanup_tenant(kd_delta_session_factory, [tenant_id, other_tenant_id])
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_create_rejects_cross_tenant_course_root_id(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Cross-tenant ``course_root_id`` raises ValueError (rule #12).
+
+        Per AI ReviewBot Critical [1] (cross-check session) +
+        vision-side ratify: prior to hotfix-13, the repository accepted
+        caller-supplied cross-tenant ``course_root_id`` without
+        validation, creating a vector for cross-tenant data leak via
+        KD-delta denormalization scope-filtering. This negative test
+        guards the defense-in-depth check matching rule #12 pattern
+        (analogous to the parent_id walk in
+        :meth:`_resolve_course_root_id`).
+        """
+        async with kd_delta_session_factory() as session:
+            tenant_a = await _make_tenant(session, "victim-a")
+            tenant_b = await _make_tenant(session, "attacker-b")
+            root_a = await _make_node(
+                session, tenant_id=tenant_a.id, parent_id=None, title="root-a"
+            )
+            child_a = await _make_node(
+                session, tenant_id=tenant_a.id, parent_id=root_a.id, title="child-a"
+            )
+            # Foreign-tenant root that an attacker might try to inject
+            # via course_root_id parameter.
+            root_b = await _make_node(
+                session, tenant_id=tenant_b.id, parent_id=None, title="root-b"
+            )
+            await session.commit()
+            tenant_ids = [tenant_a.id, tenant_b.id]
+            child_a_id = child_a.id
+            root_b_id = root_b.id
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            with pytest.raises(ValueError, match=r"cross-tenant violation"):
+                await repo.create(
+                    node_id=child_a_id,
+                    source_type="text",
+                    source_url="https://example.com/cross-tenant-attempt",
+                    course_root_id=root_b_id,
+                )
+
+        await _cleanup_tenant(kd_delta_session_factory, tenant_ids)
 
     async def test_create_computes_root_when_not_provided(
         self,

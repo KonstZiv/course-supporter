@@ -63,11 +63,37 @@ class AuthoredDocumentRepository:
             The newly created AuthoredDocument.
 
         Raises:
-            ValueError: If ``node_id`` does not exist, or
-                ``course_root_id`` is not provided and the parent walk
-                cannot resolve a root within the parent's tenant.
+            ValueError: If ``node_id`` does not exist; ``course_root_id``
+                is not provided and the parent walk cannot resolve a
+                root within the parent's tenant; or ``course_root_id``
+                is provided but does not exist or belongs to a foreign
+                tenant (rule #12 + KD-delta tenant scope).
         """
-        if course_root_id is None:
+        if course_root_id is not None:
+            # Defense-in-depth: caller-supplied course_root_id must
+            # belong to the same tenant as node_id (rule #12 +
+            # KD-delta tenant scope). Prior to hotfix-13 this branch
+            # accepted the caller's value unchanged, which created a
+            # cross-tenant data-leak vector via KD-delta scope-filtering
+            # downstream.
+            #
+            # Race-condition disposition: race-against-delete excluded
+            # by KD3 soft-delete contract (CourseNode never hard-deleted
+            # at runtime); race-against-tenant-change excluded by Phase
+            # 1 immutable tenant_id invariant. Pessimistic lock
+            # (SELECT FOR UPDATE) deemed unnecessary.
+            node = await self._session.get(CourseNode, node_id)
+            if node is None:
+                msg = f"CourseNode not found: {node_id}"
+                raise ValueError(msg)
+            root_node = await self._session.get(CourseNode, course_root_id)
+            if root_node is None or root_node.tenant_id != node.tenant_id:
+                msg = (
+                    f"Invalid course_root_id {course_root_id}: not found "
+                    f"or cross-tenant violation (node tenant {node.tenant_id})"
+                )
+                raise ValueError(msg)
+        else:
             course_root_id = await self._resolve_course_root_id(node_id)
         next_order = await self._next_sibling_order(node_id)
         task_type_value: str | None

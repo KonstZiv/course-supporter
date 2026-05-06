@@ -1,4 +1,4 @@
-"""Repository for MaterialEntry CRUD and lifecycle management."""
+"""Repository for AuthoredDocument CRUD and lifecycle management."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole
-from course_supporter.storage.orm import MaterialEntry, MaterialNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 
-class MaterialEntryRepository:
+class AuthoredDocumentRepository:
     """Repository for material entry operations.
 
     Handles CRUD, pending receipt management, and hash invalidation.
@@ -34,11 +34,12 @@ class MaterialEntryRepository:
         material_role: str = "educational",
         task_type: AssignmentType | str | None = None,
         language: str | None = None,
-    ) -> MaterialEntry:
+        course_root_id: uuid.UUID | None = None,
+    ) -> AuthoredDocument:
         """Create a new material entry with auto-incremented order.
 
         Args:
-            node_id: FK to the parent MaterialNode.
+            node_id: FK to the parent CourseNode.
             source_type: One of video, presentation, text, web.
             source_url: URL or storage path for the raw material.
             filename: Original filename (for uploads).
@@ -49,18 +50,60 @@ class MaterialEntryRepository:
             language: Optional ISO 639-1 language override. When None,
                 the course default is used and STT falls back to
                 auto-detection (which caches its result back here).
+            course_root_id: Optional KD-delta denormalized root id. When
+                omitted, the repository walks ``node_id``'s parent chain
+                to derive it (defense-in-depth: walk is tenant-scoped to
+                the parent's tenant per rule #12 — a malformed parent
+                pointing at a different tenant terminates the walk
+                early and raises). Callers that already have the root
+                in scope (e.g. ingestion pipeline working from the
+                course context) can pass it directly to skip the walk.
 
         Returns:
-            The newly created MaterialEntry.
+            The newly created AuthoredDocument.
+
+        Raises:
+            ValueError: If ``node_id`` does not exist; ``course_root_id``
+                is not provided and the parent walk cannot resolve a
+                root within the parent's tenant; or ``course_root_id``
+                is provided but does not exist or belongs to a foreign
+                tenant (rule #12 + KD-delta tenant scope).
         """
+        if course_root_id is not None:
+            # Defense-in-depth: caller-supplied course_root_id must
+            # belong to the same tenant as node_id (rule #12 +
+            # KD-delta tenant scope). Prior to hotfix-13 this branch
+            # accepted the caller's value unchanged, which created a
+            # cross-tenant data-leak vector via KD-delta scope-filtering
+            # downstream.
+            #
+            # Race-condition disposition: race-against-delete excluded
+            # by KD3 soft-delete contract (CourseNode never hard-deleted
+            # at runtime); race-against-tenant-change excluded by Phase
+            # 1 immutable tenant_id invariant. Pessimistic lock
+            # (SELECT FOR UPDATE) deemed unnecessary.
+            node = await self._session.get(CourseNode, node_id)
+            if node is None:
+                msg = f"CourseNode not found: {node_id}"
+                raise ValueError(msg)
+            root_node = await self._session.get(CourseNode, course_root_id)
+            if root_node is None or root_node.tenant_id != node.tenant_id:
+                msg = (
+                    f"Invalid course_root_id {course_root_id}: not found "
+                    f"or cross-tenant violation (node tenant {node.tenant_id})"
+                )
+                raise ValueError(msg)
+        else:
+            course_root_id = await self._resolve_course_root_id(node_id)
         next_order = await self._next_sibling_order(node_id)
         task_type_value: str | None
         if isinstance(task_type, AssignmentType):
             task_type_value = task_type.value
         else:
             task_type_value = task_type
-        entry = MaterialEntry(
-            materialnode_id=node_id,
+        entry = AuthoredDocument(
+            course_node_id=node_id,
+            course_root_id=course_root_id,
             source_type=source_type,
             source_url=source_url,
             filename=filename,
@@ -74,37 +117,72 @@ class MaterialEntryRepository:
         await self._invalidate_node_chain(node_id)
         return entry
 
-    async def get_by_id(self, entry_id: uuid.UUID) -> MaterialEntry | None:
+    async def _resolve_course_root_id(self, node_id: uuid.UUID) -> uuid.UUID:
+        """Compute the KD-delta root id for ``node_id`` via parent walk.
+
+        Loads the parent ``CourseNode`` to extract its ``tenant_id``,
+        then delegates to :meth:`CourseNodeRepository.get_root_for`
+        with the tenant filter applied to both the base and recursive
+        steps of the CTE. Tenant-scoped walking is defence-in-depth
+        per rule #12: a malformed tree where ``node_id``'s parent
+        chain crosses tenants returns ``None`` rather than silently
+        resolving to a foreign tenant's root.
+
+        Raises:
+            ValueError: If ``node_id`` does not exist, or the
+                tenant-scoped walk cannot reach a root (cross-tenant
+                ``parent_id`` corruption).
+        """
+        from course_supporter.storage.course_node_repository import (
+            CourseNodeRepository,
+        )
+
+        parent_node = await self._session.get(CourseNode, node_id)
+        if parent_node is None:
+            msg = f"CourseNode not found: {node_id}"
+            raise ValueError(msg)
+        node_repo = CourseNodeRepository(self._session)
+        root = await node_repo.get_root_for(node_id, tenant_id=parent_node.tenant_id)
+        if root is None:
+            msg = (
+                f"Cannot resolve course_root_id for {node_id}: parent walk "
+                f"did not reach a tenant-{parent_node.tenant_id} root "
+                f"(possible cross-tenant parent_id corruption)"
+            )
+            raise ValueError(msg)
+        return root.id
+
+    async def get_by_id(self, entry_id: uuid.UUID) -> AuthoredDocument | None:
         """Get an entry by primary key."""
-        return await self._session.get(MaterialEntry, entry_id)
+        return await self._session.get(AuthoredDocument, entry_id)
 
     async def get_for_node(
         self, node_id: uuid.UUID, *, source_type: str | None = None
-    ) -> list[MaterialEntry]:
+    ) -> list[AuthoredDocument]:
         """Get entries for a node, ordered by position.
 
         Args:
-            node_id: FK to the parent MaterialNode.
+            node_id: FK to the parent CourseNode.
             source_type: Optional filter by source type.
         """
         stmt = (
-            select(MaterialEntry)
-            .where(MaterialEntry.materialnode_id == node_id)
-            .order_by(MaterialEntry.order)
+            select(AuthoredDocument)
+            .where(AuthoredDocument.course_node_id == node_id)
+            .order_by(AuthoredDocument.order)
         )
         if source_type is not None:
-            stmt = stmt.where(MaterialEntry.source_type == source_type)
+            stmt = stmt.where(AuthoredDocument.source_type == source_type)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_source_url(self, source_url: str) -> MaterialEntry | None:
+    async def get_by_source_url(self, source_url: str) -> AuthoredDocument | None:
         """Find an entry by its source_url (exact match)."""
-        stmt = select(MaterialEntry).where(MaterialEntry.source_url == source_url)
+        stmt = select(AuthoredDocument).where(AuthoredDocument.source_url == source_url)
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
-    async def find_by_raw_hash(self, raw_hash: str) -> MaterialEntry | None:
-        """Find the oldest active MaterialEntry with the given ``raw_hash``.
+    async def find_by_raw_hash(self, raw_hash: str) -> AuthoredDocument | None:
+        """Find the oldest active AuthoredDocument with the given ``raw_hash``.
 
         Used by ingestion to detect re-uploads of identical content
         (vision §3 KD9 + KD4). Filters out soft-deleted rows
@@ -119,10 +197,10 @@ class MaterialEntryRepository:
         issue a custom query.
         """
         stmt = (
-            select(MaterialEntry)
-            .where(MaterialEntry.raw_hash == raw_hash)
-            .where(MaterialEntry.deleted_at.is_(None))
-            .order_by(MaterialEntry.id)
+            select(AuthoredDocument)
+            .where(AuthoredDocument.raw_hash == raw_hash)
+            .where(AuthoredDocument.deleted_at.is_(None))
+            .order_by(AuthoredDocument.id)
         )
         result = await self._session.execute(stmt)
         return result.scalars().first()
@@ -140,10 +218,10 @@ class MaterialEntryRepository:
         was already set (or the row does not exist).
         """
         stmt = (
-            update(MaterialEntry)
+            update(AuthoredDocument)
             .where(
-                MaterialEntry.id == entry_id,
-                MaterialEntry.language.is_(None),
+                AuthoredDocument.id == entry_id,
+                AuthoredDocument.language.is_(None),
             )
             .values(language=language)
             .execution_options(synchronize_session=False)
@@ -160,7 +238,7 @@ class MaterialEntryRepository:
         job_id: uuid.UUID,
         *,
         now: datetime | None = None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Mark entry as pending ingestion.
 
         Sets job_id and pending_since, clears error_message.
@@ -185,33 +263,39 @@ class MaterialEntryRepository:
         self,
         entry_id: uuid.UUID,
         *,
-        processed_content: str,
-        processed_hash: str,
         now: datetime | None = None,
-    ) -> MaterialEntry:
-        """Mark entry as successfully processed.
+    ) -> AuthoredDocument:
+        """Transition a document from PENDING to READY.
 
-        Clears pending receipt and sets processed layer.
+        Symmetric to :meth:`set_pending` (writes the receipt) and
+        :meth:`fail_processing` (clears the receipt with an error).
+        Clears the pending receipt and stamps ``processed_at``; the
+        ``state`` derivation property (``orm.AuthoredDocument.state``)
+        reads ``job_id IS NULL`` as READY.
+
+        Vision §1.2 explicitly removes ``processed_content`` /
+        ``outline_content`` / ``processed_hash`` columns from the
+        authored layer — processed content lives in DocumentSummary +
+        DocumentSegment after the Phase 2.x KD2 Pass 2 pipeline lands.
+        Until then this method only flips the state; no content is
+        persisted on the AuthoredDocument row itself.
 
         Args:
-            entry_id: Entry to update.
-            processed_content: Extracted/processed text content.
-            processed_hash: SHA-256 hash of raw source at processing time.
+            entry_id: AuthoredDocument id to mark READY.
             now: Override for current time (testing).
 
+        Returns:
+            The updated AuthoredDocument.
+
         Raises:
-            ValueError: If entry not found.
+            ValueError: If the entry is not found.
         """
         entry = await self._require(entry_id)
-        now = now or datetime.now(UTC)
-        entry.processed_content = processed_content
-        entry.processed_hash = processed_hash
-        entry.processed_at = now
         entry.job_id = None
         entry.pending_since = None
         entry.error_message = None
+        entry.processed_at = now or datetime.now(UTC)
         await self._session.flush()
-        await self._invalidate_node_chain(entry.materialnode_id)
         return entry
 
     async def fail_processing(
@@ -219,7 +303,7 @@ class MaterialEntryRepository:
         entry_id: uuid.UUID,
         *,
         error_message: str,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Mark entry as failed processing.
 
         Clears pending receipt and sets error_message.
@@ -244,12 +328,14 @@ class MaterialEntryRepository:
         *,
         source_url: str,
         filename: str | None = None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update source URL and invalidate raw hash.
 
-        When the source changes, raw_hash is cleared to signal that
-        the processed layer is potentially stale. This triggers
-        INTEGRITY_BROKEN state if processed_content exists.
+        When the source changes, ``raw_hash`` is cleared so the next
+        ingestion pass recomputes it from the new bytes. The Phase 2.x
+        Pass 2 pipeline (vision §3 KD2) is responsible for surfacing
+        any downstream staleness via ``content_hash`` invalidation
+        on the parent ``CourseNode`` chain.
 
         Args:
             entry_id: Entry to update.
@@ -265,7 +351,7 @@ class MaterialEntryRepository:
         entry.raw_hash = None
         entry.raw_size_bytes = None
         await self._session.flush()
-        await self._invalidate_node_chain(entry.materialnode_id)
+        await self._invalidate_node_chain(entry.course_node_id)
         return entry
 
     async def ensure_raw_hash(
@@ -273,7 +359,7 @@ class MaterialEntryRepository:
         entry_id: uuid.UUID,
         *,
         raw_bytes: bytes,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Lazily compute and set raw_hash from content bytes.
 
         Only sets the hash if it is currently None.
@@ -292,36 +378,12 @@ class MaterialEntryRepository:
             await self._session.flush()
         return entry
 
-    async def save_outline(
-        self,
-        entry_id: uuid.UUID,
-        *,
-        outline_json: str,
-    ) -> MaterialEntry:
-        """Save MaterialOutline JSON for a processed entry.
-
-        Stores the lossless restructured outline alongside the raw
-        processed_content. Does not invalidate fingerprints — the
-        outline is a derivative, not a source of identity.
-
-        Args:
-            entry_id: Entry to update.
-            outline_json: Serialized MaterialOutline JSON.
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        entry.outline_content = outline_json
-        await self._session.flush()
-        return entry
-
     async def update_material_role(
         self,
-        entry: MaterialEntry,
+        entry: AuthoredDocument,
         *,
         material_role: MaterialRole,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update the material_role field on an already-loaded entry.
 
         Args:
@@ -334,10 +396,10 @@ class MaterialEntryRepository:
 
     async def update_task_type(
         self,
-        entry: MaterialEntry,
+        entry: AuthoredDocument,
         *,
         task_type: AssignmentType | None,
-    ) -> MaterialEntry:
+    ) -> AuthoredDocument:
         """Update the task_type field on an already-loaded entry.
 
         Args:
@@ -348,17 +410,23 @@ class MaterialEntryRepository:
         await self._session.flush()
         return entry
 
-    async def delete(self, entry_id: uuid.UUID) -> None:
-        """Delete an entry and invalidate parent node fingerprints.
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        node_id = entry.materialnode_id
-        await self._session.delete(entry)
-        await self._session.flush()
-        await self._invalidate_node_chain(node_id)
+    # ``delete()`` removed in Phase 1 sub-area ``kd3`` commit (m) — the
+    # last remaining caller (``routes/storage.py::delete_file``) was
+    # rewritten to use :class:`CascadeDeleteService.soft_delete_with_cascade`
+    # so the KD3 contract (soft-delete + scrub) and QQ5 contract
+    # (DB → commit → ARQ enqueue via ``enqueue_s3_cleanup``) hold uniformly
+    # across all 3 KD3-violating handlers (delete_node + delete_document +
+    # delete_file). The legacy hard-delete path is now structurally
+    # unreachable from the public API surface; cascade-driven soft-delete
+    # is the canonical replacement.
+    #
+    # The ``_invalidate_node_chain`` and ``_require`` private helpers
+    # below are PRESERVED — they remain active callers from ``create()``
+    # (initial fingerprint propagation) and ``update_source()`` (raw_hash
+    # invalidation). Phase 5 sweep migrates ``_invalidate_node_chain``
+    # off legacy ``FingerprintService.invalidate_up`` onto
+    # :class:`ContentHashService.invalidate_subtree` alongside the
+    # FingerprintService module deletion.
 
     # ── Private helpers ──
 
@@ -366,22 +434,22 @@ class MaterialEntryRepository:
         """Invalidate fingerprints from node up to root."""
         from course_supporter.fingerprint import FingerprintService
 
-        node = await self._session.get(MaterialNode, node_id)
+        node = await self._session.get(CourseNode, node_id)
         if node is not None:
             await FingerprintService(self._session).invalidate_up(node)
 
-    async def _require(self, entry_id: uuid.UUID) -> MaterialEntry:
+    async def _require(self, entry_id: uuid.UUID) -> AuthoredDocument:
         """Get entry or raise ValueError."""
         entry = await self.get_by_id(entry_id)
         if entry is None:
-            msg = f"MaterialEntry not found: {entry_id}"
+            msg = f"AuthoredDocument not found: {entry_id}"
             raise ValueError(msg)
         return entry
 
     async def _next_sibling_order(self, node_id: uuid.UUID) -> int:
         """Get next order value for entries under the given node."""
-        stmt = select(func.coalesce(func.max(MaterialEntry.order) + 1, 0)).where(
-            MaterialEntry.materialnode_id == node_id,
+        stmt = select(func.coalesce(func.max(AuthoredDocument.order) + 1, 0)).where(
+            AuthoredDocument.course_node_id == node_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one()

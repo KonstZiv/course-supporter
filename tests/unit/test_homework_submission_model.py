@@ -6,10 +6,10 @@ import pytest
 
 from course_supporter.storage.homework_repository import HOMEWORK_TRANSITIONS
 from course_supporter.storage.orm import (
+    CourseNode,
     HomeworkStatus,
     HomeworkSubmission,
     Job,
-    MaterialNode,
     StructureNodeEditable,
     Student,
     Tenant,
@@ -140,17 +140,17 @@ class TestHomeworkSubmissionForeignKeys:
         assert fk.ondelete == "CASCADE"
 
     def test_course_node_id_fk(self) -> None:
-        """course_node_id FK points to material_nodes.id with CASCADE."""
+        """course_node_id FK points to course_nodes.id with CASCADE."""
         col = HomeworkSubmission.__table__.c.course_node_id
         fk = next(iter(col.foreign_keys))
-        assert fk.target_fullname == "material_nodes.id"
+        assert fk.target_fullname == "course_nodes.id"
         assert fk.ondelete == "CASCADE"
 
     def test_node_id_fk(self) -> None:
-        """node_id FK points to material_nodes.id with CASCADE."""
+        """node_id FK points to course_nodes.id with CASCADE."""
         col = HomeworkSubmission.__table__.c.node_id
         fk = next(iter(col.foreign_keys))
-        assert fk.target_fullname == "material_nodes.id"
+        assert fk.target_fullname == "course_nodes.id"
         assert fk.ondelete == "CASCADE"
 
     def test_matched_task_id_fk(self) -> None:
@@ -214,14 +214,14 @@ class TestHomeworkSubmissionRelationships:
         assert rel.back_populates == "submissions"
 
     def test_course_node_relationship(self) -> None:
-        """course_node relationship to MaterialNode."""
+        """course_node relationship to CourseNode."""
         rel = HomeworkSubmission.__mapper__.relationships["course_node"]
-        assert rel.mapper.class_ is MaterialNode
+        assert rel.mapper.class_ is CourseNode
 
     def test_node_relationship(self) -> None:
-        """node relationship to MaterialNode."""
+        """node relationship to CourseNode."""
         rel = HomeworkSubmission.__mapper__.relationships["node"]
-        assert rel.mapper.class_ is MaterialNode
+        assert rel.mapper.class_ is CourseNode
 
     def test_matched_task_relationship(self) -> None:
         """matched_task relationship to StructureNodeEditable."""

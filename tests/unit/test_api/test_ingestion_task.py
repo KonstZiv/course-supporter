@@ -11,7 +11,7 @@ from course_supporter.models.source import SourceDocument, SourceType
 _FACTORY = "course_supporter.api.tasks.create_processors"
 _HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 _ENTRY_REPO = (
-    "course_supporter.storage.material_entry_repository.MaterialEntryRepository"
+    "course_supporter.storage.authored_document_repository.AuthoredDocumentRepository"
 )
 
 
@@ -78,7 +78,7 @@ def _failing_processors(
 
 
 def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.source_url = source_url
     return entry
@@ -219,7 +219,7 @@ class TestArqIngestMaterial:
         assert "boom" in call_kwargs["error_message"]
 
     async def test_entry_not_found_returns_early(self) -> None:
-        """When MaterialEntry not found, returns early without processing."""
+        """When AuthoredDocument not found, returns early without processing."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
         factory = _make_session_factory()

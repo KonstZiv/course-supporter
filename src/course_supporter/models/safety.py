@@ -75,7 +75,7 @@ class CourseContext(BaseModel):
     )
     outline_summary: str = Field(
         default="",
-        description="Outline summary from MaterialEntry, if available.",
+        description="Outline summary from AuthoredDocument, if available.",
     )
 
 

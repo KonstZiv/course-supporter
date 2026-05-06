@@ -33,7 +33,7 @@ NODE_ID = uuid.uuid4()
 SNAPSHOT_ID = uuid.uuid4()
 NOW = datetime.now(UTC)
 
-_REPO_PATH = "course_supporter.api.routes.generation.MaterialNodeRepository"
+_REPO_PATH = "course_supporter.api.routes.generation.CourseNodeRepository"
 _SNAP_PATH = "course_supporter.api.routes.generation.SnapshotRepository"
 _TRIGGER_PATH = "course_supporter.api.routes.generation.trigger_generation"
 _REFINE_PATH = "course_supporter.api.routes.generation.trigger_refine"
@@ -78,9 +78,11 @@ def _make_snapshot(
 ) -> MagicMock:
     snap = MagicMock()
     snap.id = snapshot_id or SNAPSHOT_ID
-    snap.materialnode_id = node_id or NODE_ID
+    snap.course_node_id = node_id or NODE_ID
+    snap.materialnode_id = snap.course_node_id
     snap.mode = "free"
-    snap.node_fingerprint = "a" * 64
+    snap.content_hash = "a" * 64
+    snap.node_fingerprint = snap.content_hash
     snap.externalservicecall_id = uuid.uuid4()
     snap.service_call = MagicMock(
         id=snap.externalservicecall_id,
@@ -100,26 +102,26 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or NODE_ID
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     return node
 
 
 def _mock_structure_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     node_type: str = StructureNodeType.MODULE,
     order: int = 0,
     title: str = "Node",
 ) -> MagicMock:
     sn = MagicMock()
     sn.id = node_id or uuid.uuid4()
-    sn.parent_structurenode_id = parent_materialnode_id
+    sn.parent_structurenode_id = parent_id
     sn.node_type = node_type
     sn.order = order
     sn.title = title
@@ -158,12 +160,12 @@ def _mock_structure_tree() -> list[MagicMock]:
         ),
         _mock_structure_node(
             node_id=les_id,
-            parent_materialnode_id=mod_id,
+            parent_id=mod_id,
             title="Lesson 1",
             node_type=StructureNodeType.LESSON,
         ),
         _mock_structure_node(
-            parent_materialnode_id=les_id,
+            parent_id=les_id,
             title="Concept 1",
             node_type=StructureNodeType.CONCEPT,
         ),
@@ -748,7 +750,7 @@ class TestTenantIsolation:
     """Verify _require_node_for_tenant checks node ownership."""
 
     async def test_generate_checks_tenant(self, client: AsyncClient) -> None:
-        """POST generate verifies node ownership via MaterialNodeRepository."""
+        """POST generate verifies node ownership via CourseNodeRepository."""
         with (
             patch(_REPO_PATH) as mock_repo_cls,
             patch(_FIND_ROOT_PATH, new_callable=AsyncMock, return_value=NODE_ID),
@@ -764,13 +766,13 @@ class TestTenantIsolation:
                 json={"mode": "free"},
             )
 
-        # MaterialNodeRepository is instantiated with session (no tenant_id)
+        # CourseNodeRepository is instantiated with session (no tenant_id)
         mock_repo_cls.assert_called()
         # get_by_id is called with node_id
         mock_repo_cls.return_value.get_by_id.assert_called()
 
     async def test_get_structure_checks_tenant(self, client: AsyncClient) -> None:
-        """GET structure verifies node ownership via MaterialNodeRepository."""
+        """GET structure verifies node ownership via CourseNodeRepository."""
         with (
             patch(_REPO_PATH) as mock_repo_cls,
             patch(_SNAP_PATH) as mock_snap_cls,

@@ -37,10 +37,10 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_reconcile_preview
 from course_supporter.fingerprint import FingerprintService, compute_editable_tree_hash
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.reconciliation_preview_repository import (
     ReconciliationPreviewRepository,
 )
@@ -92,15 +92,18 @@ async def _compute_current_fingerprints(
     session: AsyncSession,
     node_id: uuid.UUID,
 ) -> tuple[str | None, str | None]:
-    """Compute current (node_fingerprint, editable_tree_hash) for a node.
+    """Compute current (content_hash, editable_tree_hash) for a node.
 
     Returns (None, editable_hash) if node fingerprint cannot be computed
     (e.g. materials not processed). Returns (node_fp, None) if no editable
     tree exists.
     """
-    # Node fingerprint — need materials + children loaded
-    node_repo = MaterialNodeRepository(session)
-    subtree = await node_repo.get_subtree(node_id, include_materials=True)
+    # Node fingerprint — need materials + children loaded.
+    # User-facing fingerprint must reflect ACTIVE state only — soft-
+    # deleted documents are excluded from the hash basis (Phase 1 KD3
+    # user-facing contract; hotfix-7 regression H).
+    node_repo = CourseNodeRepository(session)
+    subtree = await node_repo.get_subtree_with_active_documents(node_id)
     if not subtree:
         return None, None
 
@@ -112,7 +115,7 @@ async def _compute_current_fingerprints(
         await session.flush()
     except (ValueError, AttributeError) as exc:
         logger.warning(
-            "node_fingerprint_failed",
+            "content_hash_failed",
             node_id=str(node_id),
             error=str(exc),
             error_type=type(exc).__name__,
@@ -272,7 +275,7 @@ async def reconcile_preview(
         tenant_id=tenant.tenant_id,
         node_id=node_id,
         combined_fingerprint=fp_to_store,
-        node_fingerprint=current_node_fp,
+        content_hash=current_node_fp,
         editable_tree_hash=current_editable_hash,
     )
     await session.commit()
@@ -375,7 +378,7 @@ async def reconcile_apply(
     source_snapshot_id = flat[0].source_snapshot_id if flat else None
 
     return EditableTreeResponse(
-        materialnode_id=node_id,
+        course_node_id=node_id,
         source_snapshot_id=source_snapshot_id,
         nodes=_build_tree(flat),
     )

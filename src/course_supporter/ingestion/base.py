@@ -18,9 +18,9 @@ from course_supporter.models.source import SourceDocument
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.storage.orm import (
-        MaterialEntry,
-        MaterialMacroSection,
-        MaterialSegment,
+        AuthoredDocument,
+        DocumentSegment,
+        DocumentSummary,
     )
 
 
@@ -51,7 +51,7 @@ class MaterialProcessor(abc.ABC):
     @abc.abstractmethod
     async def process_raw(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
@@ -73,10 +73,10 @@ class MaterialProcessor(abc.ABC):
 
     async def process_macro(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
-    ) -> list[MaterialMacroSection]:
+    ) -> list[DocumentSummary]:
         """Generate table-of-contents sections for the given material.
 
         Default implementation raises ``NotImplementedError``. Each
@@ -89,10 +89,10 @@ class MaterialProcessor(abc.ABC):
 
     async def process_detail(
         self,
-        macro: MaterialMacroSection,
+        macro: DocumentSummary,
         *,
         router: ModelRouter | None = None,
-    ) -> list[MaterialSegment]:
+    ) -> list[DocumentSegment]:
         """Produce cleaned/sliced segments for a single macro section.
 
         Default implementation raises ``NotImplementedError``. Each

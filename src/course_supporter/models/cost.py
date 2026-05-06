@@ -71,7 +71,7 @@ class CourseCostResponse(BaseModel):
     """Response shape for ``GET /api/v1/cost/course/{course_node_id}``.
 
     Drill-down: ``by_node`` covers the entire subtree rooted at
-    ``course_node_id`` (recursive via ``parent_materialnode_id``).
+    ``course_node_id`` (recursive via ``parent_id``).
     """
 
     model_config = ConfigDict(populate_by_name=True)

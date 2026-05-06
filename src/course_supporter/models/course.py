@@ -21,7 +21,7 @@ class SlideTimecodeRef(BaseModel):
     video_timecode_start: str
 
 
-class MaterialNodeSummary(BaseModel):
+class CourseNodeSummary(BaseModel):
     """Node metadata with material references for LLM context.
 
     Provides a lightweight tree representation that tells the LLM
@@ -33,7 +33,7 @@ class MaterialNodeSummary(BaseModel):
     description: str | None = None
     order: int
     material_titles: list[str] = Field(default_factory=list)
-    children: list[MaterialNodeSummary] = Field(default_factory=list)
+    children: list[CourseNodeSummary] = Field(default_factory=list)
 
 
 class CourseContext(BaseModel):
@@ -46,7 +46,7 @@ class CourseContext(BaseModel):
 
     documents: list[SourceDocument]
     slide_video_mappings: list[SlideTimecodeRef] = Field(default_factory=list)
-    material_tree: list[MaterialNodeSummary] = Field(default_factory=list)
+    material_tree: list[CourseNodeSummary] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

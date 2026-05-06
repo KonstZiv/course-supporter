@@ -33,7 +33,7 @@ class TestJobModel:
 
     def test_node_fk(self) -> None:
         fks = {fk.target_fullname for fk in Job.__table__.foreign_keys}
-        assert "material_nodes.id" in fks
+        assert "course_nodes.id" in fks
 
     def test_tenant_fk(self) -> None:
         fks = {fk.target_fullname for fk in Job.__table__.foreign_keys}

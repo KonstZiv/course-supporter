@@ -21,7 +21,7 @@ from course_supporter.models.source import (
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import MaterialEntry
+    from course_supporter.storage.orm import AuthoredDocument
 
 logger = structlog.get_logger()
 
@@ -37,7 +37,7 @@ class TextProcessor(MaterialProcessor):
 
     async def process_raw(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:

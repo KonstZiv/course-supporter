@@ -3,7 +3,7 @@
 from course_supporter.ingestion.merge import MergeStep
 from course_supporter.models.course import (
     CourseContext,
-    MaterialNodeSummary,
+    CourseNodeSummary,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -74,7 +74,7 @@ class TestMergeStep:
 
         step = MergeStep()
         tree = [
-            MaterialNodeSummary(
+            CourseNodeSummary(
                 node_id=_uuid.uuid4(),
                 title="Intro",
                 parent_id=None,
@@ -151,12 +151,12 @@ class TestMergeStep:
         """material_tree passed through to CourseContext."""
         step = MergeStep()
         tree = [
-            MaterialNodeSummary(
+            CourseNodeSummary(
                 title="Module 1",
                 order=0,
                 material_titles=["lecture.pdf"],
                 children=[
-                    MaterialNodeSummary(
+                    CourseNodeSummary(
                         title="Lesson 1",
                         order=0,
                         material_titles=["video.mp4"],

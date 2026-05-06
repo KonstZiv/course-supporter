@@ -19,8 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.models.source import SourceType
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 
 pytestmark = pytest.mark.requires_db
 
@@ -93,7 +95,7 @@ class TestArqIngestMaterialE2E:
 
         Also covers the STT auto-detect language cache: when the
         processor reports ``detected_language``, it is persisted to
-        ``MaterialEntry.language`` (entries seeded with language=NULL).
+        ``AuthoredDocument.language`` (entries seeded with language=NULL).
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]
@@ -137,7 +139,7 @@ class TestArqIngestMaterialE2E:
         # Verify final DB state
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = MaterialEntryRepository(session)
+            mat_repo = AuthoredDocumentRepository(session)
 
             final_job = await job_repo.get_by_id(job_id)
             final_mat = await mat_repo.get_by_id(mid)
@@ -200,7 +202,7 @@ class TestArqIngestMaterialE2E:
         # Verify final DB state
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = MaterialEntryRepository(session)
+            mat_repo = AuthoredDocumentRepository(session)
 
             final_job = await job_repo.get_by_id(job_id)
             final_mat = await mat_repo.get_by_id(mid)

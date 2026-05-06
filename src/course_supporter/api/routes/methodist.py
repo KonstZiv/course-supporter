@@ -28,10 +28,10 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.storage.editable_repository import EditableRepository
-from course_supporter.storage.material_node_repository import (
-    MaterialNodeRepository,
+from course_supporter.storage.course_node_repository import (
+    CourseNodeRepository,
 )
+from course_supporter.storage.editable_repository import EditableRepository
 
 logger = structlog.get_logger()
 
@@ -52,7 +52,7 @@ async def _require_node_for_tenant(
     node_id: uuid.UUID,
 ) -> None:
     """Verify the node exists and belongs to the tenant."""
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -91,7 +91,7 @@ async def trigger_methodist(
             redis=arq,
             session=session,
             tenant_id=tenant.tenant_id,
-            materialnode_id=node_id,
+            course_node_id=node_id,
         )
     except ValueError as exc:
         raise HTTPException(

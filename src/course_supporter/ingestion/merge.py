@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import structlog
 
-from course_supporter.models.course import CourseContext, MaterialNodeSummary
+from course_supporter.models.course import CourseContext, CourseNodeSummary
 from course_supporter.models.source import SourceDocument, SourceType
 
 logger = structlog.get_logger()
@@ -31,7 +31,7 @@ class MergeStep:
     def merge(
         self,
         documents: list[SourceDocument],
-        material_tree: list[MaterialNodeSummary] | None = None,
+        material_tree: list[CourseNodeSummary] | None = None,
     ) -> CourseContext:
         """Merge source documents into CourseContext.
 

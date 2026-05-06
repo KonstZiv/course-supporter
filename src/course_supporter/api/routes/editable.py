@@ -29,8 +29,8 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_repository import EditableRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import StructureNodeEditable
 from course_supporter.storage.snapshot_repository import SnapshotRepository
 
@@ -51,7 +51,7 @@ async def _require_node_for_tenant(
     node_id: uuid.UUID,
 ) -> object:
     """Verify the node exists and belongs to the tenant."""
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -59,12 +59,25 @@ async def _require_node_for_tenant(
 
 
 def _orm_to_response(node: StructureNodeEditable) -> EditableNodeResponse:
-    """Convert ORM object to response, bypassing lazy-loaded relationships."""
-    data = {
-        k: getattr(node, k)
-        for k in EditableNodeResponse.model_fields
-        if k != "children"
-    }
+    """Convert ORM object to response, bypassing lazy-loaded relationships.
+
+    3-layer contract: ORM column ↔ Pydantic field ↔ handler dict-input.
+    StructureNodeEditable still holds the legacy Phase 2.x column
+    ``materialnode_id`` (DB rename deferred to Phase 2.x). The companion
+    bridge in ``schemas.py`` declares ``course_node_id`` with
+    ``validation_alias="materialnode_id"`` + ``populate_by_name=True``.
+    Here we mirror that bridge: when iterating Pydantic field names to
+    build the dict, redirect lookup to the alias on the ORM side so
+    ``getattr`` hits the existing column. ``isinstance(alias, str)``
+    guards against future ``AliasChoices`` usage.
+    """
+    data = {}
+    for field_name, field_info in EditableNodeResponse.model_fields.items():
+        if field_name == "children":
+            continue
+        alias = field_info.validation_alias
+        src_attr = alias if isinstance(alias, str) else field_name
+        data[field_name] = getattr(node, src_attr)
     return EditableNodeResponse.model_validate({**data, "children": []})
 
 
@@ -109,7 +122,7 @@ async def get_editable_tree(
     source_snapshot_id = flat[0].source_snapshot_id if flat else None
 
     return EditableTreeResponse(
-        materialnode_id=node_id,
+        course_node_id=node_id,
         source_snapshot_id=source_snapshot_id,
         nodes=_build_tree(flat),
     )
@@ -178,7 +191,7 @@ async def init_editable_tree(
     source_snapshot_id = editables[0].source_snapshot_id if editables else None
 
     return EditableTreeResponse(
-        materialnode_id=node_id,
+        course_node_id=node_id,
         source_snapshot_id=source_snapshot_id,
         nodes=_build_tree(editables),
     )

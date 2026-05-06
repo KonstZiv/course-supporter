@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import MaterialEntry, MaterialNode, Tenant
+from course_supporter.storage.orm import AuthoredDocument, CourseNode, Tenant
 
 pytestmark = pytest.mark.requires_db
 
@@ -22,7 +22,7 @@ class TestJobCreate:
     """Job creation against real PostgreSQL."""
 
     async def test_create_generates_uuidv7(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """Job.id is a valid UUIDv7 (version 7)."""
         repo = JobRepository(db_session)
@@ -36,7 +36,7 @@ class TestJobCreate:
         assert job.id.version == 7
 
     async def test_create_stores_jsonb_input_params(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """input_params dict round-trips through JSONB correctly."""
         params = {
@@ -57,7 +57,7 @@ class TestJobCreate:
         assert fetched.input_params == params
 
     async def test_create_server_default_queued_at(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """queued_at is set by server_default=func.now()."""
         repo = JobRepository(db_session)
@@ -82,8 +82,8 @@ class TestJobLifecycleSuccess:
     async def test_full_success_lifecycle(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
-        seed_material_entry: MaterialEntry,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
     ) -> None:
         """queued -> active -> complete with all timestamps and result."""
         repo = JobRepository(db_session)
@@ -107,7 +107,7 @@ class TestJobLifecycleSuccess:
         assert complete_job.completed_at is not None
 
     async def test_active_sets_started_at(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """Transition to active populates started_at timestamp."""
         repo = JobRepository(db_session)
@@ -128,7 +128,7 @@ class TestJobLifecycleFailureRetry:
     """Failure + retry lifecycle."""
 
     async def test_full_failure_retry_lifecycle(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """queued -> active -> failed -> queued (retry)."""
         repo = JobRepository(db_session)
@@ -158,7 +158,7 @@ class TestJobTransitionValidation:
     """Invalid transitions enforced by repository."""
 
     async def test_invalid_transition_raises(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """queued -> complete raises ValueError (must go through active)."""
         repo = JobRepository(db_session)
@@ -179,7 +179,7 @@ class TestJobQueries:
         self,
         db_session: AsyncSession,
         seed_tenant: Tenant,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """Returns job when tenant matches."""
         repo = JobRepository(db_session)
@@ -196,7 +196,7 @@ class TestJobQueries:
     async def test_get_by_id_for_tenant_wrong_tenant(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """Returns None when tenant_id does not match."""
         repo = JobRepository(db_session)
@@ -211,7 +211,7 @@ class TestJobQueries:
         assert found is None
 
     async def test_count_pending(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """count_pending returns accurate count with mixed statuses."""
         repo = JobRepository(db_session)
@@ -239,7 +239,7 @@ class TestJobQueries:
         assert count == initial_count + 3
 
     async def test_set_arq_job_id_persists(
-        self, db_session: AsyncSession, seed_root_node: MaterialNode
+        self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """set_arq_job_id updates and the value is readable after flush."""
         repo = JobRepository(db_session)
@@ -270,7 +270,7 @@ class TestJobReactivate:
     async def test_failed_to_queued_clears_run_attempt_state(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """status, error_message, started_at, completed_at, arq_job_id reset."""
         repo = JobRepository(db_session)
@@ -305,7 +305,7 @@ class TestJobReactivate:
     async def test_preserves_stage_progress_and_queued_at(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """``stage_progress`` + ``queued_at`` survive reactivate.
 
@@ -346,7 +346,7 @@ class TestJobReactivate:
     async def test_rejects_non_failed_states(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
         blocking_status: str,
     ) -> None:
         """Only ``failed`` reactivates — every other state is a 409.
@@ -373,7 +373,7 @@ class TestJobReactivate:
     async def test_rejects_cancelled(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """Reactivating a cancelled Job would defeat the cancel signal."""
         repo = JobRepository(db_session)
@@ -389,7 +389,7 @@ class TestJobReactivate:
     async def test_rejects_soft_deleted(
         self,
         db_session: AsyncSession,
-        seed_root_node: MaterialNode,
+        seed_root_node: CourseNode,
     ) -> None:
         """Soft-deleted Job → ValueError even if status would otherwise allow.
 

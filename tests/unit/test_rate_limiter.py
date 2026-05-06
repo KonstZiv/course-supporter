@@ -11,8 +11,8 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 
 
 class TestInMemoryRateLimiter:
@@ -149,17 +149,17 @@ class TestRateLimitAPI:
                     node = MagicMock()
                     node.id = uuid.uuid4()
                     node.tenant_id = tenant.tenant_id
-                    node.parent_materialnode_id = None
+                    node.parent_id = None
                     node.title = "Test"
                     node.description = None
                     node.default_language = None
                     node.order = 0
-                    node.node_fingerprint = None
+                    node.content_hash = None
                     node.created_at = datetime.now(UTC)
                     node.updated_at = datetime.now(UTC)
 
                     with patch.object(
-                        MaterialNodeRepository, "create", return_value=node
+                        CourseNodeRepository, "create", return_value=node
                     ):
                         # First 2 requests should pass (limit=2)
                         r1 = await client.post(

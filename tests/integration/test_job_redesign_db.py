@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
-from course_supporter.storage.orm import Job, MaterialNode, Tenant
+from course_supporter.storage.orm import CourseNode, Job, Tenant
 
 pytestmark = pytest.mark.requires_db
 
@@ -163,7 +163,7 @@ class TestForeignKeyEnforcement:
         await db_session.flush()
         job = Job(
             tenant_id=tenant.id,
-            course_node_id=uuid.uuid4(),  # not in material_nodes
+            course_node_id=uuid.uuid4(),  # not in course_nodes
             job_type="ingest",
         )
         db_session.add(job)
@@ -177,7 +177,7 @@ class TestForeignKeyEnforcement:
         tenant = Tenant(name=f"jrd-{uuid.uuid4().hex[:6]}")
         db_session.add(tenant)
         await db_session.flush()
-        node = MaterialNode(tenant_id=tenant.id, title="n", order=0)
+        node = CourseNode(tenant_id=tenant.id, title="n", order=0)
         db_session.add(node)
         await db_session.flush()
         job = Job(

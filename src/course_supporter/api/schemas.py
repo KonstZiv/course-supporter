@@ -97,15 +97,15 @@ class NodeUpdateRequest(BaseModel):
 class NodeMoveRequest(BaseModel):
     """Request body for moving a node within the tree.
 
-    Move a node to a new parent (or to root by setting ``parent_materialnode_id``
+    Move a node to a new parent (or to root by setting ``parent_id``
     to ``null``). Cycle detection is enforced server-side.
 
     Example::
 
-        {"parent_materialnode_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
+        {"parent_id": "019c707f-73b8-7b53-ba02-0e7be1c89189"}
     """
 
-    parent_materialnode_id: uuid.UUID | None = Field(
+    parent_id: uuid.UUID | None = Field(
         ...,
         description=(
             "Target parent node ID. Set to ``null`` to move the node to the tree root."
@@ -149,7 +149,7 @@ class NodeResponse(BaseModel):
     parent_id: uuid.UUID | None = Field(
         default=None,
         description="Parent node ID, or ``null`` for root nodes.",
-        validation_alias="parent_materialnode_id",
+        validation_alias="parent_id",
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
@@ -158,16 +158,16 @@ class NodeResponse(BaseModel):
         description=("Default ISO 639-1 language for materials under this subtree."),
     )
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
     children_count: int = Field(
         default=0,
         description="Number of direct child nodes.",
     )
-    materials_count: int = Field(
+    authored_documents_count: int = Field(
         default=0,
-        description="Number of material entries attached to this node.",
+        description="Number of authored documents attached to this node.",
     )
     created_at: datetime = Field(description="When this node was created.")
     updated_at: datetime = Field(description="When this node was last modified.")
@@ -184,13 +184,13 @@ class NodeTreeResponse(BaseModel):
 
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     tenant_id: uuid.UUID = Field(description="Tenant this node belongs to.")
-    parent_materialnode_id: uuid.UUID | None = Field(
+    parent_id: uuid.UUID | None = Field(
         description="Parent node ID, or ``null`` for root nodes."
     )
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
     children: list[NodeTreeResponse] = Field(
@@ -204,7 +204,7 @@ class NodeTreeResponse(BaseModel):
 class NodeListResponse(BaseModel):
     """Paginated list of root nodes (courses).
 
-    Root nodes (parent_materialnode_id IS NULL) serve as top-level entities.
+    Root nodes (parent_id IS NULL) serve as top-level entities.
     """
 
     items: list[NodeResponse] = Field(description="Root nodes for the current page.")
@@ -213,13 +213,13 @@ class NodeListResponse(BaseModel):
     offset: int = Field(description="Number of items skipped (as requested).")
 
 
-# --- Material Entries ---
+# --- Authored Documents ---
 
 
-class MaterialEntrySummaryResponse(BaseModel):
-    """Compact material entry within the tree detail.
+class AuthoredDocumentSummaryResponse(BaseModel):
+    """Compact authored document within the tree detail.
 
-    A lighter version of ``MaterialEntryResponse`` omitting
+    A lighter version of ``AuthoredDocumentResponse`` omitting
     ``job_id`` and ``updated_at`` to keep the tree
     payload concise. Includes the derived ``state`` field.
     """
@@ -244,10 +244,7 @@ class MaterialEntrySummaryResponse(BaseModel):
     filename: str | None = Field(description="Original filename, if available.")
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
-        description=(
-            "Derived lifecycle state: "
-            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
-        ),
+        description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
@@ -268,12 +265,13 @@ class NodeWithMaterialsResponse(BaseModel):
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
     order: int = Field(description="0-based position among siblings.")
-    node_fingerprint: str | None = Field(
+    content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
     )
-    materials: list[MaterialEntrySummaryResponse] = Field(
+    authored_documents: list[AuthoredDocumentSummaryResponse] = Field(
         default_factory=list,
-        description="Materials attached directly to this node.",
+        description="Authored documents attached directly to this node.",
+        validation_alias="documents",
     )
     children: list[NodeWithMaterialsResponse] = Field(
         default_factory=list,
@@ -283,7 +281,7 @@ class NodeWithMaterialsResponse(BaseModel):
     updated_at: datetime = Field(description="When this node was last modified.")
 
 
-class MaterialEntryCreateRequest(BaseModel):
+class AuthoredDocumentCreateRequest(BaseModel):
     """Request body for adding a material to a tree node."""
 
     source_type: SourceType = Field(
@@ -335,8 +333,8 @@ class MaterialEntryCreateRequest(BaseModel):
     )
 
 
-class MaterialEntryUpdateRequest(BaseModel):
-    """Request body for PATCH /materials/{entry_id}.
+class AuthoredDocumentUpdateRequest(BaseModel):
+    """Request body for PATCH /documents/{document_id}.
 
     All fields are optional — only fields present in the request body
     are updated. Field presence is detected via ``model_fields_set``.
@@ -356,13 +354,13 @@ class MaterialEntryUpdateRequest(BaseModel):
     )
 
 
-class MaterialEntryResponse(BaseModel):
-    """Response schema for a single material entry."""
+class AuthoredDocumentResponse(BaseModel):
+    """Response schema for a single authored document."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(
+    course_node_id: uuid.UUID = Field(
         description="Parent node this material belongs to."
     )
     source_type: str = Field(
@@ -387,10 +385,7 @@ class MaterialEntryResponse(BaseModel):
     )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
-        description=(
-            "Derived lifecycle state: "
-            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
-        ),
+        description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
@@ -402,8 +397,8 @@ class MaterialEntryResponse(BaseModel):
     updated_at: datetime = Field(description="When this entry was last modified.")
 
 
-class MaterialEntryCreateResponse(BaseModel):
-    """Response for material entry creation.
+class AuthoredDocumentCreateResponse(BaseModel):
+    """Response for authored document creation.
 
     Extends the base response with ``job_id`` — the ID of the
     ingestion job that was auto-enqueued.
@@ -412,7 +407,7 @@ class MaterialEntryCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique entry identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(
+    course_node_id: uuid.UUID = Field(
         description="Parent node this material belongs to."
     )
     source_type: str = Field(
@@ -436,9 +431,7 @@ class MaterialEntryCreateResponse(BaseModel):
         ),
     )
     order: int = Field(description="0-based position among sibling materials.")
-    state: str = Field(
-        description="Derived lifecycle state (will be ``raw`` or ``pending``)."
-    )
+    state: str = Field(description="Derived lifecycle state (will be ``pending``).")
     job_id: uuid.UUID | None = Field(
         default=None,
         description="ID of the auto-enqueued ingestion job for progress tracking.",
@@ -604,10 +597,14 @@ class SnapshotSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Unique snapshot identifier (UUIDv7).")
-    materialnode_id: uuid.UUID = Field(description="Target node for this snapshot.")
+    course_node_id: uuid.UUID = Field(
+        description="Target node for this snapshot.",
+        validation_alias="materialnode_id",
+    )
     mode: GenerationMode = Field(description="Generation mode: ``free`` or ``guided``.")
-    node_fingerprint: str = Field(
-        description="Merkle fingerprint of the target subtree at generation time."
+    content_hash: str = Field(
+        description="Merkle fingerprint of the target subtree at generation time.",
+        validation_alias="node_fingerprint",
     )
     externalservicecall_id: uuid.UUID | None = Field(
         description="Linked ExternalServiceCall UUID."
@@ -677,10 +674,15 @@ class SnapshotListResponse(BaseModel):
 class EditableNodeResponse(BaseModel):
     """Single editable structure node with edit-tracking metadata."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # populate_by_name=True required because the handler
+    # _orm_to_response (editable.py:60-66) constructs a dict with
+    # field-name keys and calls model_validate(dict). Dict input
+    # doesn't trigger from_attributes alias resolution; both alias
+    # and field-name must be accepted by Pydantic.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
-    materialnode_id: uuid.UUID
+    course_node_id: uuid.UUID = Field(validation_alias="materialnode_id")
     source_snapshot_id: uuid.UUID | None = None
     source_structurenode_id: uuid.UUID | None = None
     node_type: str
@@ -712,9 +714,9 @@ class EditableNodeResponse(BaseModel):
 
 
 class EditableTreeResponse(BaseModel):
-    """Full editable tree for a MaterialNode."""
+    """Full editable tree for a CourseNode."""
 
-    materialnode_id: uuid.UUID
+    course_node_id: uuid.UUID
     source_snapshot_id: uuid.UUID | None = None
     nodes: list[EditableNodeResponse]
 
@@ -765,7 +767,7 @@ class EditableInitRequest(BaseModel):
 
 
 class PresignedUrlRequest(BaseModel):
-    """Request body for POST /nodes/{node_id}/materials/upload-url."""
+    """Request body for POST /nodes/{node_id}/documents/upload-url."""
 
     filename: str = Field(
         min_length=1,
@@ -788,7 +790,7 @@ class PresignedUrlRequest(BaseModel):
 
 
 class PresignedUrlResponse(BaseModel):
-    """Response for POST /nodes/{node_id}/materials/upload-url."""
+    """Response for POST /nodes/{node_id}/documents/upload-url."""
 
     upload_url: str = Field(description="Presigned PUT URL for direct S3 upload.")
     key: str = Field(description="S3 object key to use in confirm-upload.")
@@ -796,7 +798,7 @@ class PresignedUrlResponse(BaseModel):
 
 
 class ConfirmUploadRequest(BaseModel):
-    """Request body for POST /nodes/{node_id}/materials/confirm-upload."""
+    """Request body for POST /nodes/{node_id}/documents/confirm-upload."""
 
     key: str = Field(
         min_length=1,

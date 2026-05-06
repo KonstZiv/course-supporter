@@ -51,8 +51,8 @@ from course_supporter.services.cost_cache import (
     make_summary_key,
     set_cached,
 )
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.orm import Tenant
 from course_supporter.storage.repositories import ExternalServiceCallRepository
 
@@ -124,7 +124,7 @@ async def get_cost_summary(
     (Variant D per KD5 §5 row 0.4 deliberation). Jobs targeting
     non-root nodes appear as their own rows; UI clients aggregate at
     course-root level. Phase 1+ task may evaluate walk-up CTE or
-    schema denormalization (``MaterialNode.root_course_id``) based on
+    schema denormalization (``CourseNode.root_course_id``) based on
     production query latency.
 
     Security: ``?no_cache=true`` always hits the DB. Absolute frequency
@@ -263,7 +263,7 @@ async def get_cost_course(
             to_=str(to_),
         )
 
-    node_repo = MaterialNodeRepository(session)
+    node_repo = CourseNodeRepository(session)
     # Tenant isolation: 404 covers both non-existent IDs AND foreign-tenant
     # IDs to avoid leaking existence across tenants.
     course = await node_repo.get_by_id_for_tenant(course_node_id, tenant.tenant_id)

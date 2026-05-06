@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs.cancellation_service import JobCancellationService
-from course_supporter.storage.orm import Job, MaterialNode, Tenant
+from course_supporter.storage.orm import CourseNode, Job, Tenant
 
 pytestmark = pytest.mark.requires_db
 
@@ -28,14 +28,14 @@ FIXED_TS = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 async def _seed_two_tenants_two_nodes(
     session: AsyncSession,
-) -> tuple[Tenant, Tenant, MaterialNode, MaterialNode]:
+) -> tuple[Tenant, Tenant, CourseNode, CourseNode]:
     """Two tenants x two nodes for OR-of-paths + isolation testing."""
     t1 = Tenant(name=f"jcs-t1-{uuid.uuid4().hex[:6]}")
     t2 = Tenant(name=f"jcs-t2-{uuid.uuid4().hex[:6]}")
     session.add_all([t1, t2])
     await session.flush()
-    n1 = MaterialNode(tenant_id=t1.id, title="n1", order=0)
-    n2 = MaterialNode(tenant_id=t2.id, title="n2", order=0)
+    n1 = CourseNode(tenant_id=t1.id, title="n1", order=0)
+    n2 = CourseNode(tenant_id=t2.id, title="n2", order=0)
     session.add_all([n1, n2])
     await session.flush()
     return t1, t2, n1, n2

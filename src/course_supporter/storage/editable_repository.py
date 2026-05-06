@@ -17,7 +17,7 @@ from course_supporter.storage.structure_node_repository import StructureNodeRepo
 
 
 class EditableRepository:
-    """Manage StructureNodeEditable persistence for a MaterialNode."""
+    """Manage StructureNodeEditable persistence for a CourseNode."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -39,7 +39,7 @@ class EditableRepository:
         self,
         materialnode_id: uuid.UUID,
     ) -> list[StructureNodeEditable]:
-        """Load all editable nodes for a MaterialNode, ordered parents-first."""
+        """Load all editable nodes for a CourseNode, ordered parents-first."""
         stmt = (
             select(StructureNodeEditable)
             .where(StructureNodeEditable.materialnode_id == materialnode_id)
@@ -94,7 +94,7 @@ class EditableRepository:
         self,
         materialnode_id: uuid.UUID,
     ) -> int:
-        """Delete all editable nodes for a MaterialNode. Returns count."""
+        """Delete all editable nodes for a CourseNode. Returns count."""
         stmt = delete(StructureNodeEditable).where(
             StructureNodeEditable.materialnode_id == materialnode_id
         )
@@ -118,7 +118,7 @@ class EditableRepository:
 
         Args:
             snapshot_id: Source StructureSnapshot to copy from.
-            materialnode_id: Target MaterialNode.
+            materialnode_id: Target CourseNode.
             preserve_edited: Whether to carry over manual edits.
 
         Returns:

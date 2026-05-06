@@ -102,7 +102,7 @@ async def trigger_methodist(
     redis: ArqRedis,
     session: AsyncSession,
     tenant_id: uuid.UUID,
-    materialnode_id: uuid.UUID,
+    course_node_id: uuid.UUID,
 ) -> MethodistPlan:
     """Orchestrate two-pass Methodist DAG over editable tree.
 
@@ -118,7 +118,7 @@ async def trigger_methodist(
         redis: ARQ Redis connection pool.
         session: Active DB session (caller controls transaction).
         tenant_id: Owning tenant UUID.
-        materialnode_id: Root MaterialNode UUID (must have editables).
+        course_node_id: Root CourseNode UUID (must have editables).
 
     Returns:
         MethodistPlan describing the enqueued work.
@@ -131,17 +131,17 @@ async def trigger_methodist(
     )
 
     log = structlog.get_logger().bind(
-        materialnode_id=str(materialnode_id),
+        course_node_id=str(course_node_id),
     )
     log.info("trigger_methodist_started")
 
     # 1. Load editable tree
     editable_repo = EditableRepository(session)
-    editables = await editable_repo.get_tree(materialnode_id)
+    editables = await editable_repo.get_tree(course_node_id)
     if not editables:
         msg = (
-            f"No editable tree found for MaterialNode "
-            f"{materialnode_id}. Run generation first."
+            f"No editable tree found for CourseNode "
+            f"{course_node_id}. Run generation first."
         )
         raise ValueError(msg)
 
@@ -162,7 +162,7 @@ async def trigger_methodist(
             redis=redis,
             session=session,
             tenant_id=tenant_id,
-            materialnode_id=materialnode_id,
+            course_node_id=course_node_id,
             editable_id=nid,
             phase="bottom_up",
             depends_on=deps if deps else None,
@@ -193,7 +193,7 @@ async def trigger_methodist(
             redis=redis,
             session=session,
             tenant_id=tenant_id,
-            materialnode_id=materialnode_id,
+            course_node_id=course_node_id,
             editable_id=nid,
             phase="top_down",
             depends_on=deps if deps else None,
@@ -220,7 +220,7 @@ async def _enqueue_methodist_step(
     redis: ArqRedis,
     session: AsyncSession,
     tenant_id: uuid.UUID,
-    materialnode_id: uuid.UUID,
+    course_node_id: uuid.UUID,
     editable_id: uuid.UUID,
     phase: Literal["bottom_up", "top_down"],
     depends_on: list[str] | None = None,
@@ -240,11 +240,11 @@ async def _enqueue_methodist_step(
 
     job = await repo.create(
         tenant_id=tenant_id,
-        course_node_id=materialnode_id,
+        course_node_id=course_node_id,
         job_type=f"methodist_{phase}",
         depends_on=validated_deps,
         input_params={
-            "materialnode_id": str(materialnode_id),
+            "course_node_id": str(course_node_id),
             "editable_id": str(editable_id),
             "phase": phase,
         },
@@ -253,7 +253,7 @@ async def _enqueue_methodist_step(
     arq_job = await redis.enqueue_job(
         "arq_execute_methodist_step",
         str(job.id),
-        str(materialnode_id),
+        str(course_node_id),
         str(editable_id),
         phase,
     )

@@ -12,8 +12,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.ingestion_callback import IngestionCallback
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.material_entry_repository import MaterialEntryRepository
 
 pytestmark = pytest.mark.requires_db
 
@@ -26,11 +28,11 @@ class TestOnSuccessDB:
         session_factory: async_sessionmaker[AsyncSession],
         committed_job_and_material: dict[str, Any],
     ) -> None:
-        """Both Job and MaterialEntry updated atomically.
+        """Both Job and AuthoredDocument updated atomically.
 
-        Pre-conditions: Job=active, MaterialEntry=pending.
+        Pre-conditions: Job=active, AuthoredDocument=pending.
         After on_success:
-          - MaterialEntry.state == 'done', processed_content set
+          - AuthoredDocument.state == 'done', processed_content set
           - Job.status == 'complete'
         """
         jid = committed_job_and_material["job_id"]
@@ -43,7 +45,7 @@ class TestOnSuccessDB:
         # Verify in a fresh session
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = MaterialEntryRepository(session)
+            mat_repo = AuthoredDocumentRepository(session)
 
             job = await job_repo.get_by_id(jid)
             material = await mat_repo.get_by_id(mid)
@@ -77,7 +79,7 @@ class TestOnFailureDB:
 
         async with session_factory() as session:
             job_repo = JobRepository(session)
-            mat_repo = MaterialEntryRepository(session)
+            mat_repo = AuthoredDocumentRepository(session)
 
             job = await job_repo.get_by_id(jid)
             material = await mat_repo.get_by_id(mid)

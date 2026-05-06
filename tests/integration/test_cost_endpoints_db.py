@@ -3,7 +3,7 @@
 Uses the FastAPI app with overridden ``get_session`` (test session),
 ``get_arq_redis`` (real Redis pool), and ``get_current_tenant`` (stub
 tenant scoped to a freshly-seeded Tenant id). Each test class sets up
-its own Tenant + MaterialNode tree + Jobs + ESCs; cleanup runs in
+its own Tenant + CourseNode tree + Jobs + ESCs; cleanup runs in
 reverse FK order at teardown.
 
 Coverage:
@@ -34,9 +34,9 @@ from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
+    CourseNode,
     ExternalServiceCall,
     Job,
-    MaterialNode,
     Tenant,
 )
 from course_supporter.storage.repositories import ExternalServiceCallRepository
@@ -94,22 +94,22 @@ async def cost_seed(
         session.add(tenant)
         await session.flush()
 
-        root = MaterialNode(tenant_id=tenant.id, title="Python Basics", order=0)
+        root = CourseNode(tenant_id=tenant.id, title="Python Basics", order=0)
         session.add(root)
         await session.flush()
-        lesson = MaterialNode(
+        lesson = CourseNode(
             tenant_id=tenant.id,
             title="Lesson 1",
             order=0,
-            parent_materialnode_id=root.id,
+            parent_id=root.id,
         )
         session.add(lesson)
         await session.flush()
-        concept = MaterialNode(
+        concept = CourseNode(
             tenant_id=tenant.id,
             title="Concept A",
             order=0,
-            parent_materialnode_id=lesson.id,
+            parent_id=lesson.id,
         )
         session.add(concept)
         await session.flush()
@@ -198,8 +198,8 @@ async def cost_seed(
             Job.__table__.delete().where(Job.tenant_id == seed["tenant_id"])
         )
         await session.execute(
-            MaterialNode.__table__.delete().where(
-                MaterialNode.tenant_id == seed["tenant_id"]
+            CourseNode.__table__.delete().where(
+                CourseNode.tenant_id == seed["tenant_id"]
             )
         )
         await session.execute(
@@ -447,7 +447,7 @@ class TestCostCourseE2E:
             other = Tenant(name=f"other-{uuid.uuid4().hex[:6]}")
             session.add(other)
             await session.flush()
-            other_node = MaterialNode(tenant_id=other.id, title="Other Course", order=0)
+            other_node = CourseNode(tenant_id=other.id, title="Other Course", order=0)
             session.add(other_node)
             await session.commit()
             other_node_id = other_node.id
@@ -462,9 +462,7 @@ class TestCostCourseE2E:
         finally:
             async with session_factory() as session:
                 await session.execute(
-                    MaterialNode.__table__.delete().where(
-                        MaterialNode.id == other_node_id
-                    )
+                    CourseNode.__table__.delete().where(CourseNode.id == other_node_id)
                 )
                 await session.execute(
                     Tenant.__table__.delete().where(Tenant.id == other_tenant_id)
@@ -480,8 +478,8 @@ class TestCostCourseE2E:
         """Defense-in-depth: a stray foreign-tenant node parented inside
         the caller's subtree must not leak into ``by_node``.
 
-        Simulates a data anomaly — manually inserts a ``MaterialNode``
-        belonging to a different tenant whose ``parent_materialnode_id``
+        Simulates a data anomaly — manually inserts a ``CourseNode``
+        belonging to a different tenant whose ``parent_id``
         points at the caller's lesson. The recursive CTE in
         ``get_descendant_ids`` is now passed ``tenant_id``; the
         anomalous node must be filtered out at the recursion boundary.
@@ -492,13 +490,13 @@ class TestCostCourseE2E:
             other_tenant = Tenant(name=f"intruder-{uuid.uuid4().hex[:6]}")
             session.add(other_tenant)
             await session.flush()
-            intruder_node = MaterialNode(
+            intruder_node = CourseNode(
                 tenant_id=other_tenant.id,
                 title="INTRUDER (foreign tenant)",
                 order=0,
                 # Parent points at the caller's lesson — invariant
                 # violation we are explicitly defending against.
-                parent_materialnode_id=cost_seed["lesson_id"],  # type: ignore[arg-type]
+                parent_id=cost_seed["lesson_id"],  # type: ignore[arg-type]
             )
             session.add(intruder_node)
             await session.flush()
@@ -547,8 +545,8 @@ class TestCostCourseE2E:
                     Job.__table__.delete().where(Job.id == intruder_job_id)
                 )
                 await session.execute(
-                    MaterialNode.__table__.delete().where(
-                        MaterialNode.id == intruder_node_id
+                    CourseNode.__table__.delete().where(
+                        CourseNode.id == intruder_node_id
                     )
                 )
                 await session.execute(

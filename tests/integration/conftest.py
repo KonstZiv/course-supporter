@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from course_supporter.config import get_settings
-from course_supporter.storage.orm import Job, MaterialEntry, MaterialNode, Tenant
+from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
 
 # ── Engine (module-scoped, shared across test module) ──────────────
 
@@ -86,9 +86,9 @@ async def seed_tenant(db_session: AsyncSession) -> Tenant:
 
 
 @pytest.fixture()
-async def seed_root_node(db_session: AsyncSession, seed_tenant: Tenant) -> MaterialNode:
-    """Create a root MaterialNode linked to seed_tenant."""
-    node = MaterialNode(
+async def seed_root_node(db_session: AsyncSession, seed_tenant: Tenant) -> CourseNode:
+    """Create a root CourseNode linked to seed_tenant."""
+    node = CourseNode(
         tenant_id=seed_tenant.id,
         title="Integration Test Course",
         order=0,
@@ -100,11 +100,11 @@ async def seed_root_node(db_session: AsyncSession, seed_tenant: Tenant) -> Mater
 
 @pytest.fixture()
 async def seed_material_entry(
-    db_session: AsyncSession, seed_root_node: MaterialNode
-) -> MaterialEntry:
-    """Create a MaterialEntry in RAW state."""
-    entry = MaterialEntry(
-        materialnode_id=seed_root_node.id,
+    db_session: AsyncSession, seed_root_node: CourseNode
+) -> AuthoredDocument:
+    """Create a AuthoredDocument in RAW state."""
+    entry = AuthoredDocument(
+        course_node_id=seed_root_node.id,
         source_type="web",
         source_url="https://example.com/test",
     )
@@ -120,13 +120,13 @@ async def seed_material_entry(
 async def committed_seeds(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[dict[str, uuid.UUID]]:
-    """Create Tenant + root MaterialNode + MaterialEntry with real commits.
+    """Create Tenant + root CourseNode + AuthoredDocument with real commits.
 
     Returns dict with ``tenant_id``, ``course_node_id``, ``material_id``.
     The ``course_node_id`` key matches the v0.20 column name on
     ``Job.course_node_id`` (KD13 — renamed from legacy
-    ``materialnode_id`` in task 0.3); the underlying row is still a
-    ``MaterialNode`` and will be re-typed to ``CourseNode`` only in
+    ``course_node_id`` in task 0.3); the underlying row is still a
+    ``CourseNode`` and will be re-typed to ``CourseNode`` only in
     Phase 1.1. Cleans up after the test via DELETE in reverse FK order.
     """
     async with session_factory() as session:
@@ -134,7 +134,7 @@ async def committed_seeds(
         session.add(tenant)
         await session.flush()
 
-        node = MaterialNode(
+        node = CourseNode(
             tenant_id=tenant.id,
             title="E2E Test Course",
             order=0,
@@ -142,8 +142,8 @@ async def committed_seeds(
         session.add(node)
         await session.flush()
 
-        entry = MaterialEntry(
-            materialnode_id=node.id,
+        entry = AuthoredDocument(
+            course_node_id=node.id,
             source_type="web",
             source_url="https://example.com/e2e",
         )
@@ -160,22 +160,20 @@ async def committed_seeds(
     yield ids
 
     # Cleanup: delete in reverse FK order. Note that
-    # ``MaterialEntry.materialnode_id`` and ``MaterialNode.id`` are
+    # ``AuthoredDocument.course_node_id`` and ``CourseNode.id`` are
     # still legacy column names — they get renamed in Phase 1.1
-    # along with the table-level MaterialNode → CourseNode rename.
+    # along with the table-level CourseNode → CourseNode rename.
     async with session_factory() as session:
         await session.execute(
             Job.__table__.delete().where(Job.course_node_id == ids["course_node_id"])
         )
         await session.execute(
-            MaterialEntry.__table__.delete().where(
-                MaterialEntry.materialnode_id == ids["course_node_id"]
+            AuthoredDocument.__table__.delete().where(
+                AuthoredDocument.course_node_id == ids["course_node_id"]
             )
         )
         await session.execute(
-            MaterialNode.__table__.delete().where(
-                MaterialNode.id == ids["course_node_id"]
-            )
+            CourseNode.__table__.delete().where(CourseNode.id == ids["course_node_id"])
         )
         await session.execute(
             Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
@@ -188,21 +186,21 @@ async def committed_job_and_material(
     session_factory: async_sessionmaker[AsyncSession],
     committed_seeds: dict[str, uuid.UUID],
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Create a Job (active) + MaterialEntry for callback tests.
+    """Create a Job (active) + AuthoredDocument for callback tests.
 
     Pre-transitions the records to the state expected before
     ``IngestionCallback.on_success`` / ``on_failure``.
 
     Returns dict with ``job_id``, ``material_id``, ``course_node_id``, ``tenant_id``.
     """
-    from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.material_entry_repository import (
-        MaterialEntryRepository,
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
     )
+    from course_supporter.storage.job_repository import JobRepository
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
-        entry_repo = MaterialEntryRepository(session)
+        entry_repo = AuthoredDocumentRepository(session)
 
         job = await job_repo.create(
             tenant_id=committed_seeds["tenant_id"],

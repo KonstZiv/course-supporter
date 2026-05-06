@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from course_supporter.errors import NodeNotFoundError
-from course_supporter.models.course import MaterialNodeSummary
+from course_supporter.models.course import CourseNodeSummary
 from course_supporter.tree_utils import (
     build_material_tree_summary,
     resolve_target_nodes,
@@ -23,22 +23,22 @@ from course_supporter.tree_utils import (
 def _make_node(
     *,
     node_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
     title: str = "Node",
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
-    materials: list[Any] | None = None,
+    documents: list[Any] | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
+    """Create a mock CourseNode."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     node.title = title
     node.description = description
     node.order = order
     node.children = children or []
-    node.materials = materials or []
+    node.documents = documents or []
     return node
 
 
@@ -48,7 +48,7 @@ def _make_entry(
     filename: str | None = "notes.md",
     source_url: str = "file:///notes.md",
 ) -> MagicMock:
-    """Create a mock MaterialEntry."""
+    """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
     entry.filename = filename
@@ -80,7 +80,7 @@ class TestBuildMaterialTreeSummary:
         """Root node with READY materials collects filenames."""
         entry1 = _make_entry(filename="lecture.pdf")
         entry2 = _make_entry(filename="notes.md")
-        root = _make_node(title="Module 1", materials=[entry1, entry2])
+        root = _make_node(title="Module 1", documents=[entry1, entry2])
 
         result = build_material_tree_summary([root])
 
@@ -92,7 +92,7 @@ class TestBuildMaterialTreeSummary:
         raw = _make_entry(state="raw", filename="raw.md")
         pending = _make_entry(state="pending", filename="pending.md")
         error = _make_entry(state="error", filename="error.md")
-        root = _make_node(materials=[ready, raw, pending, error])
+        root = _make_node(documents=[ready, raw, pending, error])
 
         result = build_material_tree_summary([root])
 
@@ -101,7 +101,7 @@ class TestBuildMaterialTreeSummary:
     def test_filename_none_falls_back_to_source_url(self) -> None:
         """When filename is None, source_url is used."""
         entry = _make_entry(filename=None, source_url="https://example.com/page")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         result = build_material_tree_summary([root])
 
@@ -114,17 +114,17 @@ class TestBuildMaterialTreeSummary:
 
         child = _make_node(
             node_id=child_id,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Lesson 1",
             order=1,
-            materials=[_make_entry(filename="video.mp4")],
+            documents=[_make_entry(filename="video.mp4")],
         )
         root = _make_node(
             node_id=root_id,
             title="Module 1",
             order=0,
             children=[child],
-            materials=[_make_entry(filename="overview.md")],
+            documents=[_make_entry(filename="overview.md")],
         )
 
         result = build_material_tree_summary([root, child])
@@ -164,13 +164,13 @@ class TestBuildMaterialTreeSummary:
 
         grandchild = _make_node(
             node_id=grandchild_id,
-            parent_materialnode_id=child_id,
+            parent_id=child_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=child_id,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Lesson",
             order=0,
             children=[grandchild],
@@ -189,16 +189,16 @@ class TestBuildMaterialTreeSummary:
         assert result[0].children[0].children[0].title == "Concept"
 
     def test_result_is_pydantic_model(self) -> None:
-        """Result items are MaterialNodeSummary instances."""
+        """Result items are CourseNodeSummary instances."""
         root = _make_node(title="Module")
         result = build_material_tree_summary([root])
 
-        assert isinstance(result[0], MaterialNodeSummary)
+        assert isinstance(result[0], CourseNodeSummary)
 
     def test_serializable(self) -> None:
         """Result can be serialized to JSON (for CourseContext)."""
         entry = _make_entry(filename="test.pdf")
-        root = _make_node(title="Module", materials=[entry])
+        root = _make_node(title="Module", documents=[entry])
 
         result = build_material_tree_summary([root])
 
@@ -212,13 +212,13 @@ class TestBuildMaterialTreeSummary:
         root_id = uuid.uuid4()
         child_in = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Included",
             order=0,
         )
         child_out = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Excluded",
             order=1,
         )
@@ -239,7 +239,7 @@ class TestBuildMaterialTreeSummary:
     def test_none_filename_and_none_source_url_skipped(self) -> None:
         """Entry with both filename=None and source_url=None is skipped."""
         entry = _make_entry(state="ready", filename=None, source_url="")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         result = build_material_tree_summary([root])
 
@@ -250,12 +250,12 @@ class TestBuildMaterialTreeSummary:
         root_id = uuid.uuid4()
         child_b = _make_node(
             node_id=uuid.uuid4(),
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
             title="Second",
             order=2,
         )
         child_a = _make_node(
-            node_id=uuid.uuid4(), parent_materialnode_id=root_id, title="First", order=1
+            node_id=uuid.uuid4(), parent_id=root_id, title="First", order=1
         )
         root = _make_node(
             node_id=root_id,
@@ -355,7 +355,7 @@ class TestSerializeTreeForGuided:
         child = _make_node(
             title="Lesson 1",
             order=0,
-            parent_materialnode_id=root_id,
+            parent_id=root_id,
         )
         root = _make_node(
             node_id=root_id,
@@ -401,13 +401,13 @@ class TestSerializeTreeForGuided:
 
         grandchild = _make_node(
             node_id=gc_id,
-            parent_materialnode_id=c_id,
+            parent_id=c_id,
             title="Concept",
             order=0,
         )
         child = _make_node(
             node_id=c_id,
-            parent_materialnode_id=r_id,
+            parent_id=r_id,
             title="Lesson",
             order=0,
             children=[grandchild],

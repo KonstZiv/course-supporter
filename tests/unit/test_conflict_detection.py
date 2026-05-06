@@ -30,17 +30,17 @@ def _make_session(
     """Create an AsyncSession whose execute() returns parent_map rows.
 
     Args:
-        nodes: Mapping of {node_id: parent_materialnode_id} representing the tree.
+        nodes: Mapping of {node_id: parent_id} representing the tree.
     """
     session = AsyncMock()
     node_map = nodes or {}
 
-    # Build Row-like objects with .id and .parent_materialnode_id attributes
+    # Build Row-like objects with .id and .parent_id attributes
     rows: list[Any] = []
     for nid, pid in node_map.items():
         row = MagicMock()
         row.id = nid
-        row.parent_materialnode_id = pid
+        row.parent_id = pid
         rows.append(row)
 
     exec_result = MagicMock()
@@ -53,7 +53,7 @@ _NodeMap = dict[uuid.UUID, uuid.UUID | None]
 
 
 def _tree(*specs: tuple[uuid.UUID, uuid.UUID | None]) -> _NodeMap:
-    """Build a node map from (node_id, parent_materialnode_id) tuples."""
+    """Build a node map from (node_id, parent_id) tuples."""
     return {nid: pid for nid, pid in specs}
 
 
@@ -149,14 +149,12 @@ class TestParentChildConflict:
 
     async def test_active_parent_target_child(self) -> None:
         """Active job on Node A, target is A's child → conflict."""
-        parent_materialnode_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
         child_id = uuid.uuid4()
-        nodes = _tree(
-            (parent_materialnode_id, None), (child_id, parent_materialnode_id)
-        )
+        nodes = _tree((parent_id, None), (child_id, parent_id))
         session = _make_session(nodes)
 
-        job = _mock_job(node_id=parent_materialnode_id)
+        job = _mock_job(node_id=parent_id)
         result = await detect_conflict(
             session,
             root_node_id=uuid.uuid4(),
@@ -169,18 +167,16 @@ class TestParentChildConflict:
 
     async def test_active_child_target_parent(self) -> None:
         """Active job on child, target is parent → conflict."""
-        parent_materialnode_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
         child_id = uuid.uuid4()
-        nodes = _tree(
-            (parent_materialnode_id, None), (child_id, parent_materialnode_id)
-        )
+        nodes = _tree((parent_id, None), (child_id, parent_id))
         session = _make_session(nodes)
 
         job = _mock_job(node_id=child_id)
         result = await detect_conflict(
             session,
             root_node_id=uuid.uuid4(),
-            target_node_id=parent_materialnode_id,
+            target_node_id=parent_id,
             active_jobs=[job],
         )
 
@@ -219,13 +215,13 @@ class TestSiblingsNoConflict:
 
     async def test_siblings_no_conflict(self) -> None:
         """Node A1 and Node A2 are siblings → no conflict."""
-        parent_materialnode_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
         sibling_a = uuid.uuid4()
         sibling_b = uuid.uuid4()
         nodes = _tree(
-            (parent_materialnode_id, None),
-            (sibling_a, parent_materialnode_id),
-            (sibling_b, parent_materialnode_id),
+            (parent_id, None),
+            (sibling_a, parent_id),
+            (sibling_b, parent_id),
         )
         session = _make_session(nodes)
 
@@ -328,15 +324,15 @@ class TestMultipleActiveJobs:
 
     async def test_no_conflict_among_multiple_independent(self) -> None:
         """Multiple active jobs on independent nodes → no conflict."""
-        parent_materialnode_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
         sib_a = uuid.uuid4()
         sib_b = uuid.uuid4()
         sib_c = uuid.uuid4()
         nodes = _tree(
-            (parent_materialnode_id, None),
-            (sib_a, parent_materialnode_id),
-            (sib_b, parent_materialnode_id),
-            (sib_c, parent_materialnode_id),
+            (parent_id, None),
+            (sib_a, parent_id),
+            (sib_b, parent_id),
+            (sib_c, parent_id),
         )
         session = _make_session(nodes)
 

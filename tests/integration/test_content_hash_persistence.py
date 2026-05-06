@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
-    MaterialEntry,
-    MaterialMacroSection,
-    MaterialNode,
-    MaterialSegment,
+    AuthoredDocument,
+    CourseNode,
+    DocumentSegment,
+    DocumentSummary,
     Tenant,
 )
 
@@ -43,10 +43,10 @@ async def _make_node(
     *,
     parent_id: uuid.UUID | None = None,
     title: str = "node",
-) -> MaterialNode:
-    node = MaterialNode(
+) -> CourseNode:
+    node = CourseNode(
         tenant_id=tenant_id,
-        parent_materialnode_id=parent_id,
+        parent_id=parent_id,
         title=title,
     )
     session.add(node)
@@ -60,9 +60,9 @@ async def _make_entry(
     *,
     raw_hash: str | None = None,
     source_url: str | None = None,
-) -> MaterialEntry:
-    entry = MaterialEntry(
-        materialnode_id=node_id,
+) -> AuthoredDocument:
+    entry = AuthoredDocument(
+        course_node_id=node_id,
         source_type="text",
         source_url=source_url or f"https://example.com/{uuid.uuid4().hex[:8]}",
         raw_hash=raw_hash,
@@ -78,9 +78,9 @@ async def _make_section(
     *,
     order: int = 0,
     title: str = "section",
-) -> MaterialMacroSection:
-    section = MaterialMacroSection(
-        material_entry_id=entry_id,
+) -> DocumentSummary:
+    section = DocumentSummary(
+        authored_document_id=entry_id,
         order=order,
         title=title,
         start_pos=0,
@@ -100,9 +100,9 @@ async def _make_segment(
     content: str = "default content",
     start_pos: int = 0,
     end_pos: int = 50,
-) -> MaterialSegment:
-    segment = MaterialSegment(
-        macro_section_id=section_id,
+) -> DocumentSegment:
+    segment = DocumentSegment(
+        document_summary_id=section_id,
         order=order,
         start_pos=start_pos,
         end_pos=end_pos,

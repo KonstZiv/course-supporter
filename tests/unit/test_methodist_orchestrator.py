@@ -88,7 +88,7 @@ class TestTriggerMethodist:
                 redis=redis,
                 session=session,
                 tenant_id=uuid.uuid4(),
-                materialnode_id=mn_id,
+                course_node_id=mn_id,
             )
 
     async def test_leaf_only_tree(self) -> None:
@@ -118,7 +118,7 @@ class TestTriggerMethodist:
                 redis=redis,
                 session=session,
                 tenant_id=uuid.uuid4(),
-                materialnode_id=mn_id,
+                course_node_id=mn_id,
             )
 
         assert isinstance(plan, MethodistPlan)
@@ -157,7 +157,7 @@ class TestTriggerMethodist:
                 redis=redis,
                 session=session,
                 tenant_id=uuid.uuid4(),
-                materialnode_id=mn_id,
+                course_node_id=mn_id,
             )
 
         # 3 nodes bottom-up + 1 non-leaf top-down (root)
@@ -197,7 +197,7 @@ class TestTriggerMethodist:
                 redis=redis,
                 session=session,
                 tenant_id=uuid.uuid4(),
-                materialnode_id=mn_id,
+                course_node_id=mn_id,
             )
 
         # 4 bottom-up (gc1, c1, c2, root)

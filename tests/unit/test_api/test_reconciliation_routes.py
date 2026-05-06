@@ -66,7 +66,8 @@ def _make_editable_node(
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
-    node.materialnode_id = NODE_ID
+    node.course_node_id = NODE_ID
+    node.materialnode_id = node.course_node_id
     node.source_snapshot_id = uuid.uuid4()
     node.source_structurenode_id = uuid.uuid4()
     node.parent_editable_id = parent_id
@@ -413,10 +414,10 @@ class TestReconcileApply:
 
         assert resp.status_code == 200
         data = resp.json()
-        # NOTE: EditableTreeResponse.materialnode_id refers to
-        # StructureNodeEditable.materialnode_id, not Job.course_node_id.
-        # Renames for that field are Phase 1.1 (MaterialNode → CourseNode).
-        assert data["materialnode_id"] == str(NODE_ID)
+        # NOTE: EditableTreeResponse.course_node_id refers to
+        # StructureNodeEditable.course_node_id, not Job.course_node_id.
+        # Renames for that field are Phase 1.1 (CourseNode → CourseNode).
+        assert data["course_node_id"] == str(NODE_ID)
 
     async def test_422_no_accepted_issues(self, client: AsyncClient) -> None:
         """Returns 422 when no issues match accepted_issue_ids."""

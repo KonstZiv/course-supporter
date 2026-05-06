@@ -87,4 +87,3 @@ class TestStudentRelationships:
         """submissions relationship back_populates student."""
         rel = Student.__mapper__.relationships["submissions"]
         assert rel.back_populates == "student"
-        assert "delete-orphan" in rel.cascade

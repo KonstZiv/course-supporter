@@ -1,7 +1,7 @@
 """Material tree node management API endpoints.
 
 Provides CRUD operations for the hierarchical material tree.
-Root nodes (parent_materialnode_id IS NULL) serve as top-level entities (courses).
+Root nodes (parent_id IS NULL) serve as top-level entities (courses).
 Tenant isolation is enforced by verifying node ownership via tenant_id.
 
 Routes
@@ -25,10 +25,11 @@ from collections.abc import Sequence
 from typing import Annotated
 
 import structlog
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_s3_client, get_session
+from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
     NodeCreateRequest,
     NodeListResponse,
@@ -42,8 +43,12 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
-from course_supporter.storage.orm import MaterialNode
+from course_supporter.jobs.cancellation_service import JobCancellationService
+from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
+from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
+from course_supporter.storage.content_hash import ContentHashService
+from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
@@ -52,17 +57,23 @@ router = APIRouter(tags=["nodes"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
 ]
 
 
-def _node_response(node: MaterialNode) -> NodeResponse:
-    """Build NodeResponse with computed children_count and materials_count."""
+def _node_response(node: CourseNode) -> NodeResponse:
+    """Build NodeResponse with computed children_count and authored_documents_count."""
     resp = NodeResponse.model_validate(node)
     resp.children_count = len(node.children) if node.children else 0
-    resp.materials_count = len(node.materials) if node.materials else 0
+    # Soft-deleted documents stay on the relationship for cascade/audit
+    # (Phase 1 KD3 contract) — exclude them from the user-facing count.
+    active_documents = (
+        [d for d in node.documents if d.deleted_at is None] if node.documents else []
+    )
+    resp.authored_documents_count = len(active_documents)
     return resp
 
 
@@ -77,7 +88,7 @@ async def _require_node_for_tenant(
         HTTPException 404: If the node is not found or
             does not belong to the authenticated tenant.
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.get_by_id(node_id)
     if node is None or node.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -111,7 +122,7 @@ async def create_root_node(
     Root nodes have no parent and appear at the top level.
     The ``order`` is auto-assigned as the next available position.
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     node = await repo.create(
         tenant_id=tenant.tenant_id,
         title=body.title,
@@ -148,7 +159,7 @@ async def list_root_nodes(
 
     Returns a paginated list sorted by creation date (newest first).
     """
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     roots = await repo.list_roots(tenant.tenant_id, limit=limit, offset=offset)
     total = await repo.count_roots(tenant.tenant_id)
     return NodeListResponse(
@@ -175,11 +186,11 @@ async def create_child_node(
     is auto-assigned as the next available position among siblings.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     node = await repo.create(
         tenant_id=tenant.tenant_id,
-        parent_materialnode_id=node_id,
+        parent_id=node_id,
         title=body.title,
         description=body.description,
         default_language=body.default_language,
@@ -189,7 +200,7 @@ async def create_child_node(
     logger.info(
         "child_node_created",
         node_id=str(node.id),
-        parent_materialnode_id=str(node_id),
+        parent_id=str(node_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -210,7 +221,7 @@ async def get_tree(
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
     roots = await repo.get_subtree(node_id)
     return [NodeTreeResponse.model_validate(r) for r in roots]
 
@@ -228,8 +239,11 @@ async def get_node_detail(
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    repo = MaterialNodeRepository(session)
-    tree_roots = await repo.get_subtree(node_id, include_materials=True)
+    repo = CourseNodeRepository(session)
+    # User-facing endpoint — filter soft-deleted documents at the loader
+    # so the response never exposes them (Phase 1 KD3 user-facing
+    # contract; hotfix-7 regression H).
+    tree_roots = await repo.get_subtree_with_active_documents(node_id)
     if not tree_roots:
         raise HTTPException(status_code=404, detail="Node not found")
     return NodeWithMaterialsResponse.model_validate(tree_roots[0])
@@ -268,7 +282,7 @@ async def update_node(
     re-ingestion of existing materials.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     # Distinguish "field omitted" from "field set to null"
     update_kwargs: dict[str, str | None] = {}
@@ -295,20 +309,18 @@ async def move_node(
 ) -> NodeResponse:
     """Move a node to a new parent (or to root).
 
-    Cycle detection is enforced. Set ``parent_materialnode_id`` to ``null``
+    Cycle detection is enforced. Set ``parent_id`` to ``null``
     to make the node a root. Returns 422 if the move would create a cycle.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     # Validate target parent belongs to the same tenant
-    if body.parent_materialnode_id is not None:
-        await _require_node_for_tenant(
-            session, tenant.tenant_id, body.parent_materialnode_id
-        )
+    if body.parent_id is not None:
+        await _require_node_for_tenant(session, tenant.tenant_id, body.parent_id)
 
     try:
-        node = await repo.move(node_id, body.parent_materialnode_id)
+        node = await repo.move(node_id, body.parent_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -317,7 +329,7 @@ async def move_node(
     logger.info(
         "node_moved",
         node_id=str(node_id),
-        new_parent_materialnode_id=str(body.parent_materialnode_id),
+        new_parent_id=str(body.parent_id),
     )
     return NodeResponse.model_validate(node)
 
@@ -335,7 +347,7 @@ async def reorder_node(
     number of siblings, it is clamped to the last position.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    repo = MaterialNodeRepository(session)
+    repo = CourseNodeRepository(session)
 
     try:
         node = await repo.reorder(node_id, body.order)
@@ -358,41 +370,133 @@ async def delete_node(
     tenant: PrepDep,
     session: SessionDep,
     s3: S3Dep,
+    arq: ArqDep,
 ) -> None:
-    """Delete a node, all descendants, and their S3 files.
+    """KD3 soft-delete the node and its full subtree (vision §3 KD3).
 
-    Collects S3 keys from all material entries in the subtree,
-    deletes them from S3, then cascades DB deletion.
+    Cascade flow per Phase 1 KD3 adoption:
+
+    1. Verify the node exists and belongs to the caller's tenant
+       (404 otherwise — same shape as the rest of the route).
+    2. Walk the subtree via ``get_subtree(include_documents=True,
+       tenant_id=...)`` and collect S3 keys from every descendant
+       AuthoredDocument's ``source_url`` BEFORE cascade fires.
+       Order matters: the cascade engine dispatches
+       ``scrub_authored_document`` per descendant which sets
+       ``source_url = ''`` — collecting keys after cascade would
+       miss them all.
+    3. Issue ``CascadeDeleteService.soft_delete_with_cascade`` rooted
+       at the node. The engine drives the four-phase hook chain
+       (cancel → invalidate → scrub → write deleted_at → flush) plus
+       per-victim scrub dispatch:
+
+       * ``on_cancel_jobs`` — direct-bind to
+         :class:`JobCancellationService.cancel_jobs_for_entities`
+         per vision §KD13. Subtree victim ids are course_node_id-keyed
+         (cascade traverses ``CourseNode → CourseNode → AuthoredDocument``
+         so the victim list includes the full subtree CourseNode set),
+         matching the JCS ``Job.course_node_id`` IN lookup path
+         directly — no closure augmentation needed (the augmentation
+         pattern in ``documents.py`` + ``storage.py`` is reserved for
+         delete sites where victim ids are document-keyed). KD13 cancel
+         semantics: ``status='cancelled'`` + ``completed_at = now()``;
+         ``deleted_at`` REMAINS NULL (Job ∉ any
+         ``__cascades_soft_delete_to__`` chain per PHASE.md §1.2 audit).
+       * ``on_invalidate_hashes`` — Gap 3 hook bridging
+         :class:`ContentHashService.invalidate_subtree` so parent-hash
+         recompute treats victims as already gone.
+       * Class-level ``__scrub_callable__`` dispatch (models-fix-3)
+         clears KD3 fields per type: CourseNode →
+         ``scrub_course_node`` (``title`` + ``description`` ← KD3
+         marker per hotfix-4); AuthoredDocument →
+         ``scrub_authored_document`` (``filename`` + ``source_url`` ←
+         KD3 marker).
+    4. Hand off to ``enqueue_s3_cleanup`` — helper persists a
+       ``s3_cleanup`` Job row, commits cascade + Job atomically
+       (QQ5 boundary), then dispatches the ARQ task post-commit
+       and records the resolved ``arq_job_id``. Empty key list
+       short-circuits — no Job row, no ARQ enqueue.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
-    node_repo = MaterialNodeRepository(session)
+    node_repo = CourseNodeRepository(session)
 
-    # Collect S3 keys before DB cascade removes entries
-    subtree = await node_repo.get_subtree(node_id, include_materials=True)
-    s3_keys: list[str] = []
+    # (2) Collect S3 keys before cascade scrub blanks ``source_url``.
+    # Tenant-scoped subtree (Gap 1 — commit (j)) defends against any
+    # corrupt parent_id chain pulling foreign-tenant docs into the
+    # cleanup batch. ``get_subtree_with_active_documents`` eager-loads
+    # only active (``deleted_at IS NULL``) AuthoredDocuments per node
+    # — already-deleted docs have already been scrub-cleaned + their
+    # S3 keys enqueued via their own ``delete_document`` path, so
+    # re-collecting their keys here would either no-op (extract_key
+    # returns None on the KD3 marker) or duplicate cleanup work.
+    # Active-only filter keeps the batch precisely what cascade-scrub
+    # is about to blank in the same flush.
+    subtree = await node_repo.get_subtree_with_active_documents(
+        node_id,
+        tenant_id=tenant.tenant_id,
+    )
+    file_keys: list[str] = []
     for node in _flatten(subtree):
-        for entry in node.materials:
-            key = s3.extract_key(entry.source_url)
+        for doc in node.documents:
+            key = s3.extract_key(doc.source_url)
             if key is not None:
-                s3_keys.append(key)
+                file_keys.append(key)
 
-    await node_repo.delete(node_id)
-    await session.commit()
+    # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
+    # dispatch (models-fix-3) clears KD3 fields on root + every
+    # descendant in the same flush as the ``deleted_at`` write.
+    cascade_service = CascadeDeleteService(session)
+    cascade_map = build_cascade_map(CourseNode)
+    content_hash_service = ContentHashService(session)
+    job_cancellation_service = JobCancellationService(session)
 
-    # Clean up S3 after successful DB commit
-    for key in s3_keys:
-        await s3.delete_object(key)
+    async def invalidate_hook(
+        ids: list[uuid.UUID], exclude_ids: set[uuid.UUID]
+    ) -> None:
+        await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
+
+    # ``subtree[0]`` is the loaded root with eager-loaded relationships
+    # — reuse it as the cascade entry point so we don't issue another
+    # ``SELECT`` for the same row. Empty subtree should never reach
+    # here (``_require_node_for_tenant`` already failed if so).
+    root_node = subtree[0]
+    await cascade_service.soft_delete_with_cascade(
+        root_node,
+        cascade_map,
+        on_cancel_jobs=job_cancellation_service.cancel_jobs_for_entities,
+        on_invalidate_hashes=invalidate_hook,
+    )
+
+    # (4) Persist the s3_cleanup Job + dispatch ARQ task. Helper owns
+    # the QQ5 commit boundary; we pass ``course_node_id=node_id`` so
+    # tenant scope on the Job row is recoverable via the
+    # ``Job.course_node_id → CourseNode.tenant_id`` join even after
+    # the cascade scrub clears the row's content fields.
+    s3_files_cleaned = len(file_keys)
+    if file_keys:
+        await enqueue_s3_cleanup(
+            session=session,
+            arq=arq,
+            file_keys=file_keys,
+            tenant_id=tenant.tenant_id,
+            course_node_id=node_id,
+        )
+    else:
+        # No S3 keys to clean (pure-text/web subtree or leaf with no
+        # documents) — still need to commit the cascade soft-delete
+        # since the helper would have done it for us otherwise.
+        await session.commit()
 
     logger.info(
         "node_deleted",
         node_id=str(node_id),
-        s3_files_cleaned=len(s3_keys),
+        s3_files_cleaned=s3_files_cleaned,
     )
 
 
-def _flatten(nodes: Sequence[MaterialNode]) -> list[MaterialNode]:
+def _flatten(nodes: Sequence[CourseNode]) -> list[CourseNode]:
     """Flatten a tree of nodes into a flat list."""
-    result: list[MaterialNode] = []
+    result: list[CourseNode] = []
     stack = list(nodes)
     while stack:
         node = stack.pop()

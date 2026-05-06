@@ -10,7 +10,7 @@ the way to the root.
 KD9 explicitly forbids lazy / on-read materialisation (vision §3
 line 563): hashes must be computed and persisted at INSERT/UPDATE
 time. The legacy ``FingerprintService`` (anchored on
-``MaterialEntry.processed_hash``) remains in place for the
+``AuthoredDocument.processed_hash``) remains in place for the
 snapshot / reconciliation flows it serves and is collapsed into
 ``ContentHashService`` in Phase 1.1.
 
@@ -26,6 +26,7 @@ vision-aligned inputs (concepts, positions, additional fields).
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime
 from typing import Protocol, cast
@@ -35,10 +36,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import (
-    MaterialEntry,
-    MaterialMacroSection,
-    MaterialNode,
-    MaterialSegment,
+    AuthoredDocument,
+    CourseNode,
+    DocumentSegment,
+    DocumentSummary,
 )
 
 logger = structlog.get_logger(__name__)
@@ -59,8 +60,8 @@ _MAX_WALK_DEPTH = 25
 class HashableEntity(Protocol):
     """Structural type for any model that participates in content_hash.
 
-    Concrete hash-bearing models (``MaterialSegment``,
-    ``MaterialMacroSection``, ``MaterialEntry``, ``MaterialNode``)
+    Concrete hash-bearing models (``DocumentSegment``,
+    ``DocumentSummary``, ``AuthoredDocument``, ``CourseNode``)
     all expose these three attributes — ``id`` and ``deleted_at``
     come from existing model contracts and ``content_hash`` is the
     column added by task 0.2.
@@ -75,7 +76,7 @@ def compute_raw_hash(content: bytes) -> str:
     """SHA-256 hex digest of the raw authored bytes (vision §3 KD9).
 
     Used for ``AuthoredDocument.raw_hash`` (currently named
-    ``MaterialEntry.raw_hash`` until the Phase 1.2 rename). Once a
+    ``AuthoredDocument.raw_hash`` until the Phase 1.2 rename). Once a
     value is persisted it is treated as immutable: re-uploading the
     same document with different bytes is a new authored input that
     invalidates downstream summaries (vision §3 KD4).
@@ -114,6 +115,30 @@ def compute_content_hash(local_content: bytes, child_hashes: list[str]) -> str:
         hasher.update(_HASH_SEPARATOR)
         hasher.update(child.encode("ascii"))
     return hasher.hexdigest()
+
+
+def _encode_local_fields(payload: dict[str, object]) -> bytes:
+    """Stable byte encoding of an entity's local-content fields.
+
+    Returns deterministic UTF-8 JSON bytes via ``json.dumps`` with
+    ``sort_keys=True`` and ``separators=(",", ":")`` — keys lay out
+    identically across calls regardless of insertion order, no
+    superfluous whitespace contributes to the hash, and ``ensure_ascii=
+    False`` keeps Unicode strings in their canonical form so the same
+    course content from two providers (e.g. UA vs RU diacritic
+    normalization) does not produce divergent hashes downstream.
+
+    Concept lists are sorted before being added to ``payload`` (LLM
+    output order is non-deterministic; stable hashing requires order
+    normalization at the formula boundary). Concept fields are passed
+    through here as-is — the caller is responsible for the ``sorted(...)``.
+    """
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class ContentHashService:
@@ -170,8 +195,8 @@ class ContentHashService:
         """Bulk Merkle propagation for cascade-soft-delete scenarios.
 
         Looks up entities by id across the four hash-bearing tables
-        (``MaterialSegment``, ``MaterialMacroSection``,
-        ``MaterialEntry``, ``MaterialNode``) — one ``WHERE id IN``
+        (``DocumentSegment``, ``DocumentSummary``,
+        ``AuthoredDocument``, ``CourseNode``) — one ``WHERE id IN``
         query per type, four total round-trips regardless of
         ``len(entity_ids)``. For each entity, walks up to the root
         with a *shared* ``visited`` set so a parent reached from N
@@ -196,10 +221,10 @@ class ContentHashService:
 
         entities: list[HashableEntity] = []
         for cls in (
-            MaterialSegment,
-            MaterialMacroSection,
-            MaterialEntry,
-            MaterialNode,
+            DocumentSegment,
+            DocumentSummary,
+            AuthoredDocument,
+            CourseNode,
         ):
             stmt = select(cls).where(cls.id.in_(entity_ids))
             result = await self._session.execute(stmt)
@@ -267,72 +292,98 @@ class ContentHashService:
         *,
         exclude_ids: set[uuid.UUID] | None,
     ) -> str:
-        """Per-entity hash formula (vision §3 KD9, minimal-viable for 0.2).
+        """Per-entity hash formula (vision §3 KD9).
 
-        Phase 1.3 / 1.4 / 2 / 3 will refine each formula with vision-
-        aligned inputs (concepts, positions, additional own fields).
+        Phase 1 commit (e) extends ``DocumentSegment`` and
+        ``DocumentSummary`` with own content fields per Gap 2 of the
+        sprint deferred debt; ``AuthoredDocument`` and ``CourseNode``
+        formulas are unchanged here (Phase 2 / Phase 3 territory).
         The current shapes:
 
-        - ``MaterialSegment`` — ``content`` bytes, no children. Phase
-          1.4 adds concepts + positions per KD9 line 552.
-        - ``MaterialMacroSection`` — empty local content + sorted
-          active segments' ``content_hash``. Phase 1.3 adds own
-          fields per KD9 line 553.
-        - ``MaterialEntry`` — ``raw_hash`` bytes + sorted active
-          sections' ``content_hash``. ``raw_hash`` anchor matches
+        - ``DocumentSegment`` — local content covers ``content`` plus
+          sorted ``main_concepts`` + sorted ``secondary_concepts``;
+          no children. ``content_char_count`` is excluded as a derived
+          field (= ``len(content)``) and would double-count the same
+          input. FK references and timestamps are excluded.
+        - ``DocumentSummary`` — local content covers ``title`` +
+          ``description`` + sorted ``main_concepts`` + sorted
+          ``secondary_concepts``; children = sorted active segments'
+          ``content_hash`` (Merkle aggregation per KD9). Same exclusion
+          rules as ``DocumentSegment``.
+        - ``AuthoredDocument`` — ``raw_hash`` bytes + sorted active
+          summaries' ``content_hash``. ``raw_hash`` anchor matches
           KD9 line 554. Falls back to ``b""`` while ``raw_hash`` is
           NULL (Phase 2 will populate it at ingestion time).
-        - ``MaterialNode`` — empty local content + sorted (active
-          entries' + active child nodes') ``content_hash``. Phase
+        - ``CourseNode`` — empty local content + sorted (active
+          documents' + active child nodes') ``content_hash``. Phase
           1.1 collapses ``node_fingerprint`` into ``content_hash``
           and switches to the full KD9 formula.
+
+        Concept list ordering is normalized via ``sorted(...)`` at the
+        formula boundary because LLM output order is non-deterministic;
+        without normalization a producer reshuffle would spuriously
+        invalidate every downstream Merkle ancestor.
 
         ``exclude_ids`` is forwarded to the children query so the
         cascade hook can elide soon-to-be-deleted siblings before
         they actually have ``deleted_at`` set.
         """
-        if isinstance(entity, MaterialSegment):
-            local = (entity.content or "").encode("utf-8")
+        if isinstance(entity, DocumentSegment):
+            local = _encode_local_fields(
+                {
+                    "content": entity.content or "",
+                    "main_concepts": sorted(entity.main_concepts or []),
+                    "secondary_concepts": sorted(entity.secondary_concepts or []),
+                }
+            )
             return compute_content_hash(local, [])
 
-        if isinstance(entity, MaterialMacroSection):
-            stmt = select(MaterialSegment.content_hash).where(
-                MaterialSegment.macro_section_id == entity.id,
-                MaterialSegment.deleted_at.is_(None),
+        if isinstance(entity, DocumentSummary):
+            local = _encode_local_fields(
+                {
+                    "title": entity.title or "",
+                    "description": entity.description or "",
+                    "main_concepts": sorted(entity.main_concepts or []),
+                    "secondary_concepts": sorted(entity.secondary_concepts or []),
+                }
+            )
+            stmt = select(DocumentSegment.content_hash).where(
+                DocumentSegment.document_summary_id == entity.id,
+                DocumentSegment.deleted_at.is_(None),
             )
             if exclude_ids:
-                stmt = stmt.where(MaterialSegment.id.notin_(exclude_ids))
-            result = await self._session.execute(stmt)
-            children = [h for (h,) in result.all() if h is not None]
-            return compute_content_hash(b"", children)
-
-        if isinstance(entity, MaterialEntry):
-            local = (entity.raw_hash or "").encode("ascii")
-            stmt = select(MaterialMacroSection.content_hash).where(
-                MaterialMacroSection.material_entry_id == entity.id,
-                MaterialMacroSection.deleted_at.is_(None),
-            )
-            if exclude_ids:
-                stmt = stmt.where(MaterialMacroSection.id.notin_(exclude_ids))
+                stmt = stmt.where(DocumentSegment.id.notin_(exclude_ids))
             result = await self._session.execute(stmt)
             children = [h for (h,) in result.all() if h is not None]
             return compute_content_hash(local, children)
 
-        if isinstance(entity, MaterialNode):
-            entry_stmt = select(MaterialEntry.content_hash).where(
-                MaterialEntry.materialnode_id == entity.id,
-                MaterialEntry.deleted_at.is_(None),
+        if isinstance(entity, AuthoredDocument):
+            local = (entity.raw_hash or "").encode("ascii")
+            stmt = select(DocumentSummary.content_hash).where(
+                DocumentSummary.authored_document_id == entity.id,
+                DocumentSummary.deleted_at.is_(None),
             )
             if exclude_ids:
-                entry_stmt = entry_stmt.where(MaterialEntry.id.notin_(exclude_ids))
+                stmt = stmt.where(DocumentSummary.id.notin_(exclude_ids))
+            result = await self._session.execute(stmt)
+            children = [h for (h,) in result.all() if h is not None]
+            return compute_content_hash(local, children)
+
+        if isinstance(entity, CourseNode):
+            entry_stmt = select(AuthoredDocument.content_hash).where(
+                AuthoredDocument.course_node_id == entity.id,
+                AuthoredDocument.deleted_at.is_(None),
+            )
+            if exclude_ids:
+                entry_stmt = entry_stmt.where(AuthoredDocument.id.notin_(exclude_ids))
             entry_result = await self._session.execute(entry_stmt)
 
-            node_stmt = select(MaterialNode.content_hash).where(
-                MaterialNode.parent_materialnode_id == entity.id,
-                MaterialNode.deleted_at.is_(None),
+            node_stmt = select(CourseNode.content_hash).where(
+                CourseNode.parent_id == entity.id,
+                CourseNode.deleted_at.is_(None),
             )
             if exclude_ids:
-                node_stmt = node_stmt.where(MaterialNode.id.notin_(exclude_ids))
+                node_stmt = node_stmt.where(CourseNode.id.notin_(exclude_ids))
             node_result = await self._session.execute(node_stmt)
 
             children = [h for (h,) in entry_result.all() if h is not None]
@@ -346,24 +397,24 @@ class ContentHashService:
     async def _fetch_parent(self, entity: HashableEntity) -> HashableEntity | None:
         """Resolve ``entity``'s parent in the hash chain, or None at root.
 
-        - Segment → MacroSection (via ``macro_section_id``)
-        - MacroSection → MaterialEntry (via ``material_entry_id``)
-        - MaterialEntry → MaterialNode (via ``materialnode_id``)
-        - MaterialNode → MaterialNode (via ``parent_materialnode_id``);
+        - Segment → MacroSection (via ``document_summary_id``)
+        - MacroSection → AuthoredDocument (via ``authored_document_id``)
+        - AuthoredDocument → CourseNode (via ``course_node_id``)
+        - CourseNode → CourseNode (via ``parent_id``);
           NULL = root, walk terminates.
         """
-        if isinstance(entity, MaterialSegment):
+        if isinstance(entity, DocumentSegment):
+            return await self._session.get(DocumentSummary, entity.document_summary_id)
+        if isinstance(entity, DocumentSummary):
             return await self._session.get(
-                MaterialMacroSection, entity.macro_section_id
+                AuthoredDocument, entity.authored_document_id
             )
-        if isinstance(entity, MaterialMacroSection):
-            return await self._session.get(MaterialEntry, entity.material_entry_id)
-        if isinstance(entity, MaterialEntry):
-            return await self._session.get(MaterialNode, entity.materialnode_id)
-        if isinstance(entity, MaterialNode):
-            if entity.parent_materialnode_id is None:
+        if isinstance(entity, AuthoredDocument):
+            return await self._session.get(CourseNode, entity.course_node_id)
+        if isinstance(entity, CourseNode):
+            if entity.parent_id is None:
                 return None
-            return await self._session.get(MaterialNode, entity.parent_materialnode_id)
+            return await self._session.get(CourseNode, entity.parent_id)
         raise TypeError(
             f"ContentHashService does not support entity type {type(entity).__name__}"
         )

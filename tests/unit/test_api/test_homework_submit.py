@@ -14,9 +14,9 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.material_node_repository import MaterialNodeRepository
 from course_supporter.storage.student_repository import StudentRepository
 
 STUB_TENANT = TenantContext(
@@ -34,13 +34,13 @@ def _mock_node(
     *,
     node_id: uuid.UUID | None = None,
     tenant_id: uuid.UUID | None = None,
-    parent_materialnode_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """Create a mock MaterialNode."""
+    """Create a mock CourseNode."""
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.tenant_id = tenant_id or STUB_TENANT.tenant_id
-    node.parent_materialnode_id = parent_materialnode_id
+    node.parent_id = parent_id
     return node
 
 
@@ -163,13 +163,13 @@ class TestSubmitHomework:
             if requested_id == node_id:
                 return _mock_node(
                     node_id=node_id,
-                    parent_materialnode_id=course_node_id,
+                    parent_id=course_node_id,
                 )
             return None
 
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 side_effect=get_node_by_id,
             ),
@@ -230,7 +230,7 @@ class TestSubmitHomework:
         node_id: uuid.UUID,
     ) -> None:
         """Non-existent course node returns 404."""
-        with patch.object(MaterialNodeRepository, "get_by_id", return_value=None):
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
             resp = await client.post(
                 "/api/v1/homework/submit",
                 data=_submit_form(course_node_id=course_node_id, node_id=node_id),
@@ -247,11 +247,11 @@ class TestSubmitHomework:
     ) -> None:
         """course_node_id that is not a root node returns 422."""
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id",
             return_value=_mock_node(
                 node_id=course_node_id,
-                parent_materialnode_id=uuid.uuid4(),  # Not root
+                parent_id=uuid.uuid4(),  # Not root
             ),
         ):
             resp = await client.post(
@@ -271,7 +271,7 @@ class TestSubmitHomework:
         """Course node belonging to another tenant returns 404."""
         other_tenant = uuid.uuid4()
         with patch.object(
-            MaterialNodeRepository,
+            CourseNodeRepository,
             "get_by_id",
             return_value=_mock_node(node_id=course_node_id, tenant_id=other_tenant),
         ):
@@ -326,13 +326,13 @@ class TestSubmitHomework:
 
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 side_effect=[
                     _mock_node(node_id=course_node_id),
                     _mock_node(
                         node_id=node_id,
-                        parent_materialnode_id=course_node_id,
+                        parent_id=course_node_id,
                     ),
                 ],
             ),
@@ -366,13 +366,13 @@ class TestSubmitHomework:
             if requested_id == node_id:
                 return _mock_node(
                     node_id=node_id,
-                    parent_materialnode_id=course_node_id,
+                    parent_id=course_node_id,
                 )
             return None
 
         with (
             patch.object(
-                MaterialNodeRepository,
+                CourseNodeRepository,
                 "get_by_id",
                 side_effect=get_node_by_id,
             ),

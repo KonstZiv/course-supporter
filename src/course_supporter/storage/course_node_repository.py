@@ -1,0 +1,684 @@
+"""Repository for CourseNode CRUD and tree operations."""
+
+from __future__ import annotations
+
+import uuid
+from enum import Enum, auto
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
+
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
+
+# Lazy import helper to avoid circular dependency at module load time.
+# FingerprintService → orm.py ← CourseNodeRepository → FingerprintService
+# Actual import deferred to _invalidate_node_chain().
+
+
+class _Unset(Enum):
+    """Sentinel for distinguishing 'not provided' from None."""
+
+    TOKEN = auto()
+
+
+class CourseNodeRepository:
+    """Repository for material tree node operations.
+
+    Root nodes (parent_id IS NULL) represent "courses" — top-level
+    entities owned by a tenant. Tenant isolation is enforced at the
+    API layer via ``node.tenant_id``.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    # ── Root node (= course) operations ──
+
+    async def list_roots(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CourseNode]:
+        """List root nodes for a tenant, ordered newest first.
+
+        Eagerly loads direct children and materials for count computation.
+        """
+        stmt = (
+            select(CourseNode)
+            .where(
+                CourseNode.tenant_id == tenant_id,
+                CourseNode.parent_id.is_(None),
+            )
+            .options(
+                selectinload(CourseNode.children),
+                selectinload(CourseNode.documents),
+            )
+            .order_by(CourseNode.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_roots(self, tenant_id: uuid.UUID) -> int:
+        """Count root nodes for a tenant."""
+        stmt = (
+            select(func.count())
+            .select_from(CourseNode)
+            .where(
+                CourseNode.tenant_id == tenant_id,
+                CourseNode.parent_id.is_(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
+    # ── CRUD ──
+
+    async def create(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        title: str,
+        parent_id: uuid.UUID | None = None,
+        description: str | None = None,
+        default_language: str | None = None,
+    ) -> CourseNode:
+        """Create a new node with auto-incremented order among siblings.
+
+        Always assigns an integer ``order`` even though the column is
+        nullable. Rationale: a brand-new node is implicitly "the next one"
+        and should sort consistently above any siblings that author later
+        explicitly sets to NULL via PATCH (NULLs sort last). Authors who
+        want "no preferred position" for a fresh node should PATCH
+        ``order=null`` immediately after create.
+
+        Args:
+            tenant_id: FK to the owning tenant.
+            title: Node title.
+            parent_id: FK to parent node (None for root).
+            description: Optional node description.
+            default_language: Optional ISO 639-1 default language for
+                materials under this node (inherited by children).
+
+        Returns:
+            The newly created CourseNode with integer ``order``.
+        """
+        next_order = await self._next_sibling_order(parent_id)
+        node = CourseNode(
+            tenant_id=tenant_id,
+            parent_id=parent_id,
+            title=title,
+            description=description,
+            default_language=default_language,
+            order=next_order,
+        )
+        self._session.add(node)
+        await self._session.flush()
+        return node
+
+    async def get_by_id(self, node_id: uuid.UUID) -> CourseNode | None:
+        """Get a node by primary key."""
+        return await self._session.get(CourseNode, node_id)
+
+    async def get_by_id_for_tenant(
+        self, node_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> CourseNode | None:
+        """Get a node only if it belongs to the given tenant.
+
+        Returns ``None`` for both non-existent nodes AND nodes owned
+        by other tenants — callers should surface this as 404 to avoid
+        leaking existence of foreign-tenant IDs (mirrors
+        :meth:`JobRepository.get_by_id_for_tenant` from 0.3).
+        """
+        stmt = select(CourseNode).where(
+            CourseNode.id == node_id,
+            CourseNode.tenant_id == tenant_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_root_for(
+        self,
+        node_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> CourseNode | None:
+        """Walk up the parent chain to find the root (course) node.
+
+        Uses a recursive CTE to traverse ``parent_id`` links to the
+        first node whose parent is NULL. Returns ``None`` if the
+        starting node does not exist or — when ``tenant_id`` is
+        supplied — if the chain leaves the tenant before reaching a
+        root.
+
+        When ``tenant_id`` is provided, the filter is applied to BOTH
+        the base anchor AND the recursive step (defense-in-depth per
+        rule #12). A malformed tree where a child node carries a
+        ``parent_id`` that points at a different tenant's node will
+        terminate the walk early and return ``None`` rather than
+        silently resolving to the wrong tenant's root. ``None`` is
+        reserved for global helpers that legitimately need to walk
+        across tenants. Mirrors the same pattern used by
+        :meth:`get_descendant_ids`.
+
+        Performance note: a single recursive CTE query is preferred over
+        an iterative loop of round-trips because course trees are shallow
+        in practice (typically 3-7 levels), and a single DB call beats
+        N sequential ``session.get`` calls over the wire.
+        """
+        # Recursive CTE: start at node_id, climb up via parent FK.
+        base = select(
+            CourseNode.id,
+            CourseNode.parent_id,
+        ).where(CourseNode.id == node_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        ancestor_cte = base.cte(name="ancestors", recursive=True)
+
+        recursive = select(
+            CourseNode.id,
+            CourseNode.parent_id,
+        ).where(CourseNode.id == ancestor_cte.c.parent_id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        ancestor_cte = ancestor_cte.union_all(recursive)
+
+        root_id_stmt = (
+            select(ancestor_cte.c.id).where(ancestor_cte.c.parent_id.is_(None)).limit(1)
+        )
+        root_id = (await self._session.execute(root_id_stmt)).scalar_one_or_none()
+        if root_id is None:
+            return None
+        return await self._session.get(CourseNode, root_id)
+
+    async def get_roots(self, tenant_id: uuid.UUID) -> list[CourseNode]:
+        """Get root nodes (parent_id=None) for a tenant, ordered."""
+        stmt = (
+            select(CourseNode)
+            .where(
+                CourseNode.tenant_id == tenant_id,
+                CourseNode.parent_id.is_(None),
+            )
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_children(self, node_id: uuid.UUID) -> list[CourseNode]:
+        """Get direct children of a node, ordered."""
+        stmt = (
+            select(CourseNode)
+            .where(CourseNode.parent_id == node_id)
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    # ── Tree operations ──
+
+    async def get_descendant_ids(
+        self,
+        root_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> list[uuid.UUID]:
+        """Return all node IDs in the subtree rooted at ``root_id`` (inclusive).
+
+        Single recursive CTE; no ORM hydration. Use for set-based filters
+        (``WHERE Job.course_node_id IN (...)``) — cheaper than
+        :meth:`get_subtree` when only IDs are needed (e.g., cost-report
+        subtree drill-down).
+
+        When ``tenant_id`` is provided, the filter is applied to BOTH the
+        base anchor AND the recursive ``JOIN``. Defense-in-depth: even if
+        a data anomaly produced a child ``CourseNode`` with a different
+        ``tenant_id`` from its parent, the recursion will not traverse
+        into the foreign tenant's subtree. The route layer always passes
+        the caller's tenant id; ``None`` is reserved for global helpers
+        that legitimately need to walk across tenants.
+
+        Performance note: callers consume the returned list as an
+        IN-clause filter (e.g.,
+        :meth:`ExternalServiceCallRepository.get_by_node` /
+        :meth:`~ExternalServiceCallRepository.get_by_action` /
+        :meth:`~ExternalServiceCallRepository.get_total_for_subtree`).
+        For courses with ≥500 nodes the IN-list size becomes the binding
+        constraint — see the consumer-side performance ceiling note for
+        the decision lever and the inline-CTE mitigation.
+        """
+        base = select(CourseNode.id).where(CourseNode.id == root_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        cte = base.cte(name="descendant_ids", recursive=True)
+        recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        cte = cte.union_all(recursive)
+        result = await self._session.execute(select(cte.c.id))
+        return list(result.scalars().all())
+
+    async def get_subtree(
+        self,
+        root_id: uuid.UUID,
+        *,
+        include_documents: bool = False,
+        tenant_id: uuid.UUID | None = None,
+    ) -> list[CourseNode]:
+        """Load entire subtree rooted at *root_id* and return with children populated.
+
+        Uses a recursive CTE to find all descendant node IDs, then loads
+        full ORM objects in a single query. Tree assembly happens in Python.
+
+        When ``tenant_id`` is provided, the filter is applied to BOTH the
+        base anchor AND the recursive ``JOIN`` of the CTE — Gap 1 fix
+        (mirrors :meth:`get_descendant_ids` shape from task 0.4 + KD-δ
+        ``get_root_for`` from Phase 1 commit (f)). Schema does NOT enforce
+        the parent-child tenant invariant, so a malformed parent pointer
+        across tenants would otherwise silently expose a foreign tenant's
+        subtree to the caller's session. The dual-side filter terminates
+        the walk at the tenant boundary; cross-tenant queries return
+        empty even when ``root_id`` is a valid id from another tenant
+        (defense-in-depth per rule #12). The route layer always passes
+        the caller's tenant id; ``None`` is reserved for global helpers
+        that legitimately need to walk across tenants.
+
+        Args:
+            root_id: UUID of the root node.
+            include_documents: If True, eager-load ``AuthoredDocument``
+                relationships for each node.
+            tenant_id: When set, restrict the recursion to nodes owned
+                by this tenant. ``None`` (default) preserves the legacy
+                cross-tenant walk for callers that have already enforced
+                isolation upstream.
+
+        Returns:
+            List containing the root node with ``children`` populated
+            recursively. Returns empty list if ``root_id`` is not found
+            or — when ``tenant_id`` is supplied — does not belong to
+            the named tenant.
+        """
+        # Recursive CTE: start from root_id, walk down via parent_id.
+        # Both the base anchor and the recursive step apply the tenant
+        # filter when supplied — see Gap 1 docstring above.
+        base = select(CourseNode.id).where(CourseNode.id == root_id)
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        cte = base.cte(name="subtree", recursive=True)
+        recursive = select(CourseNode.id).join(cte, CourseNode.parent_id == cte.c.id)
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        cte = cte.union_all(recursive)
+
+        # Load full node objects
+        stmt = (
+            select(CourseNode)
+            .where(CourseNode.id.in_(select(cte.c.id)))
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+        )
+        if include_documents:
+            stmt = stmt.options(
+                selectinload(CourseNode.documents),
+            )
+        result = await self._session.execute(stmt)
+        all_nodes = list(result.scalars().all())
+
+        # Build lookup and assemble tree
+        by_id: dict[uuid.UUID, CourseNode] = {n.id: n for n in all_nodes}
+        roots: list[CourseNode] = []
+
+        for node in all_nodes:
+            if hasattr(node, "_sa_instance_state"):
+                set_committed_value(node, "children", [])
+                set_committed_value(node, "parent", None)
+            else:
+                node.children = []
+                node.parent = None
+
+        for node in all_nodes:
+            if node.parent_id is None or node.parent_id not in by_id:
+                roots.append(node)
+            else:
+                parent = by_id.get(node.parent_id)
+                if parent is not None:
+                    parent.children.append(node)
+                    if hasattr(node, "_sa_instance_state"):
+                        set_committed_value(node, "parent", parent)
+                    else:
+                        node.parent = parent
+
+        return roots
+
+    async def get_subtree_with_active_documents(
+        self,
+        root_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID | None = None,
+    ) -> list[CourseNode]:
+        """Subtree variant that eager-loads ONLY active (non-soft-deleted)
+        ``AuthoredDocument`` rows per node.
+
+        Soft-deleted documents stay in the database for cascade + audit
+        per the Phase 1 KD3 contract. User-facing endpoints must NOT
+        expose them — this helper centralises the ``deleted_at IS NULL``
+        filter at the loader-option level so callsites cannot leak
+        deleted docs through ``node.documents`` iteration.
+
+        Internal callsites that legitimately need the unfiltered
+        relationship (cascade engine descent, scrub callable iteration,
+        fingerprint computation against full state, methodist
+        orchestration) keep using ``get_subtree(include_documents=True,
+        ...)``. The relationship definition itself stays unchanged.
+
+        Mirror of :meth:`get_subtree` body intentionally — the
+        alternative (refactoring ``get_subtree`` to accept a
+        loader-option kwarg) would touch the internal-consumer contract
+        that hotfix-7 deliberately keeps stable.
+
+        Hotfix-8 (regression M): the recursive CTE walk also filters
+        ``CourseNode.deleted_at IS NULL`` on BOTH the base anchor and
+        the recursive arm — same dual-side discipline as the Gap 1
+        tenant filter. Without this, soft-deleted nodes (e.g. a
+        cascade-deleted Module/Topic chain) leak into the subtree
+        through ``node.children`` and surface in user-facing
+        responses with their KD3 marker text rendered as title.
+
+        Args:
+            root_id: UUID of the root node.
+            tenant_id: When set, restrict the recursion to nodes owned
+                by this tenant (mirrors :meth:`get_subtree` Gap 1
+                discipline — dual-side filter on base + recursive arm).
+
+        Returns:
+            List containing the root node with ``children`` populated
+            recursively (active nodes only — ``deleted_at IS NULL``),
+            and each node's ``documents`` collection likewise
+            restricted to active (``deleted_at IS NULL``) rows.
+            Returns empty list if ``root_id`` is not found OR is
+            itself soft-deleted.
+        """
+        base = select(CourseNode.id).where(
+            CourseNode.id == root_id,
+            CourseNode.deleted_at.is_(None),
+        )
+        if tenant_id is not None:
+            base = base.where(CourseNode.tenant_id == tenant_id)
+        cte = base.cte(name="subtree_active_docs", recursive=True)
+        recursive = (
+            select(CourseNode.id)
+            .join(cte, CourseNode.parent_id == cte.c.id)
+            .where(CourseNode.deleted_at.is_(None))
+        )
+        if tenant_id is not None:
+            recursive = recursive.where(CourseNode.tenant_id == tenant_id)
+        cte = cte.union_all(recursive)
+
+        stmt = (
+            select(CourseNode)
+            .where(CourseNode.id.in_(select(cte.c.id)))
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+            .options(
+                selectinload(
+                    CourseNode.documents.and_(AuthoredDocument.deleted_at.is_(None))
+                ),
+            )
+        )
+        result = await self._session.execute(stmt)
+        all_nodes = list(result.scalars().all())
+
+        by_id: dict[uuid.UUID, CourseNode] = {n.id: n for n in all_nodes}
+        roots: list[CourseNode] = []
+
+        for node in all_nodes:
+            if hasattr(node, "_sa_instance_state"):
+                set_committed_value(node, "children", [])
+                set_committed_value(node, "parent", None)
+            else:
+                node.children = []
+                node.parent = None
+
+        for node in all_nodes:
+            if node.parent_id is None or node.parent_id not in by_id:
+                roots.append(node)
+            else:
+                parent = by_id.get(node.parent_id)
+                if parent is not None:
+                    parent.children.append(node)
+                    if hasattr(node, "_sa_instance_state"):
+                        set_committed_value(node, "parent", parent)
+                    else:
+                        node.parent = parent
+
+        return roots
+
+    async def move(
+        self,
+        node_id: uuid.UUID,
+        new_parent_id: uuid.UUID | None,
+    ) -> CourseNode:
+        """Move a node to a new parent with cycle detection.
+
+        Args:
+            node_id: UUID of the node to move.
+            new_parent_id: New parent (None to make root).
+
+        Returns:
+            Updated CourseNode.
+
+        Raises:
+            ValueError: If node not found, or move would create a cycle.
+        """
+        node = await self.get_by_id(node_id)
+        if node is None:
+            msg = f"CourseNode not found: {node_id}"
+            raise ValueError(msg)
+
+        if new_parent_id is not None:
+            if new_parent_id == node_id:
+                msg = "Cannot move node to be its own parent"
+                raise ValueError(msg)
+
+            # Walk up from new_parent to root checking for cycle
+            if await self._is_descendant(ancestor_id=node_id, node_id=new_parent_id):
+                msg = (
+                    f"Cannot move node {node_id} under {new_parent_id}: "
+                    f"would create a cycle"
+                )
+                raise ValueError(msg)
+
+        old_parent_id = node.parent_id
+        node.parent_id = new_parent_id
+        node.order = await self._next_sibling_order(new_parent_id)
+        await self._session.flush()
+        # Invalidate both old and new parent chains
+        await self._invalidate_node_chain(old_parent_id)
+        await self._invalidate_node_chain(new_parent_id)
+        return node
+
+    async def reorder(self, node_id: uuid.UUID, new_order: int) -> CourseNode:
+        """Move a node to a new position among its siblings.
+
+        Shifts other siblings to make room. Order values are
+        renumbered 0, 1, 2, ... after the operation.
+
+        Args:
+            node_id: UUID of the node to reorder.
+            new_order: Desired position (0-based).
+
+        Returns:
+            Updated CourseNode.
+
+        Raises:
+            ValueError: If node not found or new_order is negative.
+        """
+        if new_order < 0:
+            msg = f"new_order must be non-negative, got {new_order}"
+            raise ValueError(msg)
+
+        node = await self.get_by_id(node_id)
+        if node is None:
+            msg = f"CourseNode not found: {node_id}"
+            raise ValueError(msg)
+
+        # Get siblings (including this node), ordered
+        # SQLAlchemy translates `column == None` to `IS NULL`
+        stmt = (
+            select(CourseNode)
+            .where(
+                CourseNode.parent_id == node.parent_id,
+                CourseNode.tenant_id == node.tenant_id,
+            )
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        siblings = list(result.scalars().all())
+
+        # Remove node from current position
+        siblings = [s for s in siblings if s.id != node_id]
+
+        # Clamp new_order to valid range
+        new_order = min(new_order, len(siblings))
+
+        # Insert at new position
+        siblings.insert(new_order, node)
+
+        # Renumber all siblings
+        for idx, sibling in enumerate(siblings):
+            if sibling.order != idx:
+                sibling.order = idx
+
+        await self._session.flush()
+        return node
+
+    async def update(
+        self,
+        node_id: uuid.UUID,
+        *,
+        title: str | None = None,
+        description: str | None | _Unset = _Unset.TOKEN,
+        default_language: str | None | _Unset = _Unset.TOKEN,
+    ) -> CourseNode:
+        """Update node fields.
+
+        Args:
+            node_id: UUID of the node.
+            title: New title (if provided).
+            description: New description (None to clear, _Unset to skip).
+            default_language: New default language
+                (None to clear, _Unset to skip).
+
+        Returns:
+            Updated CourseNode.
+
+        Raises:
+            ValueError: If node not found.
+        """
+        node = await self.get_by_id(node_id)
+        if node is None:
+            msg = f"CourseNode not found: {node_id}"
+            raise ValueError(msg)
+
+        if title is not None:
+            node.title = title
+        if not isinstance(description, _Unset):
+            node.description = description
+        if not isinstance(default_language, _Unset):
+            node.default_language = default_language
+
+        await self._session.flush()
+        return node
+
+    # NOTE: ``delete()`` REMOVED in Phase 1 commit (k) per KD3 adoption.
+    # Hard-delete + ORM-cascade is replaced by
+    # :meth:`CascadeDeleteService.soft_delete_with_cascade` rooted at
+    # the CourseNode. The cascade engine drives both the BFS soft-
+    # delete AND per-victim ``__scrub_callable__`` dispatch (clearing
+    # KD3 content fields on every CourseNode + AuthoredDocument
+    # descendant in the same flush as the ``deleted_at`` write).
+    # ``delete_node`` route handler in ``api/routes/nodes.py`` is the
+    # canonical caller; ad-hoc hard delete (e.g. test cleanup) must
+    # bypass the repository entirely via direct ``DELETE FROM``.
+
+    # ── Private helpers ──
+
+    async def _invalidate_node_chain(self, node_id: uuid.UUID | None) -> None:
+        """Invalidate fingerprints from node up to root."""
+        if node_id is None:
+            return
+        from course_supporter.fingerprint import FingerprintService
+
+        node = await self._session.get(CourseNode, node_id)
+        if node is not None:
+            await FingerprintService(self._session).invalidate_up(node)
+
+    async def _next_sibling_order(
+        self,
+        parent_id: uuid.UUID | None,
+    ) -> int:
+        """Get next order value for siblings under the given parent.
+
+        Returns ``MAX(order) + 1`` across siblings, or ``0`` if the parent
+        has no children (or all existing children have NULL order — MAX
+        ignores NULLs in SQL).
+
+        Always returns an integer: callers (``create()``) use this to
+        assign a sortable position to new nodes. NULL ``order`` is only
+        introduced via explicit PATCH on an existing node.
+        """
+        # SQLAlchemy translates `column == None` to `IS NULL`
+        stmt = select(func.coalesce(func.max(CourseNode.order) + 1, 0)).where(
+            CourseNode.parent_id == parent_id,
+        )
+        result = await self._session.execute(stmt)
+        # coalesce ensures non-NULL int return; assert satisfies mypy strict
+        value = result.scalar_one()
+        assert value is not None
+        return int(value)
+
+    async def _is_descendant(
+        self,
+        *,
+        ancestor_id: uuid.UUID,
+        node_id: uuid.UUID,
+    ) -> bool:
+        """Check if ancestor_id is an ancestor of node_id.
+
+        Walks up from node_id to root. Returns True if ancestor_id
+        is found on the path (would create a cycle if moved).
+        """
+        current_id: uuid.UUID | None = node_id
+        visited: set[uuid.UUID] = set()
+
+        while current_id is not None:
+            if current_id in visited:
+                break  # safety: existing cycle in data
+            visited.add(current_id)
+
+            current = await self.get_by_id(current_id)
+            if current is None:
+                break
+
+            if current.parent_id == ancestor_id:
+                return True
+            current_id = current.parent_id
+
+        return False

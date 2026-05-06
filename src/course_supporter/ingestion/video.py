@@ -37,7 +37,7 @@ from course_supporter.models.source import (
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
-    from course_supporter.storage.orm import MaterialEntry
+    from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.stt.router import STTRouter
     from course_supporter.stt.schemas import STTResult
     from course_supporter.vd.pipeline import VDPipeline
@@ -121,7 +121,7 @@ class GeminiVideoProcessor(MaterialProcessor):
 
     async def process_raw(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
@@ -272,7 +272,7 @@ class WhisperVideoProcessor(MaterialProcessor):
 
     async def process_raw(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:
@@ -456,7 +456,7 @@ class VideoProcessor(MaterialProcessor):
 
     async def process_raw(
         self,
-        source: MaterialEntry,
+        source: AuthoredDocument,
         *,
         router: ModelRouter | None = None,
     ) -> SourceDocument:

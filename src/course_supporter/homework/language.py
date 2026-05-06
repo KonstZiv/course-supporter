@@ -4,7 +4,7 @@ Resolution order:
 1. Explicit request parameter (response_language on submission)
 2. Student preference (from last review interaction)
 3. Auto-detect from submission content (comments, docstrings)
-4. Course language (from MaterialNode description)
+4. Course language (from CourseNode description)
 5. Fallback: "en"
 """
 
@@ -17,7 +17,7 @@ import structlog
 
 if TYPE_CHECKING:
     from course_supporter.models.safety import SubmissionContent
-    from course_supporter.storage.orm import MaterialNode, Student
+    from course_supporter.storage.orm import CourseNode, Student
 
 logger = structlog.get_logger()
 
@@ -138,7 +138,7 @@ def detect_response_language(
     request_language: str | None,
     student: Student | None,
     submission_content: SubmissionContent | None,
-    course_node: MaterialNode | None,
+    course_node: CourseNode | None,
 ) -> str:
     """Determine the language for Mentor review response.
 

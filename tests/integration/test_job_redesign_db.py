@@ -4,7 +4,7 @@ Verifies the post-migration on-disk shape of the ``jobs`` table:
 
 * ``current_stage`` (varchar) and ``stage_progress`` (jsonb) columns exist.
 * ``estimated_at`` is dropped.
-* ``course_node_id`` is renamed to ``course_node_id`` — column, FK
+* ``materialnode_id`` is renamed to ``course_node_id`` — column, FK
   constraint (``jobs_course_node_id_fkey``), and index
   (``ix_jobs_course_node_id``) all carry the new names.
 
@@ -65,7 +65,7 @@ class TestSchemaShape:
     def test_course_node_id_column_renamed(self, sync_engine: Engine) -> None:
         col_names = {c["name"] for c in inspect(sync_engine).get_columns("jobs")}
         assert "course_node_id" in col_names
-        assert "course_node_id" not in col_names
+        assert "materialnode_id" not in col_names
 
     def test_fk_constraint_renamed(self, sync_engine: Engine) -> None:
         """``jobs_course_node_id_fkey`` exists; legacy name does not."""
@@ -78,7 +78,7 @@ class TestSchemaShape:
             ).all()
         names = {r[0] for r in rows}
         assert "jobs_course_node_id_fkey" in names
-        assert "jobs_course_node_id_fkey" not in names
+        assert "jobs_materialnode_id_fkey" not in names
 
     def test_index_renamed(self, sync_engine: Engine) -> None:
         """``ix_jobs_course_node_id`` exists; legacy name does not."""
@@ -88,7 +88,7 @@ class TestSchemaShape:
             ).all()
         names = {r[0] for r in rows}
         assert "ix_jobs_course_node_id" in names
-        assert "ix_jobs_course_node_id" not in names
+        assert "ix_jobs_materialnode_id" not in names
 
 
 class TestStageProgressRoundTrip:

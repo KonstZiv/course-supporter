@@ -244,10 +244,7 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     filename: str | None = Field(description="Original filename, if available.")
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
-        description=(
-            "Derived lifecycle state: "
-            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
-        ),
+        description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
@@ -388,10 +385,7 @@ class AuthoredDocumentResponse(BaseModel):
     )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
-        description=(
-            "Derived lifecycle state: "
-            "``raw``, ``pending``, ``ready``, ``integrity_broken``, or ``error``."
-        ),
+        description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
@@ -437,9 +431,7 @@ class AuthoredDocumentCreateResponse(BaseModel):
         ),
     )
     order: int = Field(description="0-based position among sibling materials.")
-    state: str = Field(
-        description="Derived lifecycle state (will be ``raw`` or ``pending``)."
-    )
+    state: str = Field(description="Derived lifecycle state (will be ``pending``).")
     job_id: uuid.UUID | None = Field(
         default=None,
         description="ID of the auto-enqueued ingestion job for progress tracking.",

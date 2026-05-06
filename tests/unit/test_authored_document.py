@@ -1,4 +1,11 @@
-"""Tests for AuthoredDocument ORM model."""
+"""Unit tests for AuthoredDocument ORM model — MagicMock-based, fast.
+
+Tests model behavior including state derivation, FK relationships, and
+field constraints. Does NOT verify DB-level behavior (real INSERT/UPDATE
+paths, PostgreSQL trigger interactions) — those are covered in
+``tests/storage/test_authored_document_repository.py`` (real-DB,
+Amendment 33-aligned).
+"""
 
 from __future__ import annotations
 
@@ -26,8 +33,6 @@ class TestAuthoredDocumentModel:
         assert entry.filename is None
         assert entry.raw_hash is None
         assert entry.raw_size_bytes is None
-        assert entry.processed_hash is None
-        assert entry.processed_content is None
         assert entry.processed_at is None
         assert entry.job_id is None
         assert entry.pending_since is None
@@ -47,19 +52,6 @@ class TestAuthoredDocumentModel:
         assert entry.filename == "lecture-1.mp4"
         assert entry.raw_hash == "a" * 64
         assert entry.raw_size_bytes == 1_048_576
-
-    def test_create_with_processed_layer(self) -> None:
-        """AuthoredDocument with processed layer populated."""
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="text",
-            source_url="s3://bucket/notes.md",
-            processed_hash="b" * 64,
-            processed_content='{"sections": []}',
-        )
-
-        assert entry.processed_hash == "b" * 64
-        assert entry.processed_content == '{"sections": []}'
 
     def test_pending_receipt_fields(self) -> None:
         """Pending receipt tracks in-flight job."""
@@ -88,12 +80,10 @@ class TestAuthoredDocumentModel:
         col = AuthoredDocument.__table__.c.filename
         assert col.type.length == 500  # type: ignore[union-attr]
 
-    def test_hash_fields_max_length(self) -> None:
-        """Hash fields (raw, processed) are 64 chars (SHA-256)."""
-        table = AuthoredDocument.__table__
-        for col_name in ("raw_hash", "processed_hash"):
-            col = table.c[col_name]
-            assert col.type.length == 64, f"{col_name} should be 64 chars"  # type: ignore[union-attr]
+    def test_raw_hash_max_length(self) -> None:
+        """raw_hash is 64 chars (SHA-256)."""
+        col = AuthoredDocument.__table__.c.raw_hash
+        assert col.type.length == 64  # type: ignore[union-attr]
 
     def test_repr(self) -> None:
         """__repr__ includes id, source_type, and node_id."""
@@ -154,9 +144,9 @@ class TestAuthoredDocumentRelationships:
     """AuthoredDocument relationship configuration tests."""
 
     def test_node_relationship(self) -> None:
-        """node relationship back_populates materials on CourseNode."""
+        """node relationship back_populates documents on CourseNode."""
         rel = AuthoredDocument.__mapper__.relationships["node"]
-        assert rel.back_populates == "materials"
+        assert rel.back_populates == "documents"
 
     def test_pending_job_relationship(self) -> None:
         """pending_job relationship to Job with back_populates."""
@@ -169,28 +159,14 @@ class TestAuthoredDocumentRelationships:
         rel = Job.__mapper__.relationships["authored_documents"]
         assert rel.back_populates == "pending_job"
 
-    def test_material_node_has_materials(self) -> None:
-        """CourseNode.materials relationship back_populates node."""
-        rel = CourseNode.__mapper__.relationships["materials"]
+    def test_course_node_has_documents(self) -> None:
+        """CourseNode.documents relationship back_populates node."""
+        rel = CourseNode.__mapper__.relationships["documents"]
         assert rel.back_populates == "node"
-
-    def test_material_node_materials_cascade(self) -> None:
-        """CourseNode -> materials cascade includes delete-orphan."""
-        rel = CourseNode.__mapper__.relationships["materials"]
-        assert "delete-orphan" in rel.cascade
 
 
 class TestMaterialState:
     """AuthoredDocument.state derived property tests."""
-
-    def test_state_raw(self) -> None:
-        """RAW when no processed content, no pending, no error."""
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="web",
-            source_url="https://example.com",
-        )
-        assert entry.state.value == "raw"
 
     def test_state_pending(self) -> None:
         """PENDING when job_id is set."""
@@ -222,54 +198,6 @@ class TestMaterialState:
             error_message="failed",
         )
         assert entry.state.value == "error"
-
-    def test_state_ready(self) -> None:
-        """READY when processed_content set and hashes match."""
-        h = "a" * 64
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="web",
-            source_url="https://example.com",
-            processed_content='{"sections": []}',
-            processed_hash=h,
-            raw_hash=h,
-        )
-        assert entry.state.value == "ready"
-
-    def test_state_ready_no_raw_hash(self) -> None:
-        """READY when processed_content set and raw_hash is None (skip integrity)."""
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="web",
-            source_url="https://example.com",
-            processed_content='{"data": []}',
-            processed_hash="a" * 64,
-        )
-        assert entry.state.value == "ready"
-
-    def test_state_integrity_broken(self) -> None:
-        """INTEGRITY_BROKEN when raw_hash and processed_hash differ."""
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="web",
-            source_url="https://example.com",
-            processed_content='{"sections": []}',
-            processed_hash="a" * 64,
-            raw_hash="b" * 64,
-        )
-        assert entry.state.value == "integrity_broken"
-
-    def test_state_integrity_broken_after_source_update(self) -> None:
-        """INTEGRITY_BROKEN simulating source update with new raw_hash."""
-        entry = AuthoredDocument(
-            course_node_id=_uuid7(),
-            source_type="video",
-            source_url="s3://bucket/new-video.mp4",
-            processed_content='{"transcript": "..."}',
-            processed_hash="a" * 64,
-            raw_hash="c" * 64,
-        )
-        assert entry.state.value == "integrity_broken"
 
 
 class TestAuthoredDocumentIndexes:

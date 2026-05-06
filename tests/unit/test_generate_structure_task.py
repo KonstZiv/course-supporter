@@ -44,19 +44,14 @@ def _make_node(
 def _make_entry(
     *,
     state: str = "ready",
-    processed_content: str | None = None,
     filename: str | None = "test.md",
     source_url: str = "file:///test.md",
 ) -> MagicMock:
     """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
-    entry.processed_content = processed_content or (
-        '{"source_type": "text", "source_url": "file:///test.md"}'
-    )
     entry.filename = filename
     entry.source_url = source_url
-    entry.outline_content = None
     return entry
 
 

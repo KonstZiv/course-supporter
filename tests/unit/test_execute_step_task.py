@@ -44,16 +44,10 @@ def _make_node(
 def _make_entry(
     *,
     state: str = "ready",
-    processed_content: str | None = None,
-    outline_content: str | None = None,
 ) -> MagicMock:
     """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.state = state
-    entry.processed_content = processed_content or (
-        '{"source_type": "text", "source_url": "file:///test.md"}'
-    )
-    entry.outline_content = outline_content
     return entry
 
 
@@ -645,14 +639,8 @@ class TestContextCompression:
         """Parent node collects only its own materials when children have snapshots."""
         from course_supporter.models.step import StepInput
 
-        parent_entry = _make_entry(
-            state="ready",
-            processed_content='{"source_type": "text", "source_url": "file:///parent.md"}',
-        )
-        child_entry = _make_entry(
-            state="ready",
-            processed_content='{"source_type": "text", "source_url": "file:///child.md"}',
-        )
+        parent_entry = _make_entry(state="ready")
+        child_entry = _make_entry(state="ready")
         child = _make_node(title="Child Topic", documents=[child_entry])
         root = _make_node(documents=[parent_entry], children=[child])
 

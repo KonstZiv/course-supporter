@@ -300,10 +300,8 @@ class CourseNode(SoftDeleteMixin, Base):
 class MaterialState(StrEnum):
     """Derived state of a AuthoredDocument (not stored in DB)."""
 
-    RAW = "raw"
     PENDING = "pending"
     READY = "ready"
-    INTEGRITY_BROKEN = "integrity_broken"
     ERROR = "error"
 
 

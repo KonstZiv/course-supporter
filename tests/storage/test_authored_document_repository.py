@@ -17,6 +17,8 @@ dialect or recursive CTE semantics.
 
 Complement: ``tests/unit/test_authored_document_repository.py`` covers
 Python flow + signature contracts via MagicMock (fast, no DB).
+``tests/unit/test_authored_document.py`` covers the ORM model itself
+(state derivation, FK config, field constraints) via MagicMock.
 """
 
 from __future__ import annotations

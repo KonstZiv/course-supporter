@@ -65,7 +65,7 @@ def test_convert_tree_does_not_touch_editable_only_fields() -> None:
 
     editables = convert_structure_nodes_to_editables(
         [sn],
-        course_node_id=course_node_id,
+        materialnode_id=course_node_id,
         snapshot_id=snapshot_id,
     )
 

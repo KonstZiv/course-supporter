@@ -79,8 +79,10 @@ def _make_snapshot(
     snap = MagicMock()
     snap.id = snapshot_id or SNAPSHOT_ID
     snap.course_node_id = node_id or NODE_ID
+    snap.materialnode_id = snap.course_node_id
     snap.mode = "free"
     snap.content_hash = "a" * 64
+    snap.node_fingerprint = snap.content_hash
     snap.externalservicecall_id = uuid.uuid4()
     snap.service_call = MagicMock(
         id=snap.externalservicecall_id,

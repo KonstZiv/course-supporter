@@ -67,6 +67,7 @@ def _make_editable_node(
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.course_node_id = NODE_ID
+    node.materialnode_id = node.course_node_id
     node.source_snapshot_id = uuid.uuid4()
     node.source_structurenode_id = uuid.uuid4()
     node.parent_editable_id = parent_id

@@ -71,7 +71,6 @@ def _mock_entry(
     entry.state = state
     entry.error_message = error_message
     entry.job_id = job_id
-    entry.job_id = None
     entry.deleted_at = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)

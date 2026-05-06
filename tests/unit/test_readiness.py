@@ -28,7 +28,7 @@ def _mock_node(
     tenant_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
     title: str = "Node",
-    materials: list[MagicMock] | None = None,
+    documents: list[MagicMock] | None = None,
 ) -> MagicMock:
     """Create a mock CourseNode."""
     node = MagicMock(spec=CourseNode)
@@ -36,7 +36,7 @@ def _mock_node(
     node.tenant_id = tenant_id or uuid.uuid4()
     node.parent_id = parent_id
     node.title = title
-    node.materials = materials or []
+    node.documents = documents or []
     return node
 
 
@@ -65,7 +65,7 @@ class TestAllReady:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[_mock_entry(), _mock_entry()],
+            documents=[_mock_entry(), _mock_entry()],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -81,13 +81,13 @@ class TestAllReady:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[_mock_entry()],
+            documents=[_mock_entry()],
         )
         child = _mock_node(
             tenant_id=tid,
             parent_id=root.id,
             title="Child",
-            materials=[_mock_entry()],
+            documents=[_mock_entry()],
         )
         session = _make_session(root, [root, child])
         svc = ReadinessService(session)
@@ -99,7 +99,7 @@ class TestAllReady:
     async def test_empty_tree_is_ready(self) -> None:
         """Node with no materials is considered ready."""
         tid = uuid.uuid4()
-        root = _mock_node(tenant_id=tid, title="Empty", materials=[])
+        root = _mock_node(tenant_id=tid, title="Empty", documents=[])
         session = _make_session(root, [root])
         svc = ReadinessService(session)
 
@@ -119,7 +119,7 @@ class TestStaleMaterials:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[raw_entry],
+            documents=[raw_entry],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -138,7 +138,7 @@ class TestStaleMaterials:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[broken],
+            documents=[broken],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -154,14 +154,14 @@ class TestStaleMaterials:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[_mock_entry()],
+            documents=[_mock_entry()],
         )
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="child.mp4")
         child = _mock_node(
             tenant_id=tid,
             parent_id=root.id,
             title="Child",
-            materials=[raw_entry],
+            documents=[raw_entry],
         )
         session = _make_session(root, [root, child])
         svc = ReadinessService(session)
@@ -175,19 +175,19 @@ class TestStaleMaterials:
     async def test_stale_in_grandchild(self) -> None:
         """Stale material in grandchild is detected via BFS."""
         tid = uuid.uuid4()
-        root = _mock_node(tenant_id=tid, title="Root", materials=[])
+        root = _mock_node(tenant_id=tid, title="Root", documents=[])
         child = _mock_node(
             tenant_id=tid,
             parent_id=root.id,
             title="Child",
-            materials=[],
+            documents=[],
         )
         raw_entry = _mock_entry(state=MaterialState.RAW, filename="deep.pdf")
         grandchild = _mock_node(
             tenant_id=tid,
             parent_id=child.id,
             title="Grandchild",
-            materials=[raw_entry],
+            documents=[raw_entry],
         )
         session = _make_session(root, [root, child, grandchild])
         svc = ReadinessService(session)
@@ -203,12 +203,12 @@ class TestStaleMaterials:
         tid = uuid.uuid4()
         raw1 = _mock_entry(state=MaterialState.RAW, filename="a.mp4")
         raw2 = _mock_entry(state=MaterialState.INTEGRITY_BROKEN, filename="b.pdf")
-        root = _mock_node(tenant_id=tid, title="Root", materials=[raw1])
+        root = _mock_node(tenant_id=tid, title="Root", documents=[raw1])
         child = _mock_node(
             tenant_id=tid,
             parent_id=root.id,
             title="Child",
-            materials=[_mock_entry(), raw2],
+            documents=[_mock_entry(), raw2],
         )
         session = _make_session(root, [root, child])
         svc = ReadinessService(session)
@@ -228,7 +228,7 @@ class TestNonBlockingStates:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[_mock_entry(state=MaterialState.PENDING)],
+            documents=[_mock_entry(state=MaterialState.PENDING)],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -243,7 +243,7 @@ class TestNonBlockingStates:
         root = _mock_node(
             tenant_id=tid,
             title="Root",
-            materials=[_mock_entry(state=MaterialState.ERROR)],
+            documents=[_mock_entry(state=MaterialState.ERROR)],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -282,7 +282,7 @@ class TestStaleMaterialDataclass:
         root = _mock_node(
             tenant_id=tid,
             title="My Node",
-            materials=[raw_entry],
+            documents=[raw_entry],
         )
         session = _make_session(root, [root])
         svc = ReadinessService(session)
@@ -312,7 +312,7 @@ class TestSubtreeIsolation:
         target = _mock_node(
             tenant_id=tid,
             title="Target",
-            materials=[_mock_entry()],
+            documents=[_mock_entry()],
         )
         # Mock returns only target (CTE only walks down from target)
         session = _make_session(target, [target])

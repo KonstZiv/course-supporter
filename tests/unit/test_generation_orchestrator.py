@@ -31,12 +31,12 @@ def _make_node(
     *,
     node_id: uuid.UUID | None = None,
     children: list[Any] | None = None,
-    materials: list[Any] | None = None,
+    documents: list[Any] | None = None,
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
     node.children = children or []
-    node.materials = materials or []
+    node.documents = documents or []
     return node
 
 
@@ -158,7 +158,7 @@ class TestPartitionEntries:
         ready = _make_entry(state="ready")
         raw = _make_entry(state="raw")
         error = _make_entry(state="error")
-        node = _make_node(materials=[ready, raw, error])
+        node = _make_node(documents=[ready, raw, error])
         stale, ok = _partition_entries([node])
         assert len(stale) == 2
         assert len(ok) == 1
@@ -167,7 +167,7 @@ class TestPartitionEntries:
     def test_pending_is_stale(self) -> None:
         """PENDING entries are counted as stale."""
         pending = _make_entry(state="pending", job_id=uuid.uuid4())
-        node = _make_node(materials=[pending])
+        node = _make_node(documents=[pending])
         stale, ready = _partition_entries([node])
         assert len(stale) == 1
         assert len(ready) == 0
@@ -229,7 +229,7 @@ class TestSingleNodeGeneration:
     async def test_single_ready_node(self) -> None:
         """Single root with READY materials -> one generation job."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _Deps(root_nodes=[root])
 
         plan = await _run(deps)
@@ -246,10 +246,10 @@ class TestPerNodeDAG:
         """Root with two children -> 3 gen + 1 reconcile jobs."""
         c1_entry = _make_entry(state="ready")
         c2_entry = _make_entry(state="ready")
-        child1 = _make_node(materials=[c1_entry])
-        child2 = _make_node(materials=[c2_entry])
+        child1 = _make_node(documents=[c1_entry])
+        child2 = _make_node(documents=[c2_entry])
         root_entry = _make_entry(state="ready")
-        root = _make_node(materials=[root_entry], children=[child1, child2])
+        root = _make_node(documents=[root_entry], children=[child1, child2])
 
         # 3 gen jobs + 1 reconcile job = 4 total
         jobs = [_make_job() for _ in range(4)]
@@ -281,11 +281,11 @@ class TestPerNodeDAG:
     async def test_three_level_tree(self) -> None:
         """Root → Module → Lesson: 3 gen + 2 reconcile jobs."""
         lesson_entry = _make_entry(state="ready")
-        lesson = _make_node(materials=[lesson_entry])
+        lesson = _make_node(documents=[lesson_entry])
         module_entry = _make_entry(state="ready")
-        module = _make_node(materials=[module_entry], children=[lesson])
+        module = _make_node(documents=[module_entry], children=[lesson])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[module],
         )
 
@@ -317,8 +317,8 @@ class TestPerNodeDAG:
     async def test_empty_parent_with_children(self) -> None:
         """Parent without own materials but with children still gets jobs."""
         child_entry = _make_entry(state="ready")
-        child = _make_node(materials=[child_entry])
-        parent = _make_node(materials=[], children=[child])
+        child = _make_node(documents=[child_entry])
+        parent = _make_node(documents=[], children=[child])
 
         # 2 gen + 1 reconcile (parent is non-leaf)
         jobs = [_make_job() for _ in range(3)]
@@ -332,9 +332,9 @@ class TestPerNodeDAG:
 
     async def test_skip_empty_subtree(self) -> None:
         """Node without materials and no children with materials is skipped."""
-        empty_child = _make_node(materials=[])
+        empty_child = _make_node(documents=[])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[empty_child],
         )
 
@@ -355,7 +355,7 @@ class TestStaleWithDAG:
     async def test_ingestion_deps_per_node(self) -> None:
         """Stale entries create ingestion deps for their specific node."""
         raw = _make_entry(state="raw")
-        root = _make_node(materials=[raw])
+        root = _make_node(documents=[raw])
         ing_job = _make_job()
         deps = _Deps(root_nodes=[root], enqueue_ingestion_job=ing_job)
 
@@ -371,7 +371,7 @@ class TestStaleWithDAG:
         """PENDING entries are not re-enqueued but their job IDs go to depends_on."""
         pending_jid = uuid.uuid4()
         pending = _make_entry(state="pending", job_id=pending_jid)
-        root = _make_node(materials=[pending])
+        root = _make_node(documents=[pending])
         deps = _Deps(root_nodes=[root])
 
         plan = await _run(deps)
@@ -386,7 +386,7 @@ class TestErrorEntries:
     async def test_error_entries_re_enqueued(self) -> None:
         """ERROR entries get re-enqueued for ingestion."""
         error = _make_entry(state="error")
-        root = _make_node(materials=[error])
+        root = _make_node(documents=[error])
         deps = _Deps(root_nodes=[root])
 
         plan = await _run(deps)
@@ -399,7 +399,7 @@ class TestConflictDetected:
     async def test_raises_conflict_error(self) -> None:
         """Active generation overlap -> GenerationConflictError."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         conflict = MagicMock()
         conflict.job_id = uuid.uuid4()
         conflict.reason = "both target the same node"
@@ -423,7 +423,7 @@ class TestNodeNotFound:
 class TestNoMaterials:
     async def test_empty_subtree_raises(self) -> None:
         """Empty subtree -> NoReadyMaterialsError."""
-        root = _make_node(materials=[])
+        root = _make_node(documents=[])
         deps = _Deps(root_nodes=[root])
 
         with pytest.raises(NoReadyMaterialsError):
@@ -465,11 +465,11 @@ class TestDAGEndToEnd:
 
     async def test_wide_tree_with_mixed_materials(self) -> None:
         """Wide tree: root has 3 children, 2 with materials, 1 empty."""
-        c1 = _make_node(materials=[_make_entry(state="ready")])
-        c2 = _make_node(materials=[_make_entry(state="ready")])
-        c3_empty = _make_node(materials=[])
+        c1 = _make_node(documents=[_make_entry(state="ready")])
+        c2 = _make_node(documents=[_make_entry(state="ready")])
+        c3_empty = _make_node(documents=[])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[c1, c2, c3_empty],
         )
 
@@ -486,9 +486,9 @@ class TestDAGEndToEnd:
     async def test_stale_child_creates_ingestion_then_generation(self) -> None:
         """Child with raw material: ingestion + gen, parent depends on child."""
         raw = _make_entry(state="raw")
-        child = _make_node(materials=[raw])
+        child = _make_node(documents=[raw])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[child],
         )
 
@@ -509,13 +509,13 @@ class TestDAGEndToEnd:
 
     async def test_subtree_generation(self) -> None:
         """Target subtree: only target and descendants get jobs."""
-        leaf = _make_node(materials=[_make_entry(state="ready")])
+        leaf = _make_node(documents=[_make_entry(state="ready")])
         target = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[leaf],
         )
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[target],
         )
 
@@ -541,7 +541,7 @@ class TestReconcilePass:
 
     async def test_leaf_only_no_reconcile(self) -> None:
         """Single leaf node → no reconciliation jobs."""
-        root = _make_node(materials=[_make_entry(state="ready")])
+        root = _make_node(documents=[_make_entry(state="ready")])
         deps = _Deps(root_nodes=[root])
 
         plan = await _run(deps)
@@ -550,9 +550,9 @@ class TestReconcilePass:
 
     async def test_reconcile_depends_on_root_gen(self) -> None:
         """First reconcile job depends on root generate job."""
-        child = _make_node(materials=[_make_entry(state="ready")])
+        child = _make_node(documents=[_make_entry(state="ready")])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[child],
         )
 
@@ -570,13 +570,13 @@ class TestReconcilePass:
 
     async def test_reconcile_chain_top_down(self) -> None:
         """Reconcile jobs form a top-down chain."""
-        leaf = _make_node(materials=[_make_entry(state="ready")])
+        leaf = _make_node(documents=[_make_entry(state="ready")])
         mid = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[leaf],
         )
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[mid],
         )
 
@@ -709,7 +709,7 @@ async def _run_refine(
 class TestTriggerRefine:
     async def test_leaf_refine_no_ancestors(self) -> None:
         """Refine a root node: 1 refine job, 0 reconcile jobs."""
-        root = _make_node(materials=[_make_entry(state="ready")])
+        root = _make_node(documents=[_make_entry(state="ready")])
 
         deps = _RefineDeps(root_nodes=[root])
         plan = await _run_refine(deps, target_node_id=root.id)
@@ -724,13 +724,13 @@ class TestTriggerRefine:
 
     async def test_mid_node_refine_with_ancestors(self) -> None:
         """Refine mid node: 1 refine + 1 reconcile (root)."""
-        leaf = _make_node(materials=[_make_entry(state="ready")])
+        leaf = _make_node(documents=[_make_entry(state="ready")])
         mid = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[leaf],
         )
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[mid],
         )
 
@@ -755,13 +755,13 @@ class TestTriggerRefine:
 
     async def test_leaf_refine_two_ancestors(self) -> None:
         """Refine leaf: 1 refine + 2 reconcile (mid, root) chained."""
-        leaf = _make_node(materials=[_make_entry(state="ready")])
+        leaf = _make_node(documents=[_make_entry(state="ready")])
         mid = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[leaf],
         )
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[mid],
         )
 
@@ -790,7 +790,7 @@ class TestTriggerRefine:
 
     async def test_target_not_found_raises(self) -> None:
         """Non-existent target_node_id raises NodeNotFoundError."""
-        root = _make_node(materials=[_make_entry(state="ready")])
+        root = _make_node(documents=[_make_entry(state="ready")])
         deps = _RefineDeps(root_nodes=[root])
 
         with pytest.raises(NodeNotFoundError):
@@ -798,9 +798,9 @@ class TestTriggerRefine:
 
     async def test_no_ingestion_jobs(self) -> None:
         """Refine never creates ingestion jobs."""
-        leaf = _make_node(materials=[_make_entry(state="ready")])
+        leaf = _make_node(documents=[_make_entry(state="ready")])
         root = _make_node(
-            materials=[_make_entry(state="ready")],
+            documents=[_make_entry(state="ready")],
             children=[leaf],
         )
 

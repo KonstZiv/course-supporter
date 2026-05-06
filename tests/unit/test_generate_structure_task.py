@@ -25,7 +25,7 @@ def _make_node(
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
-    materials: list[Any] | None = None,
+    documents: list[Any] | None = None,
     content_hash: str | None = None,
 ) -> MagicMock:
     """Create a mock CourseNode with required attributes."""
@@ -36,7 +36,7 @@ def _make_node(
     node.description = description
     node.order = order
     node.children = children or []
-    node.materials = materials or []
+    node.documents = documents or []
     node.content_hash = content_hash
     return node
 
@@ -284,7 +284,7 @@ class TestHappyPathNodeLevel:
         """Happy path: node-level generation creates snapshot and completes job."""
         nid = uuid.UUID(node_id_str)
         entry = _make_entry(state="ready")
-        target = _make_node(node_id=nid, materials=[entry])
+        target = _make_node(node_id=nid, documents=[entry])
         root = _make_node(children=[target])
 
         snap = _make_snapshot()
@@ -318,7 +318,7 @@ class TestHappyPathCourseLevel:
     ) -> None:
         """Course-level generation calls ensure_course_fp."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -339,7 +339,7 @@ class TestIdempotency:
     ) -> None:
         """Idempotency: existing snapshot skips LLM call."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         existing = _make_snapshot()
 
         deps = _MockDeps(root_nodes=[root], find_identity=existing)
@@ -365,7 +365,7 @@ class TestNoReadyMaterials:
     ) -> None:
         """Task fails when no READY materials found."""
         raw_entry = _make_entry(state="raw")
-        root = _make_node(materials=[raw_entry])
+        root = _make_node(documents=[raw_entry])
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -385,7 +385,7 @@ class TestAgentError:
     ) -> None:
         """Task fails when ArchitectAgent raises."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         deps = _MockDeps(root_nodes=[root])
         deps.agent.run_with_metadata.side_effect = RuntimeError("LLM boom")
@@ -408,7 +408,7 @@ class TestMixedStates:
         ready = _make_entry(state="ready")
         raw = _make_entry(state="raw")
         error = _make_entry(state="error")
-        root = _make_node(materials=[ready, raw, error])
+        root = _make_node(documents=[ready, raw, error])
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -432,7 +432,7 @@ class TestLLMMetadata:
     ) -> None:
         """Snapshot receives externalservicecall_id from created ESC."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         gen_result = _sample_gen_result()
         deps = _MockDeps(root_nodes=[root], gen_result=gen_result)
@@ -458,7 +458,7 @@ class TestModePassthrough:
     ) -> None:
         """Mode is passed to snapshot create and find_by_identity."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -485,7 +485,7 @@ class TestGuidedModeAgent:
         """Guided mode passes serialized tree as existing_structure."""
         entry = _make_entry(state="ready")
         root = _make_node(
-            materials=[entry], title="My Module", description="About Python"
+            documents=[entry], title="My Module", description="About Python"
         )
 
         deps = _MockDeps(root_nodes=[root])
@@ -509,7 +509,7 @@ class TestGuidedModeAgent:
         child = _make_node(title="Lesson 1", description="First lesson")
         child.parent_id = uuid.uuid4()  # has parent
         root = _make_node(
-            materials=[entry],
+            documents=[entry],
             title="Module A",
             children=[child],
         )
@@ -533,7 +533,7 @@ class TestGuidedModeAgent:
     ) -> None:
         """Free mode passes existing_structure=None to agent."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         deps = _MockDeps(root_nodes=[root])
 

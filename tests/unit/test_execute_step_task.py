@@ -24,7 +24,7 @@ def _make_node(
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
-    materials: list[Any] | None = None,
+    documents: list[Any] | None = None,
     content_hash: str | None = None,
 ) -> MagicMock:
     """Create a mock CourseNode."""
@@ -36,7 +36,7 @@ def _make_node(
     node.description = description
     node.order = order
     node.children = children or []
-    node.materials = materials or []
+    node.documents = documents or []
     node.content_hash = content_hash
     return node
 
@@ -230,7 +230,7 @@ class TestHappyPath:
     ) -> None:
         """Snapshot includes step_type, summary, core/mentioned_concepts."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps)
@@ -245,7 +245,7 @@ class TestHappyPath:
     async def test_job_completes(self, job_id: str, root_node_id: str) -> None:
         """Job transitions to complete on success."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps)
@@ -258,7 +258,7 @@ class TestHappyPath:
     async def test_esc_linked_to_snapshot(self, job_id: str, root_node_id: str) -> None:
         """ExternalServiceCall is created and linked to snapshot."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps)
@@ -277,7 +277,7 @@ class TestStepInputAssembly:
         from course_supporter.models.step import StepInput
 
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps)
@@ -297,7 +297,7 @@ class TestStepInputAssembly:
         from course_supporter.models.step import StepInput
 
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry], title="My Module")
+        root = _make_node(documents=[entry], title="My Module")
         root.parent_id = None
         deps = _MockDeps(root_nodes=[root])
 
@@ -320,7 +320,7 @@ class TestChildrenSummaries:
 
         child = _make_node(title="Child Topic")
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry], children=[child])
+        root = _make_node(documents=[entry], children=[child])
 
         # Snapshot with summary but NO structure → not a full snapshot,
         # so children_summaries path is used instead of children_snapshots.
@@ -354,7 +354,7 @@ class TestChildrenSummaries:
         """Children without snapshots are excluded from summaries."""
         child = _make_node(title="No Snapshot Child")
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry], children=[child])
+        root = _make_node(documents=[entry], children=[child])
 
         deps = _MockDeps(root_nodes=[root])
         # get_latest_for_nodes returns empty dict (default)
@@ -371,7 +371,7 @@ class TestIdempotency:
     async def test_idempotent_skips_agent(self, job_id: str, root_node_id: str) -> None:
         """Existing fingerprint match skips LLM call."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         existing = _make_snapshot()
         deps = _MockDeps(root_nodes=[root], find_identity=existing)
 
@@ -388,7 +388,7 @@ class TestErrorHandling:
     async def test_agent_error_fails_job(self, job_id: str, root_node_id: str) -> None:
         """Agent exception triggers failure path."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
         deps.agent.execute.side_effect = RuntimeError("LLM boom")
 
@@ -401,7 +401,7 @@ class TestErrorHandling:
     ) -> None:
         """No READY materials triggers failure."""
         raw_entry = _make_entry(state="raw")
-        root = _make_node(materials=[raw_entry])
+        root = _make_node(documents=[raw_entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps)
@@ -446,7 +446,7 @@ class TestCorrectionsSerialize:
         )
 
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root], step_output=output)
 
         await _run_task(job_id, root_node_id, deps)
@@ -488,7 +488,7 @@ class TestReconcileSlidingWindow:
         entry = _make_entry(state="ready")
         child = _make_node(
             title="Child",
-            materials=[entry],
+            documents=[entry],
             parent_id=parent_id,
         )
         parent = _make_node(
@@ -533,7 +533,7 @@ class TestReconcileSlidingWindow:
         entry = _make_entry(state="ready")
         target_child = _make_node(
             title="Target",
-            materials=[entry],
+            documents=[entry],
             parent_id=parent_id,
         )
         sibling = _make_node(
@@ -582,7 +582,7 @@ class TestReconcileSlidingWindow:
         entry = _make_entry(state="ready")
         child = _make_node(
             title="Child",
-            materials=[entry],
+            documents=[entry],
             parent_id=parent_id,
         )
         parent = _make_node(
@@ -615,7 +615,7 @@ class TestReconcileSlidingWindow:
         entry = _make_entry(state="ready")
         child = _make_node(title="Child")
         root = _make_node(
-            materials=[entry],
+            documents=[entry],
             children=[child],
         )
         # Root has no parent
@@ -653,8 +653,8 @@ class TestContextCompression:
             state="ready",
             processed_content='{"source_type": "text", "source_url": "file:///child.md"}',
         )
-        child = _make_node(title="Child Topic", materials=[child_entry])
-        root = _make_node(materials=[parent_entry], children=[child])
+        child = _make_node(title="Child Topic", documents=[child_entry])
+        root = _make_node(documents=[parent_entry], children=[child])
 
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
@@ -689,9 +689,9 @@ class TestContextCompression:
     ) -> None:
         """Parent with no own materials but children with snapshots → no error."""
         child_entry = _make_entry(state="ready")
-        child = _make_node(title="Child", materials=[child_entry])
+        child = _make_node(title="Child", documents=[child_entry])
         # Parent has no materials
-        root = _make_node(materials=[], children=[child])
+        root = _make_node(documents=[], children=[child])
 
         child_snap = MagicMock()
         child_snap.id = uuid.uuid4()
@@ -719,7 +719,7 @@ class TestContextCompression:
     ) -> None:
         """Leaf node without children uses all subtree materials (unchanged)."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         deps = _MockDeps(root_nodes=[root])
 
@@ -734,8 +734,8 @@ class TestContextCompression:
     ) -> None:
         """Children without snapshots → fallback to subtree materials."""
         child_entry = _make_entry(state="ready")
-        child = _make_node(title="Child", materials=[child_entry])
-        root = _make_node(materials=[], children=[child])
+        child = _make_node(title="Child", documents=[child_entry])
+        root = _make_node(documents=[], children=[child])
 
         deps = _MockDeps(root_nodes=[root])
         # get_latest_for_nodes returns empty dict (no snapshots)
@@ -756,7 +756,7 @@ class TestAgentDispatch:
     ) -> None:
         """step_type='reconcile' still calls agent.execute()."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps, step_type="reconcile")
@@ -770,7 +770,7 @@ class TestAgentDispatch:
     ) -> None:
         """step_type='generate' calls agent.execute()."""
         entry = _make_entry(state="ready")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
         deps = _MockDeps(root_nodes=[root])
 
         await _run_task(job_id, root_node_id, deps, step_type="generate")

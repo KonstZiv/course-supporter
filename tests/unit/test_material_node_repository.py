@@ -277,7 +277,7 @@ class TestGetTreeIncludeMaterials:
         root = _mock_node(tenant_id=cid, title="Root")
         # Simulate materials list on the node (as selectinload would populate)
         mat1 = MagicMock()
-        root.materials = [mat1]
+        root.documents = [mat1]
 
         session = AsyncMock()
         exec_result = MagicMock()
@@ -288,7 +288,7 @@ class TestGetTreeIncludeMaterials:
         roots = await repo.get_subtree(cid, include_documents=True)
 
         assert len(roots) == 1
-        assert roots[0].materials == [mat1]
+        assert roots[0].documents == [mat1]
         # Verify that session.execute was called (selectinload is inside stmt)
         session.execute.assert_awaited_once()
 

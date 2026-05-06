@@ -28,7 +28,7 @@ def _make_node(
     description: str | None = None,
     order: int = 0,
     children: list[Any] | None = None,
-    materials: list[Any] | None = None,
+    documents: list[Any] | None = None,
 ) -> MagicMock:
     """Create a mock CourseNode."""
     node = MagicMock()
@@ -38,7 +38,7 @@ def _make_node(
     node.description = description
     node.order = order
     node.children = children or []
-    node.materials = materials or []
+    node.documents = documents or []
     return node
 
 
@@ -80,7 +80,7 @@ class TestBuildMaterialTreeSummary:
         """Root node with READY materials collects filenames."""
         entry1 = _make_entry(filename="lecture.pdf")
         entry2 = _make_entry(filename="notes.md")
-        root = _make_node(title="Module 1", materials=[entry1, entry2])
+        root = _make_node(title="Module 1", documents=[entry1, entry2])
 
         result = build_material_tree_summary([root])
 
@@ -92,7 +92,7 @@ class TestBuildMaterialTreeSummary:
         raw = _make_entry(state="raw", filename="raw.md")
         pending = _make_entry(state="pending", filename="pending.md")
         error = _make_entry(state="error", filename="error.md")
-        root = _make_node(materials=[ready, raw, pending, error])
+        root = _make_node(documents=[ready, raw, pending, error])
 
         result = build_material_tree_summary([root])
 
@@ -101,7 +101,7 @@ class TestBuildMaterialTreeSummary:
     def test_filename_none_falls_back_to_source_url(self) -> None:
         """When filename is None, source_url is used."""
         entry = _make_entry(filename=None, source_url="https://example.com/page")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         result = build_material_tree_summary([root])
 
@@ -117,14 +117,14 @@ class TestBuildMaterialTreeSummary:
             parent_id=root_id,
             title="Lesson 1",
             order=1,
-            materials=[_make_entry(filename="video.mp4")],
+            documents=[_make_entry(filename="video.mp4")],
         )
         root = _make_node(
             node_id=root_id,
             title="Module 1",
             order=0,
             children=[child],
-            materials=[_make_entry(filename="overview.md")],
+            documents=[_make_entry(filename="overview.md")],
         )
 
         result = build_material_tree_summary([root, child])
@@ -198,7 +198,7 @@ class TestBuildMaterialTreeSummary:
     def test_serializable(self) -> None:
         """Result can be serialized to JSON (for CourseContext)."""
         entry = _make_entry(filename="test.pdf")
-        root = _make_node(title="Module", materials=[entry])
+        root = _make_node(title="Module", documents=[entry])
 
         result = build_material_tree_summary([root])
 
@@ -239,7 +239,7 @@ class TestBuildMaterialTreeSummary:
     def test_none_filename_and_none_source_url_skipped(self) -> None:
         """Entry with both filename=None and source_url=None is skipped."""
         entry = _make_entry(state="ready", filename=None, source_url="")
-        root = _make_node(materials=[entry])
+        root = _make_node(documents=[entry])
 
         result = build_material_tree_summary([root])
 

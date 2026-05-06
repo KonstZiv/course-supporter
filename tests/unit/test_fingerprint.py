@@ -29,14 +29,14 @@ def _make_entry(
 
 def _make_node(
     *,
-    materials: list[MagicMock] | None = None,
+    documents: list[MagicMock] | None = None,
     children: list[MagicMock] | None = None,
     content_hash: str | None = None,
 ) -> MagicMock:
-    """Create a mock CourseNode with materials and children."""
+    """Create a mock CourseNode with documents and children."""
     node = MagicMock(spec=CourseNode)
     node.id = uuid.uuid4()
-    node.materials = materials or []
+    node.documents = documents or []
     node.children = children or []
     node.content_hash = content_hash
     return node
@@ -172,7 +172,7 @@ class TestEnsureNodeFp:
     async def test_single_material(self) -> None:
         """Node with one processed material includes its fingerprint."""
         mat = _make_entry(processed_content="lesson text")
-        node = _make_node(materials=[mat])
+        node = _make_node(documents=[mat])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -186,20 +186,20 @@ class TestEnsureNodeFp:
         """Materials without processed_content are excluded."""
         processed = _make_entry(processed_content="done")
         raw = _make_entry(processed_content=None)
-        node = _make_node(materials=[processed, raw])
+        node = _make_node(documents=[processed, raw])
         session = AsyncMock()
         svc = FingerprintService(session)
 
         result = await svc.ensure_node_fp(node)
 
         # Same as node with only the processed material
-        node_single = _make_node(materials=[_make_entry(processed_content="done")])
+        node_single = _make_node(documents=[_make_entry(processed_content="done")])
         result_single = await svc.ensure_node_fp(node_single)
         assert result == result_single
 
     async def test_single_child_node(self) -> None:
         """Node with one child includes child's Merkle hash."""
-        child = _make_node(materials=[_make_entry(processed_content="child text")])
+        child = _make_node(documents=[_make_entry(processed_content="child text")])
         parent = _make_node(children=[child])
         session = AsyncMock()
         svc = FingerprintService(session)
@@ -214,7 +214,7 @@ class TestEnsureNodeFp:
 
     async def test_nested_3_levels(self) -> None:
         """Merkle hash propagates correctly through 3 levels."""
-        leaf = _make_node(materials=[_make_entry(processed_content="leaf")])
+        leaf = _make_node(documents=[_make_entry(processed_content="leaf")])
         mid = _make_node(children=[leaf])
         root = _make_node(children=[mid])
         session = AsyncMock()
@@ -234,8 +234,8 @@ class TestEnsureNodeFp:
         session = AsyncMock()
         svc = FingerprintService(session)
 
-        node1 = _make_node(materials=[_make_entry(processed_content="aaa")])
-        node2 = _make_node(materials=[_make_entry(processed_content="aaa")])
+        node1 = _make_node(documents=[_make_entry(processed_content="aaa")])
+        node2 = _make_node(documents=[_make_entry(processed_content="aaa")])
 
         fp1 = await svc.ensure_node_fp(node1)
         fp2 = await svc.ensure_node_fp(node2)
@@ -255,7 +255,7 @@ class TestEnsureNodeFp:
 
     async def test_invalidation_then_recalculate(self) -> None:
         """After clearing content_hash, next call recomputes."""
-        node = _make_node(materials=[_make_entry(processed_content="data")])
+        node = _make_node(documents=[_make_entry(processed_content="data")])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -277,9 +277,9 @@ class TestEnsureNodeFp:
         mat_b = _make_entry(processed_content="bbb")
 
         # Order of materials should not affect fingerprint
-        node1 = _make_node(materials=[mat_a, mat_b])
+        node1 = _make_node(documents=[mat_a, mat_b])
         node2 = _make_node(
-            materials=[
+            documents=[
                 _make_entry(processed_content="bbb"),
                 _make_entry(processed_content="aaa"),
             ],
@@ -291,9 +291,9 @@ class TestEnsureNodeFp:
 
     async def test_materials_and_children_mixed(self) -> None:
         """Node with both materials and children combines all parts."""
-        child = _make_node(materials=[_make_entry(processed_content="child")])
+        child = _make_node(documents=[_make_entry(processed_content="child")])
         mat = _make_entry(processed_content="parent mat")
-        parent = _make_node(materials=[mat], children=[child])
+        parent = _make_node(documents=[mat], children=[child])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -323,7 +323,7 @@ class TestEnsureCourseFp:
 
     async def test_single_root(self) -> None:
         """Course with one root node returns hash of that root's fp."""
-        root = _make_node(materials=[_make_entry(processed_content="data")])
+        root = _make_node(documents=[_make_entry(processed_content="data")])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -337,16 +337,16 @@ class TestEnsureCourseFp:
 
     async def test_multiple_roots_sorted(self) -> None:
         """Root node order does not affect course fingerprint."""
-        root_a = _make_node(materials=[_make_entry(processed_content="aaa")])
-        root_b = _make_node(materials=[_make_entry(processed_content="bbb")])
+        root_a = _make_node(documents=[_make_entry(processed_content="aaa")])
+        root_b = _make_node(documents=[_make_entry(processed_content="bbb")])
         session = AsyncMock()
         svc = FingerprintService(session)
 
         fp1 = await svc.ensure_course_fp([root_a, root_b])
 
         # Reverse order
-        root_a2 = _make_node(materials=[_make_entry(processed_content="aaa")])
-        root_b2 = _make_node(materials=[_make_entry(processed_content="bbb")])
+        root_a2 = _make_node(documents=[_make_entry(processed_content="aaa")])
+        root_b2 = _make_node(documents=[_make_entry(processed_content="bbb")])
         fp2 = await svc.ensure_course_fp([root_b2, root_a2])
 
         assert fp1 == fp2
@@ -356,8 +356,8 @@ class TestEnsureCourseFp:
         session = AsyncMock()
         svc = FingerprintService(session)
 
-        root1 = _make_node(materials=[_make_entry(processed_content="x")])
-        root2 = _make_node(materials=[_make_entry(processed_content="x")])
+        root1 = _make_node(documents=[_make_entry(processed_content="x")])
+        root2 = _make_node(documents=[_make_entry(processed_content="x")])
 
         fp1 = await svc.ensure_course_fp([root1])
         fp2 = await svc.ensure_course_fp([root2])
@@ -368,8 +368,8 @@ class TestEnsureCourseFp:
         session = AsyncMock()
         svc = FingerprintService(session)
 
-        root_v1 = _make_node(materials=[_make_entry(processed_content="v1")])
-        root_v2 = _make_node(materials=[_make_entry(processed_content="v2")])
+        root_v1 = _make_node(documents=[_make_entry(processed_content="v1")])
+        root_v2 = _make_node(documents=[_make_entry(processed_content="v2")])
 
         fp1 = await svc.ensure_course_fp([root_v1])
         fp2 = await svc.ensure_course_fp([root_v2])
@@ -379,8 +379,8 @@ class TestEnsureCourseFp:
         """ensure_course_fp issues exactly one flush."""
         root = _make_node(
             children=[
-                _make_node(materials=[_make_entry(processed_content="a")]),
-                _make_node(materials=[_make_entry(processed_content="b")]),
+                _make_node(documents=[_make_entry(processed_content="a")]),
+                _make_node(documents=[_make_entry(processed_content="b")]),
             ],
         )
         session = AsyncMock()
@@ -645,7 +645,7 @@ class TestKnownHash:
         mat_fp = hashlib.sha256(content.encode()).hexdigest()
         expected = hashlib.sha256(f"m:{mat_fp}".encode()).hexdigest()
 
-        node = _make_node(materials=[_make_entry(processed_content=content)])
+        node = _make_node(documents=[_make_entry(processed_content=content)])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -686,7 +686,7 @@ class TestEdgeCases:
         svc = FingerprintService(session)
 
         # Build chain: leaf → ... → root (10 levels)
-        leaf = _make_node(materials=[_make_entry(processed_content="deep")])
+        leaf = _make_node(documents=[_make_entry(processed_content="deep")])
         current = leaf
         for _ in range(9):
             current = _make_node(children=[current])
@@ -719,7 +719,7 @@ class TestEdgeCases:
         """Node where all materials lack processed_content = empty hash."""
         raw1 = _make_entry(processed_content=None)
         raw2 = _make_entry(processed_content=None)
-        node = _make_node(materials=[raw1, raw2])
+        node = _make_node(documents=[raw1, raw2])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -742,11 +742,11 @@ class TestBranchIndependence:
         #      |        |
         #    leafA    leafB
         leaf_a = _make_node(
-            materials=[_make_entry(processed_content="A")],
+            documents=[_make_entry(processed_content="A")],
             content_hash="leaf_a_fp",
         )
         leaf_b = _make_node(
-            materials=[_make_entry(processed_content="B")],
+            documents=[_make_entry(processed_content="B")],
             content_hash="leaf_b_fp",
         )
         branch_a = _make_node(children=[leaf_a], content_hash="branch_a_fp")
@@ -785,8 +785,8 @@ class TestBranchIndependence:
         session = AsyncMock()
         svc = FingerprintService(session)
 
-        branch_a = _make_node(materials=[_make_entry(processed_content="alpha")])
-        branch_b = _make_node(materials=[_make_entry(processed_content="beta")])
+        branch_a = _make_node(documents=[_make_entry(processed_content="alpha")])
+        branch_b = _make_node(documents=[_make_entry(processed_content="beta")])
 
         fp_a = await svc.ensure_node_fp(branch_a)
         fp_b = await svc.ensure_node_fp(branch_b)
@@ -800,14 +800,14 @@ class TestBranchIndependence:
 
         root1 = _make_node(
             children=[
-                _make_node(materials=[_make_entry(processed_content="A")]),
-                _make_node(materials=[_make_entry(processed_content="B")]),
+                _make_node(documents=[_make_entry(processed_content="A")]),
+                _make_node(documents=[_make_entry(processed_content="B")]),
             ]
         )
         root2 = _make_node(
             children=[
-                _make_node(materials=[_make_entry(processed_content="B")]),
-                _make_node(materials=[_make_entry(processed_content="A")]),
+                _make_node(documents=[_make_entry(processed_content="B")]),
+                _make_node(documents=[_make_entry(processed_content="A")]),
             ]
         )
 
@@ -839,7 +839,7 @@ class TestLazyCalculation:
         """Node with one cached child and one fresh child works correctly."""
         cached_fp = "d" * 64
         cached_child = _make_node(content_hash=cached_fp)
-        fresh_child = _make_node(materials=[_make_entry(processed_content="new")])
+        fresh_child = _make_node(documents=[_make_entry(processed_content="new")])
         parent = _make_node(children=[cached_child, fresh_child])
         session = AsyncMock()
         svc = FingerprintService(session)
@@ -858,7 +858,7 @@ class TestLazyCalculation:
         """Material fingerprint comes from processed_hash directly."""
         cached_fp = "e" * 64
         mat = _make_entry(processed_hash=cached_fp)
-        node = _make_node(materials=[mat])
+        node = _make_node(documents=[mat])
         session = AsyncMock()
         svc = FingerprintService(session)
 
@@ -898,14 +898,14 @@ class TestCourseFpDeepTree:
         svc = FingerprintService(session)
 
         # Root → child → grandchild with material
-        grandchild = _make_node(materials=[_make_entry(processed_content="deep")])
+        grandchild = _make_node(documents=[_make_entry(processed_content="deep")])
         child = _make_node(children=[grandchild])
         root = _make_node(children=[child])
 
         fp1 = await svc.ensure_course_fp([root])
 
         # Change the deep material
-        grandchild2 = _make_node(materials=[_make_entry(processed_content="changed")])
+        grandchild2 = _make_node(documents=[_make_entry(processed_content="changed")])
         child2 = _make_node(children=[grandchild2])
         root2 = _make_node(children=[child2])
 
@@ -920,11 +920,11 @@ class TestCourseFpDeepTree:
 
         root_a = _make_node(
             children=[
-                _make_node(materials=[_make_entry(processed_content="a1")]),
-                _make_node(materials=[_make_entry(processed_content="a2")]),
+                _make_node(documents=[_make_entry(processed_content="a1")]),
+                _make_node(documents=[_make_entry(processed_content="a2")]),
             ]
         )
-        root_b = _make_node(materials=[_make_entry(processed_content="b")])
+        root_b = _make_node(documents=[_make_entry(processed_content="b")])
 
         result = await svc.ensure_course_fp([root_a, root_b])
 

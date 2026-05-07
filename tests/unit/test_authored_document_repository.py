@@ -464,12 +464,13 @@ class TestInvalidationContract:
     masks the helper for every other test, but here we explicitly observe
     the call surface to lock the contract.
 
-    Migrated from ``tests/unit/test_fingerprint.py::TestRepositoryInvalidation``
-    before that file's wholesale deletion (Phase 1.1 etap 1.1.3). The mock
+    Migrated from the legacy
+    ``tests/unit/test_fingerprint.py::TestRepositoryInvalidation`` before
+    that file's wholesale deletion (Phase 1.1 etap 1.1.3). The mock
     target is the helper itself (``_invalidate_node_chain``), so the body
-    rewire from ``FingerprintService`` to ``ContentHashService`` is invisible
-    at this layer — what matters is that ``update_source`` triggers it and
-    ``complete_processing`` does not.
+    rewire from the legacy fingerprint service to ``ContentHashService`` is
+    invisible at this layer — what matters is that ``update_source`` triggers
+    it and ``complete_processing`` does not.
     """
 
     async def test_update_source_invalidates_node_chain(self) -> None:

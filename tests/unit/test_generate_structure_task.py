@@ -161,7 +161,7 @@ class _MockDeps:
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
-        # FingerprintService mock removed in Phase 1.1 etap 1.1.2:
+        # legacy fingerprint mock removed in Phase 1.1 etap 1.1.2:
         # production task replaces ``ensure_*_fp`` calls with literal
         # ``stub-phase-5-{id}`` placeholders (D1 ratify), so the mock
         # has no surface to substitute. Snapshot identity is now a
@@ -326,7 +326,7 @@ class TestHappyPathCourseLevel:
         # Fingerprint-call assertions dropped in Phase 1.1 etap 1.1.2:
         # post-stub the course-level vs node-level branching produces
         # ``f"stub-phase-5-course-{id}"`` vs ``f"stub-phase-5-{id}"``
-        # literals; the FingerprintService mock no longer exists.
+        # literals; the legacy fingerprint mock no longer exists.
         # Branching invariant disappears with Phase 5 deletion of this
         # whole task body — orchestration-only coverage suffices for
         # the residual skip-permanent test surface.

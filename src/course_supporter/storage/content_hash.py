@@ -9,10 +9,10 @@ the way to the root.
 
 KD9 explicitly forbids lazy / on-read materialisation (vision §3
 line 563): hashes must be computed and persisted at INSERT/UPDATE
-time. The legacy ``FingerprintService`` (anchored on
-``AuthoredDocument.processed_hash``) remains in place for the
-snapshot / reconciliation flows it serves and is collapsed into
-``ContentHashService`` in Phase 1.1.
+time. This service is the canonical KD9 implementation; the legacy
+half-aligned fingerprint service (anchored on
+``AuthoredDocument.processed_hash``) was retired in Phase 1.1
+(commits 1.1.C1 through 1.1.C3).
 
 **Per-entity formulas in 0.2 are minimal-viable.** The compute
 helpers (``compute_raw_hash`` / ``compute_content_hash``) ship the

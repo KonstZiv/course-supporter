@@ -108,7 +108,7 @@ class _MockDeps:
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
-        # FingerprintService mock removed in Phase 1.1 etap 1.1.2:
+        # Legacy fingerprint service mock removed in Phase 1.1 etap 1.1.2:
         # production task uses literal ``stub-phase-5-{id}`` placeholders
         # (D1 ratify) — no service surface to substitute.
 

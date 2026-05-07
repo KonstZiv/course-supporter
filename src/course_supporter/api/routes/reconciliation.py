@@ -11,6 +11,7 @@ Routes
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from typing import Annotated, Any
 
@@ -36,7 +37,6 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_reconcile_preview
-from course_supporter.fingerprint import compute_editable_tree_hash
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
 from course_supporter.storage.editable_repository import EditableRepository
@@ -57,6 +57,40 @@ _ALLOWED_FIELDS: frozenset[str] = frozenset(_CONTENT_FIELDS)
 
 
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
+
+
+def _editable_tree_hash(flat: list[Any]) -> str:
+    """Compute a stable SHA-256 hash of the editable tree content fields.
+
+    For each editable node, serialises content fields (from
+    ``_CONTENT_FIELDS``) to canonical JSON (``sort_keys=True``).
+    Nodes are sorted by ``id`` for deterministic ordering.
+
+    Inlined from the deleted legacy fingerprint module (Phase 1.1
+    etap 1.1.3 — wholesale module deletion). The reconcile preview
+    endpoint is itself a Phase 5.2 deletion target, so this helper
+    inherits the same dying-code lifetime; it relocates here for
+    the brief Phase 1.1 → Phase 5.2 window rather than gaining a
+    stub (per §6.A ratify — freshness-determination semantic differs
+    from C2's snapshot-identity stubbing pattern).
+
+    Args:
+        flat: Flat list of editable node ORM objects. Type annotated
+            as ``list[Any]`` to match the sibling ``_editable_tree_to_dicts``
+            convention and to avoid a fresh dependency on the
+            Phase-5.1-dying ``StructureNodeEditable`` type.
+
+    Returns:
+        64-char lowercase hex SHA-256 digest.
+    """
+    parts: list[str] = []
+    for node in sorted(flat, key=lambda n: str(n.id)):
+        content: dict[str, object] = {}
+        for field in _CONTENT_FIELDS:
+            content[field] = getattr(node, field)
+        parts.append(json.dumps(content, sort_keys=True, default=str))
+
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
 def _editable_tree_to_dicts(
@@ -122,7 +156,7 @@ async def _compute_current_fingerprints(
     flat = await editable_repo.get_tree(node_id)
     editable_hash: str | None = None
     if flat:
-        editable_hash = compute_editable_tree_hash(flat)
+        editable_hash = _editable_tree_hash(flat)
 
     return node_fp, editable_hash
 

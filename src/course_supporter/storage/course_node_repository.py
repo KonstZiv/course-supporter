@@ -10,11 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
+from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
-
-# Lazy import helper to avoid circular dependency at module load time.
-# FingerprintService → orm.py ← CourseNodeRepository → FingerprintService
-# Actual import deferred to _invalidate_node_chain().
 
 
 class _Unset(Enum):
@@ -119,6 +116,15 @@ class CourseNodeRepository:
         )
         self._session.add(node)
         await self._session.flush()
+        # Materialise content_hash at INSERT time per KD9 invariant
+        # (vision §3 KD9 line 563: hashes computed at INSERT/UPDATE,
+        # not lazy). For a brand-new empty node this resolves to the
+        # well-known empty-merkle hash; if ``parent_id`` is set, the
+        # walk continues up through the parent chain so each ancestor
+        # reflects the new child. Phase 1.1 etap 1.1.4 — fixes the
+        # NULL-on-INSERT regression observed during Phase 1
+        # (vision §3 KD9 line 580).
+        await ContentHashService(self._session).invalidate_up(node)
         return node
 
     async def get_by_id(self, node_id: uuid.UUID) -> CourseNode | None:
@@ -621,14 +627,12 @@ class CourseNodeRepository:
     # ── Private helpers ──
 
     async def _invalidate_node_chain(self, node_id: uuid.UUID | None) -> None:
-        """Invalidate fingerprints from node up to root."""
+        """Recompute parent chain ``content_hash`` from node up to root."""
         if node_id is None:
             return
-        from course_supporter.fingerprint import FingerprintService
-
         node = await self._session.get(CourseNode, node_id)
         if node is not None:
-            await FingerprintService(self._session).invalidate_up(node)
+            await ContentHashService(self._session).invalidate_up(node)
 
     async def _next_sibling_order(
         self,

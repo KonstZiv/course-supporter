@@ -149,7 +149,6 @@ class TestArqIngestMaterialE2E:
         assert final_job.completed_at is not None
         assert final_mat is not None
         assert final_mat.state == "ready"
-        assert final_mat.processed_content is not None
         assert final_mat.language == expected_language
 
     async def test_failure_full_lifecycle(

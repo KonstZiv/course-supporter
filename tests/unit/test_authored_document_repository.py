@@ -22,10 +22,27 @@ from course_supporter.storage.orm import AuthoredDocument
 
 @pytest.fixture(autouse=True)
 def _no_cascade_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Disable fingerprint cascade invalidation in unit tests."""
+    """Disable content_hash cascade invalidation in unit tests.
+
+    Two entry points masked: (1) ``_invalidate_node_chain`` helper used by
+    ``update_source`` / legacy ``create`` flows; (2) direct
+    ``ContentHashService.invalidate_up`` call wired into ``create()``
+    post-flush per Phase 1.1 etap 1.1.4 (variant (a) of §6.7.1). Unit
+    tests focus on signature / Python flow; the canonical KD9 walker is
+    exercised in ``tests/integration/test_content_hash_persistence.py``.
+    Tests asserting these specific callsites override per-test via
+    ``mp.setattr`` (see ``TestInvalidationContract`` below).
+    """
+    from course_supporter.storage.content_hash import ContentHashService
+
     monkeypatch.setattr(
         AuthoredDocumentRepository,
         "_invalidate_node_chain",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        ContentHashService,
+        "invalidate_up",
         AsyncMock(),
     )
 
@@ -437,3 +454,69 @@ class TestEnsureRawHash:
         repo = AuthoredDocumentRepository(session)
         with pytest.raises(ValueError, match="not found"):
             await repo.ensure_raw_hash(uuid.uuid4(), raw_bytes=b"data")
+
+
+class TestInvalidationContract:
+    """Asserts the parent-chain invalidation contract preserved post-Phase-1.1.
+
+    Bypasses the file-level ``_no_cascade_invalidation`` autouse fixture
+    via per-test ``mp.setattr`` instance-level override — the autouse mock
+    masks the helper for every other test, but here we explicitly observe
+    the call surface to lock the contract.
+
+    Migrated from ``tests/unit/test_fingerprint.py::TestRepositoryInvalidation``
+    before that file's wholesale deletion (Phase 1.1 etap 1.1.3). The mock
+    target is the helper itself (``_invalidate_node_chain``), so the body
+    rewire from ``FingerprintService`` to ``ContentHashService`` is invisible
+    at this layer — what matters is that ``update_source`` triggers it and
+    ``complete_processing`` does not.
+    """
+
+    async def test_update_source_invalidates_node_chain(self) -> None:
+        """``update_source`` triggers parent chain invalidation post-flush."""
+        entry = _mock_entry(
+            source_url="https://old.com",
+            raw_hash="a" * 64,
+            raw_size_bytes=1024,
+        )
+        session = AsyncMock()
+        session.get.return_value = entry
+
+        repo = AuthoredDocumentRepository(session)
+        invalidate_mock = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
+            await repo.update_source(
+                entry.id,
+                source_url="https://new-url.com",
+            )
+
+        invalidate_mock.assert_awaited_once_with(entry.course_node_id)
+
+    async def test_complete_processing_does_not_invalidate_node_chain(
+        self,
+    ) -> None:
+        """``complete_processing`` is intentionally state-transition-only.
+
+        Per Amendment 35 sub-class 3d (intentional non-behavior verification
+        — hotfix-9 design): ``complete_processing`` clears ``job_id`` /
+        ``pending_since`` / ``error_message`` and sets ``processed_at``, but
+        does NOT cascade invalidate parent hashes. Cascade invalidation
+        belongs to ``update_source`` (raw bytes change) and ``create``
+        (initial insertion); state transitions alone do not affect
+        ``content_hash``. This negative assertion serves as regression guard
+        — re-adding cascade invalidation here without review would be caught.
+        """
+        entry = MagicMock(spec=AuthoredDocument)
+
+        session = AsyncMock()
+        repo = AuthoredDocumentRepository(session)
+        invalidate_mock = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_require", AsyncMock(return_value=entry))
+            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
+            await repo.complete_processing(entry.id)
+
+        invalidate_mock.assert_not_awaited()

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole
+from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
 
@@ -114,7 +115,14 @@ class AuthoredDocumentRepository:
         )
         self._session.add(entry)
         await self._session.flush()
-        await self._invalidate_node_chain(node_id)
+        # Single-call materialization: ``invalidate_up`` walks from the
+        # new entry up the parent chain, computing ``content_hash`` for
+        # the entry itself and every ancestor. Replaces the legacy
+        # ``_invalidate_node_chain`` call here per Phase 1.1 §6.7.1
+        # variant (a): one call covers entity-level + parent chain in
+        # a single walk, fixing the KD9 NULL-on-INSERT regression
+        # (vision §3 KD9 line 580).
+        await ContentHashService(self._session).invalidate_up(entry)
         return entry
 
     async def _resolve_course_root_id(self, node_id: uuid.UUID) -> uuid.UUID:
@@ -421,22 +429,21 @@ class AuthoredDocumentRepository:
     # is the canonical replacement.
     #
     # The ``_invalidate_node_chain`` and ``_require`` private helpers
-    # below are PRESERVED — they remain active callers from ``create()``
-    # (initial fingerprint propagation) and ``update_source()`` (raw_hash
-    # invalidation). Phase 5 sweep migrates ``_invalidate_node_chain``
-    # off legacy ``FingerprintService.invalidate_up`` onto
-    # :class:`ContentHashService.invalidate_subtree` alongside the
-    # FingerprintService module deletion.
+    # below are PRESERVED. After Phase 1.1, ``_invalidate_node_chain``
+    # is the parent-chain materialisation path used by
+    # ``update_source()`` (raw_hash cleared → parent chain recomputed
+    # via canonical KD9 cascade). The ``create()`` flow no longer calls
+    # this helper; it invokes ``ContentHashService.invalidate_up`` on
+    # the new entry directly so the entity's own ``content_hash`` is
+    # materialised in the same walk (Phase 1.1 §6.7.1 variant (a)).
 
     # ── Private helpers ──
 
     async def _invalidate_node_chain(self, node_id: uuid.UUID) -> None:
-        """Invalidate fingerprints from node up to root."""
-        from course_supporter.fingerprint import FingerprintService
-
+        """Recompute parent chain ``content_hash`` from node up to root."""
         node = await self._session.get(CourseNode, node_id)
         if node is not None:
-            await FingerprintService(self._session).invalidate_up(node)
+            await ContentHashService(self._session).invalidate_up(node)
 
     async def _require(self, entry_id: uuid.UUID) -> AuthoredDocument:
         """Get entry or raise ValueError."""

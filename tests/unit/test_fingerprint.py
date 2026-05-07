@@ -512,26 +512,14 @@ class TestInvalidateUp:
 class TestRepositoryCascadeInvalidation:
     """Tests for auto-invalidation in repository CRUD methods (S2-028)."""
 
-    async def test_entry_create_invalidates_node(self) -> None:
-        """AuthoredDocumentRepository.create triggers cascade invalidation."""
-        from course_supporter.storage.authored_document_repository import (
-            AuthoredDocumentRepository,
-        )
-
-        session = AsyncMock()
-        repo = AuthoredDocumentRepository(session)
-
-        with pytest.MonkeyPatch.context() as mp:
-            mock_inv = AsyncMock()
-            mp.setattr(repo, "_invalidate_node_chain", mock_inv)
-            mp.setattr(repo, "_next_sibling_order", AsyncMock(return_value=0))
-            await repo.create(
-                node_id=uuid.uuid4(),
-                source_type="text",
-                source_url="https://example.com",
-            )
-
-        mock_inv.assert_awaited_once()
+    # ``test_entry_create_invalidates_node`` removed in Phase 1.1 etap
+    # 1.1.4: ``AuthoredDocumentRepository.create()`` no longer routes
+    # through ``_invalidate_node_chain`` — it now calls
+    # ``ContentHashService.invalidate_up(entry)`` directly post-flush
+    # (per INVESTIGATION §6.7.1 variant (a)). The create()-time
+    # materialisation invariant is covered by
+    # ``tests/integration/test_content_hash_persistence.py::TestCreate
+    # MaterializesContentHash``. The whole file deletes wholesale in C3.
 
     async def test_entry_complete_processing_does_not_invalidate_node(self) -> None:
         """AuthoredDocumentRepository.complete_processing intentionally skips cascade.

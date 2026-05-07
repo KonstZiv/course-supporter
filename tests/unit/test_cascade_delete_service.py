@@ -14,6 +14,7 @@ from course_supporter.storage.cascade import (
     SoftDeletableEntity,
     build_cascade_map,
 )
+from tests._helpers.kd3_marker import assert_marker_recent
 
 # ── Fakes: minimal soft-deletable entities (no SQLAlchemy involved) ─
 
@@ -918,42 +919,6 @@ class TestKD3MarkerFormat:
     Amendment 24 (hotfix-4 disposition: marker overrides nullability).
     """
 
-    _MARKER_REGEX: ClassVar[str] = (
-        r"^інформація видалена автором "
-        r"(\d{2})-(\d{2})-(\d{4}) "
-        r"(\d{2}):(\d{2}):(\d{2})$"
-    )
-    _TIMESTAMP_TOLERANCE_SECONDS: ClassVar[int] = 5
-
-    @staticmethod
-    def _parse_marker_timestamp(marker: str) -> datetime:
-        """Parse the embedded timestamp from a marker string."""
-        import re
-
-        match = re.match(TestKD3MarkerFormat._MARKER_REGEX, marker)
-        assert match is not None, f"Marker did not match contract: {marker!r}"
-        day, month, year, hour, minute, second = match.groups()
-        return datetime(
-            int(year),
-            int(month),
-            int(day),
-            int(hour),
-            int(minute),
-            int(second),
-            tzinfo=UTC,
-        )
-
-    def _assert_marker_recent(self, marker: str) -> None:
-        """Assert the marker timestamp is within tolerance of now."""
-        parsed = self._parse_marker_timestamp(marker)
-        now = datetime.now(UTC)
-        drift = abs((now - parsed).total_seconds())
-        assert drift <= self._TIMESTAMP_TOLERANCE_SECONDS, (
-            f"Marker timestamp drift {drift}s exceeds tolerance "
-            f"{self._TIMESTAMP_TOLERANCE_SECONDS}s "
-            f"(parsed={parsed}, now={now})"
-        )
-
     async def test_format_helper_emits_kd3_marker_with_default_now(self) -> None:
         """``_format_deleted_marker()`` with no argument computes its
         own ``datetime.now(UTC)`` and returns the contract format.
@@ -961,7 +926,7 @@ class TestKD3MarkerFormat:
         from course_supporter.storage.cascade import _format_deleted_marker
 
         marker = _format_deleted_marker()
-        self._assert_marker_recent(marker)
+        assert_marker_recent(marker)
 
     async def test_format_helper_honors_provided_now(self) -> None:
         """``_format_deleted_marker(now=...)`` uses the supplied
@@ -981,7 +946,7 @@ class TestKD3MarkerFormat:
         node.title = "Original Course Title"
         node.description = "Original description text"
         await scrub_course_node(node)
-        self._assert_marker_recent(node.title)
+        assert_marker_recent(node.title)
 
     async def test_scrub_course_node_stamps_description_with_marker(self) -> None:
         """``scrub_course_node`` writes the KD3 marker to ``description``
@@ -994,7 +959,7 @@ class TestKD3MarkerFormat:
         node.title = "Original Course Title"
         node.description = "Original description text"
         await scrub_course_node(node)
-        self._assert_marker_recent(node.description)
+        assert_marker_recent(node.description)
 
     async def test_scrub_course_node_columns_share_marker(self) -> None:
         """Single scrub invocation produces ONE marker reused across
@@ -1022,7 +987,7 @@ class TestKD3MarkerFormat:
         doc.filename = "lecture-01.pdf"
         doc.source_url = "https://s3.example.com/bucket/lecture-01.pdf"
         await scrub_authored_document(doc)
-        self._assert_marker_recent(doc.filename)
+        assert_marker_recent(doc.filename)
 
     async def test_scrub_authored_document_stamps_source_url_with_marker(
         self,
@@ -1036,7 +1001,7 @@ class TestKD3MarkerFormat:
         doc.filename = "lecture-01.pdf"
         doc.source_url = "https://s3.example.com/bucket/lecture-01.pdf"
         await scrub_authored_document(doc)
-        self._assert_marker_recent(doc.source_url)
+        assert_marker_recent(doc.source_url)
 
     async def test_scrub_authored_document_columns_share_marker(self) -> None:
         """Single scrub invocation produces ONE marker reused across

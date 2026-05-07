@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import AsyncIterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import TracebackType
 from typing import Any
 from urllib.parse import urlparse
@@ -21,6 +21,20 @@ logger = structlog.get_logger()
 MULTIPART_CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB
 MULTIPART_THRESHOLD = 50 * 1024 * 1024  # 50 MB
 DOWNLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
+
+
+def sanitize_s3_key(filename: str) -> str:
+    """Strip directory components from a filename for safe S3 key composition.
+
+    Prevents path traversal: inputs like ``../../etc/passwd`` collapse to
+    ``passwd``. Empty or dot-only names (``""``, ``"."``, ``".."``) fall
+    back to ``upload``. POSIX-only semantics — backslash is preserved
+    verbatim (S3 allows it in keys).
+    """
+    name = PurePosixPath(filename).name
+    if not name or name in {".", ".."}:
+        return "upload"
+    return name
 
 
 class S3Client:
@@ -84,6 +98,14 @@ class S3Client:
         """Close the S3 client context."""
         await self.close()
 
+    def get_object_url(self, key: str) -> str:
+        """Return the path-style URL for an S3 object key.
+
+        Encapsulates the ``endpoint/bucket/key`` composition so callers
+        do not reach into private attributes of S3Client.
+        """
+        return f"{self._endpoint_url}/{self._bucket}/{key}"
+
     async def upload_file(
         self,
         key: str,
@@ -110,7 +132,7 @@ class S3Client:
             Body=data,
             ContentType=content_type,
         )
-        url = f"{self._endpoint_url}/{self._bucket}/{key}"
+        url = self.get_object_url(key)
         logger.info("s3_upload", key=key, content_type=content_type)
         return url
 
@@ -245,7 +267,7 @@ class S3Client:
 
         # Large or unknown size — streaming multipart
         total = await self.upload_stream(stream, key, content_type)
-        url = f"{self._endpoint_url}/{self._bucket}/{key}"
+        url = self.get_object_url(key)
         return url, total
 
     def extract_key(self, url: str) -> str | None:

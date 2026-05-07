@@ -58,7 +58,7 @@ from course_supporter.storage.cascade import CascadeDeleteService, build_cascade
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import AuthoredDocument
-from course_supporter.storage.s3 import S3Client, upload_file_chunks
+from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_chunks
 
 logger = structlog.get_logger()
 
@@ -206,7 +206,8 @@ async def create_document(
     if file is not None:
         if actual_filename is None:
             actual_filename = file.filename
-        key = f"{node_id}/{uuid.uuid4()}/{actual_filename or 'upload'}"
+        safe_name = sanitize_s3_key(actual_filename or "upload")
+        key = f"{node_id}/{uuid.uuid4()}/{safe_name}"
         content_type = file.content_type or "application/octet-stream"
         actual_url, uploaded_bytes = await s3.upload_smart(
             stream=upload_file_chunks(file),
@@ -294,7 +295,8 @@ async def get_upload_url(
 
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
-    key = f"tenants/{tenant.tenant_id}/nodes/{node_id}/{uuid.uuid4()}/{body.filename}"
+    safe_name = sanitize_s3_key(body.filename)
+    key = f"tenants/{tenant.tenant_id}/nodes/{node_id}/{uuid.uuid4()}/{safe_name}"
 
     upload_url = await s3.generate_presigned_url(
         key, body.content_type, expires_in=PRESIGNED_URL_EXPIRY
@@ -342,7 +344,7 @@ async def confirm_upload(
         )
 
     actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
-    s3_url = f"{s3._endpoint_url}/{s3._bucket}/{body.key}"
+    s3_url = s3.get_object_url(body.key)
 
     document_repo = AuthoredDocumentRepository(session)
     document = await document_repo.create(

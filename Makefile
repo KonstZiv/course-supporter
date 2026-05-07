@@ -68,3 +68,6 @@ logs:  ## Показати логи сервісів
 
 ps:  ## Статус сервісів
 	docker compose ps
+
+psql:  ## Відкрити psql shell у postgres контейнері
+	docker compose exec postgres psql -U $${POSTGRES_USER:-course_supporter} -d $${POSTGRES_DB:-course_supporter}

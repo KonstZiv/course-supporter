@@ -252,7 +252,7 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     created_at: datetime = Field(description="When this entry was created.")
 
 
-class NodeWithMaterialsResponse(BaseModel):
+class NodeWithDocumentsResponse(BaseModel):
     """Recursive tree node with attached materials.
 
     Used in tree detail to provide the full hierarchical view
@@ -273,7 +273,7 @@ class NodeWithMaterialsResponse(BaseModel):
         description="Authored documents attached directly to this node.",
         validation_alias="documents",
     )
-    children: list[NodeWithMaterialsResponse] = Field(
+    children: list[NodeWithDocumentsResponse] = Field(
         default_factory=list,
         description="Child nodes, recursively nested.",
     )

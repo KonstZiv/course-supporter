@@ -137,7 +137,7 @@ async def delete_file(
         raise HTTPException(status_code=403, detail="Key does not belong to tenant.")
 
     # Look up the AuthoredDocument (if any) referencing this S3 URL.
-    s3_url = f"{s3._endpoint_url}/{s3._bucket}/{key}"
+    s3_url = s3.get_object_url(key)
     document_repo = AuthoredDocumentRepository(session)
     document = await document_repo.get_by_source_url(s3_url)
 

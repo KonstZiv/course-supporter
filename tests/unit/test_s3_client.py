@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from course_supporter.storage.s3 import S3Client
+from course_supporter.storage.s3 import S3Client, sanitize_s3_key
 
 
 class TestS3Client:
@@ -341,3 +341,75 @@ class TestS3Config:
         config: BotoConfig = call_kwargs[1]["config"]
         assert config.signature_version == "s3v4"
         assert config.s3["addressing_style"] == "path"
+
+
+class TestGetObjectUrl:
+    """Tests for S3Client.get_object_url() — public encapsulation method."""
+
+    def test_basic_url(self) -> None:
+        """get_object_url() composes path-style URL from endpoint + bucket + key."""
+        client = S3Client(
+            endpoint_url="https://s3.example.com",
+            access_key="key",
+            secret_key="secret",
+            bucket="course-materials",
+        )
+        url = client.get_object_url("tenants/abc/file.pdf")
+        assert url == "https://s3.example.com/course-materials/tenants/abc/file.pdf"
+
+    def test_endpoint_trailing_slash_stripped(self) -> None:
+        """__init__ strips endpoint trailing slash; get_object_url honors it."""
+        client = S3Client(
+            endpoint_url="https://s3.example.com/",
+            access_key="key",
+            secret_key="secret",
+            bucket="bucket",
+        )
+        assert client.get_object_url("k") == "https://s3.example.com/bucket/k"
+
+    def test_special_chars_in_key_preserved(self) -> None:
+        """get_object_url() preserves spaces, unicode, and slashes verbatim."""
+        client = S3Client(
+            endpoint_url="https://s3.local",
+            access_key="key",
+            secret_key="secret",
+            bucket="b",
+        )
+        assert (
+            client.get_object_url("a b/файл.txt") == "https://s3.local/b/a b/файл.txt"
+        )
+
+    def test_empty_key(self) -> None:
+        """get_object_url() returns endpoint/bucket/ for empty key."""
+        client = S3Client(
+            endpoint_url="https://s3.local",
+            access_key="key",
+            secret_key="secret",
+            bucket="b",
+        )
+        assert client.get_object_url("") == "https://s3.local/b/"
+
+
+class TestSanitizeS3Key:
+    """Tests for sanitize_s3_key() — path-traversal defense."""
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("normal.pdf", "normal.pdf"),
+            ("../../etc/passwd", "passwd"),
+            ("foo/bar/baz.txt", "baz.txt"),
+            ("/absolute/path/file.md", "file.md"),
+            ("", "upload"),
+            (".", "upload"),
+            ("..", "upload"),
+            ("a\\b\\c.pdf", "a\\b\\c.pdf"),
+            ("file with spaces.docx", "file with spaces.docx"),
+            ("документ.txt", "документ.txt"),
+            ("trailing/", "trailing"),
+            ("...hidden", "...hidden"),
+        ],
+    )
+    def test_sanitization(self, filename: str, expected: str) -> None:
+        """sanitize_s3_key() strips dir components and falls back to 'upload'."""
+        assert sanitize_s3_key(filename) == expected

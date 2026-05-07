@@ -60,9 +60,11 @@ async def _make_entry(
     *,
     raw_hash: str | None = None,
     source_url: str | None = None,
+    course_root_id: uuid.UUID | None = None,
 ) -> AuthoredDocument:
     entry = AuthoredDocument(
         course_node_id=node_id,
+        course_root_id=course_root_id if course_root_id is not None else node_id,
         source_type="text",
         source_url=source_url or f"https://example.com/{uuid.uuid4().hex[:8]}",
         raw_hash=raw_hash,
@@ -76,16 +78,19 @@ async def _make_section(
     session: AsyncSession,
     entry_id: uuid.UUID,
     *,
-    order: int = 0,
     title: str = "section",
 ) -> DocumentSummary:
+    # Inherit course_root_id from parent AuthoredDocument per KD-delta
+    # (schema comment at orm.py: ``Inherited from
+    # authored_documents.course_root_id at INSERT``).
+    entry = await session.get(AuthoredDocument, entry_id)
+    if entry is None:
+        msg = f"AuthoredDocument {entry_id} not found"
+        raise ValueError(msg)
     section = DocumentSummary(
         authored_document_id=entry_id,
-        order=order,
+        course_root_id=entry.course_root_id,
         title=title,
-        start_pos=0,
-        end_pos=100,
-        status="ready",
     )
     session.add(section)
     await session.flush()
@@ -101,8 +106,14 @@ async def _make_segment(
     start_pos: int = 0,
     end_pos: int = 50,
 ) -> DocumentSegment:
+    # Inherit course_root_id from parent DocumentSummary per KD-delta.
+    section = await session.get(DocumentSummary, section_id)
+    if section is None:
+        msg = f"DocumentSummary {section_id} not found"
+        raise ValueError(msg)
     segment = DocumentSegment(
         document_summary_id=section_id,
+        course_root_id=section.course_root_id,
         order=order,
         start_pos=start_pos,
         end_pos=end_pos,

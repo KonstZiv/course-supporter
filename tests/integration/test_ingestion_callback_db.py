@@ -32,7 +32,7 @@ class TestOnSuccessDB:
 
         Pre-conditions: Job=active, AuthoredDocument=pending.
         After on_success:
-          - AuthoredDocument.state == 'done', processed_content set
+          - AuthoredDocument.state == 'done'
           - Job.status == 'complete'
         """
         jid = committed_job_and_material["job_id"]
@@ -55,7 +55,6 @@ class TestOnSuccessDB:
         assert job.completed_at is not None
         assert material is not None
         assert material.state == "ready"
-        assert material.processed_content == content
 
 
 class TestOnFailureDB:

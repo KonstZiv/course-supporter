@@ -38,7 +38,7 @@ from course_supporter.api.schemas import (
     NodeResponse,
     NodeTreeResponse,
     NodeUpdateRequest,
-    NodeWithMaterialsResponse,
+    NodeWithDocumentsResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
@@ -231,7 +231,7 @@ async def get_node_detail(
     node_id: uuid.UUID,
     tenant: SharedDep,
     session: SessionDep,
-) -> NodeWithMaterialsResponse:
+) -> NodeWithDocumentsResponse:
     """Get the full subtree with materials attached to each node.
 
     Returns the hierarchical view including materials at each level
@@ -246,7 +246,7 @@ async def get_node_detail(
     tree_roots = await repo.get_subtree_with_active_documents(node_id)
     if not tree_roots:
         raise HTTPException(status_code=404, detail="Node not found")
-    return NodeWithMaterialsResponse.model_validate(tree_roots[0])
+    return NodeWithDocumentsResponse.model_validate(tree_roots[0])
 
 
 # ── Single node operations ──

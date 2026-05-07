@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -13,10 +13,26 @@ from course_supporter.storage.orm import CourseNode
 
 @pytest.fixture(autouse=True)
 def _no_cascade_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Disable fingerprint cascade invalidation in unit tests."""
+    """Disable content_hash cascade invalidation in unit tests.
+
+    Two entry points masked: (1) ``_invalidate_node_chain`` helper used by
+    ``move``; (2) direct ``ContentHashService.invalidate_up`` call wired
+    into ``create()`` post-flush per Phase 1.1 etap 1.1.4. Unit tests
+    focus on signature / Python flow; the canonical KD9 walker is
+    exercised in ``tests/integration/test_content_hash_persistence.py``.
+    Tests asserting these specific callsites override per-test via
+    ``mp.setattr`` (see ``TestInvalidationContract`` below).
+    """
+    from course_supporter.storage.content_hash import ContentHashService
+
     monkeypatch.setattr(
         CourseNodeRepository,
         "_invalidate_node_chain",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        ContentHashService,
+        "invalidate_up",
         AsyncMock(),
     )
 
@@ -768,3 +784,50 @@ class TestGetDescendantIds:
         # (literal_binds strips dashes from UUIDs; match by column name
         # to stay stable across formatting variants.)
         assert sql.count("course_nodes.tenant_id =") == 2
+
+
+class TestInvalidationContract:
+    """Asserts the parent-chain invalidation contract for ``move``.
+
+    Bypasses the file-level ``_no_cascade_invalidation`` autouse fixture
+    via per-test ``mp.setattr`` instance-level override — the autouse mock
+    masks ``_invalidate_node_chain`` for every other test in this file,
+    but here we explicitly observe the call surface to lock the contract.
+
+    ``move`` is the SOLE production caller of ``_invalidate_node_chain``
+    in ``CourseNodeRepository`` (per INVESTIGATION §6.7.2). Other CRUD
+    methods either do not mutate formula-relevant fields (``update``,
+    ``reorder``) or do not call the helper at all (``create`` — which
+    invokes ``ContentHashService.invalidate_up`` directly post-Phase-1.1).
+    Single representative test is sufficient to exercise the full surface.
+    """
+
+    async def test_move_invalidates_both_parent_chains(self) -> None:
+        """``move`` invalidates BOTH old and new parent chains in order."""
+        old_parent_id = uuid.uuid4()
+        new_parent_id = uuid.uuid4()
+        node = _mock_node(parent_id=old_parent_id)
+        session = AsyncMock()
+        session.get.return_value = node
+
+        scalar_result = MagicMock()
+        scalar_result.scalar_one.return_value = 0
+        session.execute.return_value = scalar_result
+
+        repo = CourseNodeRepository(session)
+        invalidate_mock = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
+            mp.setattr(
+                repo,
+                "_is_descendant",
+                AsyncMock(return_value=False),
+            )
+            await repo.move(node.id, new_parent_id)
+
+        # Both parents invalidated: old (children set lost a node) +
+        # new (children set gained a node). Order matters — production
+        # code invalidates old before new.
+        assert invalidate_mock.await_count == 2
+        invalidate_mock.assert_has_awaits([call(old_parent_id), call(new_parent_id)])

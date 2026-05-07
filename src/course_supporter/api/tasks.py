@@ -349,7 +349,6 @@ async def arq_generate_structure(
         target_node_id: Optional target node UUID. None = whole tree.
         mode: Generation mode ('free' or 'guided').
     """
-    from course_supporter.fingerprint import FingerprintService
     from course_supporter.ingestion.merge import MergeStep
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
@@ -403,12 +402,17 @@ async def arq_generate_structure(
                 material_tree=tree_summary,
             )
 
-            # Compute fingerprint
-            fp_service = FingerprintService(session)
+            # Snapshot identity placeholder per Phase 1.1 etap 1.1.2
+            # (D1 ratify): this whole task is a Phase 5 deletion target,
+            # so the legacy fingerprint computation chain is replaced
+            # with an explicit stub string. Branching shape is preserved
+            # (course-level vs node-level) so the Phase 5 sweep can grep
+            # for ``stub-phase-5`` and locate every dying-code callsite.
+            # Synchronous string assignment — no ``await``.
             if target is not None:
-                fingerprint = await fp_service.ensure_node_fp(target)
+                fingerprint = f"stub-phase-5-{target.id}"
             else:
-                fingerprint = await fp_service.ensure_course_fp(root_nodes)
+                fingerprint = f"stub-phase-5-course-{root_nodes[0].id}"
             await session.commit()
 
             # Effective node_id for snapshot identity
@@ -830,7 +834,6 @@ async def arq_execute_step(
         mode: Generation mode ('free' or 'guided').
         step_type: Step type ('generate', 'reconcile', 'refine').
     """
-    from course_supporter.fingerprint import FingerprintService
     from course_supporter.models.step import StepType as _StepType
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
@@ -909,12 +912,14 @@ async def arq_execute_step(
                 parent_context = await _load_parent_context(session, target_node)
                 sibling_sums = await _load_sibling_summaries(session, target_node)
 
-            # Compute fingerprint
-            fp_service = FingerprintService(session)
+            # Snapshot identity placeholder per Phase 1.1 etap 1.1.2
+            # (D1 ratify): same dying-code stub pattern as
+            # ``arq_generate_structure``. See that task's comment for
+            # rationale.
             if target is not None:
-                fingerprint = await fp_service.ensure_node_fp(target)
+                fingerprint = f"stub-phase-5-{target.id}"
             else:
-                fingerprint = await fp_service.ensure_course_fp(root_nodes)
+                fingerprint = f"stub-phase-5-course-{root_nodes[0].id}"
             await session.commit()
 
             effective_node_id = nid or rid

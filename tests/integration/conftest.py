@@ -105,6 +105,7 @@ async def seed_material_entry(
     """Create a AuthoredDocument in RAW state."""
     entry = AuthoredDocument(
         course_node_id=seed_root_node.id,
+        course_root_id=seed_root_node.id,
         source_type="web",
         source_url="https://example.com/test",
     )
@@ -143,6 +144,7 @@ async def committed_seeds(
 
         entry = AuthoredDocument(
             course_node_id=node.id,
+            course_root_id=node.id,
             source_type="web",
             source_url="https://example.com/e2e",
         )

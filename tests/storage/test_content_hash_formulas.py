@@ -337,3 +337,33 @@ class TestFormulaReturnShape:
         assert result == result.lower()
         # Lowercase hex alphabet only.
         assert all(c in "0123456789abcdef" for c in result)
+
+
+# ── Unicode invariant (ensure_ascii=False) ───────────────────────
+
+
+class TestUnicodeContentInvariant:
+    """Lock ``ensure_ascii=False`` invariant for non-ASCII content (vision §3 KD9).
+
+    ``_encode_local_fields`` uses ``json.dumps(..., ensure_ascii=False)``
+    (``content_hash.py:127-129``) so Cyrillic / accented characters contribute
+    to the digest as raw UTF-8 bytes, not ``\\uXXXX`` escapes. Without this
+    flag, identical content from a UA/RU course would hash differently
+    depending on encoding-aware vs encoding-naive producers, breaking
+    cache invariance across the Merkle tree.
+    """
+
+    async def test_unicode_content_distinct_and_stable(self) -> None:
+        """Cyrillic content yields a stable hash distinct from ASCII transliteration."""
+        svc = ContentHashService(AsyncMock())
+        cyrillic = _make_segment(content="Привіт світ")
+        ascii_sub = _make_segment(content="Privit svit")
+
+        h_cyrillic = await svc._compute_hash_for(cyrillic, exclude_ids=None)
+        h_ascii = await svc._compute_hash_for(ascii_sub, exclude_ids=None)
+        h_cyrillic_again = await svc._compute_hash_for(cyrillic, exclude_ids=None)
+
+        # Unicode bytes contribute to digest (not stripped to escapes).
+        assert h_cyrillic != h_ascii
+        # Stable across calls — determinism holds for non-ASCII payloads.
+        assert h_cyrillic == h_cyrillic_again

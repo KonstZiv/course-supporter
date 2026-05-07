@@ -153,7 +153,6 @@ class _MockDeps:
         find_identity: Any = None,
         gen_result: GenerationResult | None = None,
         created_snapshot: Any = None,
-        fingerprint: str = "a" * 64,
     ) -> None:
         # JobRepository
         self.job_repo = AsyncMock()
@@ -162,10 +161,11 @@ class _MockDeps:
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
-        # FingerprintService
-        self.fp_service = AsyncMock()
-        self.fp_service.ensure_node_fp = AsyncMock(return_value=fingerprint)
-        self.fp_service.ensure_course_fp = AsyncMock(return_value=fingerprint)
+        # FingerprintService mock removed in Phase 1.1 etap 1.1.2:
+        # production task replaces ``ensure_*_fp`` calls with literal
+        # ``stub-phase-5-{id}`` placeholders (D1 ratify), so the mock
+        # has no surface to substitute. Snapshot identity is now a
+        # synchronous string assignment in production.
 
         # SnapshotRepository
         self.snap_repo = AsyncMock()
@@ -237,10 +237,6 @@ async def _run_task(
         patch(
             "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
-        ),
-        patch(
-            "course_supporter.fingerprint.FingerprintService",
-            return_value=deps.fp_service,
         ),
         patch(
             "course_supporter.api.tasks.SnapshotRepository",
@@ -327,8 +323,13 @@ class TestHappyPathCourseLevel:
 
         await _run_task(job_id, root_node_id, deps, target_node_id=None)
 
-        deps.fp_service.ensure_course_fp.assert_called_once_with([root])
-        deps.fp_service.ensure_node_fp.assert_not_called()
+        # Fingerprint-call assertions dropped in Phase 1.1 etap 1.1.2:
+        # post-stub the course-level vs node-level branching produces
+        # ``f"stub-phase-5-course-{id}"`` vs ``f"stub-phase-5-{id}"``
+        # literals; the FingerprintService mock no longer exists.
+        # Branching invariant disappears with Phase 5 deletion of this
+        # whole task body — orchestration-only coverage suffices for
+        # the residual skip-permanent test surface.
 
 
 @pytest.mark.skip(reason=SKIP_REASON)

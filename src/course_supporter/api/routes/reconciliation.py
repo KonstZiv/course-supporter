@@ -36,7 +36,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_reconcile_preview
-from course_supporter.fingerprint import FingerprintService, compute_editable_tree_hash
+from course_supporter.fingerprint import compute_editable_tree_hash
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_conversion import _CONTENT_FIELDS
 from course_supporter.storage.editable_repository import EditableRepository
@@ -108,19 +108,14 @@ async def _compute_current_fingerprints(
         return None, None
 
     root = subtree[0]
-    node_fp: str | None = None
-    try:
-        fp_service = FingerprintService(session)
-        node_fp = await fp_service.ensure_node_fp(root)
-        await session.flush()
-    except (ValueError, AttributeError) as exc:
-        logger.warning(
-            "content_hash_failed",
-            node_id=str(node_id),
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        node_fp = None
+    # Snapshot identity placeholder per Phase 1.1 etap 1.1.2 (D1
+    # ratify): /reconcile/preview is a Phase 5.2 deletion target,
+    # so the legacy fingerprint computation call is replaced with
+    # an explicit stub. Synchronous assignment cannot raise
+    # ValueError / AttributeError, so the legacy try/except shell
+    # + ``content_hash_failed`` warning log were dropped — the
+    # defensive surface they wrapped no longer exists.
+    node_fp: str | None = f"stub-phase-5-{root.id}"
 
     # Editable tree hash
     editable_repo = EditableRepository(session)

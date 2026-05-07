@@ -103,15 +103,14 @@ class _MockDeps:
         find_identity: Any = None,
         step_output: StepOutput | None = None,
         created_snapshot: Any = None,
-        fingerprint: str = "a" * 64,
     ) -> None:
         self.job_repo = AsyncMock()
         self.node_repo = AsyncMock()
         self.node_repo.get_subtree = AsyncMock(return_value=root_nodes)
 
-        self.fp_service = AsyncMock()
-        self.fp_service.ensure_node_fp = AsyncMock(return_value=fingerprint)
-        self.fp_service.ensure_course_fp = AsyncMock(return_value=fingerprint)
+        # FingerprintService mock removed in Phase 1.1 etap 1.1.2:
+        # production task uses literal ``stub-phase-5-{id}`` placeholders
+        # (D1 ratify) — no service surface to substitute.
 
         self.snap_repo = AsyncMock()
         self.snap_repo.find_by_identity = AsyncMock(return_value=find_identity)
@@ -172,10 +171,6 @@ async def _run_task(
         patch(
             "course_supporter.storage.course_node_repository.CourseNodeRepository",
             return_value=deps.node_repo,
-        ),
-        patch(
-            "course_supporter.fingerprint.FingerprintService",
-            return_value=deps.fp_service,
         ),
         patch(
             "course_supporter.api.tasks.SnapshotRepository",

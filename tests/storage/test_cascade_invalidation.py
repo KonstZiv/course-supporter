@@ -33,10 +33,8 @@ rule #13 — atomic commits over artificial bisect-separation.
 
 from __future__ import annotations
 
-import re
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -63,47 +61,7 @@ from course_supporter.storage.orm import (
     Job,
     Tenant,
 )
-
-# ── KD3 marker contract helpers (duplicated from canonical site) ──
-#
-# Canonical regex + recency assertion live in
-# ``tests/unit/test_cascade_delete_service.py::TestKD3MarkerFormat``
-# (unit-level scrub callable contract). Duplicated here because this
-# file exercises a different concern (cascade-engine integration)
-# and the regex is small enough to keep inline rather than extract
-# a shared test-helper module. Update both sites in lock-step on
-# contract changes (Amendment 23/24 anchor).
-
-_MARKER_REGEX = (
-    r"^інформація видалена автором "
-    r"(\d{2})-(\d{2})-(\d{4}) "
-    r"(\d{2}):(\d{2}):(\d{2})$"
-)
-_TIMESTAMP_TOLERANCE_SECONDS = 5
-
-
-def _assert_marker_recent(value: str) -> None:
-    """Assert ``value`` matches the KD3 marker contract with a recent
-    timestamp (within ``_TIMESTAMP_TOLERANCE_SECONDS`` of now).
-    """
-    match = re.match(_MARKER_REGEX, value)
-    assert match is not None, f"Value did not match marker contract: {value!r}"
-    day, month, year, hour, minute, second = match.groups()
-    parsed = datetime(
-        int(year),
-        int(month),
-        int(day),
-        int(hour),
-        int(minute),
-        int(second),
-        tzinfo=UTC,
-    )
-    drift = abs((datetime.now(UTC) - parsed).total_seconds())
-    assert drift <= _TIMESTAMP_TOLERANCE_SECONDS, (
-        f"Marker timestamp drift {drift}s exceeds tolerance "
-        f"{_TIMESTAMP_TOLERANCE_SECONDS}s"
-    )
-
+from tests._helpers.kd3_marker import assert_marker_recent
 
 # ── Unit-level: scrub_authored_document field semantics ───────────
 
@@ -128,7 +86,7 @@ class TestScrubAuthoredDocument:
         await scrub_authored_document(doc)
 
         assert doc.filename is not None
-        _assert_marker_recent(doc.filename)
+        assert_marker_recent(doc.filename)
 
     async def test_scrub_writes_marker_to_source_url(self) -> None:
         doc = _StubDocument(
@@ -138,7 +96,7 @@ class TestScrubAuthoredDocument:
 
         await scrub_authored_document(doc)
 
-        _assert_marker_recent(doc.source_url)
+        assert_marker_recent(doc.source_url)
 
     async def test_scrub_idempotent_re_stamps_marker(self) -> None:
         """Idempotency under the marker contract means a second scrub
@@ -151,8 +109,8 @@ class TestScrubAuthoredDocument:
         await scrub_authored_document(doc)
 
         assert doc.filename is not None
-        _assert_marker_recent(doc.filename)
-        _assert_marker_recent(doc.source_url)
+        assert_marker_recent(doc.filename)
+        assert_marker_recent(doc.source_url)
 
     async def test_scrub_does_not_touch_unrelated_attributes(self) -> None:
         """Scrub list is exactly ``filename`` + ``source_url`` — other
@@ -185,8 +143,8 @@ class TestScrubAuthoredDocument:
         assert doc.filename != "x.mp4"
         assert doc.source_url != ""
         assert doc.source_url != "https://example.com/x.mp4"
-        _assert_marker_recent(doc.filename)
-        _assert_marker_recent(doc.source_url)
+        assert_marker_recent(doc.filename)
+        assert_marker_recent(doc.source_url)
 
 
 class _StubDocument:
@@ -522,12 +480,12 @@ class TestCascadeScrubCompleteness:
                 assert node.title is not None, (
                     f"CourseNode {node_id} title unexpectedly NULL"
                 )
-                _assert_marker_recent(node.title)
+                assert_marker_recent(node.title)
                 assert node.description is not None, (
                     f"CourseNode {node_id} description unexpectedly NULL "
                     f"(Amendment 24 ruling: nullable column receives marker)"
                 )
-                _assert_marker_recent(node.description)
+                assert_marker_recent(node.description)
 
             # AuthoredDocument descendant scrubbed + soft-deleted.
             persisted_doc = await session.get(AuthoredDocument, doc_id)
@@ -538,8 +496,8 @@ class TestCascadeScrubCompleteness:
                 f"(Amendment 24 ruling: nullable column receives marker): "
                 f"{persisted_doc.filename!r}"
             )
-            _assert_marker_recent(persisted_doc.filename)
-            _assert_marker_recent(persisted_doc.source_url)
+            assert_marker_recent(persisted_doc.filename)
+            assert_marker_recent(persisted_doc.source_url)
 
         await _cleanup_tenant(gap3_session_factory, [tenant_id])
 

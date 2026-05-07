@@ -416,7 +416,6 @@ class TestReconcileApply:
         data = resp.json()
         # NOTE: EditableTreeResponse.course_node_id refers to
         # StructureNodeEditable.course_node_id, not Job.course_node_id.
-        # Renames for that field are Phase 1.1 (CourseNode → CourseNode).
         assert data["course_node_id"] == str(NODE_ID)
 
     async def test_422_no_accepted_issues(self, client: AsyncClient) -> None:

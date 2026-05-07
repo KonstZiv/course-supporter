@@ -125,9 +125,8 @@ async def committed_seeds(
     Returns dict with ``tenant_id``, ``course_node_id``, ``material_id``.
     The ``course_node_id`` key matches the v0.20 column name on
     ``Job.course_node_id`` (KD13 — renamed from legacy
-    ``course_node_id`` in task 0.3); the underlying row is still a
-    ``CourseNode`` and will be re-typed to ``CourseNode`` only in
-    Phase 1.1. Cleans up after the test via DELETE in reverse FK order.
+    ``materialnode_id`` in task 0.3). Cleans up after the test via
+    DELETE in reverse FK order.
     """
     async with session_factory() as session:
         tenant = Tenant(name=f"test-tenant-{uuid.uuid4().hex[:8]}")
@@ -159,10 +158,8 @@ async def committed_seeds(
 
     yield ids
 
-    # Cleanup: delete in reverse FK order. Note that
-    # ``AuthoredDocument.course_node_id`` and ``CourseNode.id`` are
-    # still legacy column names — they get renamed in Phase 1.1
-    # along with the table-level CourseNode → CourseNode rename.
+    # Cleanup: delete in reverse FK order following the
+    # ``AuthoredDocument.course_node_id → CourseNode.id`` FK chain.
     async with session_factory() as session:
         await session.execute(
             Job.__table__.delete().where(Job.course_node_id == ids["course_node_id"])

@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.keys import hash_api_key
 from course_supporter.llm.router import ModelRouter
+from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Tenant
 from course_supporter.storage.s3 import S3Client
@@ -27,6 +28,7 @@ __all__ = [
     "get_model_router",
     "get_s3_client",
     "get_session",
+    "get_stage_router",
 ]
 
 api_key_header = APIKeyHeader(name="X-API-Key")
@@ -93,6 +95,14 @@ async def get_model_router(request: Request) -> ModelRouter:
     Initialized during lifespan startup.
     """
     return cast(ModelRouter, request.app.state.model_router)
+
+
+async def get_stage_router(request: Request) -> StageRouter:
+    """Retrieve StageRouter from app state.
+
+    Initialized during lifespan startup.
+    """
+    return cast(StageRouter, request.app.state.stage_router)
 
 
 async def get_s3_client(request: Request) -> S3Client:

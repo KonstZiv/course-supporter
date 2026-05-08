@@ -226,6 +226,7 @@ class Settings(BaseSettings):
     external_services_path: Path = Path("config/external_services.yaml")
     auth_registry_path: Path = Path("config/auth.yaml")
     platform_registry_path: Path = Path("config/platforms.yaml")
+    ladders_dir: Path = Path("config")
 
     # --- Convenience properties ---
     @property

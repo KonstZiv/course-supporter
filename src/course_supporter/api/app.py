@@ -33,6 +33,9 @@ from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
+from course_supporter.llm.factory import create_providers
+from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.stage_router import StageRouter
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
 from course_supporter.storage.s3 import S3Client
@@ -60,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     Startup:
         - Create ModelRouter with DB logging enabled.
+        - Create StageRouter (KD16) with ladder config + providers.
         - Start rate limiter cleanup task.
     Shutdown:
         - Cancel cleanup task.
@@ -70,6 +74,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         log_level=settings.log_level,
     )
     app.state.model_router = create_model_router(settings, async_session)
+
+    # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
+    # (option a, two-build); providers are stateless HTTP wrappers and a
+    # second construction is cheap.
+    ladder_config = load_ladder_config(settings.ladders_dir)
+    stage_router_providers = create_providers(settings)
+    app.state.stage_router = StageRouter(
+        ladder_config=ladder_config,
+        providers=stage_router_providers,
+        session_factory=async_session,
+    )
 
     # ARQ Redis pool for job enqueue
     arq_redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))

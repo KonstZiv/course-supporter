@@ -1,7 +1,18 @@
 """Shared file upload and URL validation utilities.
 
-Provides extension validation, allowed extensions mapping,
-and platform allowlist checking.
+Provides filename extension parsing helper for callers outside the
+canonical KD14 pipeline (e.g. homework's own quick-fail check at
+``api/routes/homework.py:134``) plus the URL platform allowlist
+(separate concern from KD14 file-upload validation per
+:mod:`course_supporter.security.policies` lines 9-13).
+
+Phase 1.2 C3 (KD14 adoption in production): the legacy hand-rolled
+``ALLOWED_EXTENSIONS`` source-type → frozenset whitelist was removed
+from this module. Authored upload validation now invokes
+:func:`course_supporter.security.run_stage1` against
+:data:`course_supporter.security.AUTHORED_POLICY` directly at the
+``api/routes/documents.py`` callsites (8-extension behavioral drift
+documented in POST-MERGE-NOTES "Ratified whitelist drift" section).
 """
 
 from __future__ import annotations
@@ -11,18 +22,6 @@ from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel
-
-from course_supporter.models.source import SourceType
-
-# Allowed file extensions per source_type (lowercase, with dot).
-# web does not accept file uploads at all.
-ALLOWED_EXTENSIONS: dict[SourceType, frozenset[str]] = {
-    SourceType.VIDEO: frozenset({".mp4", ".webm", ".mkv", ".avi"}),
-    SourceType.PRESENTATION: frozenset({".pdf", ".pptx"}),
-    SourceType.TEXT: frozenset(
-        {".md", ".markdown", ".docx", ".html", ".htm", ".txt"},
-    ),
-}
 
 
 def file_extension(filename: str | None) -> str:

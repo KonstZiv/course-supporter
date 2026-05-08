@@ -164,7 +164,16 @@ class TestCreateDocument:
         node_id: uuid.UUID,
         mock_s3: AsyncMock,
     ) -> None:
-        """Successful file upload returns 201."""
+        """Successful file upload returns 201.
+
+        Phase 1.2 C3 wired Stage 1 magic validation at the multipart
+        callsite. Fixture bytes ``b"PDF content"`` are not a valid
+        PDF magic header — patch ``run_stage1`` to bypass the magic
+        check so the test continues to exercise the happy-path
+        wiring (Stage 1 ok → S3 upload → repo create → 201).
+        Phase 0.6 sealed-library tests cover magic validation at the
+        unit tier; here we test the route-level S3 + repo flow.
+        """
         entry = _mock_entry(
             node_id=node_id,
             source_type="presentation",
@@ -180,6 +189,10 @@ class TestCreateDocument:
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(
+                "course_supporter.api.routes.documents.run_stage1",
+                return_value=None,
+            ),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node_id}/documents",
@@ -233,23 +246,33 @@ class TestCreateDocument:
         assert resp.status_code == 422
         assert "does not accept file uploads" in resp.json()["detail"]
 
-    async def test_invalid_extension_returns_422(
+    async def test_forbidden_extension_returns_400(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """File with wrong extension for source_type returns 422."""
+        """Extension outside ``AUTHORED_POLICY`` whitelist returns 400.
+
+        Phase 1.2 C3 — KD14 envelope replaces legacy 422 + freeform
+        ``detail`` string. Source-type-segmented rejection (e.g.
+        ``.pdf`` for ``video``) was removed; the policy is flat. Use
+        ``.exe`` (always-rejected) to exercise the FORBIDDEN_TYPE
+        wiring at the multipart create_document endpoint.
+        """
         resp = await client.post(
             f"/api/v1/nodes/{node_id}/documents",
             data={"source_type": "video"},
             files={
                 "file": (
-                    "slides.pdf",
-                    io.BytesIO(b"PDF content"),
-                    "application/pdf",
+                    "payload.exe",
+                    io.BytesIO(b"binary"),
+                    "application/octet-stream",
                 ),
             },
         )
-        assert resp.status_code == 422
-        assert "'.pdf' is not allowed" in resp.json()["detail"]
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["code"] == "SECURITY_REJECTED"
+        assert detail["category"] == "forbidden_type"
+        assert "details" in detail
 
     async def test_node_not_found_returns_404(
         self, client: AsyncClient, node_id: uuid.UUID

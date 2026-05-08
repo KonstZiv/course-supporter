@@ -1,7 +1,17 @@
 """Tests for document upload validation edge cases.
 
-Covers file extension validation per source_type that is NOT duplicated
-in ``test_authored_documents.py`` (which tests CRUD + tenant isolation).
+Phase 1.2 C3 replaced hand-rolled ``ALLOWED_EXTENSIONS`` source-type
+segmentation with canonical ``security/run_stage1`` against the flat
+``AUTHORED_POLICY`` whitelist. Source-type-cross rejection (e.g.
+".pdf" rejected for "video") is no longer a behavior — coverage of
+the new wiring lives at the drift integration suite
+(``tests/integration/test_authored_upload_validation.py``).
+
+This module retains route-level KD14 wiring assertions for the
+multipart ``POST /nodes/{nid}/documents`` and presigned
+``POST /nodes/{nid}/documents/upload-url`` endpoints (status 400 +
+KD14 detail schema). Magic-byte mismatch coverage lives at the
+library tier (``tests/unit/security/test_stage1.py``).
 """
 
 import io
@@ -125,50 +135,23 @@ async def client(
     app.dependency_overrides.clear()
 
 
+RUN_STAGE1_AT_DOCUMENTS = "course_supporter.api.routes.documents.run_stage1"
+
+
 class TestDocumentUploadValidation:
-    """File extension validation edge cases for POST /nodes/{nid}/documents."""
+    """KD14 Stage 1 wiring at POST /nodes/{nid}/documents (multipart).
 
-    async def test_video_rejects_pdf_file(
-        self, client: AsyncClient, node_id: uuid.UUID
-    ) -> None:
-        """POST /documents rejects .pdf file for source_type 'video'."""
-        response = await client.post(
-            f"/api/v1/nodes/{node_id}/documents",
-            data={"source_type": "video"},
-            files={
-                "file": (
-                    "slides.pdf",
-                    io.BytesIO(b"PDF content"),
-                    "application/pdf",
-                ),
-            },
-        )
-        assert response.status_code == 422
-        assert "'.pdf' is not allowed" in response.json()["detail"]
-        assert "'.mp4'" in response.json()["detail"]
-
-    async def test_presentation_rejects_mp4_file(
-        self, client: AsyncClient, node_id: uuid.UUID
-    ) -> None:
-        """POST /documents rejects .mp4 file for source_type 'presentation'."""
-        response = await client.post(
-            f"/api/v1/nodes/{node_id}/documents",
-            data={"source_type": "presentation"},
-            files={
-                "file": (
-                    "video.mp4",
-                    io.BytesIO(b"video data"),
-                    "video/mp4",
-                ),
-            },
-        )
-        assert response.status_code == 422
-        assert "'.mp4' is not allowed" in response.json()["detail"]
+    Source-type-cross rejection (e.g. ".pdf" for "video") was removed
+    in Phase 1.2 C3 — drift suite covers AUTHORED_POLICY whitelist.
+    These tests verify route-level wiring of Stage 1 results to the
+    KD14 HTTP envelope (200/201 on accept; 400 + KD14 detail on
+    reject).
+    """
 
     async def test_text_accepts_docx(
         self, client: AsyncClient, node_id: uuid.UUID, mock_s3: AsyncMock
     ) -> None:
-        """POST /documents accepts .docx for source_type 'text'."""
+        """POST /documents accepts .docx when Stage 1 returns ok."""
         entry = _mock_entry(
             node_id=node_id,
             source_type="text",
@@ -184,6 +167,11 @@ class TestDocumentUploadValidation:
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            # Bypass libmagic — fixture bytes are not a valid DOCX
+            # archive. Phase 0.6 sealed-library tests cover magic
+            # validation at the unit tier; here we exercise the
+            # route-level happy-path wiring (Stage 1 succeeds → 201).
+            patch(RUN_STAGE1_AT_DOCUMENTS, return_value=None),
         ):
             response = await client.post(
                 f"/api/v1/nodes/{node_id}/documents",
@@ -201,7 +189,7 @@ class TestDocumentUploadValidation:
     async def test_file_without_extension_rejected(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
-        """POST /documents rejects file without extension."""
+        """POST /documents rejects file without extension via KD14."""
         response = await client.post(
             f"/api/v1/nodes/{node_id}/documents",
             data={"source_type": "video"},
@@ -213,7 +201,11 @@ class TestDocumentUploadValidation:
                 ),
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "SECURITY_REJECTED"
+        assert detail["category"] == "forbidden_type"
+        assert "details" in detail
 
     async def test_create_document_returns_state(
         self, client: AsyncClient, node_id: uuid.UUID
@@ -338,21 +330,6 @@ class TestGetUploadUrl:
             },
         )
         assert resp.status_code == 422
-
-    async def test_422_wrong_extension(
-        self, client: AsyncClient, node_id: uuid.UUID
-    ) -> None:
-        """Wrong extension for source_type is rejected."""
-        resp = await client.post(
-            f"/api/v1/nodes/{node_id}/documents/upload-url",
-            json={
-                "filename": "video.mp4",
-                "content_type": "video/mp4",
-                "source_type": "presentation",
-            },
-        )
-        assert resp.status_code == 422
-        assert "'.mp4' is not allowed" in resp.json()["detail"]
 
     async def test_404_node_not_found(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""

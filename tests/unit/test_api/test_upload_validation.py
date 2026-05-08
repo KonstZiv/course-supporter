@@ -1,12 +1,27 @@
-"""Tests for shared upload validation utilities."""
+"""Tests for shared upload validation utilities.
+
+Phase 1.2 C3 removed the legacy ``ALLOWED_EXTENSIONS`` constant from
+:mod:`course_supporter.api.upload_validation` (replaced by canonical
+``security/run_stage1`` against ``AUTHORED_POLICY`` in the
+``api/routes/documents.py`` callsites). Whitelist coverage moved to:
+
+* :class:`tests.unit.security.test_policies.TestPolicyConsistency` —
+  ``AUTHORED_POLICY.allowed_extensions`` values + consistency.
+* ``tests/integration/test_authored_upload_validation.py`` —
+  ``TestAuthoredUploadDriftEnumeration`` — endpoint-level wiring of
+  the authored policy whitelist (8 drift extensions + 2 baseline
+  cases per Phase 1.2 §6.5 ratify).
+
+This module retains only the ``file_extension`` helper tests; the
+helper survives Phase 1.2 because ``api/routes/homework.py`` still
+uses it for homework's quick-fail extension parsing (separate from
+the canonical ``security.file_type.extension_of`` used in the
+authored path).
+"""
 
 from __future__ import annotations
 
-from course_supporter.api.upload_validation import (
-    ALLOWED_EXTENSIONS,
-    file_extension,
-)
-from course_supporter.models.source import SourceType
+from course_supporter.api.upload_validation import file_extension
 
 
 class TestFileExtension:
@@ -29,23 +44,3 @@ class TestFileExtension:
 
     def test_double_dot(self) -> None:
         assert file_extension("archive.tar.gz") == ".gz"
-
-
-class TestAllowedExtensions:
-    """ALLOWED_EXTENSIONS contains expected values."""
-
-    def test_video_extensions(self) -> None:
-        assert ".mp4" in ALLOWED_EXTENSIONS[SourceType.VIDEO]
-        assert ".webm" in ALLOWED_EXTENSIONS[SourceType.VIDEO]
-
-    def test_presentation_extensions(self) -> None:
-        assert ".pdf" in ALLOWED_EXTENSIONS[SourceType.PRESENTATION]
-        assert ".pptx" in ALLOWED_EXTENSIONS[SourceType.PRESENTATION]
-
-    def test_text_extensions(self) -> None:
-        assert ".md" in ALLOWED_EXTENSIONS[SourceType.TEXT]
-        assert ".docx" in ALLOWED_EXTENSIONS[SourceType.TEXT]
-        assert ".txt" in ALLOWED_EXTENSIONS[SourceType.TEXT]
-
-    def test_web_not_in_allowed(self) -> None:
-        assert SourceType.WEB not in ALLOWED_EXTENSIONS

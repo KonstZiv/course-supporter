@@ -62,6 +62,7 @@ from course_supporter.service_logging import get_current_job_id
 
 if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.models.safety import CourseContext
 
 logger = structlog.get_logger(__name__)
 
@@ -77,6 +78,7 @@ async def run_stage2_safety_check(
     submission_text: str,
     *,
     router: StageRouter,
+    course_context: CourseContext | None = None,
 ) -> SafetyResult:
     """Execute the ``safety_check`` stage and parse the verdict.
 
@@ -100,6 +102,16 @@ async def run_stage2_safety_check(
             wiring constructs one router per app and reuses it; tests
             inject a mocked-provider router via this dependency
             injection point.
+        course_context: Optional course/topic context. When provided,
+            its fields populate the conditional ``Course context``
+            block of the v1.md prompt, sharpening the ``off_topic``
+            judgement against the active course. ``None`` (default)
+            renders the prompt without that block — generic safety
+            classification appropriate for non-homework callers
+            (Phase 2.1 authored-pipeline integration). KD-1.2-I:
+            preserves legacy ``SafetyChecker`` course-aware behavior
+            under the canonical migration without forcing the same
+            shape onto every Stage 2 caller.
 
     Returns:
         Parsed :class:`SafetyResult` (typed Pydantic model). The
@@ -118,12 +130,28 @@ async def run_stage2_safety_check(
     logger.info(
         "stage2.safety_check.start",
         text_length=len(submission_text),
+        course_context_provided=course_context is not None,
         job_id=str(job_id) if job_id is not None else None,
     )
 
+    # Always pass course-context vars (empty strings when absent) so
+    # the v1.md template's StrictUndefined Jinja2 environment does not
+    # raise UndefinedError; the template uses ``{% if course_title %}``
+    # to gate the entire course-context block on truthiness.
+    render_context: dict[str, str] = {
+        "submission_text": submission_text,
+        "course_title": course_context.course_title if course_context else "",
+        "course_description": (
+            course_context.course_description if course_context else ""
+        ),
+        "node_title": course_context.node_title if course_context else "",
+        "node_description": (course_context.node_description if course_context else ""),
+        "outline_summary": (course_context.outline_summary if course_context else ""),
+    }
+
     result = await router.execute_for_stage(
         "safety_check",
-        submission_text=submission_text,
+        **render_context,
     )
 
     try:

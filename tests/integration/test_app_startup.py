@@ -78,12 +78,12 @@ class TestStageRouterFoundation:
         )
 
         class _State:
-            pass
+            stage_router: StageRouter | None = None
 
         class _App:
             def __init__(self) -> None:
                 self.state = _State()
-                self.state.stage_router = sentinel_router  # type: ignore[attr-defined]
+                self.state.stage_router = sentinel_router
 
         class _Request:
             def __init__(self, app: _App) -> None:

@@ -1377,7 +1377,7 @@ async def arq_process_homework(
     from course_supporter.llm.stage_router import StageRouter
 
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
-    router: ModelRouter = ctx["model_router"]
+    model_router: ModelRouter = ctx["model_router"]
     stage_router: StageRouter = ctx["stage_router"]
     s3 = ctx["s3_client"]
 
@@ -1572,7 +1572,7 @@ async def arq_process_homework(
                     match_result = await matcher.match(
                         content,
                         editable_nodes,
-                        router,
+                        model_router,
                         task_hint_id=submission.task_hint_id,
                     )
                 except TaskMatchError as exc:
@@ -1636,7 +1636,7 @@ async def arq_process_homework(
                     session=session,
                 )
                 mentor = MentorAgent()
-                review = await mentor.review(mentor_ctx, router)
+                review = await mentor.review(mentor_ctx, model_router)
 
                 await hw_repo.store_review_result(
                     sid,

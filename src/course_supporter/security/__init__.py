@@ -3,8 +3,8 @@
 Provides shared validation pipeline for all uploads -- authored
 materials and homework submissions -- with policies that vary per
 context. Public surface grows commit-by-commit through task 0.6;
-later commits add the :class:`SecurityLayer` orchestrator and
-context policy constants.
+later commits add the :mod:`course_supporter.security` orchestrator
+and context policy constants.
 """
 
 from course_supporter.security.archive import (

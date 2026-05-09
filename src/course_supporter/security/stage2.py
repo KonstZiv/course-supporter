@@ -109,9 +109,10 @@ async def run_stage2_safety_check(
             renders the prompt without that block — generic safety
             classification appropriate for non-homework callers
             (Phase 2.1 authored-pipeline integration). KD-1.2-I:
-            preserves legacy ``SafetyChecker`` course-aware behavior
-            under the canonical migration without forcing the same
-            shape onto every Stage 2 caller.
+            preserves legacy course-aware safety check behavior
+            (migrated from removed ``SafetyChecker`` to this
+            canonical orchestrator) without forcing the same shape
+            onto every Stage 2 caller.
 
     Returns:
         Parsed :class:`SafetyResult` (typed Pydantic model). The

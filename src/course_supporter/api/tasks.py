@@ -1353,11 +1353,16 @@ async def arq_process_homework(
     )
     from course_supporter.models.safety import CourseContext
     from course_supporter.safety.archive import extract_submission_content
-    from course_supporter.safety.checker import SafetyChecker
     from course_supporter.safety.exceptions import (
         SecurityContext,
         SecurityViolationError,
     )
+    from course_supporter.security.exceptions import SecurityRejectedError
+    from course_supporter.security.schemas import (
+        Stage1RejectionResult,
+    )
+    from course_supporter.security.stage1 import run_stage1
+    from course_supporter.security.stage2 import run_stage2_safety_check
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
     )
@@ -1369,8 +1374,11 @@ async def arq_process_homework(
     jid = uuid.UUID(job_id)
     sid = uuid.UUID(submission_id)
 
+    from course_supporter.llm.stage_router import StageRouter
+
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
-    router: ModelRouter = ctx["model_router"]
+    model_router: ModelRouter = ctx["model_router"]
+    stage_router: StageRouter = ctx["stage_router"]
     s3 = ctx["s3_client"]
 
     log = structlog.get_logger().bind(
@@ -1468,24 +1476,85 @@ async def arq_process_homework(
                     security_warnings=len(content.security_warnings),
                 )
 
-                # Safety check
-                checker = SafetyChecker()
-                safety_result = await checker.check(file_path, course_ctx, router)
+                # --- KD14 Stage 1 — synchronous validation ---
+                # File already downloaded above; HOMEWORK_POLICY caps at 1 MB
+                # so in-memory read is safe (per Phase 1.2 §6.2 option a ratify).
+                file_bytes = file_path.read_bytes()
+                try:
+                    stage1_result = run_stage1(
+                        filename=submission.original_filename or file_path.name,
+                        content=file_bytes,
+                        context="homework",
+                    )
+                except SecurityRejectedError as stage1_exc:
+                    # Stage 1 rejection persists as Stage1RejectionResult
+                    # (synthetic shape; ``source='stage1'`` discriminates from
+                    # Stage 2 SafetyResult per KD-1.2-I).
+                    rejection = Stage1RejectionResult(
+                        category=stage1_exc.category,
+                        detail=stage1_exc.detail,
+                    )
+                    await hw_repo.store_safety_result(
+                        sid, rejection.model_dump(mode="json")
+                    )
+                    await hw_repo.update_status(
+                        sid, "rejected", error_message=stage1_exc.detail
+                    )
+                    await job_repo.update_status(jid, "complete")
+                    await session.commit()
+                    log.warning(
+                        "homework_rejected_stage1",
+                        category=stage1_exc.category.value,
+                        detail=stage1_exc.detail,
+                    )
+                    return
+
+                # --- KD14 Stage 2 — LLM safety classifier (canonical) ---
+                # Assemble submission_text per Stage 1 output shape:
+                # archive_entries → concatenate entries with separators
+                #   (legacy SubmissionContent.full_text parity);
+                # nfc_text → use directly (NFC-normalized text body);
+                # both None (binary like PDF) → best-effort UTF-8 decode
+                #   (legacy ``safety/archive._read_text_file`` parity).
+                if stage1_result.archive_entries is not None:
+                    submission_text = "\n".join(
+                        f"--- {entry.arcname} ---\n"
+                        f"{entry.content.decode('utf-8', errors='replace')}"
+                        for entry in stage1_result.archive_entries
+                    )
+                elif stage1_result.nfc_text is not None:
+                    submission_text = stage1_result.nfc_text
+                else:
+                    submission_text = file_bytes.decode("utf-8", errors="replace")
+
+                # Caller-side observability log (KD-1.2-H Variant A; pairs
+                # with StageRouter's ``stage_router_executing`` line).
+                log.info(
+                    "homework_safety_check_executing",
+                    policy_context="homework",
+                )
+                safety_result = await run_stage2_safety_check(
+                    submission_text=submission_text,
+                    router=stage_router,
+                    course_context=course_ctx,
+                )
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )
                 await session.commit()
 
-                if not safety_result.safe:
+                if not safety_result.is_safe:
                     await hw_repo.update_status(
-                        sid, "rejected", error_message=safety_result.reason
+                        sid,
+                        "rejected",
+                        error_message=safety_result.reasoning,
                     )
                     await job_repo.update_status(jid, "complete")
                     await session.commit()
                     log.warning(
                         "homework_rejected_safety",
-                        reason=safety_result.reason,
-                        flags=safety_result.flags,
+                        reasoning=safety_result.reasoning,
+                        violations=[v.value for v in safety_result.violations],
                     )
                     return
 
@@ -1503,7 +1572,7 @@ async def arq_process_homework(
                     match_result = await matcher.match(
                         content,
                         editable_nodes,
-                        router,
+                        model_router,
                         task_hint_id=submission.task_hint_id,
                     )
                 except TaskMatchError as exc:
@@ -1567,7 +1636,7 @@ async def arq_process_homework(
                     session=session,
                 )
                 mentor = MentorAgent()
-                review = await mentor.review(mentor_ctx, router)
+                review = await mentor.review(mentor_ctx, model_router)
 
                 await hw_repo.store_review_result(
                     sid,

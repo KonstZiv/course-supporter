@@ -144,6 +144,19 @@ class StageRouter:
             LadderExhaustedError: if every ladder entry failed.
         """
         stage = self._ladder_config.get_stage(stage_name)
+
+        # KD-1.2-H Variant A — observability log line at the start of
+        # every stage execution. Correlates with caller-side logs (e.g.
+        # ``homework_safety_check_executing``) via structlog's bound
+        # ``job_id`` context var. Policy context (``homework`` /
+        # ``authored``) is intentionally NOT emitted here — StageRouter
+        # is policy-agnostic; the caller emits its own context line.
+        logger.info(
+            "stage_router_executing",
+            stage=stage_name,
+            prompt_ref=stage.prompt_ref,
+        )
+
         prompt = load_prompt(
             stage.prompt_ref,
             base_path=self._prompt_base_path,

@@ -42,6 +42,9 @@ async def startup(ctx: WorkerCtx) -> None:
     )
 
     from course_supporter.llm import create_model_router
+    from course_supporter.llm.factory import create_providers
+    from course_supporter.llm.ladder_config import load_ladder_config
+    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.s3 import S3Client
 
     s = get_settings()
@@ -62,6 +65,19 @@ async def startup(ctx: WorkerCtx) -> None:
     )
     model_router = create_model_router(s, session_factory)
 
+    # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
+    # (option a, two-build); mirrors the FastAPI lifespan wiring in
+    # ``api/app.py`` so worker-side consumers (e.g. ``arq_process_homework``
+    # invoking ``run_stage2_safety_check``) can read the same ladder
+    # registry as HTTP-side consumers.
+    ladder_config = load_ladder_config(s.ladders_dir)
+    stage_router_providers = create_providers(s)
+    stage_router = StageRouter(
+        ladder_config=ladder_config,
+        providers=stage_router_providers,
+        session_factory=session_factory,
+    )
+
     s3 = S3Client(
         endpoint_url=s.s3_endpoint,
         access_key=s.s3_access_key,
@@ -73,6 +89,7 @@ async def startup(ctx: WorkerCtx) -> None:
     ctx["engine"] = engine
     ctx["session_factory"] = session_factory
     ctx["model_router"] = model_router
+    ctx["stage_router"] = stage_router
     ctx["s3_client"] = s3
 
     log = structlog.get_logger()

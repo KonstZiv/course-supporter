@@ -38,11 +38,7 @@ from course_supporter.api.schemas import (
     PresignedUrlRequest,
     PresignedUrlResponse,
 )
-from course_supporter.api.upload_validation import (
-    ALLOWED_EXTENSIONS,
-    check_platform,
-    file_extension,
-)
+from course_supporter.api.upload_validation import check_platform
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
@@ -50,6 +46,13 @@ from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.models.methodist import AssignmentType
 from course_supporter.models.source import MaterialRole, SourceType
+from course_supporter.security import AUTHORED_POLICY, run_stage1
+from course_supporter.security.exceptions import (
+    ErrorCategory,
+    SecurityRejectedError,
+)
+from course_supporter.security.file_type import extension_of
+from course_supporter.security.policies import get_max_size_for_extension
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -186,17 +189,48 @@ async def create_document(
                 detail="source_type 'web' does not accept file uploads,"
                 " provide source_url instead.",
             )
-        allowed = ALLOWED_EXTENSIONS.get(source_type, frozenset())
-        ext = file_extension(file.filename)
-        if ext not in allowed:
+        # KD14 Stage 1 — full validation (extension whitelist + libmagic
+        # MIME + size cap + charset/regex/unicode for text + archive
+        # structure for archives) per Phase 1.2 §2.3 ratify. AUTHORED_POLICY
+        # drives the whitelist; legacy source_type-segmented hand-rolled
+        # ALLOWED_EXTENSIONS was removed (8-extension behavioral drift —
+        # see POST-MERGE-NOTES "Ratified whitelist drift").
+        upload_filename = file.filename or "upload"
+        upload_ext = extension_of(upload_filename)
+        # Pre-read size check — fast-fails clearly oversize files BEFORE
+        # ``await file.read()`` loads bytes into memory (per pre-flight §6.2
+        # large-file memory observation; 5 GB video cap is operational
+        # concern, не security).
+        max_size = get_max_size_for_extension(upload_ext, AUTHORED_POLICY)
+        if file.size is not None and file.size > max_size:
             raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"File extension '{ext}' is not allowed "
-                    f"for source_type '{source_type}'. "
-                    f"Accepted: {sorted(allowed)}"
-                ),
+                status_code=400,
+                detail={
+                    "code": "SECURITY_REJECTED",
+                    "category": ErrorCategory.SIZE_LIMIT.value,
+                    "details": (
+                        f"file size {file.size} bytes exceeds authored "
+                        f"limit {max_size} bytes for {upload_ext!r}"
+                    ),
+                },
             )
+        upload_content = await file.read()
+        await file.seek(0)
+        try:
+            run_stage1(
+                filename=upload_filename,
+                content=upload_content,
+                context="authored",
+            )
+        except SecurityRejectedError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "SECURITY_REJECTED",
+                    "category": exc.category.value,
+                    "details": exc.detail,
+                },
+            ) from exc
 
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
@@ -281,16 +315,25 @@ async def get_upload_url(
             detail="source_type 'web' does not support file upload.",
         )
 
-    allowed = ALLOWED_EXTENSIONS.get(body.source_type, frozenset())
-    ext = file_extension(body.filename)
-    if ext not in allowed:
+    # KD14 ext-only direct check pre-presigned-upload per Phase 1.2 §6.1 (a)
+    # ratify: file content unavailable until S3 PUT completes, so full
+    # Stage 1 (libmagic / size / charset / archive structure) cannot run
+    # here. The full Stage 1 is invoked in ``create_document`` (multipart
+    # path); ``confirm_upload`` Stage 1 wiring deferred to Phase 2.1 (see
+    # POST-MERGE-NOTES "Known limitations"). Ext-allowlist fast-fails
+    # clear-cut bad extensions before client uploads MB+ of rejected
+    # content — UX parity with legacy hand-rolled ext check.
+    upload_ext = extension_of(body.filename)
+    if upload_ext not in AUTHORED_POLICY.allowed_extensions:
         raise HTTPException(
-            status_code=422,
-            detail=(
-                f"File extension '{ext}' is not allowed "
-                f"for source_type '{body.source_type}'. "
-                f"Accepted: {sorted(allowed)}"
-            ),
+            status_code=400,
+            detail={
+                "code": "SECURITY_REJECTED",
+                "category": ErrorCategory.FORBIDDEN_TYPE.value,
+                "details": (
+                    f"extension {upload_ext!r} not allowed for authored uploads"
+                ),
+            },
         )
 
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)

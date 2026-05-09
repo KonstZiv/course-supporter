@@ -204,17 +204,48 @@ class TestPromptCalibrationExamples:
 class TestPromptRender:
     def test_renders_with_submission_text(self) -> None:
         sp = load_prompt(_PROMPT_REF)
-        rendered = sp.render(submission_text="def fib(n): return n")
+        # All six vars passed (per Phase 1.2.2 KD-1.2-I — production
+        # caller ``run_stage2_safety_check`` always provides them, with
+        # empty strings when no course context is available).
+        rendered = sp.render(
+            submission_text="def fib(n): return n",
+            course_title="",
+            course_description="",
+            node_title="",
+            node_description="",
+            outline_summary="",
+        )
         assert rendered.user is not None
         assert "def fib(n): return n" in rendered.user
         # System section has no Jinja vars -- it should round-trip
         # unchanged through render.
         assert rendered.system == sp.system
+        # Course context block is gated on truthiness; with empty
+        # strings the block is omitted.
+        assert "### Course context" not in rendered.user
+
+    def test_renders_with_course_context(self) -> None:
+        """Course context block appears when course_title is non-empty."""
+        sp = load_prompt(_PROMPT_REF)
+        rendered = sp.render(
+            submission_text="def fib(n): return n",
+            course_title="Python Basics",
+            course_description="Introductory Python course",
+            node_title="Recursion",
+            node_description="Learn about recursive functions",
+            outline_summary="Functions, recursion, base cases",
+        )
+        assert rendered.user is not None
+        assert "### Course context" in rendered.user
+        assert "Python Basics" in rendered.user
+        assert "Recursion" in rendered.user
 
     def test_strict_undefined_raises_on_missing_var(self) -> None:
         sp = load_prompt(_PROMPT_REF)
+        # Any required Jinja var omitted raises UndefinedError under
+        # StrictUndefined.
         with pytest.raises(UndefinedError):
-            sp.render()  # submission_text intentionally omitted
+            sp.render()
 
 
 # ── Ladder config integration ──────────────────────────────────────

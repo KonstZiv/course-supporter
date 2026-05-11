@@ -9,7 +9,7 @@ from course_supporter.homework.language import (
     _extract_human_text,
     detect_response_language,
 )
-from course_supporter.models.safety import FileContent, SubmissionContent
+from course_supporter.security.schemas import FileContent, SubmissionContent
 
 
 def _make_student(preferred_language: str | None = None) -> MagicMock:

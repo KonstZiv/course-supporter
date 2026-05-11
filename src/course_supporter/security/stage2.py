@@ -62,7 +62,7 @@ from course_supporter.service_logging import get_current_job_id
 
 if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
-    from course_supporter.models.safety import CourseContext
+    from course_supporter.security.schemas import CourseContext
 
 logger = structlog.get_logger(__name__)
 

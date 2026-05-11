@@ -21,7 +21,7 @@ from course_supporter.models.matching import (
     MatchResult,
     TaskMatch,
 )
-from course_supporter.models.safety import SubmissionContent
+from course_supporter.security.schemas import SubmissionContent
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter

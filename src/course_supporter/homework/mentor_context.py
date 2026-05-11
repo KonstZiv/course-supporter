@@ -14,7 +14,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.language import detect_response_language
-from course_supporter.models.safety import SubmissionContent
+from course_supporter.security.schemas import SubmissionContent
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.homework_repository import HomeworkRepository

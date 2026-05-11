@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from course_supporter.models.safety import SubmissionContent
+    from course_supporter.security.schemas import SubmissionContent
     from course_supporter.storage.orm import CourseNode, Student
 
 logger = structlog.get_logger()

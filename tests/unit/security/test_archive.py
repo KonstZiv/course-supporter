@@ -651,3 +651,147 @@ class TestExtractSubmissionContentMalformed:
             await extract_submission_content(bad_gz)
         assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
         assert "gzip" in exc_info.value.detail.lower()
+
+
+# ── Phase 2.1 C3: ported coverage scenarios from legacy ────────────
+#
+# 6 scenarios migrated from tests/unit/test_safety_archive.py (legacy)
+# during Phase 2.1 C3 commit per Option B ratify (2026-05-11). They
+# preserve coverage for: ARCHIVE_BOMB defenses (max_files / oversized
+# uncompressed / oversized gz), encoding fallback (non-UTF-8 → U+FFFD),
+# zip-internal symlink SecurityWarning collection, and direct unit
+# tests for the _submission_sanitize_filename helper.
+
+import stat  # noqa: E402
+
+from course_supporter.security.archive import (  # noqa: E402
+    _submission_sanitize_filename,
+)
+
+
+class TestExtractSubmissionContentEncodingFallback:
+    """Non-UTF-8 file bytes decode з U+FFFD replacement."""
+
+    @pytest.mark.asyncio
+    async def test_read_non_utf8_file_uses_replacement(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "notes.txt"
+        file_path.write_bytes("caf\xe9 r\xe9sum\xe9".encode("latin-1"))
+
+        result = await extract_submission_content(file_path)
+        assert "caf" in result.files[0].content
+        assert "�" in result.files[0].content
+
+
+class TestExtractSubmissionContentArchiveBombCaps:
+    """Settings-driven cap enforcement (max_files / max uncompressed size)."""
+
+    @pytest.mark.asyncio
+    async def test_too_many_files_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.security import archive
+
+        class MockSettings:
+            safety_archive_max_uncompressed_mb = 50
+            safety_archive_max_files = 2
+            safety_archive_max_nesting = 1
+
+        monkeypatch.setattr(archive, "get_settings", lambda: MockSettings())
+
+        archive_path = tmp_path / "many.zip"
+        _write_zip_to_path(
+            archive_path,
+            [(f"file{i}.py", f"x = {i}\n".encode()) for i in range(5)],
+        )
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(archive_path)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_BOMB
+        assert "files" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_oversized_uncompressed_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.security import archive
+
+        class MockSettings:
+            safety_archive_max_uncompressed_mb = 1
+            safety_archive_max_files = 1000
+            safety_archive_max_nesting = 1
+
+        monkeypatch.setattr(archive, "get_settings", lambda: MockSettings())
+
+        archive_path = tmp_path / "big.zip"
+        _write_zip_to_path(archive_path, [("big.py", b"x" * (2 * 1024 * 1024))])
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(archive_path)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_BOMB
+        assert "exceeds limit" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_oversized_gz_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.security import archive
+
+        class MockSettings:
+            safety_archive_max_uncompressed_mb = 1
+            safety_archive_max_files = 1000
+            safety_archive_max_nesting = 1
+
+        monkeypatch.setattr(archive, "get_settings", lambda: MockSettings())
+
+        gz_path = tmp_path / "big.txt.gz"
+        _write_gz_to_path(gz_path, b"x" * (2 * 1024 * 1024))
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(gz_path)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_BOMB
+        assert "exceeds limit" in exc_info.value.detail.lower()
+
+
+class TestExtractSubmissionContentZipSymlinkWarning:
+    """Symlink entries inside .zip are skipped and yield SecurityWarning."""
+
+    @pytest.mark.asyncio
+    async def test_zip_symlink_entries_skipped_with_warning(
+        self, tmp_path: Path
+    ) -> None:
+        archive_path = tmp_path / "with_symlink.zip"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("real.py", b"x = 1\n")
+            symlink_info = zipfile.ZipInfo("evil.py")
+            symlink_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(symlink_info, "/etc/passwd")
+
+        result = await extract_submission_content(archive_path)
+        assert len(result.files) == 1
+        assert result.files[0].filename == "real.py"
+        symlink_warnings = [
+            w for w in result.security_warnings if w.violation_type == "symlink"
+        ]
+        assert len(symlink_warnings) == 1
+        assert symlink_warnings[0].raw_filename == "evil.py"
+
+
+class TestSubmissionSanitizeFilename:
+    """Direct unit tests for _submission_sanitize_filename helper."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("main.py", "main.py"),
+            ("src/utils.py", "src/utils.py"),
+            ("../../../etc/passwd", "etc/passwd"),
+            ("foo/../../bar.py", "foo/bar.py"),
+            ("/absolute/path.py", "absolute/path.py"),
+        ],
+    )
+    def test_sanitize_returns_safe_path(self, raw: str, expected: str) -> None:
+        assert _submission_sanitize_filename(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["../", "..", "/../.."])
+    def test_sanitize_returns_none_for_unsafe(self, raw: str) -> None:
+        assert _submission_sanitize_filename(raw) is None

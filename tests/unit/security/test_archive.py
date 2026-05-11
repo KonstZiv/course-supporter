@@ -462,3 +462,192 @@ class TestMalformedArchive:
             _extract(b"x", archive_kind="rar")
         assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
         assert "unsupported" in exc_info.value.detail.lower()
+
+
+# ── Phase 2.1 C2: extract_submission_content (KD-2.1-H) ────────────
+#
+# Tests for canonical submission-extraction migrated from
+# safety/archive.py. Verify functional parity з legacy + canonical
+# SecurityRejectedError raises with ErrorCategory ARCHIVE_BOMB /
+# SYMLINK_VIOLATION values (per KD-2.1-I 2-set ratify).
+
+import gzip  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from course_supporter.security.archive import (  # noqa: E402
+    extract_submission_content,
+)
+
+
+def _write_zip_to_path(path: Path, entries: list[tuple[str, bytes]]) -> None:
+    """Write a ZIP archive to ``path`` with the given entries."""
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in entries:
+            zf.writestr(name, content)
+
+
+def _write_gz_to_path(path: Path, content: bytes) -> None:
+    """Write a gzip file to ``path`` with the given content."""
+    with gzip.open(path, "wb") as f:
+        f.write(content)
+
+
+class TestExtractSubmissionContentSingleFile:
+    """extract_submission_content on a standalone text file."""
+
+    @pytest.mark.asyncio
+    async def test_reads_single_python_file(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "main.py"
+        file_path.write_text("print('hello')\n", encoding="utf-8")
+
+        result = await extract_submission_content(file_path)
+        assert len(result.files) == 1
+        assert result.files[0].filename == "main.py"
+        assert result.files[0].content == "print('hello')\n"
+        assert result.total_size == result.files[0].size
+        assert result.security_warnings == []
+
+    @pytest.mark.asyncio
+    async def test_reads_single_markdown_file(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "README.md"
+        file_path.write_text("# Title\n\nBody.\n", encoding="utf-8")
+
+        result = await extract_submission_content(file_path)
+        assert result.files[0].filename == "README.md"
+        assert "# Title" in result.files[0].content
+
+
+class TestExtractSubmissionContentZip:
+    """extract_submission_content on .zip archives."""
+
+    @pytest.mark.asyncio
+    async def test_extracts_text_entries(self, tmp_path: Path) -> None:
+        archive_path = tmp_path / "submission.zip"
+        _write_zip_to_path(
+            archive_path,
+            [
+                ("solution.py", b"def f(): return 42\n"),
+                ("README.md", b"# Solution\n"),
+            ],
+        )
+
+        result = await extract_submission_content(archive_path)
+        assert len(result.files) == 2
+        filenames = {f.filename for f in result.files}
+        assert filenames == {"solution.py", "README.md"}
+        assert result.security_warnings == []
+
+    @pytest.mark.asyncio
+    async def test_skips_non_text_entries(self, tmp_path: Path) -> None:
+        archive_path = tmp_path / "mixed.zip"
+        _write_zip_to_path(
+            archive_path,
+            [
+                ("code.py", b"x = 1\n"),
+                ("image.png", b"\x89PNG\r\n\x1a\n"),
+                ("notes.md", b"# Notes\n"),
+            ],
+        )
+
+        result = await extract_submission_content(archive_path)
+        filenames = {f.filename for f in result.files}
+        assert filenames == {"code.py", "notes.md"}
+        # image.png skipped silently (not a SecurityWarning — it's debug log).
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_sanitized_with_warning(self, tmp_path: Path) -> None:
+        archive_path = tmp_path / "traversal.zip"
+        _write_zip_to_path(
+            archive_path,
+            [("../etc/passwd.py", b"# evil\n")],
+        )
+
+        result = await extract_submission_content(archive_path)
+        # Path traversal sanitized — filename stripped to "etc/passwd.py"
+        assert any(
+            w.violation_type == "path_traversal" for w in result.security_warnings
+        )
+        # File still extracted under safe name (after sanitization).
+        safe_filenames = {f.filename for f in result.files}
+        assert "etc/passwd.py" in safe_filenames
+
+
+class TestExtractSubmissionContentGz:
+    """extract_submission_content on .gz files."""
+
+    @pytest.mark.asyncio
+    async def test_decompresses_gz(self, tmp_path: Path) -> None:
+        gz_path = tmp_path / "log.txt.gz"
+        _write_gz_to_path(gz_path, b"line one\nline two\n")
+
+        result = await extract_submission_content(gz_path)
+        assert len(result.files) == 1
+        assert result.files[0].filename == "log.txt"  # stem (.gz stripped)
+        assert result.files[0].content == "line one\nline two\n"
+
+
+class TestExtractSubmissionContentSymlink:
+    """extract_submission_content rejects symlinks (SYMLINK_VIOLATION)."""
+
+    @pytest.mark.asyncio
+    async def test_symlink_raises_canonical_error(self, tmp_path: Path) -> None:
+        target = tmp_path / "target.txt"
+        target.write_text("safe content\n", encoding="utf-8")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(link)
+        assert exc_info.value.category is ErrorCategory.SYMLINK_VIOLATION
+        assert "symlink" in exc_info.value.detail.lower()
+
+
+class TestExtractSubmissionContentArchiveBomb:
+    """extract_submission_content rejects bomb patterns (ARCHIVE_BOMB)."""
+
+    @pytest.mark.asyncio
+    async def test_nested_archive_raises_bomb(self, tmp_path: Path) -> None:
+        # Nested .zip inside .zip — triggers bomb check (max_nesting=1).
+        inner_path = tmp_path / "inner.zip"
+        _write_zip_to_path(inner_path, [("payload.py", b"x = 1\n")])
+
+        outer_path = tmp_path / "outer.zip"
+        with zipfile.ZipFile(outer_path, "w") as zf:
+            zf.write(inner_path, arcname="nested.zip")
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(outer_path)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_BOMB
+        assert "nested" in exc_info.value.detail.lower()
+
+
+class TestExtractSubmissionContentMalformed:
+    """extract_submission_content raises SecurityRejectedError on malformed input.
+
+    Per Phase 2.1 C2 Option B consolidation (ratified 2026-05-11): malformed
+    archives (``BadZipFile``, ``BadGzipFile``) raise
+    :class:`SecurityRejectedError` з ``ErrorCategory.ARCHIVE_VIOLATION``,
+    mirroring :func:`extract_archive_safely` canonical precedent. No separate
+    ``ArchiveExtractionError`` exception class — single canonical exception
+    hierarchy per KD-2.1-I spirit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_malformed_zip_raises_archive_violation(self, tmp_path: Path) -> None:
+        bad_zip = tmp_path / "bad.zip"
+        bad_zip.write_bytes(b"not actually a zip file")
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(bad_zip)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
+        assert "zip" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_malformed_gz_raises_archive_violation(self, tmp_path: Path) -> None:
+        bad_gz = tmp_path / "bad.gz"
+        bad_gz.write_bytes(b"not actually gzipped")
+
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await extract_submission_content(bad_gz)
+        assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
+        assert "gzip" in exc_info.value.detail.lower()

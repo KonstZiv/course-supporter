@@ -32,6 +32,10 @@ serve different domains and are not interchangeable.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from course_supporter.security.schemas import SecurityContext
 
 
 class ErrorCategory(StrEnum):
@@ -61,6 +65,15 @@ class ErrorCategory(StrEnum):
       contexts (homework) baseline UTF-8; legacy encodings reach
       this category. Authored content keeps the strict flag off and
       never raises this.
+    * ``ARCHIVE_BOMB`` -- archive decompression exceeds size, file
+      count, or nesting depth limits per ``safety_archive_*``
+      settings. Added Phase 2.1 C2 per KD-2.1-I migration of legacy
+      ``safety.exceptions.ArchiveBombError`` raisers (load-bearing
+      at ``safety/archive.py:177, 204, 219, 270, 310``).
+    * ``SYMLINK_VIOLATION`` -- submission file or archive entry is
+      a symbolic link. Added Phase 2.1 C2 per KD-2.1-I migration of
+      legacy ``safety.exceptions.SymlinkViolationError`` raiser
+      (load-bearing at ``safety/archive.py:130``).
     """
 
     SIZE_LIMIT = "size_limit"
@@ -70,10 +83,17 @@ class ErrorCategory(StrEnum):
     SUSPICIOUS_UNICODE = "suspicious_unicode"
     PROMPT_INJECTION = "prompt_injection"
     CHARSET_VIOLATION = "charset_violation"
+    ARCHIVE_BOMB = "archive_bomb"
+    SYMLINK_VIOLATION = "symlink_violation"
 
 
 class SecurityRejectedError(Exception):
     """Stage 1 synchronous rejection, categorized for HTTP layer mapping.
+
+    Carries optional :class:`SecurityContext` for audit logging,
+    attached via :meth:`enrich` after library-side raise (KD-2.1-N
+    Phase 2.1 C2 — mirrors legacy
+    ``safety.exceptions.SecurityViolationError`` API).
 
     Attributes:
         category: One of :class:`ErrorCategory`. The HTTP layer
@@ -81,12 +101,44 @@ class SecurityRejectedError(Exception):
         detail: Human-readable explanation of the specific failure
             (e.g. ``"file size 31MB exceeds homework limit 20MB"``).
             Safe for inclusion in client-facing error responses.
+        ctx: Optional audit context attached post-raise via
+            :meth:`enrich`. ``None`` until consumer-side enriches.
     """
 
     def __init__(self, category: ErrorCategory, detail: str) -> None:
         self.category = category
         self.detail = detail
+        self.ctx: SecurityContext | None = None
         super().__init__(f"{category.value}: {detail}")
+
+    def enrich(self, ctx: SecurityContext) -> None:
+        """Attach caller-side audit context (tenant, student, submission).
+
+        Library-side code (e.g.
+        :func:`course_supporter.security.archive.extract_submission_content`)
+        raises without ``ctx``; the consumer (e.g.
+        ``api/tasks.py:1705``) catches and calls :meth:`enrich` to
+        attach the audit metadata before re-raising or logging.
+
+        Mirrors legacy ``safety.exceptions.SecurityViolationError.enrich``
+        signature per KD-2.1-N — drop-in API replacement.
+        """
+        self.ctx = ctx
+
+    def as_log_dict(self) -> dict[str, Any]:
+        """Return structured payload for log emission.
+
+        Combines category + detail with attached :class:`SecurityContext`
+        fields (when enriched). Format mirrors legacy
+        ``safety.exceptions.SecurityViolationError.as_log_dict``.
+        """
+        result: dict[str, Any] = {
+            "category": self.category.value,
+            "detail": self.detail,
+        }
+        if self.ctx is not None:
+            result.update(self.ctx.as_log_dict())
+        return result
 
 
 class SafetyValidationError(Exception):

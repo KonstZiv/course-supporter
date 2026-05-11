@@ -1163,11 +1163,20 @@ class Job(SoftDeleteMixin, Base):
     current_stage: Mapped[str | None] = mapped_column(
         String(50),
         comment="Internal pipeline stage marker per vision §3 KD13. "
-        "Free-form per job_type (e.g. pass_1/pass_2a/pass_2b/pass_2c "
-        "for document_processing; bottomup/topdown for "
-        "node_summary_regeneration; safety/sanity/review/delivery for "
-        "homework_processing; unused for s3_cleanup). Validation lives "
-        "at the worker level per pipeline.",
+        "Free-form per job_type. "
+        "Generic guidance per job_type (legacy taxonomy, retained as "
+        "reference per Phase 2.1 D7): "
+        "pass_1/pass_2a/pass_2b/pass_2c for document_processing; "
+        "bottomup/topdown for node_summary_regeneration; "
+        "safety/sanity/review/delivery for homework_processing; "
+        "unused for s3_cleanup. "
+        "Text/web ingestion taxonomy per KD-2.1-B (Phase 2.1): "
+        "'extracting_structure' (Pass 2a premium LLM mapping → "
+        "DocumentSummary; ESC.action 'pass_2a_mapping'), "
+        "'checking_safety' (Stage 2 LLM safety check; ESC.action "
+        "'safety_check'), 'creating_segments' (Pass 2b algorithmic "
+        "slice → DocumentSegments; no ESC entry — no LLM call). "
+        "Validation lives at the worker level per pipeline.",
     )
     stage_progress: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,

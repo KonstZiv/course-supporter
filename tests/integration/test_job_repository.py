@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import AuthoredDocument, CourseNode, Tenant
@@ -415,3 +416,108 @@ class TestJobReactivate:
 
         with pytest.raises(ValueError, match="soft-deleted"):
             await repo.reactivate(job.id)
+
+
+class TestUpdateStage:
+    """``JobRepository.update_stage`` -- current_stage checkpoint marker.
+
+    Covers Phase 2.1 C4 (KD-2.1-B). Method is infrastructure-only --
+    production callers are added in C5 / C6 / C7. Tests verify atomic
+    UPDATE with ``deleted_at IS NULL`` filter + silent skip behavior
+    on missing/filtered rows + log.warning emission for observability.
+    """
+
+    async def test_successful_update_persists_value(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """update_stage writes stage_name to current_stage column."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        assert job.current_stage is None
+
+        await repo.update_stage(job.id, "extracting_structure")
+
+        fetched = await repo.get_by_id(job.id)
+        assert fetched is not None
+        assert fetched.current_stage == "extracting_structure"
+
+    async def test_filter_deleted_at_skips_soft_deleted(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """Soft-deleted Job is excluded by deleted_at IS NULL filter."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        # Set initial stage on a live Job.
+        await repo.update_stage(job.id, "initial_stage")
+        # Soft-delete via direct attribute write (cascade service out of
+        # scope; here we only need deleted_at to be set on this row).
+        job.deleted_at = datetime(2026, 1, 1, tzinfo=UTC)
+        await db_session.flush()
+
+        with capture_logs() as logs:
+            await repo.update_stage(job.id, "should_not_apply")
+
+        # WHERE filter excludes soft-deleted row → rowcount=0 → warning.
+        warnings = [log for log in logs if log["log_level"] == "warning"]
+        assert len(warnings) == 1
+        assert warnings[0]["event"] == "update_stage_no_job_found"
+        assert warnings[0]["job_id"] == str(job.id)
+        assert warnings[0]["stage_name"] == "should_not_apply"
+
+        # current_stage on the soft-deleted row remains the initial value.
+        await db_session.refresh(job)
+        assert job.current_stage == "initial_stage"
+
+    async def test_no_job_found_silent_skip_with_warning(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        """Random UUID → no exception, warning log emitted з context."""
+        repo = JobRepository(db_session)
+        nonexistent = uuid.uuid4()
+
+        with capture_logs() as logs:
+            await repo.update_stage(nonexistent, "extracting_structure")
+
+        warnings = [log for log in logs if log["log_level"] == "warning"]
+        assert len(warnings) == 1
+        assert warnings[0]["event"] == "update_stage_no_job_found"
+        assert warnings[0]["job_id"] == str(nonexistent)
+        assert warnings[0]["stage_name"] == "extracting_structure"
+
+    async def test_idempotent_update(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """Writing the same stage_name twice succeeds (no exception)."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+
+        with capture_logs() as logs:
+            await repo.update_stage(job.id, "checking_safety")
+            await repo.update_stage(job.id, "checking_safety")
+
+        # Both calls match the live row → rowcount=1 each → no warnings.
+        warnings = [log for log in logs if log["log_level"] == "warning"]
+        assert warnings == []
+
+        fetched = await repo.get_by_id(job.id)
+        assert fetched is not None
+        assert fetched.current_stage == "checking_safety"

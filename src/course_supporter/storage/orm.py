@@ -38,6 +38,15 @@ def _uuid7() -> uuid.UUID:
 class Base(DeclarativeBase):
     """Base class for all ORM models."""
 
+    # ``eager_defaults=True`` makes SQLAlchemy populate server-generated
+    # column values (``server_default``, ``onupdate``) on the in-memory
+    # ORM instance at flush time via ``RETURNING`` — required for
+    # async + Pydantic ``from_attributes`` serialization. Without it,
+    # post-commit ``model_validate(orm_instance)`` triggers a sync
+    # lazy-load on expired server-default columns (e.g. ``updated_at``)
+    # outside the greenlet context → ``MissingGreenlet``.
+    __mapper_args__ = {"eager_defaults": True}
+
 
 class SoftDeleteMixin:
     """Universal soft-delete pattern (vision §3 KD3, KD12).

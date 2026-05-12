@@ -25,7 +25,19 @@ from pydantic import BaseModel, Field
 
 
 class DocumentSegmentDraft(BaseModel):
-    """In-flight segment draft (Pass 2b output, pre-ORM)."""
+    """In-flight segment draft (Pass 2a metadata + Pass 2b content, pre-ORM).
+
+    Per KD-2.1-O (ratified 2026-05-12), for text/web source types Pass 2a
+    emits only structural metadata (offsets, title, description, concepts);
+    ``content`` is left ``None`` and populated algorithmically in Pass 2b
+    (C7) as ``doc.text[start_pos:end_pos]``. For audio/video, ``content``
+    may be filled by the LLM in Pass 2a directly (final decision deferred
+    to Phase 2.3 / 2.5).
+
+    The ORM ``DocumentSegment`` row requires ``content`` non-null at
+    INSERT time — that invariant is preserved by Pass 2b before
+    ``DocumentSegmentRepository.create``.
+    """
 
     order: int = Field(description="0-indexed position within parent summary.")
     start_pos: int = Field(
@@ -34,7 +46,16 @@ class DocumentSegmentDraft(BaseModel):
     end_pos: int = Field(
         description="Absolute end char offset (must be > start_pos).",
     )
-    content: str = Field(description="Cleaned or sliced segment content.")
+    title: str | None = Field(
+        default=None,
+        description="Optional short heading for this segment.",
+    )
+    description: str = Field(
+        description=(
+            "1-2 sentence description of what this segment covers "
+            "(not a paraphrase of its content)."
+        ),
+    )
     main_concepts: list[str] = Field(
         default_factory=list,
         description="Concept strings taught in this segment (KD-gamma).",
@@ -42,6 +63,14 @@ class DocumentSegmentDraft(BaseModel):
     secondary_concepts: list[str] = Field(
         default_factory=list,
         description="Concept strings mentioned but not taught in this segment.",
+    )
+    content: str | None = Field(
+        default=None,
+        description=(
+            "``None`` for text/web (KD-2.1-O): Pass 2b fills it from "
+            "``doc.text[start_pos:end_pos]``. For audio/video, may be "
+            "populated by the LLM in Pass 2a."
+        ),
     )
 
 

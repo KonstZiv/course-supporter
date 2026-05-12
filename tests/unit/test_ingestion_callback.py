@@ -337,8 +337,19 @@ class TestCallbackIntegrationWithArqTask:
         # detected_language to cache).
         mock_doc.metadata = {}
 
+        from course_supporter.ingestion.schemas import DocumentSummaryDraft
+
         mock_processor = MagicMock()
         mock_processor.process_raw = AsyncMock(return_value=mock_doc)
+        mock_processor.process_macro = AsyncMock(
+            return_value=DocumentSummaryDraft(
+                title="t",
+                description="d",
+                main_concepts=[],
+                secondary_concepts=[],
+                content_char_count=10,
+            )
+        )
 
         session = AsyncMock()
         session.commit = AsyncMock()
@@ -354,12 +365,20 @@ class TestCallbackIntegrationWithArqTask:
         mock_entry = MagicMock()
         mock_entry.source_url = "https://example.com"
 
-        ctx = {"session_factory": factory, "model_router": router}
+        ctx = {
+            "session_factory": factory,
+            "model_router": router,
+            "stage_router": MagicMock(),
+        }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (
             "course_supporter.storage.authored_document_repository"
             ".AuthoredDocumentRepository"
+        )
+        _arq_summary_repo = (
+            "course_supporter.storage.document_summary_repository"
+            ".DocumentSummaryRepository"
         )
         _factory = "course_supporter.api.tasks.create_processors"
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
@@ -369,6 +388,7 @@ class TestCallbackIntegrationWithArqTask:
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch(_arq_entry_repo) as entry_cls,
+            patch(_arq_summary_repo) as summary_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
             patch(
@@ -377,8 +397,12 @@ class TestCallbackIntegrationWithArqTask:
             ),
         ):
             job_cls.return_value.update_status = AsyncMock()
+            job_cls.return_value.update_stage = AsyncMock()
             entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
             entry_cls.return_value.set_pending = AsyncMock()
+            summary_cls.return_value.create = AsyncMock(
+                return_value=MagicMock(id=uuid.uuid4()),
+            )
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 
@@ -410,7 +434,11 @@ class TestCallbackIntegrationWithArqTask:
         factory = MagicMock(return_value=ctx_manager)
         router = MagicMock()
 
-        ctx = {"session_factory": factory, "model_router": router}
+        ctx = {
+            "session_factory": factory,
+            "model_router": router,
+            "stage_router": MagicMock(),
+        }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (

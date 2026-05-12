@@ -130,11 +130,15 @@ async def arq_ingest_material(
     """
     from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
+    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.authored_document_repository import (
         AuthoredDocumentRepository,
     )
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
+    )
+    from course_supporter.storage.document_summary_repository import (
+        DocumentSummaryRepository,
     )
     from course_supporter.storage.job_repository import JobRepository
 
@@ -144,6 +148,7 @@ async def arq_ingest_material(
     mid = uuid.UUID(material_id)
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     router: ModelRouter = ctx["model_router"]
+    stage_router: StageRouter = ctx["stage_router"]
     callback = IngestionCallback(session_factory)
 
     log = structlog.get_logger().bind(
@@ -203,6 +208,37 @@ async def arq_ingest_material(
 
             async with _resolve_s3_url(entry, s3) as resolved:
                 doc = await processor.process_raw(resolved, router=router)
+
+            # ── Pass 2a — premium LLM mapping (Phase 2.1 C5, KD-2.1-A) ──
+            # Writes Job.current_stage="extracting_structure"; routes the
+            # parsed SourceDocument through pass_2a_mapping ladder; creates
+            # the canonical DocumentSummary row with cascade content_hash
+            # invalidation (KD-2.1-F closure inside repository.create()).
+            # Segment drafts on summary_draft.segments are retained for
+            # Phase 2.1 C7 (Pass 2b) consumption -- not materialised here.
+            await job_repo.update_stage(jid, "extracting_structure")
+            summary_draft = await processor.process_macro(doc, stage_router)
+            summary_repo = DocumentSummaryRepository(session)
+            summary = await summary_repo.create(
+                authored_document_id=entry.id,
+                title=summary_draft.title,
+                description=summary_draft.description,
+                main_concepts=summary_draft.main_concepts,
+                secondary_concepts=summary_draft.secondary_concepts,
+                content_char_count=summary_draft.content_char_count,
+            )
+            log.info(
+                "pass_2a_complete",
+                summary_id=str(summary.id),
+                segment_draft_count=len(summary_draft.segments),
+            )
+            # Persist Pass 2a outputs (DocumentSummary + cascade
+            # content_hash). Project convention: each business unit
+            # commits at end (see other arq_* tasks).
+            # callback.on_success uses its own session for Job
+            # lifecycle update.
+            await session.commit()
+            # ── /Pass 2a ──
 
             content = doc.model_dump_json()
             detected_language = doc.metadata.get("detected_language")

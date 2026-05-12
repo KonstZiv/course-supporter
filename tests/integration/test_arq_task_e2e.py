@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_ingest_material
@@ -23,6 +24,7 @@ from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.orm import DocumentSummary
 
 pytestmark = pytest.mark.requires_db
 
@@ -37,6 +39,7 @@ def _build_ctx(
     return {
         "session_factory": session_factory,
         "model_router": MagicMock(),
+        "stage_router": MagicMock(),
     }
 
 
@@ -52,6 +55,8 @@ def _mock_processors(
     cache path. ``metadata`` is set to a real dict to prevent MagicMock
     auto-mocking from producing unserialisable values for downstream SQL.
     """
+    from course_supporter.ingestion.schemas import DocumentSummaryDraft
+
     mock_doc = MagicMock()
     mock_doc.model_dump_json.return_value = content
     mock_doc.metadata = (
@@ -61,6 +66,19 @@ def _mock_processors(
     )
     processor = MagicMock()
     processor.process_raw = AsyncMock(return_value=mock_doc)
+    # Non-empty concepts on the mocked draft so the regression test
+    # for the Pass 2a commit gap can assert that the aggregated
+    # document-level concepts survive end-to-end persistence (not
+    # just metadata fields).
+    processor.process_macro = AsyncMock(
+        return_value=DocumentSummaryDraft(
+            title="t",
+            description="d",
+            main_concepts=["alpha", "beta"],
+            secondary_concepts=["gamma"],
+            content_char_count=10,
+        )
+    )
     return {SourceType.WEB: processor}
 
 
@@ -150,6 +168,27 @@ class TestArqIngestMaterialE2E:
         assert final_mat is not None
         assert final_mat.state == "ready"
         assert final_mat.language == expected_language
+
+        # Regression test for the Pass 2a commit gap (vision-side
+        # ratified 2026-05-12): without the explicit ``session.commit()``
+        # after ``DocumentSummaryRepository.create(...)`` in
+        # ``arq_ingest_material``, the summary INSERT was rolled back
+        # when the task's ``async with session_factory()`` block exited.
+        # Verifying persistence (not a mock-spy on ``session.commit``)
+        # because persistence is the actual contract the fix enforces.
+        async with session_factory() as verify_session:
+            result = await verify_session.execute(
+                select(DocumentSummary).where(
+                    DocumentSummary.authored_document_id == mid
+                )
+            )
+            summary = result.scalar_one_or_none()
+        assert summary is not None, "Pass 2a DocumentSummary did not persist"
+        assert summary.title == "t"
+        assert summary.description == "d"
+        # Aggregated document-level concepts survive end-to-end.
+        assert summary.main_concepts == ["alpha", "beta"]
+        assert summary.secondary_concepts == ["gamma"]
 
     async def test_failure_full_lifecycle(
         self,

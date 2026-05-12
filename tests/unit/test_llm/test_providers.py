@@ -240,14 +240,27 @@ class TestGeminiDetectImageMime:
 
         assert _detect_image_mime(b"random nonsense") == "application/octet-stream"
 
-    def test_deepseek_uses_openai_compat(self) -> None:
+    def test_deepseek_uses_deepseek_provider_subclass(self) -> None:
+        """KD-2.1-O: ``deepseek`` registry maps to :class:`DeepSeekProvider`.
+
+        The subclass extends :class:`OpenAICompatProvider` to inject
+        ``extra_body={"thinking": {"type": "disabled"}}`` on every
+        ``chat.completions.create`` call — see
+        :file:`tests/unit/test_llm/test_providers_deepseek.py` for the
+        thinking-mode contract tests. The ``isinstance`` against the
+        parent class still holds (inheritance), but the concrete type
+        must be the specialised subclass.
+        """
         from course_supporter.config import Settings
         from course_supporter.llm.factory import create_providers
+        from course_supporter.llm.providers.deepseek import DeepSeekProvider
         from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 
         s = Settings(deepseek_api_key="test-key", _env_file=None)  # type: ignore[arg-type]
         providers = create_providers(s)
         assert "deepseek" in providers
+        assert isinstance(providers["deepseek"], DeepSeekProvider)
+        # Inheritance is preserved for downstream isinstance checks.
         assert isinstance(providers["deepseek"], OpenAICompatProvider)
         assert providers["deepseek"].provider_name == "deepseek"
 

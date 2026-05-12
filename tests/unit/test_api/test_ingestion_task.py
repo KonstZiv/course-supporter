@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.api.tasks import arq_ingest_material
+from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceDocument, SourceType
 
 _FACTORY = "course_supporter.api.tasks.create_processors"
@@ -13,6 +14,20 @@ _HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 _ENTRY_REPO = (
     "course_supporter.storage.authored_document_repository.AuthoredDocumentRepository"
 )
+_SUMMARY_REPO = (
+    "course_supporter.storage.document_summary_repository.DocumentSummaryRepository"
+)
+
+
+def _default_summary_draft() -> DocumentSummaryDraft:
+    """Build a minimal valid DocumentSummaryDraft for mock Pass 2a."""
+    return DocumentSummaryDraft(
+        title="t",
+        description="d",
+        main_concepts=[],
+        secondary_concepts=[],
+        content_char_count=10,
+    )
 
 
 @pytest.fixture()
@@ -42,11 +57,13 @@ def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
 def _make_arq_ctx(
     factory: MagicMock | None = None,
     router: MagicMock | None = None,
+    stage_router: MagicMock | None = None,
 ) -> dict[str, object]:
     """Build an ARQ worker context dict for testing."""
     return {
         "session_factory": factory or _make_session_factory(),
         "model_router": router,
+        "stage_router": stage_router or MagicMock(),
     }
 
 
@@ -54,6 +71,7 @@ def _mock_processors(
     doc: SourceDocument | None = None,
     *,
     source_type: SourceType = SourceType.WEB,
+    summary_draft: DocumentSummaryDraft | None = None,
 ) -> dict[SourceType, MagicMock]:
     """Create a processors dict with a mock processor instance."""
     if doc is None:
@@ -63,6 +81,9 @@ def _mock_processors(
         )
     mock_proc = MagicMock()
     mock_proc.process_raw = AsyncMock(return_value=doc)
+    mock_proc.process_macro = AsyncMock(
+        return_value=summary_draft or _default_summary_draft(),
+    )
     return {source_type: mock_proc}
 
 
@@ -84,7 +105,18 @@ def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
     return entry
 
 
-@pytest.mark.usefixtures("_bypass_tenant_lookup")
+@pytest.fixture()
+def _patch_summary_repo() -> None:  # type: ignore[misc]
+    """Auto-patch DocumentSummaryRepository so Pass 2a inside arq_ingest_material
+    materialises against a mock (no DB) yielding a usable summary instance."""
+    with patch(_SUMMARY_REPO) as cls:
+        cls.return_value.create = AsyncMock(
+            return_value=MagicMock(id=uuid.uuid4()),
+        )
+        yield
+
+
+@pytest.mark.usefixtures("_bypass_tenant_lookup", "_patch_summary_repo")
 class TestArqIngestMaterial:
     """Tests for the ARQ-based arq_ingest_material function."""
 
@@ -108,6 +140,7 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=_mock_processors()),
         ):
             mock_job_repo_cls.return_value.update_status = AsyncMock()
+            mock_job_repo_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
@@ -154,6 +187,7 @@ class TestArqIngestMaterial:
         ):
             mock_job = mock_job_cls.return_value
             mock_job.update_status = AsyncMock()
+            mock_job.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
@@ -200,6 +234,7 @@ class TestArqIngestMaterial:
             ),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
@@ -238,6 +273,7 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=_mock_processors()),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
@@ -307,6 +343,7 @@ class TestArqIngestMaterial:
 
         mock_proc = MagicMock()
         mock_proc.process_raw = capture_process
+        mock_proc.process_macro = AsyncMock(return_value=_default_summary_draft())
         procs = {SourceType.TEXT: mock_proc}
 
         with (
@@ -323,6 +360,7 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "exists", AsyncMock(return_value=False)),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj
             )
@@ -388,6 +426,7 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "unlink", mock_unlink),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj
             )

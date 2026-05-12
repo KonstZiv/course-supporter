@@ -12,6 +12,7 @@ That's it -- no changes to factory.py or router.py needed.
 
 from course_supporter.llm.providers.anthropic import AnthropicProvider
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
+from course_supporter.llm.providers.deepseek import DeepSeekProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 
@@ -19,13 +20,14 @@ PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
     "gemini": GeminiProvider,
     "anthropic": AnthropicProvider,
     "openai": OpenAICompatProvider,
-    "deepseek": OpenAICompatProvider,
+    "deepseek": DeepSeekProvider,
     "mistral": OpenAICompatProvider,
 }
 
 __all__ = [
     "PROVIDER_REGISTRY",
     "AnthropicProvider",
+    "DeepSeekProvider",
     "GeminiProvider",
     "LLMProvider",
     "OpenAICompatProvider",

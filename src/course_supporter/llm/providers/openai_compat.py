@@ -99,6 +99,16 @@ class OpenAICompatProvider(LLMProvider):
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
 
+    def _extra_create_kwargs(self) -> dict[str, Any]:
+        """Provider-specific extra kwargs spread into ``chat.completions.create``.
+
+        Default returns ``{}``. Subclasses (e.g. ``DeepSeekProvider``)
+        override to inject vendor-specific knobs such as
+        ``extra_body={"thinking": {...}}`` without duplicating the
+        base call body.
+        """
+        return {}
+
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Classify OpenAI-SDK exceptions into ladder categories.
 
@@ -181,6 +191,7 @@ class OpenAICompatProvider(LLMProvider):
                 messages=messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
+                **self._extra_create_kwargs(),
             )
 
         choice = response.choices[0]
@@ -224,6 +235,7 @@ class OpenAICompatProvider(LLMProvider):
                     temperature=request.temperature,
                     max_tokens=request.max_tokens,
                     max_retries=2,
+                    **self._extra_create_kwargs(),
                 )
             except Exception as exc:
                 if not isinstance(exc, self._retry_exc_cls):

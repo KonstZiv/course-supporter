@@ -1,4 +1,4 @@
-"""Unit tests for ingestion draft Pydantic models (KD-2.1-M).
+"""Unit tests for ingestion draft Pydantic models (KD-2.1-M, KD-2.1-O).
 
 Covers :class:`DocumentSummaryDraft` + :class:`DocumentSegmentDraft`
 added in Phase 2.1 commit 4.5. Both are in-flight Pydantic carriers
@@ -6,12 +6,21 @@ returned by ``MaterialProcessor.process_macro`` / ``process_detail``
 abstract methods; concrete TextProcessor / WebProcessor overrides
 land in commits 5 and 7.
 
+KD-2.1-O (ratified 2026-05-12) makes ``DocumentSegmentDraft.content``
+optional with default ``None``: Pass 2a for text/web emits metadata
+only; Pass 2b (C7) fills ``content`` algorithmically from
+``doc.text[start_pos:end_pos]``. For audio/video Pass 2a may set
+``content`` directly. Both code paths must validate.
+
 Tests verify:
 
 * Required (non-list) fields raise ``ValidationError`` when omitted
   -- fail-fast against partial LLM output (KD-2.1-M strictness).
 * List fields default to empty list when omitted.
 * Nested draft structures roundtrip faithfully.
+* ``content`` accepts ``None`` (text/web Pass 2a) AND non-empty
+  ``str`` (audio/video Pass 2a, or Pass 2b post-slicing). Default
+  is ``None``.
 """
 
 from __future__ import annotations
@@ -33,12 +42,14 @@ class TestDocumentSegmentDraft:
             order=0,
             start_pos=0,
             end_pos=42,
-            content="The quick brown fox.",
+            description="Defines the iterator protocol.",
         )
         assert draft.order == 0
         assert draft.start_pos == 0
         assert draft.end_pos == 42
-        assert draft.content == "The quick brown fox."
+        assert draft.description == "Defines the iterator protocol."
+        assert draft.title is None
+        assert draft.content is None
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
 
@@ -47,23 +58,73 @@ class TestDocumentSegmentDraft:
             order=1,
             start_pos=10,
             end_pos=20,
-            content="payload",
+            description="Walks through lexer + parser stages.",
             main_concepts=["lexer", "parser"],
             secondary_concepts=["AST"],
         )
         assert draft.main_concepts == ["lexer", "parser"]
         assert draft.secondary_concepts == ["AST"]
 
+    def test_content_none_default(self) -> None:
+        """KD-2.1-O text/web path: Pass 2a does NOT emit segment content."""
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=80,
+            description="Introduces the generator protocol.",
+        )
+        assert draft.content is None
+
+    def test_content_explicit_none_accepted(self) -> None:
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=80,
+            description="Introduces the generator protocol.",
+            content=None,
+        )
+        assert draft.content is None
+
+    def test_content_string_accepted(self) -> None:
+        """audio/video Pass 2a OR Pass 2b post-slicing populates content."""
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=20,
+            description="Spoken intro defining the lecture topic.",
+            content="The quick brown fox.",
+        )
+        assert draft.content == "The quick brown fox."
+
+    def test_title_optional_defaults_none(self) -> None:
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=10,
+            description="Boilerplate copyright section.",
+        )
+        assert draft.title is None
+
+    def test_title_string_accepted(self) -> None:
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=10,
+            title="Introduction",
+            description="Frames the broader topic.",
+        )
+        assert draft.title == "Introduction"
+
     @pytest.mark.parametrize(
         "missing",
-        ["order", "start_pos", "end_pos", "content"],
+        ["order", "start_pos", "end_pos", "description"],
     )
     def test_missing_required_field_raises(self, missing: str) -> None:
         kwargs: dict[str, object] = {
             "order": 0,
             "start_pos": 0,
             "end_pos": 1,
-            "content": "x",
+            "description": "Default fixture description.",
         }
         del kwargs[missing]
         with pytest.raises(ValidationError) as exc_info:
@@ -103,7 +164,7 @@ class TestDocumentSummaryDraft:
             order=0,
             start_pos=0,
             end_pos=5,
-            content="hello",
+            description="Opens with a greeting.",
             main_concepts=["greeting"],
         )
         draft = DocumentSummaryDraft(
@@ -113,7 +174,8 @@ class TestDocumentSummaryDraft:
             segments=[seg],
         )
         assert len(draft.segments) == 1
-        assert draft.segments[0].content == "hello"
+        assert draft.segments[0].description == "Opens with a greeting."
+        assert draft.segments[0].content is None
         assert draft.segments[0].main_concepts == ["greeting"]
 
     @pytest.mark.parametrize(
@@ -139,3 +201,22 @@ class TestDocumentSummaryDraft:
                 description="d",
                 content_char_count=0,
             )
+
+    def test_model_validate_json_without_doc_level_concepts(self) -> None:
+        """v2 prompt omits document-level concepts; defaults must be ``[]``.
+
+        TextProcessor / WebProcessor ``process_macro`` parse LLM
+        responses via ``model_validate_json``. The v2 prompt (KD-2.1-O)
+        no longer asks the LLM for document-level ``main_concepts`` /
+        ``secondary_concepts`` — the processor aggregates them from
+        segments post-parse. The schema must therefore accept missing
+        keys and default them to an empty list so the aggregation step
+        has a known starting point.
+        """
+        payload = (
+            '{"title": "Sample", "description": "Sample doc.",'
+            ' "content_char_count": 0, "segments": []}'
+        )
+        draft = DocumentSummaryDraft.model_validate_json(payload)
+        assert draft.main_concepts == []
+        assert draft.secondary_concepts == []

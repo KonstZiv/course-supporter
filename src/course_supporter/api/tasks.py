@@ -1351,14 +1351,11 @@ async def arq_process_homework(
         deliver_webhook,
         resolve_webhook_url,
     )
-    from course_supporter.models.safety import CourseContext
-    from course_supporter.safety.archive import extract_submission_content
-    from course_supporter.safety.exceptions import (
-        SecurityContext,
-        SecurityViolationError,
-    )
+    from course_supporter.security.archive import extract_submission_content
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import (
+        CourseContext,
+        SecurityContext,
         Stage1RejectionResult,
     )
     from course_supporter.security.stage1 import run_stage1
@@ -1702,7 +1699,7 @@ async def arq_process_homework(
                     file_path.unlink()
                     log.debug("homework_temp_file_cleaned", path=str(file_path))
 
-        except SecurityViolationError as exc:
+        except SecurityRejectedError as exc:
             exc.enrich(sec_ctx)
             await session.rollback()
             async with session_factory() as err_session:

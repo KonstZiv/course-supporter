@@ -9,7 +9,7 @@ import pytest
 
 from course_supporter.homework.matcher import TaskMatcher, TaskMatchError
 from course_supporter.models.matching import LLMMatchResponse, LLMTaskMatch
-from course_supporter.models.safety import FileContent, SubmissionContent
+from course_supporter.security.schemas import FileContent, SubmissionContent
 
 
 def _mock_editable(

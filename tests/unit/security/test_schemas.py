@@ -223,3 +223,205 @@ class TestViolationCategory:
         assert ViolationCategory.OFF_TOPIC.value == "off_topic"
         assert ViolationCategory.POLICY_VIOLATION.value == "policy_violation"
         assert ViolationCategory.SUSPICIOUS_BEHAVIOR.value == "suspicious_behavior"
+
+
+# ── Phase 2.1 C2 migrations (KD-2.1-I + KD-2.1-J) ──────────────────
+#
+# Tests for classes migrated from models/safety.py + safety/exceptions.py
+# to canonical security/schemas.py per Phase 2.1 C2.
+
+
+import uuid  # noqa: E402  -- grouped з Phase 2.1 imports for locality
+
+from course_supporter.security.schemas import (  # noqa: E402
+    CourseContext,
+    FileContent,
+    SecurityContext,
+    SecurityWarning,
+    SubmissionContent,
+)
+
+
+class TestFileContent:
+    def test_create_with_all_fields(self) -> None:
+        fc = FileContent(filename="main.py", content="print('hi')", size=11)
+        assert fc.filename == "main.py"
+        assert fc.content == "print('hi')"
+        assert fc.size == 11
+
+    def test_fields_required(self) -> None:
+        with pytest.raises(ValidationError):
+            FileContent()  # type: ignore[call-arg]
+
+
+class TestSubmissionContent:
+    def test_create_empty_files_list(self) -> None:
+        sc = SubmissionContent(files=[], total_size=0)
+        assert sc.files == []
+        assert sc.total_size == 0
+        assert sc.security_warnings == []
+
+    def test_create_with_files(self) -> None:
+        files = [
+            FileContent(filename="a.py", content="x = 1", size=5),
+            FileContent(filename="b.md", content="# Title", size=7),
+        ]
+        sc = SubmissionContent(files=files, total_size=12)
+        assert len(sc.files) == 2
+        assert sc.total_size == 12
+
+    def test_full_text_property_concatenates_files(self) -> None:
+        files = [
+            FileContent(filename="a.py", content="x = 1", size=5),
+            FileContent(filename="b.md", content="# Title", size=7),
+        ]
+        sc = SubmissionContent(files=files, total_size=12)
+        text = sc.full_text
+        assert "--- a.py ---" in text
+        assert "x = 1" in text
+        assert "--- b.md ---" in text
+        assert "# Title" in text
+
+    def test_full_text_empty_for_no_files(self) -> None:
+        sc = SubmissionContent(files=[], total_size=0)
+        assert sc.full_text == ""
+
+    def test_security_warnings_excluded_from_serialization(self) -> None:
+        warning = SecurityWarning(violation_type="symlink", message="skipped")
+        sc = SubmissionContent(
+            files=[],
+            total_size=0,
+            security_warnings=[warning],
+        )
+        # ``exclude=True`` in Field config — warnings drop from model_dump.
+        dumped = sc.model_dump()
+        assert "security_warnings" not in dumped
+
+    def test_security_warnings_typed_list(self) -> None:
+        # Type-narrowing improvement (was list[Any] in legacy):
+        # security_warnings now typed as list[SecurityWarning].
+        warning = SecurityWarning(
+            violation_type="path_traversal",
+            message="sanitized",
+            raw_filename="../etc/passwd",
+            filename="etc/passwd",
+        )
+        sc = SubmissionContent(
+            files=[],
+            total_size=0,
+            security_warnings=[warning],
+        )
+        assert len(sc.security_warnings) == 1
+        assert sc.security_warnings[0] is warning
+
+
+class TestCourseContext:
+    def test_required_fields_only(self) -> None:
+        cc = CourseContext(course_title="Python 101", node_title="Decorators")
+        assert cc.course_title == "Python 101"
+        assert cc.node_title == "Decorators"
+        # optional fields default to empty string
+        assert cc.course_description == ""
+        assert cc.node_description == ""
+        assert cc.outline_summary == ""
+
+    def test_all_fields_set(self) -> None:
+        cc = CourseContext(
+            course_title="Python 101",
+            course_description="Intro course",
+            node_title="Decorators",
+            node_description="Functional patterns",
+            outline_summary="Module on advanced Python",
+        )
+        assert cc.course_description == "Intro course"
+        assert cc.node_description == "Functional patterns"
+        assert cc.outline_summary == "Module on advanced Python"
+
+
+class TestSecurityContext:
+    def test_create_with_no_fields(self) -> None:
+        ctx = SecurityContext()
+        assert ctx.tenant_id is None
+        assert ctx.student_id is None
+        assert ctx.submission_id is None
+        assert ctx.file_url is None
+        assert ctx.filename is None
+
+    def test_create_with_all_fields(self) -> None:
+        tenant_id = uuid.UUID("00000000-0000-7000-8000-000000000001")
+        student_id = uuid.UUID("00000000-0000-7000-8000-000000000002")
+        submission_id = uuid.UUID("00000000-0000-7000-8000-000000000003")
+        ctx = SecurityContext(
+            tenant_id=tenant_id,
+            student_id=student_id,
+            submission_id=submission_id,
+            file_url="s3://bucket/key",
+            filename="submission.zip",
+        )
+        assert ctx.tenant_id == tenant_id
+        assert ctx.student_id == student_id
+        assert ctx.submission_id == submission_id
+        assert ctx.file_url == "s3://bucket/key"
+        assert ctx.filename == "submission.zip"
+
+    def test_frozen_immutable(self) -> None:
+        ctx = SecurityContext(filename="test.zip")
+        with pytest.raises((AttributeError, Exception)):
+            # Frozen dataclass forbids attribute mutation.
+            ctx.filename = "other.zip"  # type: ignore[misc]
+
+    def test_as_log_dict_returns_non_none_stringified(self) -> None:
+        tenant_id = uuid.UUID("00000000-0000-7000-8000-000000000011")
+        ctx = SecurityContext(tenant_id=tenant_id, filename="x.zip")
+        payload = ctx.as_log_dict()
+        assert payload == {
+            "tenant_id": str(tenant_id),
+            "filename": "x.zip",
+        }
+
+    def test_as_log_dict_empty_for_all_none(self) -> None:
+        ctx = SecurityContext()
+        assert ctx.as_log_dict() == {}
+
+
+class TestSecurityWarning:
+    def test_create_minimal_fields(self) -> None:
+        warning = SecurityWarning(
+            violation_type="symlink",
+            message="entry skipped",
+        )
+        assert warning.violation_type == "symlink"
+        assert warning.message == "entry skipped"
+        assert warning.filename is None
+        assert warning.raw_filename is None
+
+    def test_create_with_filenames(self) -> None:
+        warning = SecurityWarning(
+            violation_type="path_traversal",
+            message="sanitized",
+            filename="etc/passwd",
+            raw_filename="../etc/passwd",
+        )
+        assert warning.filename == "etc/passwd"
+        assert warning.raw_filename == "../etc/passwd"
+
+    def test_mutable(self) -> None:
+        # SecurityWarning is @dataclass (NOT frozen) — mutation allowed.
+        warning = SecurityWarning(violation_type="symlink", message="x")
+        warning.filename = "updated.zip"
+        assert warning.filename == "updated.zip"
+
+    def test_as_log_dict_returns_non_none_fields(self) -> None:
+        warning = SecurityWarning(
+            violation_type="symlink",
+            message="entry skipped",
+            raw_filename="link.txt",
+        )
+        payload = warning.as_log_dict()
+        assert payload == {
+            "violation_type": "symlink",
+            "message": "entry skipped",
+            "raw_filename": "link.txt",
+        }
+        # filename None excluded.
+        assert "filename" not in payload

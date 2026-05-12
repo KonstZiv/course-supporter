@@ -38,6 +38,15 @@ def _uuid7() -> uuid.UUID:
 class Base(DeclarativeBase):
     """Base class for all ORM models."""
 
+    # ``eager_defaults=True`` makes SQLAlchemy populate server-generated
+    # column values (``server_default``, ``onupdate``) on the in-memory
+    # ORM instance at flush time via ``RETURNING`` — required for
+    # async + Pydantic ``from_attributes`` serialization. Without it,
+    # post-commit ``model_validate(orm_instance)`` triggers a sync
+    # lazy-load on expired server-default columns (e.g. ``updated_at``)
+    # outside the greenlet context → ``MissingGreenlet``.
+    __mapper_args__ = {"eager_defaults": True}
+
 
 class SoftDeleteMixin:
     """Universal soft-delete pattern (vision §3 KD3, KD12).
@@ -1163,11 +1172,20 @@ class Job(SoftDeleteMixin, Base):
     current_stage: Mapped[str | None] = mapped_column(
         String(50),
         comment="Internal pipeline stage marker per vision §3 KD13. "
-        "Free-form per job_type (e.g. pass_1/pass_2a/pass_2b/pass_2c "
-        "for document_processing; bottomup/topdown for "
-        "node_summary_regeneration; safety/sanity/review/delivery for "
-        "homework_processing; unused for s3_cleanup). Validation lives "
-        "at the worker level per pipeline.",
+        "Free-form per job_type. "
+        "Generic guidance per job_type (legacy taxonomy, retained as "
+        "reference per Phase 2.1 D7): "
+        "pass_1/pass_2a/pass_2b/pass_2c for document_processing; "
+        "bottomup/topdown for node_summary_regeneration; "
+        "safety/sanity/review/delivery for homework_processing; "
+        "unused for s3_cleanup. "
+        "Text/web ingestion taxonomy per KD-2.1-B (Phase 2.1): "
+        "'extracting_structure' (Pass 2a premium LLM mapping → "
+        "DocumentSummary; ESC.action 'pass_2a_mapping'), "
+        "'checking_safety' (Stage 2 LLM safety check; ESC.action "
+        "'safety_check'), 'creating_segments' (Pass 2b algorithmic "
+        "slice → DocumentSegments; no ESC entry — no LLM call). "
+        "Validation lives at the worker level per pipeline.",
     )
     stage_progress: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,

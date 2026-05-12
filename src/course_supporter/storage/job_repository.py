@@ -7,11 +7,14 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs import JobType, validate_job_type
 from course_supporter.storage.orm import CourseNode, Job
+
+logger = structlog.get_logger()
 
 # Valid job status transitions
 JOB_TRANSITIONS: dict[str, set[str]] = {
@@ -128,6 +131,47 @@ class JobRepository:
         stmt = update(Job).where(Job.id == job_id).values(arq_job_id=arq_job_id)
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def update_stage(self, job_id: uuid.UUID, stage_name: str) -> None:
+        """Update the ``current_stage`` checkpoint marker on a live Job.
+
+        Atomic UPDATE filtered through ``Job.deleted_at IS NULL`` so
+        soft-deleted Jobs are skipped silently (KD13 + Phase 1
+        soft-delete cascade discipline). No status transition
+        validation -- stage taxonomy is per-pipeline free-form per
+        :class:`Job.current_stage` column docs.
+
+        Silent skip on:
+
+        * Job not found (no row matches ``job_id``).
+        * Job soft-deleted (``deleted_at IS NOT NULL``).
+
+        Both cases mirror :meth:`set_arq_job_id` / :meth:`store_result`
+        convention (void return; no exception). A ``log.warning`` is
+        emitted on zero-rowcount for observability of caller race or
+        wrong-id bugs without breaking the contract.
+
+        Production callers added in Phase 2.1 C5 (Pass 2a entry), C6
+        (Stage 2 entry), C7 (Pass 2b entry) per KD-2.1-B. Stage names
+        live in ``config/ladders_*.yaml`` (KD16); this method accepts
+        loose ``str`` and does no validation at write-time.
+        """
+        stmt = (
+            update(Job)
+            .where(Job.id == job_id, Job.deleted_at.is_(None))
+            .values(current_stage=stage_name)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        # ``rowcount`` is provided by CursorResult (actual runtime type
+        # for DML execute); SQLAlchemy's static return type is the wider
+        # ``Result`` which does not expose it -- hence the ignore.
+        if (result.rowcount or 0) == 0:  # type: ignore[attr-defined]
+            logger.warning(
+                "update_stage_no_job_found",
+                job_id=str(job_id),
+                stage_name=stage_name,
+            )
 
     async def reactivate(self, job_id: uuid.UUID) -> Job:
         """Re-queue a failed Job for retry (vision §3 KD13).

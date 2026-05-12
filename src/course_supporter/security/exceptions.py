@@ -74,6 +74,12 @@ class ErrorCategory(StrEnum):
       a symbolic link. Added Phase 2.1 C2 per KD-2.1-I migration of
       legacy ``safety.exceptions.SymlinkViolationError`` raiser
       (load-bearing at ``safety/archive.py:130``).
+    * ``STAGE2_REJECTED`` -- LLM-judged Stage 2 rejection (off-topic
+      relative to course, harmful content, policy violation). Added
+      Phase 2.1 C6 per KD-2.1-P (defense-in-depth Stage 2 for
+      authored materials). Superset of :data:`PROMPT_INJECTION`:
+      that value covers regex-detected attacks; this one covers any
+      LLM verdict ``is_safe=False`` regardless of violation category.
     """
 
     SIZE_LIMIT = "size_limit"
@@ -85,6 +91,7 @@ class ErrorCategory(StrEnum):
     CHARSET_VIOLATION = "charset_violation"
     ARCHIVE_BOMB = "archive_bomb"
     SYMLINK_VIOLATION = "symlink_violation"
+    STAGE2_REJECTED = "stage2_rejected"
 
 
 class SecurityRejectedError(Exception):

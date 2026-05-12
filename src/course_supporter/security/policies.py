@@ -70,8 +70,10 @@ class ContextPolicy:
             in this context.
         enable_llm_safety_check: When ``True``, Stage 1 dispatches
             to Stage 2 LLM safety check after sync validation
-            passes. Authored content is trusted; homework
-            submissions are checked.
+            passes. Both authored and homework run Stage 2 post
+            Phase 2.1 C6 (KD-2.1-P defense-in-depth — authored
+            ingestion calls Stage 2 before Pass 2a to protect the
+            downstream LLM from prompt injection in raw text).
         enable_charset_strict: When ``True``, Stage 1 rejects text
             content whose libmagic-detected charset is neither
             UTF-8 nor US-ASCII. Modern submissions baseline UTF-8;
@@ -118,7 +120,7 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     max_video_size_bytes=5 * 1024 * 1024 * 1024,
     max_archive_unzipped_bytes=None,
     max_archive_nesting_depth=None,
-    enable_llm_safety_check=False,
+    enable_llm_safety_check=True,
     enable_charset_strict=False,
 )
 

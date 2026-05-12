@@ -266,7 +266,7 @@ class TestSafetyCheckLadderLoads:
         assert providers == ["mistral", "deepseek", "gemini"]
         assert models == [
             "mistral-small-latest",
-            "deepseek-chat",
+            "deepseek-v4-flash",
             "gemini-2.5-flash",
         ]
 

@@ -116,7 +116,53 @@ def _patch_summary_repo() -> None:  # type: ignore[misc]
         yield
 
 
-@pytest.mark.usefixtures("_bypass_tenant_lookup", "_patch_summary_repo")
+@pytest.fixture()
+def _patch_stage2_check() -> None:  # type: ignore[misc]
+    """Auto-patch Stage 2 to return is_safe=True (Phase 2.1 C6).
+
+    Pass-through verdict so existing test scenarios (which were
+    designed against the pre-C6 flow without LLM safety checks)
+    continue covering Pass 2a + callback delegation without a real
+    LLM call. Scenarios that want to exercise the reject branch
+    re-patch ``run_stage2_safety_check`` directly.
+    """
+    from course_supporter.security.schemas import SafetyResult
+
+    safe = SafetyResult(
+        is_safe=True,
+        violations=[],
+        confidence=0.95,
+        reasoning="benign",
+    )
+    with patch(
+        "course_supporter.security.stage2.run_stage2_safety_check",
+        new=AsyncMock(return_value=safe),
+    ):
+        yield
+
+
+@pytest.fixture()
+def _patch_node_repo_for_stage2() -> MagicMock:  # type: ignore[misc]
+    """Auto-patch CourseNodeRepository so Stage 2's course_context build
+    resolves root/target nodes without real DB queries.
+    """
+    with patch(
+        "course_supporter.storage.course_node_repository.CourseNodeRepository"
+    ) as cls:
+        node = MagicMock()
+        node.title = "Course"
+        node.description = "Desc"
+        cls.return_value.get_root_for = AsyncMock(return_value=node)
+        cls.return_value.get_by_id = AsyncMock(return_value=node)
+        yield cls
+
+
+@pytest.mark.usefixtures(
+    "_bypass_tenant_lookup",
+    "_patch_summary_repo",
+    "_patch_stage2_check",
+    "_patch_node_repo_for_stage2",
+)
 class TestArqIngestMaterial:
     """Tests for the ARQ-based arq_ingest_material function."""
 
@@ -145,7 +191,9 @@ class TestArqIngestMaterial:
                 return_value=_mock_entry()
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx,
@@ -192,6 +240,7 @@ class TestArqIngestMaterial:
                 return_value=_mock_entry()
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
@@ -365,7 +414,9 @@ class TestArqIngestMaterial:
                 return_value=mock_entry_obj
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx,

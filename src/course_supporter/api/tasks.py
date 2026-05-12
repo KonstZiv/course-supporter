@@ -131,6 +131,12 @@ async def arq_ingest_material(
     from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
     from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.security.exceptions import (
+        ErrorCategory,
+        SecurityRejectedError,
+    )
+    from course_supporter.security.schemas import CourseContext
+    from course_supporter.security.stage2 import run_stage2_safety_check
     from course_supporter.storage.authored_document_repository import (
         AuthoredDocumentRepository,
     )
@@ -209,6 +215,62 @@ async def arq_ingest_material(
             async with _resolve_s3_url(entry, s3) as resolved:
                 doc = await processor.process_raw(resolved, router=router)
 
+            # ── Stage 2 — LLM safety check (Phase 2.1 C6, KD-2.1-P) ──
+            # Defense-in-depth: authored raw text may carry prompt
+            # injection, harmful content, or off-topic material. Stage 2
+            # gates Pass 2a so the downstream mapping LLM never sees
+            # un-vetted content. Both pass and reject outcomes persist
+            # the verdict via ``store_safety_result`` (KD-2.1-P contract
+            # — operators can audit even ratified rejects). Rejection
+            # commits the row before raising so the row survives
+            # rollback; ``IngestionCallback.on_failure`` then soft-
+            # deletes the document in its fresh session.
+            await job_repo.update_stage(jid, "checking_safety")
+
+            root_node = await node_repo.get_root_for(entry.course_node_id)
+            target_node = await node_repo.get_by_id(entry.course_node_id)
+            course_context = CourseContext(
+                course_title=(root_node.title if root_node else ""),
+                course_description=(
+                    root_node.description if root_node and root_node.description else ""
+                ),
+                node_title=(target_node.title if target_node else ""),
+                node_description=(
+                    target_node.description
+                    if target_node and target_node.description
+                    else ""
+                ),
+                outline_summary="",
+            )
+
+            # Concatenate chunk text — same pattern as ingestion/text.py
+            # and ingestion/web.py use for Pass 2a (KD-2.1-A); Stage 2
+            # sees the same body that the mapping LLM would have seen.
+            submission_text = "\n\n".join(
+                chunk.text for chunk in doc.chunks if chunk.text
+            )
+            safety_result = await run_stage2_safety_check(
+                submission_text,
+                router=stage_router,
+                course_context=course_context,
+            )
+            await entry_repo.store_safety_result(
+                mid, safety_result=safety_result.model_dump(mode="json")
+            )
+            await session.commit()
+
+            if not safety_result.is_safe:
+                log.warning(
+                    "stage2_authored_rejected",
+                    violations=[v.value for v in safety_result.violations],
+                    confidence=safety_result.confidence,
+                    reasoning=safety_result.reasoning,
+                )
+                raise SecurityRejectedError(
+                    ErrorCategory.STAGE2_REJECTED,
+                    safety_result.reasoning or "Stage 2 LLM safety rejection",
+                )
+
             # ── Pass 2a — premium LLM mapping (Phase 2.1 C5, KD-2.1-A) ──
             # Writes Job.current_stage="extracting_structure"; routes the
             # parsed SourceDocument through pass_2a_mapping ladder; creates
@@ -243,6 +305,25 @@ async def arq_ingest_material(
             content = doc.model_dump_json()
             detected_language = doc.metadata.get("detected_language")
 
+        except SecurityRejectedError as exc:
+            # Stage 2 reject branch (KD-2.1-P, Phase 2.1 C6). The
+            # ``safety_result`` row is already committed pre-raise so
+            # rollback is a no-op for that row; callback handles the
+            # cascade soft-delete in its fresh session via the
+            # ``error_category`` discriminator.
+            await session.rollback()
+            await callback.on_failure(
+                job_id=jid,
+                material_id=mid,
+                error_message=str(exc),
+                error_category=exc.category,
+            )
+            log.warning(
+                "ingestion_security_rejected",
+                category=exc.category.value,
+                detail=exc.detail,
+            )
+            return
         except Exception as exc:
             await session.rollback()
             await callback.on_failure(

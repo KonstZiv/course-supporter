@@ -32,6 +32,6 @@ stages:
       - provider: mistral
         model: mistral-small-latest
       - provider: deepseek
-        model: deepseek-chat
+        model: deepseek-v4-flash
       - provider: gemini
         model: gemini-2.5-flash

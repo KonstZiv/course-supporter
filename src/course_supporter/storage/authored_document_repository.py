@@ -330,6 +330,37 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
+    async def store_safety_result(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        safety_result: dict[str, object],
+    ) -> AuthoredDocument:
+        """Persist Stage 2 LLM safety verdict (pass or reject).
+
+        Stores the serialized :class:`SafetyResult` JSON regardless
+        of ``is_safe`` outcome. On rejection, ``arq_ingest_material``
+        commits this row before raising ``SecurityRejectedError`` so
+        that the verdict survives the subsequent rollback and the
+        callback can read or audit it independently (Phase 2.1 C6
+        per KD-2.1-P).
+
+        Args:
+            entry_id: AuthoredDocument id to update.
+            safety_result: Serialized SafetyResult JSON shape (from
+                ``SafetyResult.model_dump(mode="json")``).
+
+        Returns:
+            The updated AuthoredDocument.
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.safety_result = safety_result
+        await self._session.flush()
+        return entry
+
     async def update_source(
         self,
         entry_id: uuid.UUID,

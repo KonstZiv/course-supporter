@@ -64,6 +64,10 @@ def _mock_processors(
         if detected_language is not None
         else {}
     )
+    # Phase 2.1 C6 — Stage 2 reads ``submission_text`` from chunks.
+    chunk = MagicMock()
+    chunk.text = "Educational test content."
+    mock_doc.chunks = [chunk]
     processor = MagicMock()
     processor.process_raw = AsyncMock(return_value=mock_doc)
     # Non-empty concepts on the mocked draft so the regression test
@@ -133,6 +137,15 @@ class TestArqIngestMaterialE2E:
         content = '{"sections": [{"title": "E2E Test"}]}'
         ctx = _build_ctx(session_factory)
 
+        from course_supporter.security.schemas import SafetyResult
+
+        safe_verdict = SafetyResult(
+            is_safe=True,
+            violations=[],
+            confidence=0.95,
+            reasoning="benign",
+        )
+
         with (
             patch(
                 "course_supporter.job_priority.check_work_window",
@@ -144,6 +157,10 @@ class TestArqIngestMaterialE2E:
                     content=content,
                     detected_language=detected_language,
                 ),
+            ),
+            patch(
+                "course_supporter.security.stage2.run_stage2_safety_check",
+                new=AsyncMock(return_value=safe_verdict),
             ),
         ):
             await arq_ingest_material(

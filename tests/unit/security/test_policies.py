@@ -56,7 +56,7 @@ class TestAuthoredPolicy:
         assert AUTHORED_POLICY.max_archive_nesting_depth is None
 
     def test_safety_and_charset_flags(self) -> None:
-        assert AUTHORED_POLICY.enable_llm_safety_check is False
+        assert AUTHORED_POLICY.enable_llm_safety_check is True
         assert AUTHORED_POLICY.enable_charset_strict is False
 
 

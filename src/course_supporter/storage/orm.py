@@ -448,6 +448,16 @@ class AuthoredDocument(SoftDeleteMixin, Base):
     # ── Errors ──
     error_message: Mapped[str | None] = mapped_column(Text)
 
+    # ── Stage 2 safety verdict (KD-2.1-P) ──
+    safety_result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Stage 2 LLM safety verdict persisted regardless of "
+        "is_safe outcome. JSON shape per security.schemas.SafetyResult "
+        "(source='stage2'; is_safe, violations, confidence, reasoning). "
+        "NULL when Stage 2 hasn't run yet (legacy rows pre-Phase-2.1 C6).",
+    )
+
     # ── Derived state ──
 
     @property

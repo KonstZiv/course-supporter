@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.homework.language import detect_response_language
 from course_supporter.security.schemas import SubmissionContent
 from course_supporter.storage.course_node_repository import CourseNodeRepository
-from course_supporter.storage.editable_repository import EditableRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.student_repository import StudentRepository
 
@@ -210,8 +209,9 @@ async def build_mentor_context(
 ) -> MentorContext:
     """Assemble MentorContext from all available sources.
 
-    Loads the matched task, Methodist output, course info,
-    student history, and detects response language.
+    Loads course info, student history, and detects response language.
+    Mentor task context is unavailable post-C9.1 stub (DD-2.1-AG;
+    Phase 4 reroute target: NodeSummaryFinal per KD11).
 
     Args:
         submission_content: Extracted text content from the submission.
@@ -221,23 +221,14 @@ async def build_mentor_context(
     Returns:
         Populated MentorContext ready for prompt building.
     """
-    editable_repo = EditableRepository(session)
     node_repo = CourseNodeRepository(session)
     hw_repo = HomeworkRepository(session)
     student_repo = StudentRepository(session)
 
-    # Load matched task (StructureNodeEditable)
-    task = None
-    if submission.matched_task_id:
-        task = await editable_repo.get_by_id(submission.matched_task_id)
-
-    # Load course node
+    # Task context stubbed (DD-2.1-AG; Phase 4 reroute to NodeSummaryFinal per KD11).
     course_node = await node_repo.get_by_id(submission.course_node_id)
-
-    # Load student
     student = await student_repo.get_by_id(submission.student_id)
 
-    # Language detection
     response_language = detect_response_language(
         request_language=submission.response_language,
         student=student,
@@ -245,38 +236,14 @@ async def build_mentor_context(
         course_node=course_node,
     )
 
-    # Base context
     ctx = MentorContext(
         submission_content=submission_content.full_text,
-        task_title=task.title if task else "(task not identified)",
-        node_type=task.node_type if task else "unknown",
+        task_title="(task not identified)",
+        node_type="unknown",
         response_language=response_language,
         course_title=course_node.title if course_node else None,
         course_description=course_node.description if course_node else None,
     )
-
-    # Enrich from task
-    if task:
-        ctx.task_description = task.description
-        ctx.learning_goal = task.learning_goal
-        ctx.difficulty = task.difficulty
-        ctx.estimated_duration = task.estimated_duration
-        ctx.success_criteria = task.success_criteria
-        ctx.assessment_method = task.assessment_method
-        ctx.common_mistakes = task.common_mistakes or []
-
-        # Methodist output
-        methodist = _extract_methodist_fields(
-            task.methodological_content,
-            task.title,
-        )
-        ctx.learning_objectives = methodist.get("learning_objectives", [])
-        ctx.grading_criteria = methodist.get("grading_criteria")
-        ctx.assignment_description = methodist.get("assignment_description")
-        ctx.assignment_steps = methodist.get("assignment_steps", [])
-        ctx.common_misconceptions = methodist.get("common_misconceptions", [])
-        ctx.key_concepts = methodist.get("key_concepts", [])
-        ctx.teaching_recommendations = methodist.get("teaching_recommendations")
 
     # Student history
     if student:

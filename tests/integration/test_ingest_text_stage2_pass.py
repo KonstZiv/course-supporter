@@ -71,6 +71,10 @@ def _passing_processors() -> dict[SourceType, MagicMock]:
             content_char_count=200,
         )
     )
+    # Phase 2.1 C7: Pass 2b is now wired into the worker task. Empty
+    # drafts keep this test focused on Stage 2 verdict persistence
+    # without materialising segment rows.
+    processor.process_detail = AsyncMock(return_value=[])
     return {SourceType.WEB: processor}
 
 

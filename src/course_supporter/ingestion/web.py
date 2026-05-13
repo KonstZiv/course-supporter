@@ -17,7 +17,10 @@ from course_supporter.ingestion.heavy_steps import (
     ScrapeWebFunc,
     ScrapeWebParams,
 )
-from course_supporter.ingestion.schemas import DocumentSummaryDraft
+from course_supporter.ingestion.schemas import (
+    DocumentSegmentDraft,
+    DocumentSummaryDraft,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -142,7 +145,7 @@ class WebProcessor(MaterialProcessor):
         least one segment stays in ``main_concepts`` and is removed
         from ``secondary_concepts``.
         """
-        text = "\n\n".join(chunk.text for chunk in doc.chunks if chunk.text)
+        text = doc.assemble_text()
         if not text.strip():
             msg = "Cannot run Pass 2a on empty document (no content chunks)"
             raise ProcessingError(msg)
@@ -169,3 +172,25 @@ class WebProcessor(MaterialProcessor):
         draft.secondary_concepts = sorted(all_secondary)
 
         return draft
+
+    async def process_detail(
+        self,
+        doc: SourceDocument,
+        summary_draft: DocumentSummaryDraft,
+    ) -> list[DocumentSegmentDraft]:
+        """Pass 2b -- algorithmic slice over Pass 2a offsets (KD-2.1-O).
+
+        Zero LLM calls. Mirrors ``TextProcessor.process_detail``: slices
+        ``doc.assemble_text()`` per draft offset pair. Reference text is
+        the same string the mapping LLM saw in Pass 2a. Non-None
+        ``draft.content`` is passed through verbatim (defensive).
+        """
+        reference_text = doc.assemble_text()
+        filled: list[DocumentSegmentDraft] = []
+        for draft in summary_draft.segments:
+            if draft.content is not None:
+                filled.append(draft)
+                continue
+            sliced = reference_text[draft.start_pos : draft.end_pos]
+            filled.append(draft.model_copy(update={"content": sliced}))
+        return filled

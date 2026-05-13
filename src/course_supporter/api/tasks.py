@@ -143,6 +143,9 @@ async def arq_ingest_material(
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
     )
+    from course_supporter.storage.document_segment_repository import (
+        DocumentSegmentRepository,
+    )
     from course_supporter.storage.document_summary_repository import (
         DocumentSummaryRepository,
     )
@@ -243,12 +246,11 @@ async def arq_ingest_material(
                 outline_summary="",
             )
 
-            # Concatenate chunk text — same pattern as ingestion/text.py
-            # and ingestion/web.py use for Pass 2a (KD-2.1-A); Stage 2
-            # sees the same body that the mapping LLM would have seen.
-            submission_text = "\n\n".join(
-                chunk.text for chunk in doc.chunks if chunk.text
-            )
+            # Canonical assembly via SourceDocument.assemble_text() —
+            # same string that Pass 2a's mapping LLM sees and that Pass 2b
+            # slices for DocumentSegment.content. Single source prevents
+            # silent offset drift between the three pipeline stages.
+            submission_text = doc.assemble_text()
             safety_result = await run_stage2_safety_check(
                 submission_text,
                 router=stage_router,
@@ -301,6 +303,30 @@ async def arq_ingest_material(
             # lifecycle update.
             await session.commit()
             # ── /Pass 2a ──
+
+            # ── Pass 2b — algorithmic slice (Phase 2.1 C7, KD-2.1-O) ──
+            # Materialises DocumentSegment rows from the Pass 2a-emitted
+            # drafts. For text/web the processor fills ``content`` via
+            # slice over the canonical reference text (offsets line up
+            # exactly with what the mapping LLM saw). Repository owns
+            # cascade content_hash invalidation up through the parent
+            # chain to the root CourseNode (KD-2.1-F symmetric with
+            # Pass 2a). Commits inside the same business unit.
+            await job_repo.update_stage(jid, "creating_segments")
+            segment_drafts = await processor.process_detail(doc, summary_draft)
+            segment_repo = DocumentSegmentRepository(session)
+            segments = await segment_repo.create_batch(
+                summary.id,
+                segment_drafts,
+                source_doc=doc,
+            )
+            log.info(
+                "pass_2b_complete",
+                summary_id=str(summary.id),
+                segment_count=len(segments),
+            )
+            await session.commit()
+            # ── /Pass 2b ──
 
             content = doc.model_dump_json()
             detected_language = doc.metadata.get("detected_language")

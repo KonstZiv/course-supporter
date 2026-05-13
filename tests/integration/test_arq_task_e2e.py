@@ -23,8 +23,9 @@ from course_supporter.models.source import SourceType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import DocumentSummary
+from course_supporter.storage.orm import DocumentSegment, DocumentSummary
 
 pytestmark = pytest.mark.requires_db
 
@@ -54,26 +55,85 @@ def _mock_processors(
     so callers can cover both the no-detect path and the STT auto-detect
     cache path. ``metadata`` is set to a real dict to prevent MagicMock
     auto-mocking from producing unserialisable values for downstream SQL.
-    """
-    from course_supporter.ingestion.schemas import DocumentSummaryDraft
 
-    mock_doc = MagicMock()
-    mock_doc.model_dump_json.return_value = content
-    mock_doc.metadata = (
-        {"detected_language": detected_language}
-        if detected_language is not None
-        else {}
+    Phase 2.1 C7 — Pass 2b is exercised end-to-end: the mocked
+    ``process_macro`` returns a ``DocumentSummaryDraft`` carrying segment
+    drafts (with offsets that line up to the chunk text), and
+    ``process_detail`` is a real ``AsyncMock`` returning the same drafts
+    with ``content`` pre-filled. The integration test asserts both
+    ``DocumentSummary`` and N ``DocumentSegment`` rows persist with
+    cascade hash propagation reaching the root CourseNode.
+    """
+    from course_supporter.ingestion.schemas import (
+        DocumentSegmentDraft,
+        DocumentSummaryDraft,
     )
-    # Phase 2.1 C6 — Stage 2 reads ``submission_text`` from chunks.
-    chunk = MagicMock()
-    chunk.text = "Educational test content."
-    mock_doc.chunks = [chunk]
+    from course_supporter.models.source import (
+        ChunkType,
+        ContentChunk,
+        SourceDocument,
+    )
+
+    # Real SourceDocument so ``doc.assemble_text()`` /
+    # ``doc.model_dump_json()`` / ``doc.metadata`` / ``doc.chunks`` all
+    # behave under Pass 2b wiring (api/tasks.py calls
+    # ``processor.process_detail(doc, summary_draft)`` and then
+    # ``DocumentSegmentRepository.create_batch(..., source_doc=doc)``
+    # which invokes ``doc.assemble_text()``). The ``content`` argument
+    # is retained for backwards-compatible signature; Pydantic's own
+    # JSON serialisation supplies the on_success payload.
+    real_doc = SourceDocument(
+        source_type=SourceType.WEB,
+        source_url="https://example.com/e2e",
+        chunks=[
+            ContentChunk(
+                chunk_type=ChunkType.WEB_CONTENT,
+                text="Educational test content body one.",
+                index=0,
+            ),
+            ContentChunk(
+                chunk_type=ChunkType.WEB_CONTENT,
+                text="Educational test content body two.",
+                index=1,
+            ),
+        ],
+        metadata=(
+            {"detected_language": detected_language}
+            if detected_language is not None
+            else {}
+        ),
+    )
+    _ = content  # parameter kept for legacy callers; serialisation is real
+
+    # Segment drafts with content pre-filled so ``process_detail`` is a
+    # straight passthrough -- the test verifies ``DocumentSegmentRepository
+    # .create_batch`` materialisation, not the slicing path itself
+    # (that lives in unit tests).
+    seg_drafts = [
+        DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=10,
+            title="Seg A",
+            description="First test segment.",
+            main_concepts=["alpha"],
+            secondary_concepts=[],
+            content="seg A body",
+        ),
+        DocumentSegmentDraft(
+            order=1,
+            start_pos=10,
+            end_pos=20,
+            title="Seg B",
+            description="Second test segment.",
+            main_concepts=["beta"],
+            secondary_concepts=["gamma"],
+            content="seg B body",
+        ),
+    ]
+
     processor = MagicMock()
-    processor.process_raw = AsyncMock(return_value=mock_doc)
-    # Non-empty concepts on the mocked draft so the regression test
-    # for the Pass 2a commit gap can assert that the aggregated
-    # document-level concepts survive end-to-end persistence (not
-    # just metadata fields).
+    processor.process_raw = AsyncMock(return_value=real_doc)
     processor.process_macro = AsyncMock(
         return_value=DocumentSummaryDraft(
             title="t",
@@ -81,8 +141,10 @@ def _mock_processors(
             main_concepts=["alpha", "beta"],
             secondary_concepts=["gamma"],
             content_char_count=10,
+            segments=seg_drafts,
         )
     )
+    processor.process_detail = AsyncMock(return_value=seg_drafts)
     return {SourceType.WEB: processor}
 
 
@@ -206,6 +268,35 @@ class TestArqIngestMaterialE2E:
         # Aggregated document-level concepts survive end-to-end.
         assert summary.main_concepts == ["alpha", "beta"]
         assert summary.secondary_concepts == ["gamma"]
+
+        # Phase 2.1 C7 — Pass 2b materialised DocumentSegment rows with
+        # title/description from drafts + cascade hash propagation up to
+        # the root CourseNode.
+        async with session_factory() as verify_session:
+            seg_result = await verify_session.execute(
+                select(DocumentSegment)
+                .where(DocumentSegment.document_summary_id == summary.id)
+                .order_by(DocumentSegment.order)
+            )
+            segments = list(seg_result.scalars().all())
+        assert len(segments) == 2, "Pass 2b did not persist segment rows"
+        assert [s.title for s in segments] == ["Seg A", "Seg B"]
+        assert [s.content for s in segments] == ["seg A body", "seg B body"]
+        assert all(s.content_hash is not None for s in segments)
+        assert all(s.course_root_id == summary.course_root_id for s in segments)
+
+        # KD-2.1-F cascade reaches the root: summary + AuthoredDocument
+        # + CourseNode root all carry post-Pass-2b content_hash.
+        async with session_factory() as verify_session:
+            mat_repo = AuthoredDocumentRepository(verify_session)
+            node_repo = CourseNodeRepository(verify_session)
+            entry = await mat_repo.get_by_id(mid)
+            assert entry is not None
+            root = await node_repo.get_root_for(entry.course_node_id)
+        assert summary.content_hash is not None
+        assert entry.content_hash is not None
+        assert root is not None
+        assert root.content_hash is not None
 
     async def test_failure_full_lifecycle(
         self,

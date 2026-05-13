@@ -448,6 +448,7 @@ class TestCallbackIntegrationWithArqTask:
                 content_char_count=10,
             )
         )
+        mock_processor.process_detail = AsyncMock(return_value=[])
 
         session = AsyncMock()
         session.commit = AsyncMock()
@@ -482,6 +483,10 @@ class TestCallbackIntegrationWithArqTask:
             "course_supporter.storage.document_summary_repository"
             ".DocumentSummaryRepository"
         )
+        _arq_segment_repo = (
+            "course_supporter.storage.document_segment_repository"
+            ".DocumentSegmentRepository"
+        )
         _factory = "course_supporter.api.tasks.create_processors"
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
         _stage2 = "course_supporter.security.stage2.run_stage2_safety_check"
@@ -500,6 +505,7 @@ class TestCallbackIntegrationWithArqTask:
             patch(_arq_entry_repo) as entry_cls,
             patch(_arq_node_repo) as node_cls,
             patch(_arq_summary_repo) as summary_cls,
+            patch(_arq_segment_repo) as segment_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
             patch(
@@ -522,6 +528,7 @@ class TestCallbackIntegrationWithArqTask:
             summary_cls.return_value.create = AsyncMock(
                 return_value=MagicMock(id=uuid.uuid4()),
             )
+            segment_cls.return_value.create_batch = AsyncMock(return_value=[])
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 

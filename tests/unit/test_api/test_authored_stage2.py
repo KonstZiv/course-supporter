@@ -74,6 +74,10 @@ def _patch_paths() -> dict[str, str]:
             "course_supporter.storage.document_summary_repository"
             ".DocumentSummaryRepository"
         ),
+        "segment_repo": (
+            "course_supporter.storage.document_segment_repository"
+            ".DocumentSegmentRepository"
+        ),
         "callback_cls": "course_supporter.ingestion_callback.IngestionCallback",
         "stage2": "course_supporter.security.stage2.run_stage2_safety_check",
         "check_work_window": "course_supporter.job_priority.check_work_window",
@@ -103,6 +107,7 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
             content_char_count=100,
         )
     )
+    processor.process_detail = AsyncMock(return_value=[])
 
     ctx, _ = _build_ctx(processor)
     paths = _patch_paths()
@@ -116,6 +121,7 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
         patch(paths["entry_repo"]) as entry_cls,
         patch(paths["node_repo"]) as node_cls,
         patch(paths["summary_repo"]) as summary_cls,
+        patch(paths["segment_repo"]) as segment_cls,
         patch(paths["create_heavy"]),
         patch(paths["create_processors"], return_value={"web": processor}),
         patch(paths["set_tenant_from_job"], new=AsyncMock()),
@@ -141,6 +147,7 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
         summary_cls.return_value.create = AsyncMock(
             return_value=MagicMock(id=uuid.uuid4()),
         )
+        segment_cls.return_value.create_batch = AsyncMock(return_value=[])
         cb_cls.return_value.on_success = AsyncMock()
         cb_cls.return_value.on_failure = AsyncMock()
 
@@ -151,6 +158,8 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
     sr_kwargs = entry_cls.return_value.store_safety_result.call_args.kwargs
     assert sr_kwargs["safety_result"]["is_safe"] is True
     processor.process_macro.assert_awaited_once()
+    processor.process_detail.assert_awaited_once()
+    segment_cls.return_value.create_batch.assert_awaited_once()
     cb_cls.return_value.on_success.assert_awaited_once()
     cb_cls.return_value.on_failure.assert_not_awaited()
 
@@ -244,6 +253,7 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
             content_char_count=10,
         )
     )
+    processor.process_detail = AsyncMock(return_value=[])
 
     ctx, _ = _build_ctx(processor)
     paths = _patch_paths()
@@ -256,6 +266,7 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
         patch(paths["entry_repo"]) as entry_cls,
         patch(paths["node_repo"]) as node_cls,
         patch(paths["summary_repo"]) as summary_cls,
+        patch(paths["segment_repo"]) as segment_cls,
         patch(paths["create_heavy"]),
         patch(paths["create_processors"], return_value={"web": processor}),
         patch(paths["set_tenant_from_job"], new=AsyncMock()),
@@ -281,6 +292,7 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
         summary_cls.return_value.create = AsyncMock(
             return_value=MagicMock(id=uuid.uuid4())
         )
+        segment_cls.return_value.create_batch = AsyncMock(return_value=[])
         cb_cls.return_value.on_success = AsyncMock()
         cb_cls.return_value.on_failure = AsyncMock()
 
@@ -289,4 +301,8 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
     stage_calls = [
         call.args[1] for call in job_cls.return_value.update_stage.await_args_list
     ]
-    assert stage_calls == ["checking_safety", "extracting_structure"]
+    assert stage_calls == [
+        "checking_safety",
+        "extracting_structure",
+        "creating_segments",
+    ]

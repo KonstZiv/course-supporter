@@ -688,6 +688,18 @@ class DocumentSegment(SoftDeleteMixin, Base):
         Integer,
         comment="Absolute end in the source unit",
     )
+    title: Mapped[str | None] = mapped_column(
+        String(128),
+        comment="Optional short heading (Pass 2a LLM emits per segment for "
+        "text/web; NULL for audio/video where title is synthesised later). "
+        "NOT in content_hash formula -- DD-2.1-W defers to Phase 1.3/1.4.",
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(512),
+        comment="1-2 sentence segment description (Pass 2a LLM emits per "
+        "segment; populated for text/web at C7, NULL for media pre-Pass-2c). "
+        "NOT in content_hash formula -- DD-2.1-W defers to Phase 1.3/1.4.",
+    )
     content: Mapped[str] = mapped_column(
         Text,
         comment="Cleaned (LLM) or sliced (text/web) content of this segment",

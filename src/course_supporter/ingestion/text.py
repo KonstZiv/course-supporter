@@ -13,7 +13,10 @@ from course_supporter.ingestion.base import (
     ProcessingError,
     UnsupportedFormatError,
 )
-from course_supporter.ingestion.schemas import DocumentSummaryDraft
+from course_supporter.ingestion.schemas import (
+    DocumentSegmentDraft,
+    DocumentSummaryDraft,
+)
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -266,7 +269,7 @@ class TextProcessor(MaterialProcessor):
         least one segment stays in ``main_concepts`` and is removed
         from ``secondary_concepts``.
         """
-        text = "\n\n".join(chunk.text for chunk in doc.chunks if chunk.text)
+        text = doc.assemble_text()
         if not text.strip():
             msg = "Cannot run Pass 2a on empty document (no content chunks)"
             raise ProcessingError(msg)
@@ -293,3 +296,34 @@ class TextProcessor(MaterialProcessor):
         draft.secondary_concepts = sorted(all_secondary)
 
         return draft
+
+    async def process_detail(
+        self,
+        doc: SourceDocument,
+        summary_draft: DocumentSummaryDraft,
+    ) -> list[DocumentSegmentDraft]:
+        """Pass 2b -- algorithmic slice over Pass 2a offsets (KD-2.1-O).
+
+        Zero LLM calls. For each ``DocumentSegmentDraft`` in
+        ``summary_draft.segments`` (Pass 2a output), materialises
+        ``content`` by slicing ``doc.assemble_text()`` with the
+        ``start_pos`` / ``end_pos`` offsets the mapping LLM emitted.
+
+        Reference text is assembled via the canonical
+        :meth:`SourceDocument.assemble_text` helper -- identical string
+        seen by Pass 2a's mapping prompt and by Stage 2's safety check.
+
+        Drafts that already carry a non-None ``content`` are passed through
+        verbatim (defensive: not expected in text/web canonical path).
+        Offset bounds are validated by ``DocumentSegmentRepository.create_batch``
+        downstream so a single source of truth handles boundary errors.
+        """
+        reference_text = doc.assemble_text()
+        filled: list[DocumentSegmentDraft] = []
+        for draft in summary_draft.segments:
+            if draft.content is not None:
+                filled.append(draft)
+                continue
+            sliced = reference_text[draft.start_pos : draft.end_pos]
+            filled.append(draft.model_copy(update={"content": sliced}))
+        return filled

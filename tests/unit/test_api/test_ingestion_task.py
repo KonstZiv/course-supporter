@@ -17,6 +17,9 @@ _ENTRY_REPO = (
 _SUMMARY_REPO = (
     "course_supporter.storage.document_summary_repository.DocumentSummaryRepository"
 )
+_SEGMENT_REPO = (
+    "course_supporter.storage.document_segment_repository.DocumentSegmentRepository"
+)
 
 
 def _default_summary_draft() -> DocumentSummaryDraft:
@@ -84,6 +87,7 @@ def _mock_processors(
     mock_proc.process_macro = AsyncMock(
         return_value=summary_draft or _default_summary_draft(),
     )
+    mock_proc.process_detail = AsyncMock(return_value=[])
     return {source_type: mock_proc}
 
 
@@ -113,6 +117,19 @@ def _patch_summary_repo() -> None:  # type: ignore[misc]
         cls.return_value.create = AsyncMock(
             return_value=MagicMock(id=uuid.uuid4()),
         )
+        yield
+
+
+@pytest.fixture()
+def _patch_segment_repo() -> None:  # type: ignore[misc]
+    """Auto-patch DocumentSegmentRepository so Pass 2b runs without DB.
+
+    ``create_batch`` returns an empty list; mocked ``process_detail``
+    already returns ``[]`` so Pass 2b is a no-op end-to-end for these
+    legacy tests that pre-date Phase 2.1 C7.
+    """
+    with patch(_SEGMENT_REPO) as cls:
+        cls.return_value.create_batch = AsyncMock(return_value=[])
         yield
 
 
@@ -160,6 +177,7 @@ def _patch_node_repo_for_stage2() -> MagicMock:  # type: ignore[misc]
 @pytest.mark.usefixtures(
     "_bypass_tenant_lookup",
     "_patch_summary_repo",
+    "_patch_segment_repo",
     "_patch_stage2_check",
     "_patch_node_repo_for_stage2",
 )

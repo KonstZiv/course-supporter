@@ -8,7 +8,7 @@ are None — the prompt builder includes only what is present.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +58,7 @@ class MentorContext:
     success_criteria: str | None = None
     assessment_method: str | None = None
 
-    # Methodist output (from methodological_content JSONB)
+    # Task context fields (populated by Phase 4 NodeSummaryFinal reroute per DD-2.1-AG).
     learning_objectives: list[str] = field(default_factory=list)
     grading_criteria: str | None = None
     assignment_description: str | None = None
@@ -74,75 +74,6 @@ class MentorContext:
     # Course info
     course_title: str | None = None
     course_description: str | None = None
-
-
-class MethodistFields(TypedDict, total=False):
-    """Typed return value for _extract_methodist_fields."""
-
-    learning_objectives: list[str]
-    common_misconceptions: list[str]
-    teaching_recommendations: str | None
-    key_concepts: list[dict[str, str]]
-    grading_criteria: str | None
-    assignment_description: str | None
-    assignment_steps: list[str]
-
-
-def _extract_methodist_fields(
-    methodological_content: dict[str, Any] | None,
-    task_title: str | None,
-) -> MethodistFields:
-    """Extract relevant fields from MethodistNodeOutput JSONB.
-
-    Matches the assignment recommendation by title when possible,
-    falls back to the first assignment otherwise.
-    """
-    result = MethodistFields()
-    if not methodological_content:
-        return result
-
-    result["learning_objectives"] = methodological_content.get(
-        "learning_objectives",
-        [],
-    )
-    result["common_misconceptions"] = methodological_content.get(
-        "common_misconceptions",
-        [],
-    )
-    result["teaching_recommendations"] = methodological_content.get(
-        "teaching_recommendations",
-    )
-
-    # Extract key concepts (simplified)
-    raw_concepts = methodological_content.get("key_concepts_detailed", [])
-    result["key_concepts"] = [
-        {"name": c.get("name", ""), "definition": c.get("definition", "")}
-        for c in raw_concepts
-        if c.get("name")
-    ]
-
-    # Find matching assignment recommendation
-    assignments = methodological_content.get("recommended_assignments", [])
-    if assignments:
-        assignment = _find_assignment(assignments, task_title)
-        result["grading_criteria"] = assignment.get("grading_criteria")
-        result["assignment_description"] = assignment.get("description")
-        result["assignment_steps"] = assignment.get("steps", [])
-
-    return result
-
-
-def _find_assignment(
-    assignments: list[dict[str, Any]],
-    task_title: str | None,
-) -> dict[str, Any]:
-    """Find the assignment matching task_title, or fall back to first."""
-    if task_title:
-        title_lower = task_title.lower()
-        for assignment in assignments:
-            if assignment.get("title", "").lower() == title_lower:
-                return assignment
-    return assignments[0]
 
 
 def _build_student_history(

@@ -464,9 +464,8 @@ class AuthoredDocument(SoftDeleteMixin, Base):
     def state(self) -> MaterialState:
         """Derive current state. Phase 2.x will refine after Pass 2 pipeline.
 
-        Priority: ERROR > PENDING > READY. RAW / INTEGRITY_BROKEN states
-        relied on dropped processed_content / processed_hash columns; their
-        new semantics land with the Pass 2 pipeline introduction.
+        Priority: ERROR > PENDING > READY. RAW / INTEGRITY_BROKEN states are
+        deferred to Phase 2.x semantics after Pass 2 pipeline introduction.
         """
         if self.error_message:
             return MaterialState.ERROR
@@ -1017,9 +1016,8 @@ class StructureSnapshot(Base):
         ),
         {
             "comment": (
-                "Immutable LLM response built from MaterialEntries.processed_content "
-                "for a node or subtree. Used to populate StructureNodes which the "
-                "course author can then edit"
+                "Immutable LLM response payload from a single agent call "
+                "(generic schema; consumer-specific shape stored as JSONB)."
             ),
         },
     )
@@ -1221,8 +1219,8 @@ class Job(SoftDeleteMixin, Base):
         "that must complete before this job runs. "
         "DEPRECATED in v0.20 vision (KD13 — one Job = one logical "
         "action, internal stages via current_stage). To be dropped "
-        "when methodist_orchestrator and generation_orchestrator are "
-        "rewritten to single-Job-with-stages pattern in Phase 2.x.",
+        "when remaining multi-job orchestration is rewritten to the "
+        "single-Job-with-stages pattern in Phase 2.x.",
     )
     result_data: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"

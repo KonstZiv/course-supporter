@@ -13,10 +13,9 @@ exactly four:
 
 The DB-level CHECK constraint that would enforce this is
 **deferred to Phase 2.x** (see task 0.3 pre-flight): current
-call-sites in ``enqueue.py``, ``methodist_orchestrator.py``,
-``generation_orchestrator.py`` emit legacy strings (``ingest``,
-``generate_structure``, ``methodist_bottomup``, etc.) outside the
-KD13 enum, and a strict CHECK would break dev/test/CI immediately.
+call-sites in ``enqueue.py`` emit legacy strings (``ingest``,
+etc.) outside the KD13 enum, and a strict CHECK would break
+dev/test/CI immediately.
 
 This module ships the **transitional** layer: a clean StrEnum that
 matches KD13 exactly + an opt-in validator that lets callers signal

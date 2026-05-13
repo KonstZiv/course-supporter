@@ -50,12 +50,7 @@ class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
 
     async def test_material_processing_completed(self) -> None:
-        """AuthoredDocument complete_processing called with the entry id only.
-
-        Hotfix-9 dropped ``processed_content`` + ``processed_hash`` kwargs —
-        per vision §1.2 those columns no longer live on AuthoredDocument.
-        Method is now a pure state transition (pending → ready).
-        """
+        """AuthoredDocument complete_processing called with the entry id only."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -112,31 +107,6 @@ class TestOnSuccess:
             )
 
         session.commit.assert_awaited_once()
-
-    async def test_fingerprint_hook_called(self) -> None:
-        """_invalidate_fingerprints is called on success."""
-        callback, _ = _make_callback()
-        mid = uuid.uuid4()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            patch.object(
-                callback, "_invalidate_fingerprints", new_callable=AsyncMock
-            ) as mock_fp,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=mid,
-                content_json="{}",
-            )
-
-        mock_fp.assert_awaited_once()
-        call_kwargs = mock_fp.call_args
-        assert call_kwargs.kwargs["material_id"] == mid
 
     async def test_repos_receive_same_session(self) -> None:
         """Both repositories are instantiated with the same session."""
@@ -404,16 +374,6 @@ class TestOnFailureErrors:
                     material_id=uuid.uuid4(),
                     error_message="error",
                 )
-
-
-class TestHooksAreNoOp:
-    """Extension hooks are callable and do nothing (yet)."""
-
-    async def test_invalidate_fingerprints_is_noop(self) -> None:
-        """_invalidate_fingerprints completes without error."""
-        callback, _ = _make_callback()
-        session = AsyncMock()
-        await callback._invalidate_fingerprints(session, material_id=uuid.uuid4())
 
 
 class TestCallbackIntegrationWithArqTask:

@@ -247,9 +247,7 @@ async def create_document(
         # (AuthoredDocument.raw_hash never populated production-wide).
         # Pair-populate raw_size_bytes per INVESTIGATION.md §6.5 Strategy A
         # original design (sealed PHASE.md §"Коміт 8" silent on the size
-        # half of the pair — D17 acknowledged deviation). Without this
-        # column becomes fully dormant post-C9 (both update_source and
-        # ensure_raw_hash deleted).
+        # half of the pair — D17 acknowledged deviation).
         raw_hash = hashlib.sha256(upload_content).hexdigest()
         raw_size_bytes = len(upload_content)
         if actual_filename is None:

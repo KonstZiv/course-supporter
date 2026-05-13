@@ -24,14 +24,15 @@ from course_supporter.storage.orm import AuthoredDocument
 def _no_cascade_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable content_hash cascade invalidation in unit tests.
 
-    Two entry points masked: (1) ``_invalidate_node_chain`` helper used by
-    ``update_source`` / legacy ``create`` flows; (2) direct
-    ``ContentHashService.invalidate_up`` call wired into ``create()``
-    post-flush per Phase 1.1 etap 1.1.4 (variant (a) of §6.7.1). Unit
-    tests focus on signature / Python flow; the canonical KD9 walker is
-    exercised in ``tests/integration/test_content_hash_persistence.py``.
-    Tests asserting these specific callsites override per-test via
-    ``mp.setattr`` (see ``TestInvalidationContract`` below).
+    Two entry points masked: (1) ``_invalidate_node_chain`` helper
+    preserved post-C9.2 for the invalidation-contract negative test;
+    (2) direct ``ContentHashService.invalidate_up`` call wired into
+    ``create()`` post-flush per Phase 1.1 etap 1.1.4 (variant (a) of
+    §6.7.1). Unit tests focus on signature / Python flow; the canonical
+    KD9 walker is exercised in
+    ``tests/integration/test_content_hash_persistence.py``. The negative
+    test in ``TestInvalidationContract`` overrides per-test via
+    ``mp.setattr``.
     """
     from course_supporter.storage.content_hash import ContentHashService
 
@@ -362,138 +363,14 @@ class TestFailProcessing:
             await repo.fail_processing(uuid.uuid4(), error_message="fail")
 
 
-class TestUpdateSource:
-    """AuthoredDocumentRepository.update_source tests."""
-
-    async def test_updates_url_and_invalidates_hash(self) -> None:
-        """Updates source_url and clears raw_hash/raw_size_bytes."""
-        entry = _mock_entry(
-            source_url="https://old.com",
-            raw_hash="a" * 64,
-            raw_size_bytes=1024,
-        )
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        result = await repo.update_source(
-            entry.id,
-            source_url="https://new.com/article",
-            filename="new.html",
-        )
-
-        assert result.source_url == "https://new.com/article"
-        assert result.filename == "new.html"
-        assert result.raw_hash is None
-        assert result.raw_size_bytes is None
-        session.flush.assert_awaited()
-
-    async def test_clears_filename_by_default(self) -> None:
-        """Filename cleared when not provided."""
-        entry = _mock_entry(filename="old.pdf")
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        result = await repo.update_source(
-            entry.id,
-            source_url="https://new.com",
-        )
-
-        assert result.filename is None
-
-    async def test_not_found(self) -> None:
-        """ValueError if entry doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = AuthoredDocumentRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.update_source(uuid.uuid4(), source_url="https://x.com")
-
-
-class TestEnsureRawHash:
-    """AuthoredDocumentRepository.ensure_raw_hash tests."""
-
-    async def test_sets_hash_when_none(self) -> None:
-        """Computes and sets raw_hash from bytes."""
-        entry = _mock_entry(raw_hash=None, raw_size_bytes=None)
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        raw = b"hello world"
-        result = await repo.ensure_raw_hash(entry.id, raw_bytes=raw)
-
-        import hashlib
-
-        expected = hashlib.sha256(raw).hexdigest()
-        assert result.raw_hash == expected
-        assert result.raw_size_bytes == len(raw)
-        session.flush.assert_awaited()
-
-    async def test_skips_when_already_set(self) -> None:
-        """Does not overwrite existing raw_hash."""
-        existing_hash = "b" * 64
-        entry = _mock_entry(raw_hash=existing_hash, raw_size_bytes=512)
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        result = await repo.ensure_raw_hash(entry.id, raw_bytes=b"new data")
-
-        assert result.raw_hash == existing_hash
-        assert result.raw_size_bytes == 512
-        session.flush.assert_not_awaited()
-
-    async def test_not_found(self) -> None:
-        """ValueError if entry doesn't exist."""
-        session = AsyncMock()
-        session.get.return_value = None
-
-        repo = AuthoredDocumentRepository(session)
-        with pytest.raises(ValueError, match="not found"):
-            await repo.ensure_raw_hash(uuid.uuid4(), raw_bytes=b"data")
-
-
 class TestInvalidationContract:
-    """Asserts the parent-chain invalidation contract preserved post-Phase-1.1.
+    """Asserts the parent-chain invalidation contract for surviving callsites.
 
     Bypasses the file-level ``_no_cascade_invalidation`` autouse fixture
     via per-test ``mp.setattr`` instance-level override — the autouse mock
     masks the helper for every other test, but here we explicitly observe
     the call surface to lock the contract.
-
-    Migrated from the legacy
-    ``tests/unit/test_fingerprint.py::TestRepositoryInvalidation`` before
-    that file's wholesale deletion (Phase 1.1 etap 1.1.3). The mock
-    target is the helper itself (``_invalidate_node_chain``), so the body
-    rewire from the legacy fingerprint service to ``ContentHashService`` is
-    invisible at this layer — what matters is that ``update_source`` triggers
-    it and ``complete_processing`` does not.
     """
-
-    async def test_update_source_invalidates_node_chain(self) -> None:
-        """``update_source`` triggers parent chain invalidation post-flush."""
-        entry = _mock_entry(
-            source_url="https://old.com",
-            raw_hash="a" * 64,
-            raw_size_bytes=1024,
-        )
-        session = AsyncMock()
-        session.get.return_value = entry
-
-        repo = AuthoredDocumentRepository(session)
-        invalidate_mock = AsyncMock()
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(repo, "_invalidate_node_chain", invalidate_mock)
-            await repo.update_source(
-                entry.id,
-                source_url="https://new-url.com",
-            )
-
-        invalidate_mock.assert_awaited_once_with(entry.course_node_id)
 
     async def test_complete_processing_does_not_invalidate_node_chain(
         self,
@@ -504,10 +381,10 @@ class TestInvalidationContract:
         — hotfix-9 design): ``complete_processing`` clears ``job_id`` /
         ``pending_since`` / ``error_message`` and sets ``processed_at``, but
         does NOT cascade invalidate parent hashes. Cascade invalidation
-        belongs to ``update_source`` (raw bytes change) and ``create``
-        (initial insertion); state transitions alone do not affect
-        ``content_hash``. This negative assertion serves as regression guard
-        — re-adding cascade invalidation here without review would be caught.
+        belongs to ``create`` (initial insertion); state transitions alone
+        do not affect ``content_hash``. This negative assertion serves as
+        regression guard — re-adding cascade invalidation here without
+        review would be caught.
         """
         entry = MagicMock(spec=AuthoredDocument)
 

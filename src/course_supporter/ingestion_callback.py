@@ -73,9 +73,6 @@ class IngestionCallback:
 
             await job_repo.update_status(job_id, "complete")
 
-            # Extension points
-            await self._invalidate_fingerprints(session, material_id=material_id)
-
             await session.commit()
 
         log.info("ingestion_callback_success")
@@ -208,15 +205,3 @@ class IngestionCallback:
             on_invalidate_hashes=invalidate_hook,
         )
         log.info("stage2_reject_cascade_complete", material_id=str(material_id))
-
-    # ------------------------------------------------------------------
-    # Extension hooks
-    # ------------------------------------------------------------------
-
-    async def _invalidate_fingerprints(
-        self,
-        session: AsyncSession,
-        *,
-        material_id: uuid.UUID,
-    ) -> None:
-        """Invalidate Merkle fingerprints from material up to root."""

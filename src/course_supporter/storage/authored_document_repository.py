@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from datetime import UTC, datetime
 
@@ -297,13 +296,6 @@ class AuthoredDocumentRepository:
         ``state`` derivation property (``orm.AuthoredDocument.state``)
         reads ``job_id IS NULL`` as READY.
 
-        Vision §1.2 explicitly removes ``processed_content`` /
-        ``outline_content`` / ``processed_hash`` columns from the
-        authored layer — processed content lives in DocumentSummary +
-        DocumentSegment after the Phase 2.x KD2 Pass 2 pipeline lands.
-        Until then this method only flips the state; no content is
-        persisted on the AuthoredDocument row itself.
-
         Args:
             entry_id: AuthoredDocument id to mark READY.
             now: Override for current time (testing).
@@ -377,62 +369,6 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
-    async def update_source(
-        self,
-        entry_id: uuid.UUID,
-        *,
-        source_url: str,
-        filename: str | None = None,
-    ) -> AuthoredDocument:
-        """Update source URL and invalidate raw hash.
-
-        When the source changes, ``raw_hash`` is cleared so the next
-        ingestion pass recomputes it from the new bytes. The Phase 2.x
-        Pass 2 pipeline (vision §3 KD2) is responsible for surfacing
-        any downstream staleness via ``content_hash`` invalidation
-        on the parent ``CourseNode`` chain.
-
-        Args:
-            entry_id: Entry to update.
-            source_url: New source URL.
-            filename: New filename (or None to clear).
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        entry.source_url = source_url
-        entry.filename = filename
-        entry.raw_hash = None
-        entry.raw_size_bytes = None
-        await self._session.flush()
-        await self._invalidate_node_chain(entry.course_node_id)
-        return entry
-
-    async def ensure_raw_hash(
-        self,
-        entry_id: uuid.UUID,
-        *,
-        raw_bytes: bytes,
-    ) -> AuthoredDocument:
-        """Lazily compute and set raw_hash from content bytes.
-
-        Only sets the hash if it is currently None.
-
-        Args:
-            entry_id: Entry to update.
-            raw_bytes: Raw content bytes for hashing.
-
-        Raises:
-            ValueError: If entry not found.
-        """
-        entry = await self._require(entry_id)
-        if entry.raw_hash is None:
-            entry.raw_hash = hashlib.sha256(raw_bytes).hexdigest()
-            entry.raw_size_bytes = len(raw_bytes)
-            await self._session.flush()
-        return entry
-
     async def update_material_role(
         self,
         entry: AuthoredDocument,
@@ -464,25 +400,6 @@ class AuthoredDocumentRepository:
         entry.task_type = task_type.value if task_type is not None else None
         await self._session.flush()
         return entry
-
-    # ``delete()`` removed in Phase 1 sub-area ``kd3`` commit (m) — the
-    # last remaining caller (``routes/storage.py::delete_file``) was
-    # rewritten to use :class:`CascadeDeleteService.soft_delete_with_cascade`
-    # so the KD3 contract (soft-delete + scrub) and QQ5 contract
-    # (DB → commit → ARQ enqueue via ``enqueue_s3_cleanup``) hold uniformly
-    # across all 3 KD3-violating handlers (delete_node + delete_document +
-    # delete_file). The legacy hard-delete path is now structurally
-    # unreachable from the public API surface; cascade-driven soft-delete
-    # is the canonical replacement.
-    #
-    # The ``_invalidate_node_chain`` and ``_require`` private helpers
-    # below are PRESERVED. After Phase 1.1, ``_invalidate_node_chain``
-    # is the parent-chain materialisation path used by
-    # ``update_source()`` (raw_hash cleared → parent chain recomputed
-    # via canonical KD9 cascade). The ``create()`` flow no longer calls
-    # this helper; it invokes ``ContentHashService.invalidate_up`` on
-    # the new entry directly so the entity's own ``content_hash`` is
-    # materialised in the same walk (Phase 1.1 §6.7.1 variant (a)).
 
     # ── Private helpers ──
 

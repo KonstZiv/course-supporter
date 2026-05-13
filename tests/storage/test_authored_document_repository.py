@@ -528,3 +528,77 @@ class TestCompleteProcessingStateTransition:
             repo = AuthoredDocumentRepository(session)
             with pytest.raises(ValueError):
                 await repo.complete_processing(nonexistent)
+
+
+@pytest.mark.requires_db
+class TestCreateRawHash:
+    """``AuthoredDocumentRepository.create`` persists optional raw_hash
+    kwarg (Phase 2.1 C8 / KD-2.1-E / closes DD-1.1-1).
+
+    Strategy A: the upload entry points compute SHA-256 over the bytes
+    they already hold (Stage 1 requires full-buffer materialisation)
+    and forward the hex digest into ``create()``. Pre-C8 the column
+    was nullable and never populated; post-C8 every file-backed entry
+    carries a hash, while URL-only entries legitimately stay ``None``
+    until the ingestion worker fetches the bytes (out-of-scope for C8).
+    """
+
+    async def test_create_with_raw_hash_persists_value(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "raw-hash-explicit")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            await session.commit()
+            tenant_id = tenant.id
+            root_id = root.id
+
+        # 64-char lowercase hex digest (mirror SHA-256 hex shape).
+        digest = "a" * 64
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root_id,
+                source_type="text",
+                source_url="https://example.com/raw-hash-explicit",
+                raw_hash=digest,
+            )
+            await session.commit()
+            assert doc.raw_hash == digest
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_create_without_raw_hash_defaults_to_none(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Backwards-compat: callers that omit raw_hash get None.
+
+        Existing pre-C8 call sites (URL-only paths, legacy fixtures)
+        keep working without modification; raw_hash is opt-in via
+        keyword argument.
+        """
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "raw-hash-omitted")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            await session.commit()
+            tenant_id = tenant.id
+            root_id = root.id
+
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root_id,
+                source_type="web",
+                source_url="https://example.com/raw-hash-omitted",
+            )
+            await session.commit()
+            assert doc.raw_hash is None
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])

@@ -448,6 +448,49 @@ class S3Client:
         )
         return result
 
+    async def get_object(self, key: str) -> bytes:
+        """Download an object from S3 and return its full body in memory.
+
+        Distinct from :meth:`download_file` (which streams to a local
+        path): this returns ``bytes`` directly for callers that need
+        the body in memory (Stage 1 security pipeline, raw_hash compute
+        post presigned-URL confirm). Bounded by ``AUTHORED_POLICY``
+        size caps at the call-site; not safe for arbitrary multi-GB
+        objects.
+
+        Args:
+            key: Object key in the bucket.
+
+        Returns:
+            Full object body as ``bytes``.
+
+        Raises:
+            ClientError: If the object does not exist or fetch fails.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        log = structlog.get_logger()
+        try:
+            response = await self._client.get_object(
+                Bucket=self._bucket,
+                Key=key,
+            )
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            log.error(
+                "s3_get_object_failed",
+                key=key,
+                bucket=self._bucket,
+                error_code=error_code,
+                error=str(e),
+            )
+            raise
+
+        body: bytes = await response["Body"].read()
+        return body
+
     async def delete_object(self, key: str) -> None:
         """Delete a single object from the bucket.
 

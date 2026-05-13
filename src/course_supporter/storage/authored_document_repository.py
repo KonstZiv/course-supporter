@@ -36,6 +36,8 @@ class AuthoredDocumentRepository:
         task_type: AssignmentType | str | None = None,
         language: str | None = None,
         course_root_id: uuid.UUID | None = None,
+        raw_hash: str | None = None,
+        raw_size_bytes: int | None = None,
     ) -> AuthoredDocument:
         """Create a new material entry with auto-incremented order.
 
@@ -59,6 +61,19 @@ class AuthoredDocumentRepository:
                 early and raises). Callers that already have the root
                 in scope (e.g. ingestion pipeline working from the
                 course context) can pass it directly to skip the walk.
+            raw_hash: Optional pre-computed SHA-256 hex digest of the
+                authored bytes (Strategy A per KD-2.1-E). Set by the
+                upload entry points (multipart ``create_document`` and
+                presigned ``confirm_upload``) for file-backed uploads;
+                ``None`` for URL-only materials where the bytes are
+                fetched later by the ingestion worker. Once persisted
+                the value is immutable (vision §3 KD9).
+            raw_size_bytes: Optional byte count of the authored input
+                paired with ``raw_hash`` per Strategy A original design
+                (INVESTIGATION.md §6.5; sealed PHASE.md §"Коміт 8"
+                omitted by abbreviation — D17 acknowledged deviation).
+                Populated alongside ``raw_hash`` from the same buffer
+                via ``len(upload_bytes)``. ``None`` for URL-only paths.
 
         Returns:
             The newly created AuthoredDocument.
@@ -112,6 +127,8 @@ class AuthoredDocumentRepository:
             task_type=task_type_value,
             language=language,
             order=next_order,
+            raw_hash=raw_hash,
+            raw_size_bytes=raw_size_bytes,
         )
         self._session.add(entry)
         await self._session.flush()

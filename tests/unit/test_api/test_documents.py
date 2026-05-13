@@ -359,6 +359,10 @@ class TestConfirmUpload:
     ) -> None:
         """Successful confirm creates AuthoredDocument with ingestion job."""
         mock_s3.head_object = AsyncMock(return_value={"ContentLength": 1024})
+        # Phase 2.1 C8 — confirm_upload now fetches bytes for Stage 1.
+        # Stage 1 itself is bypassed via the ``RUN_STAGE1_AT_DOCUMENTS``
+        # patch below; any bytes value satisfies the await contract.
+        mock_s3.get_object = AsyncMock(return_value=b"%PDF-1.4 dummy")
         mock_s3._endpoint_url = "http://localhost:9000"
         mock_s3._bucket = "course-materials"
         entry = _mock_entry(node_id=node_id)
@@ -373,6 +377,10 @@ class TestConfirmUpload:
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            # Phase 2.1 C8 — Stage 1 fires on the confirm_upload path too.
+            # This test focuses on the success persistence shape, not on
+            # Stage 1 logic (covered by test_confirm_upload_stage1.py).
+            patch(RUN_STAGE1_AT_DOCUMENTS, return_value=MagicMock()),
         ):
             resp = await client.post(
                 f"/api/v1/nodes/{node_id}/documents/confirm-upload",

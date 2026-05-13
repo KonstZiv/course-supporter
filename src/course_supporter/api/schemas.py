@@ -8,8 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from course_supporter.models.methodist import AssignmentType
-from course_supporter.models.source import MaterialRole, SourceType
+from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.storage.orm import GenerationMode
 
 # --- Material Tree Nodes ---

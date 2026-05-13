@@ -7,21 +7,11 @@ a four-tier taxonomy (test, short_task, task, project).
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# -- Task Taxonomy --
-
-
-class AssignmentType(StrEnum):
-    """Assignment types with increasing complexity and duration."""
-
-    TEST = "test"
-    SHORT_TASK = "short_task"
-    TASK = "task"
-    PROJECT = "project"
+from course_supporter.models.source import AssignmentType
 
 
 class AssignmentRecommendation(BaseModel):

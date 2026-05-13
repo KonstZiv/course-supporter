@@ -7,12 +7,12 @@ from pydantic import ValidationError
 
 from course_supporter.models.methodist import (
     AssignmentRecommendation,
-    AssignmentType,
     ConceptDetail,
     Contradiction,
     Gap,
     MethodistNodeOutput,
 )
+from course_supporter.models.source import AssignmentType
 
 
 class TestAssignmentType:

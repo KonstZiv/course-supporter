@@ -45,8 +45,7 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.jobs.cancellation_service import JobCancellationService
-from course_supporter.models.methodist import AssignmentType
-from course_supporter.models.source import MaterialRole, SourceType
+from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.security import AUTHORED_POLICY, run_stage1
 from course_supporter.security.exceptions import (
     ErrorCategory,

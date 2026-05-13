@@ -146,7 +146,7 @@ class TestCreate:
 
     async def test_create_with_task_type_enum(self) -> None:
         """AssignmentType is persisted as its string value."""
-        from course_supporter.models.methodist import AssignmentType
+        from course_supporter.models.source import AssignmentType
 
         session = AsyncMock()
         session.add = MagicMock()
@@ -185,7 +185,7 @@ class TestUpdateTaskType:
     """AuthoredDocumentRepository.update_task_type tests."""
 
     async def test_set_task_type(self) -> None:
-        from course_supporter.models.methodist import AssignmentType
+        from course_supporter.models.source import AssignmentType
 
         session = AsyncMock()
         repo = AuthoredDocumentRepository(session)

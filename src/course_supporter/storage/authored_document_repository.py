@@ -9,8 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.models.methodist import AssignmentType
-from course_supporter.models.source import MaterialRole
+from course_supporter.models.source import AssignmentType, MaterialRole
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
 

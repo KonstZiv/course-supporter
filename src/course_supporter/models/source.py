@@ -23,6 +23,21 @@ class MaterialRole(StrEnum):
     METHODOLOGICAL = "methodological"
 
 
+class AssignmentType(StrEnum):
+    """Assignment types with increasing complexity and duration.
+
+    Translocated from models/methodist.py in C9.0 (K-stop-1 resolution):
+    AuthoredDocument.task_type is a core document taxonomy attribute,
+    not a methodist-internal concept. Methodist legacy layer is deleted
+    in C9.3 (Phase 5 + methodist cleanup).
+    """
+
+    TEST = "test"
+    SHORT_TASK = "short_task"
+    TASK = "task"
+    PROJECT = "project"
+
+
 class ChunkType(StrEnum):
     """Types of content chunks produced by processors."""
 

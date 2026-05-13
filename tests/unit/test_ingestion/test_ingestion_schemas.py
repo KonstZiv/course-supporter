@@ -220,3 +220,163 @@ class TestDocumentSummaryDraft:
         draft = DocumentSummaryDraft.model_validate_json(payload)
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
+
+
+class TestDocumentSegmentDraftOffsetInvariants:
+    """Fixup 2.1.7.1 — strict offset invariants per prompt v1.md."""
+
+    def test_inverted_offsets_rejected(self) -> None:
+        """end_pos must be strictly greater than start_pos."""
+        with pytest.raises(ValidationError, match=r"end_pos.*start_pos"):
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=100,
+                end_pos=50,
+                description="Inverted offsets — order=0 case.",
+            )
+
+    def test_equal_offsets_rejected(self) -> None:
+        """end_pos == start_pos is a zero-length segment; not allowed."""
+        with pytest.raises(ValidationError, match=r"end_pos.*start_pos"):
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=42,
+                end_pos=42,
+                description="Zero-length window.",
+            )
+
+    def test_negative_start_pos_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="start_pos must be non-negative"):
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=-1,
+                end_pos=5,
+                description="Negative start.",
+            )
+
+    def test_negative_order_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="order must be non-negative"):
+            DocumentSegmentDraft(
+                order=-1,
+                start_pos=0,
+                end_pos=5,
+                description="Negative order.",
+            )
+
+
+class TestDocumentSummaryDraftSequenceInvariants:
+    """Fixup 2.1.7.1 — strict cover invariants per prompt v1.md."""
+
+    @staticmethod
+    def _seg(order: int, start: int, end: int) -> DocumentSegmentDraft:
+        return DocumentSegmentDraft(
+            order=order,
+            start_pos=start,
+            end_pos=end,
+            description=f"Segment {order} fixture.",
+        )
+
+    def test_empty_segments_accepted(self) -> None:
+        """Trivially short doc — segments=[] allowed."""
+        draft = DocumentSummaryDraft(
+            title="t", description="d", content_char_count=0, segments=[]
+        )
+        assert draft.segments == []
+
+    def test_contiguous_cover_accepted(self) -> None:
+        """0..N contiguous segments matching content_char_count — happy path."""
+        draft = DocumentSummaryDraft(
+            title="t",
+            description="d",
+            content_char_count=30,
+            segments=[
+                self._seg(0, 0, 10),
+                self._seg(1, 10, 20),
+                self._seg(2, 20, 30),
+            ],
+        )
+        assert len(draft.segments) == 3
+
+    def test_first_segment_must_start_at_zero(self) -> None:
+        with pytest.raises(ValidationError, match="first segment must start at 0"):
+            DocumentSummaryDraft(
+                title="t",
+                description="d",
+                content_char_count=20,
+                segments=[
+                    self._seg(0, 5, 10),
+                    self._seg(1, 10, 20),
+                ],
+            )
+
+    def test_segment_order_must_be_strictly_monotonic(self) -> None:
+        """Order [0, 2] (gap) rejected."""
+        with pytest.raises(ValidationError, match="strictly monotonic"):
+            DocumentSummaryDraft(
+                title="t",
+                description="d",
+                content_char_count=20,
+                segments=[
+                    self._seg(0, 0, 10),
+                    self._seg(2, 10, 20),
+                ],
+            )
+
+    def test_segments_must_not_overlap(self) -> None:
+        """prev.end_pos > next.start_pos rejected."""
+        with pytest.raises(ValidationError, match="contiguous without gaps or overlap"):
+            DocumentSummaryDraft(
+                title="t",
+                description="d",
+                content_char_count=20,
+                segments=[
+                    self._seg(0, 0, 12),
+                    self._seg(1, 10, 20),  # overlaps prev
+                ],
+            )
+
+    def test_segments_must_not_have_gaps(self) -> None:
+        """prev.end_pos < next.start_pos rejected."""
+        with pytest.raises(ValidationError, match="contiguous without gaps or overlap"):
+            DocumentSummaryDraft(
+                title="t",
+                description="d",
+                content_char_count=20,
+                segments=[
+                    self._seg(0, 0, 8),
+                    self._seg(1, 10, 20),  # gap between 8 and 10
+                ],
+            )
+
+    def test_content_char_count_must_match_last_end_pos(self) -> None:
+        """content_char_count == segments[-1].end_pos required."""
+        with pytest.raises(
+            ValidationError, match=r"content_char_count.*last segment end_pos"
+        ):
+            DocumentSummaryDraft(
+                title="t",
+                description="d",
+                content_char_count=25,
+                segments=[
+                    self._seg(0, 0, 10),
+                    self._seg(1, 10, 20),  # last end=20 != count=25
+                ],
+            )
+
+    def test_negative_content_char_count_rejected(self) -> None:
+        with pytest.raises(
+            ValidationError, match="content_char_count must be non-negative"
+        ):
+            DocumentSummaryDraft(
+                title="t", description="d", content_char_count=-1, segments=[]
+            )
+
+    def test_real_world_smoke_a_bug_rejected(self) -> None:
+        """Regression: C8 smoke A 2026-05-13 LLM output (end_pos < start_pos)."""
+        with pytest.raises(ValidationError, match=r"end_pos.*start_pos"):
+            DocumentSegmentDraft(
+                order=13,
+                start_pos=8700,
+                end_pos=6187,
+                description="LLM-emitted malformed offsets (real bug data).",
+            )

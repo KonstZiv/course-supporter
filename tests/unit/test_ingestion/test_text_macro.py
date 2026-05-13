@@ -84,6 +84,8 @@ class TestProcessMacroHappyPath:
         processor = TextProcessor()
         doc = _make_doc("alpha.", "beta.")
         router = AsyncMock()
+        # Contiguous segments per fixup 2.1.7.1 invariants (no gaps; first
+        # starts at 0; last ends at content_char_count).
         router.execute_for_stage.return_value = _stage_result(
             '{"title": "T", "description": "D",'
             ' "content_char_count": 13,'
@@ -92,7 +94,7 @@ class TestProcessMacroHappyPath:
             '    "title": "Alpha section",'
             '    "description": "Frames the alpha topic.",'
             '    "main_concepts": ["a"], "secondary_concepts": []},'
-            '   {"order": 1, "start_pos": 8, "end_pos": 13,'
+            '   {"order": 1, "start_pos": 6, "end_pos": 13,'
             '    "title": null,'
             '    "description": "Follow-up on beta.",'
             '    "main_concepts": ["b"], "secondary_concepts": []}'
@@ -199,13 +201,21 @@ class TestProcessMacroEmptyDocument:
 
 
 class TestProcessMacroValidationError:
-    """LLM output that fails Pydantic validation propagates the error."""
+    """LLM output that fails Pydantic validation surfaces a ProcessingError.
+
+    Fixup 2.1.7.1 wraps Pydantic ValidationError into ProcessingError so
+    the upstream worker pipeline gets a consistent error type with a
+    descriptive message; the original ValidationError is preserved via
+    ``__cause__`` for traceability.
+    """
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_propagates_validation_error(
+    async def test_missing_required_field_surfaces_processing_error(
         self,
     ) -> None:
         from pydantic import ValidationError
+
+        from course_supporter.ingestion.base import ProcessingError
 
         processor = TextProcessor()
         doc = _make_doc("hello")
@@ -216,5 +226,7 @@ class TestProcessMacroValidationError:
             ' "content_char_count": 5, "segments": []}'
         )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ProcessingError) as exc_info:
             await processor.process_macro(doc, router)
+        # Original ValidationError preserved as cause for debugging.
+        assert isinstance(exc_info.value.__cause__, ValidationError)

@@ -61,12 +61,15 @@ def _draft(
 
 
 def _summary(segments: list[DocumentSegmentDraft]) -> DocumentSummaryDraft:
+    # Per fixup 2.1.7.1 invariants: content_char_count must equal last
+    # segment end_pos when segments non-empty.
+    content_char_count = segments[-1].end_pos if segments else 0
     return DocumentSummaryDraft(
         title="t",
         description="d",
         main_concepts=[],
         secondary_concepts=[],
-        content_char_count=sum(s.end_pos - s.start_pos for s in segments),
+        content_char_count=content_char_count,
         segments=segments,
     )
 
@@ -96,20 +99,21 @@ class TestTextProcessorProcessDetail:
 
     @pytest.mark.asyncio
     async def test_multi_segment_slice_in_order(self) -> None:
+        """Contiguous segment cover per fixup 2.1.7.1 invariants."""
         processor = TextProcessor()
         text = "Lexing stage.\n\nParsing stage.\n\nAST stage."
         doc = _doc(text)
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=13),
-            _draft(order=1, start_pos=15, end_pos=29),
+            _draft(order=0, start_pos=0, end_pos=15),
+            _draft(order=1, start_pos=15, end_pos=31),
             _draft(order=2, start_pos=31, end_pos=len(text)),
         ]
 
         result = await processor.process_detail(doc, _summary(drafts))
 
         assert [s.content for s in result] == [
-            "Lexing stage.",
-            "Parsing stage.",
+            "Lexing stage.\n\n",
+            "Parsing stage.\n\n",
             "AST stage.",
         ]
         assert [s.order for s in result] == [0, 1, 2]
@@ -154,15 +158,17 @@ class TestTextProcessorProcessDetail:
             source_url="file:///fixture",
             chunks=chunks,
         )
-        # assemble_text() => "Header\n\nBody." (len 13).
+        # assemble_text() => "Header\n\nBody." (len 13). Contiguous cover
+        # per fixup 2.1.7.1 — separator chars are absorbed into the
+        # preceding segment for fixture purposes.
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=6),
+            _draft(order=0, start_pos=0, end_pos=8),
             _draft(order=1, start_pos=8, end_pos=13),
         ]
 
         result = await processor.process_detail(doc, _summary(drafts))
 
-        assert result[0].content == "Header"
+        assert result[0].content == "Header\n\n"
         assert result[1].content == "Body."
 
 
@@ -182,20 +188,21 @@ class TestWebProcessorProcessDetail:
 
     @pytest.mark.asyncio
     async def test_multi_segment_slice(self) -> None:
+        """Contiguous segment cover per fixup 2.1.7.1 invariants."""
         processor = WebProcessor()
         text = "intro para.\n\nsecond para.\n\nthird para."
         doc = _doc(text, source_type=SourceType.WEB)
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=11),
-            _draft(order=1, start_pos=13, end_pos=25),
+            _draft(order=0, start_pos=0, end_pos=13),
+            _draft(order=1, start_pos=13, end_pos=27),
             _draft(order=2, start_pos=27, end_pos=len(text)),
         ]
 
         result = await processor.process_detail(doc, _summary(drafts))
 
         assert [s.content for s in result] == [
-            "intro para.",
-            "second para.",
+            "intro para.\n\n",
+            "second para.\n\n",
             "third para.",
         ]
 

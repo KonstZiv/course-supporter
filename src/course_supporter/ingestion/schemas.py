@@ -17,11 +17,26 @@ commits 5 and 7; ORM materialisation through
 All non-list fields are required (no Optional). LLM callers must
 emit complete payloads; partial output fails fast through Pydantic
 validation rather than silently propagating None into ORM rows.
+
+**Pass 2a output offset invariants (fixup 2.1.7.1).** Beyond the
+type-level checks, the schemas enforce structural invariants that
+the Pass 2a prompt (``prompts/pass_2a_mapping/v1.md``) commits to:
+``end_pos > start_pos`` per segment; segments order strictly
+monotonic (0, 1, 2, ...); adjacency without gaps
+(``prev.end_pos == next.start_pos``); full document coverage
+(``segments[0].start_pos == 0`` and
+``segments[-1].end_pos == content_char_count``). LLM JSON that
+violates the invariants raises ``ValidationError`` at parse time;
+the upstream ``StageRouter`` ladder treats that as a structural
+failure and retries on the next rung. This prevents orphan
+``DocumentSummary`` commits when only Pass 2a succeeds but Pass 2b
+would reject the offsets (the failure mode that surfaced in C8
+smoke A 2026-05-13).
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DocumentSegmentDraft(BaseModel):
@@ -73,6 +88,36 @@ class DocumentSegmentDraft(BaseModel):
         ),
     )
 
+    @field_validator("start_pos")
+    @classmethod
+    def _start_pos_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(
+                f"start_pos must be non-negative; got {value} "
+                "(prompt rule: 0 <= start_pos < end_pos)"
+            )
+        return value
+
+    @field_validator("order")
+    @classmethod
+    def _order_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(
+                f"order must be non-negative; got {value} "
+                "(prompt rule: order = 0, 1, 2, ...)"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _end_pos_strictly_after_start_pos(self) -> DocumentSegmentDraft:
+        if self.end_pos <= self.start_pos:
+            raise ValueError(
+                f"end_pos ({self.end_pos}) must be strictly greater than "
+                f"start_pos ({self.start_pos}) for segment order={self.order}; "
+                "prompt rule: 'end_pos must be > start_pos'"
+            )
+        return self
+
 
 class DocumentSummaryDraft(BaseModel):
     """In-flight summary draft (Pass 2a output, pre-ORM)."""
@@ -100,3 +145,61 @@ class DocumentSummaryDraft(BaseModel):
             "Pass 2b appends drafts before ORM materialisation."
         ),
     )
+
+    @field_validator("content_char_count")
+    @classmethod
+    def _content_char_count_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(f"content_char_count must be non-negative; got {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _segments_form_full_contiguous_cover(self) -> DocumentSummaryDraft:
+        """Strict prompt-literal invariants over the segment sequence.
+
+        Per ``prompts/pass_2a_mapping/v1.md``:
+
+        * ``order`` runs ``0, 1, 2, ...`` without gaps.
+        * Segments must not overlap and must not leave gaps
+          (``prev.end_pos == next.start_pos``).
+        * ``segments[0].start_pos == 0`` and
+          ``segments[-1].end_pos == content_char_count`` — the cover
+          spans the full document body the LLM analysed.
+
+        Empty ``segments`` is allowed only when the document is
+        trivially short (per prompt). In that case the only invariant
+        is ``content_char_count >= 0`` enforced field-level above.
+        """
+        if not self.segments:
+            return self
+
+        orders = [seg.order for seg in self.segments]
+        expected_orders = list(range(len(self.segments)))
+        if orders != expected_orders:
+            raise ValueError(
+                f"segment order sequence must be strictly monotonic "
+                f"0..{len(self.segments) - 1}; got {orders}"
+            )
+
+        if self.segments[0].start_pos != 0:
+            raise ValueError(
+                f"first segment must start at 0; got start_pos="
+                f"{self.segments[0].start_pos}"
+            )
+
+        for prev, nxt in zip(self.segments, self.segments[1:], strict=False):
+            if prev.end_pos != nxt.start_pos:
+                raise ValueError(
+                    f"segments must be contiguous without gaps or overlap; "
+                    f"order={prev.order} end_pos={prev.end_pos} != "
+                    f"order={nxt.order} start_pos={nxt.start_pos}"
+                )
+
+        last_end = self.segments[-1].end_pos
+        if last_end != self.content_char_count:
+            raise ValueError(
+                f"content_char_count ({self.content_char_count}) must equal "
+                f"last segment end_pos ({last_end}); full document coverage "
+                "required per prompt"
+            )
+        return self

@@ -140,7 +140,9 @@ def _mock_processors(
             description="d",
             main_concepts=["alpha", "beta"],
             secondary_concepts=["gamma"],
-            content_char_count=10,
+            # content_char_count must equal last segment end_pos per
+            # fixup 2.1.7.1 invariants (segments cover 0..20).
+            content_char_count=20,
             segments=seg_drafts,
         )
     )

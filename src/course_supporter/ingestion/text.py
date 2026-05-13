@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
     MaterialProcessor,
@@ -277,7 +278,30 @@ class TextProcessor(MaterialProcessor):
             "pass_2a_mapping",
             text=text,
         )
-        draft = DocumentSummaryDraft.model_validate_json(result.content)
+        try:
+            draft = DocumentSummaryDraft.model_validate_json(result.content)
+        except ValidationError as exc:
+            # Fixup 2.1.7.1 — Pass 2a output offset invariants. Strict
+            # prompt-literal validators (see ``ingestion/schemas.py``)
+            # reject malformed LLM output before the orphan-prone Pass 2a
+            # commit path. Surface a structured event so operator can
+            # track malformed rate (DD-2.1-AB Instructor adoption signal).
+            error_types = sorted({e.get("type", "unknown") for e in exc.errors()})
+            logger.warning(
+                "pass2a.validation.failed",
+                source_type=doc.source_type.value,
+                model=result.model_used,
+                provider=result.provider_used,
+                attempt_count=result.attempt_count,
+                validation_error_types=error_types,
+                retry_will_fire=False,
+            )
+            msg = (
+                f"Pass 2a output failed offset invariants "
+                f"(provider={result.provider_used} model={result.model_used}): "
+                f"{exc.error_count()} validation error(s)"
+            )
+            raise ProcessingError(msg) from exc
 
         # Algorithmic aggregation of document-level concepts from
         # per-segment concepts (vision.md §2.2, KD-2.1-O). LLM emits

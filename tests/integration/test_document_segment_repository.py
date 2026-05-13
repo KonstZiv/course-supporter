@@ -119,9 +119,11 @@ class TestCreateBatch:
         summary = await _make_summary(db_session, seed_material_entry)
         text = "alpha block.\n\nbeta block.\n\ngamma block."
         doc = _source_doc(text)
+        # Contiguous cover per fixup 2.1.7.1 — separators absorbed into
+        # preceding segment for fixture purposes.
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=12, title="A"),
-            _draft(order=1, start_pos=14, end_pos=25, title="B"),
+            _draft(order=0, start_pos=0, end_pos=14, title="A"),
+            _draft(order=1, start_pos=14, end_pos=27, title="B"),
             _draft(order=2, start_pos=27, end_pos=len(text), title="C"),
         ]
 
@@ -129,8 +131,8 @@ class TestCreateBatch:
         segments = await repo.create_batch(summary.id, drafts, source_doc=doc)
 
         assert [s.order for s in segments] == [0, 1, 2]
-        assert segments[0].content == "alpha block."
-        assert segments[1].content == "beta block."
+        assert segments[0].content == "alpha block.\n\n"
+        assert segments[1].content == "beta block.\n\n"
         assert segments[2].content == "gamma block."
         for seg in segments:
             assert seg.document_summary_id == summary.id
@@ -206,7 +208,7 @@ class TestCreateBatch:
         text = "block one body here.\n\nblock two body here."
         doc = _source_doc(text)
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=20),
+            _draft(order=0, start_pos=0, end_pos=22),
             _draft(order=1, start_pos=22, end_pos=len(text)),
         ]
 
@@ -235,7 +237,7 @@ class TestCreateBatch:
         text = "first.\n\nsecond."
         doc = _source_doc(text)
         drafts = [
-            _draft(order=0, start_pos=0, end_pos=6),
+            _draft(order=0, start_pos=0, end_pos=8),
             _draft(order=1, start_pos=8, end_pos=len(text)),
         ]
 
@@ -249,7 +251,8 @@ class TestCreateBatch:
         )
         rows = list(result.scalars().all())
         assert len(rows) == 2
-        assert rows[0].content == "first."
+        # Separator absorbed into preceding segment per contiguous cover.
+        assert rows[0].content == "first.\n\n"
         assert rows[1].content == "second."
 
     async def test_empty_draft_list_short_circuits(
@@ -274,7 +277,16 @@ class TestCreateBatch:
 
 
 class TestCreateBatchErrors:
-    """Boundary + missing-parent error paths."""
+    """Boundary + missing-parent error paths.
+
+    Note: per-segment offset invariants (``start_pos >= 0``,
+    ``end_pos > start_pos``) are now enforced at the Pydantic schema
+    level — see ``test_ingestion_schemas.py``
+    ``TestDocumentSegmentDraftOffsetInvariants``. The repository's
+    bounds-check is retained as defence-in-depth (model_construct
+    bypass safety) but the unique error path it owns is ``end_pos >
+    reference_text length``.
+    """
 
     async def test_out_of_bounds_end_pos_raises(
         self,
@@ -282,40 +294,11 @@ class TestCreateBatchErrors:
         seed_root_node: CourseNode,
         seed_material_entry: AuthoredDocument,
     ) -> None:
+        """end_pos > len(reference_text) — only repo-owned error path."""
         summary = await _make_summary(db_session, seed_material_entry)
         text = "short"
         doc = _source_doc(text)
         drafts = [_draft(order=0, start_pos=0, end_pos=99)]
-
-        repo = DocumentSegmentRepository(db_session)
-        with pytest.raises(ProcessingError, match="out of bounds"):
-            await repo.create_batch(summary.id, drafts, source_doc=doc)
-
-    async def test_inverted_offsets_raise(
-        self,
-        db_session: AsyncSession,
-        seed_root_node: CourseNode,
-        seed_material_entry: AuthoredDocument,
-    ) -> None:
-        summary = await _make_summary(db_session, seed_material_entry)
-        text = "valid reference text"
-        doc = _source_doc(text)
-        drafts = [_draft(order=0, start_pos=10, end_pos=5)]
-
-        repo = DocumentSegmentRepository(db_session)
-        with pytest.raises(ProcessingError, match="out of bounds"):
-            await repo.create_batch(summary.id, drafts, source_doc=doc)
-
-    async def test_negative_start_pos_raises(
-        self,
-        db_session: AsyncSession,
-        seed_root_node: CourseNode,
-        seed_material_entry: AuthoredDocument,
-    ) -> None:
-        summary = await _make_summary(db_session, seed_material_entry)
-        text = "valid reference text"
-        doc = _source_doc(text)
-        drafts = [_draft(order=0, start_pos=-1, end_pos=5)]
 
         repo = DocumentSegmentRepository(db_session)
         with pytest.raises(ProcessingError, match="out of bounds"):

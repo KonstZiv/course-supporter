@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import structlog
+from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
     MaterialProcessor,
@@ -153,7 +154,27 @@ class WebProcessor(MaterialProcessor):
             "pass_2a_mapping",
             text=text,
         )
-        draft = DocumentSummaryDraft.model_validate_json(result.content)
+        try:
+            draft = DocumentSummaryDraft.model_validate_json(result.content)
+        except ValidationError as exc:
+            # Fixup 2.1.7.1 — see TextProcessor.process_macro for full
+            # rationale (offset invariants, DD-2.1-AB observability).
+            error_types = sorted({e.get("type", "unknown") for e in exc.errors()})
+            logger.warning(
+                "pass2a.validation.failed",
+                source_type=doc.source_type.value,
+                model=result.model_used,
+                provider=result.provider_used,
+                attempt_count=result.attempt_count,
+                validation_error_types=error_types,
+                retry_will_fire=False,
+            )
+            msg = (
+                f"Pass 2a output failed offset invariants "
+                f"(provider={result.provider_used} model={result.model_used}): "
+                f"{exc.error_count()} validation error(s)"
+            )
+            raise ProcessingError(msg) from exc
 
         # Algorithmic aggregation of document-level concepts from
         # per-segment concepts (vision.md §2.2, KD-2.1-O). LLM emits

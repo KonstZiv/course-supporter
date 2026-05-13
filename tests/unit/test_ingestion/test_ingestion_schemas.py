@@ -133,17 +133,19 @@ class TestDocumentSegmentDraft:
 
 
 class TestDocumentSummaryDraft:
-    """Validation contract for DocumentSummaryDraft."""
+    """Validation contract for DocumentSummaryDraft.
+
+    Per fixup 2.1.7.2, ``content_char_count`` is no longer a Pydantic
+    field — derived server-side in ``api/tasks.py``.
+    """
 
     def test_minimal_required_fields_accepted(self) -> None:
         draft = DocumentSummaryDraft(
             title="Intro to Compilers",
             description="Five-week module on parser construction.",
-            content_char_count=1234,
         )
         assert draft.title == "Intro to Compilers"
         assert draft.description == "Five-week module on parser construction."
-        assert draft.content_char_count == 1234
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
         assert draft.segments == []
@@ -152,7 +154,6 @@ class TestDocumentSummaryDraft:
         draft = DocumentSummaryDraft(
             title="Sample",
             description="Sample document.",
-            content_char_count=10,
             main_concepts=["concept_a"],
             secondary_concepts=["concept_b", "concept_c"],
         )
@@ -170,7 +171,6 @@ class TestDocumentSummaryDraft:
         draft = DocumentSummaryDraft(
             title="t",
             description="d",
-            content_char_count=5,
             segments=[seg],
         )
         assert len(draft.segments) == 1
@@ -180,13 +180,12 @@ class TestDocumentSummaryDraft:
 
     @pytest.mark.parametrize(
         "missing",
-        ["title", "description", "content_char_count"],
+        ["title", "description"],
     )
     def test_missing_required_field_raises(self, missing: str) -> None:
         kwargs: dict[str, object] = {
             "title": "t",
             "description": "d",
-            "content_char_count": 0,
         }
         del kwargs[missing]
         with pytest.raises(ValidationError) as exc_info:
@@ -199,7 +198,6 @@ class TestDocumentSummaryDraft:
             DocumentSummaryDraft(
                 title=None,  # type: ignore[arg-type]
                 description="d",
-                content_char_count=0,
             )
 
     def test_model_validate_json_without_doc_level_concepts(self) -> None:
@@ -213,13 +211,26 @@ class TestDocumentSummaryDraft:
         keys and default them to an empty list so the aggregation step
         has a known starting point.
         """
-        payload = (
-            '{"title": "Sample", "description": "Sample doc.",'
-            ' "content_char_count": 0, "segments": []}'
-        )
+        payload = '{"title": "Sample", "description": "Sample doc.", "segments": []}'
         draft = DocumentSummaryDraft.model_validate_json(payload)
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
+
+    def test_extra_content_char_count_silently_ignored(self) -> None:
+        """Fixup 2.1.7.2 transition safety.
+
+        If an LLM (or a recorded test fixture) still emits the legacy
+        ``content_char_count`` field, Pydantic's default
+        ``extra="ignore"`` silently drops it. Parse must succeed; the
+        new schema simply does not expose the value.
+        """
+        payload = (
+            '{"title": "Legacy", "description": "Legacy doc.",'
+            ' "content_char_count": 9999, "segments": []}'
+        )
+        draft = DocumentSummaryDraft.model_validate_json(payload)
+        assert draft.title == "Legacy"
+        assert not hasattr(draft, "content_char_count")
 
 
 class TestDocumentSegmentDraftOffsetInvariants:
@@ -278,17 +289,14 @@ class TestDocumentSummaryDraftSequenceInvariants:
 
     def test_empty_segments_accepted(self) -> None:
         """Trivially short doc — segments=[] allowed."""
-        draft = DocumentSummaryDraft(
-            title="t", description="d", content_char_count=0, segments=[]
-        )
+        draft = DocumentSummaryDraft(title="t", description="d", segments=[])
         assert draft.segments == []
 
     def test_contiguous_cover_accepted(self) -> None:
-        """0..N contiguous segments matching content_char_count — happy path."""
+        """0..N contiguous segments — happy path (no content_char_count)."""
         draft = DocumentSummaryDraft(
             title="t",
             description="d",
-            content_char_count=30,
             segments=[
                 self._seg(0, 0, 10),
                 self._seg(1, 10, 20),
@@ -302,7 +310,6 @@ class TestDocumentSummaryDraftSequenceInvariants:
             DocumentSummaryDraft(
                 title="t",
                 description="d",
-                content_char_count=20,
                 segments=[
                     self._seg(0, 5, 10),
                     self._seg(1, 10, 20),
@@ -315,7 +322,6 @@ class TestDocumentSummaryDraftSequenceInvariants:
             DocumentSummaryDraft(
                 title="t",
                 description="d",
-                content_char_count=20,
                 segments=[
                     self._seg(0, 0, 10),
                     self._seg(2, 10, 20),
@@ -328,7 +334,6 @@ class TestDocumentSummaryDraftSequenceInvariants:
             DocumentSummaryDraft(
                 title="t",
                 description="d",
-                content_char_count=20,
                 segments=[
                     self._seg(0, 0, 12),
                     self._seg(1, 10, 20),  # overlaps prev
@@ -341,34 +346,10 @@ class TestDocumentSummaryDraftSequenceInvariants:
             DocumentSummaryDraft(
                 title="t",
                 description="d",
-                content_char_count=20,
                 segments=[
                     self._seg(0, 0, 8),
                     self._seg(1, 10, 20),  # gap between 8 and 10
                 ],
-            )
-
-    def test_content_char_count_must_match_last_end_pos(self) -> None:
-        """content_char_count == segments[-1].end_pos required."""
-        with pytest.raises(
-            ValidationError, match=r"content_char_count.*last segment end_pos"
-        ):
-            DocumentSummaryDraft(
-                title="t",
-                description="d",
-                content_char_count=25,
-                segments=[
-                    self._seg(0, 0, 10),
-                    self._seg(1, 10, 20),  # last end=20 != count=25
-                ],
-            )
-
-    def test_negative_content_char_count_rejected(self) -> None:
-        with pytest.raises(
-            ValidationError, match="content_char_count must be non-negative"
-        ):
-            DocumentSummaryDraft(
-                title="t", description="d", content_char_count=-1, segments=[]
             )
 
     def test_real_world_smoke_a_bug_rejected(self) -> None:
@@ -380,3 +361,96 @@ class TestDocumentSummaryDraftSequenceInvariants:
                 end_pos=6187,
                 description="LLM-emitted malformed offsets (real bug data).",
             )
+
+
+class TestCoverageMatchesReferenceLength:
+    """Pydantic context-driven full-cover check (fixup 2.1.7.2).
+
+    The validator skips when no context is provided, so existing
+    test fixtures and ad-hoc draft construction keep working. Production
+    callers (TextProcessor / WebProcessor.process_macro) pass
+    ``context={"reference_text_length": N}`` via
+    ``model_validate_json``, in which case ``segments[-1].end_pos``
+    must equal ``N`` exactly.
+    """
+
+    @staticmethod
+    def _payload(end_pos: int) -> str:
+        return (
+            '{"title": "t", "description": "d",'
+            ' "main_concepts": [], "secondary_concepts": [],'
+            ' "segments": ['
+            f'  {{"order": 0, "start_pos": 0, "end_pos": {end_pos},'
+            '    "title": null, "description": "d0",'
+            '    "main_concepts": [], "secondary_concepts": []}'
+            " ]}"
+        )
+
+    def test_coverage_matches_accepted(self) -> None:
+        """Exact match (end_pos == reference_text_length) passes."""
+        draft = DocumentSummaryDraft.model_validate_json(
+            self._payload(end_pos=100),
+            context={"reference_text_length": 100},
+        )
+        assert draft.segments[-1].end_pos == 100
+
+    def test_coverage_undershoot_rejected(self) -> None:
+        """end_pos < reference_text_length is rejected (segments under-cover)."""
+        with pytest.raises(ValidationError, match="do not cover"):
+            DocumentSummaryDraft.model_validate_json(
+                self._payload(end_pos=80),
+                context={"reference_text_length": 100},
+            )
+
+    def test_coverage_overshoot_rejected(self) -> None:
+        """end_pos > reference_text_length is rejected (segments over-cover)."""
+        with pytest.raises(ValidationError, match="do not cover"):
+            DocumentSummaryDraft.model_validate_json(
+                self._payload(end_pos=120),
+                context={"reference_text_length": 100},
+            )
+
+    def test_no_context_skips_check(self) -> None:
+        """Without context, the coverage check is silently skipped.
+
+        Regression guard for unit-test fixtures and ad-hoc tooling
+        that construct drafts without going through process_macro.
+        """
+        draft = DocumentSummaryDraft.model_validate_json(self._payload(end_pos=80))
+        assert draft.segments[-1].end_pos == 80
+
+    def test_context_without_reference_text_length_key_skips_check(self) -> None:
+        """Context present but lacking the key → check skipped."""
+        draft = DocumentSummaryDraft.model_validate_json(
+            self._payload(end_pos=80),
+            context={"unrelated_key": "value"},
+        )
+        assert draft.segments[-1].end_pos == 80
+
+    def test_empty_segments_with_context_skips_coverage_check(self) -> None:
+        """Empty segments are allowed regardless of context; the parent
+        invariant ``_segments_form_contiguous_cover`` early-returns on
+        empty segments and the coverage check then also early-returns."""
+        payload = (
+            '{"title": "t", "description": "d",'
+            ' "main_concepts": [], "secondary_concepts": [],'
+            ' "segments": []}'
+        )
+        draft = DocumentSummaryDraft.model_validate_json(
+            payload,
+            context={"reference_text_length": 100},
+        )
+        assert draft.segments == []
+
+    def test_error_message_includes_actionable_values(self) -> None:
+        """Validator feedback names both actual and expected lengths so
+        the StructuralRetryError surface can give the LLM something to
+        correct on retry."""
+        with pytest.raises(ValidationError) as exc_info:
+            DocumentSummaryDraft.model_validate_json(
+                self._payload(end_pos=42),
+                context={"reference_text_length": 100},
+            )
+        msg = str(exc_info.value)
+        assert "42" in msg
+        assert "100" in msg

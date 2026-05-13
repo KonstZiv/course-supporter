@@ -29,7 +29,6 @@ def _default_summary_draft() -> DocumentSummaryDraft:
         description="d",
         main_concepts=[],
         secondary_concepts=[],
-        content_char_count=10,
     )
 
 

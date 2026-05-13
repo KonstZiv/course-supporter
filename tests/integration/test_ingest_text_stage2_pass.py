@@ -68,7 +68,6 @@ def _passing_processors() -> dict[SourceType, MagicMock]:
             description="Primer on Python generators",
             main_concepts=["generator", "yield"],
             secondary_concepts=["iterator"],
-            content_char_count=200,
         )
     )
     # Phase 2.1 C7: Pass 2b is now wired into the worker task. Empty

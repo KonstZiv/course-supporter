@@ -282,6 +282,19 @@ async def arq_ingest_material(
             # Phase 2.1 C7 (Pass 2b) consumption -- not materialised here.
             await job_repo.update_stage(jid, "extracting_structure")
             summary_draft = await processor.process_macro(doc, stage_router)
+
+            # Fixup 2.1.7.2 — content_char_count derived server-side from
+            # the canonical reference text (``doc.assemble_text()``). The
+            # LLM no longer emits this value (anchor-bias mitigation per
+            # Etap 0 forensic 2026-05-13). The full-cover invariant
+            # (``segments[-1].end_pos == reference_text_length``) is now
+            # enforced inside ``DocumentSummaryDraft`` via Pydantic
+            # context, with the closure passed as StageRouter
+            # ``response_validator`` translating ``ValidationError`` to
+            # ``StructuralRetryError`` so the ladder retry mechanism
+            # runs before terminal failure. By the time control reaches
+            # this point, the draft is guaranteed coverage-correct.
+            derived_char_count = len(doc.assemble_text())
             summary_repo = DocumentSummaryRepository(session)
             summary = await summary_repo.create(
                 authored_document_id=entry.id,
@@ -289,7 +302,7 @@ async def arq_ingest_material(
                 description=summary_draft.description,
                 main_concepts=summary_draft.main_concepts,
                 secondary_concepts=summary_draft.secondary_concepts,
-                content_char_count=summary_draft.content_char_count,
+                content_char_count=derived_char_count,
             )
             log.info(
                 "pass_2a_complete",

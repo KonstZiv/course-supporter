@@ -3,10 +3,16 @@
 Mirror of test_text_macro.py for the web ingestion path. Web pages
 produce ContentChunk.WEB_CONTENT entries from the scraped body; the
 Pass 2a contract is otherwise identical to text materials.
+
+Fixup 2.1.7.2 wired the coverage closure as ``response_validator``
+on :meth:`StageRouter.execute_for_stage`; the fake router here
+mirrors that wiring so the closure runs on the canned payload
+before the test reads the returned draft.
 """
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -48,6 +54,27 @@ def _stage_result(payload: str) -> StageResult:
     )
 
 
+def _router_returning(payload: str) -> AsyncMock:
+    """StageRouter mock that invokes ``response_validator`` (fixup 2.1.7.2).
+
+    Mirrors :func:`tests.unit.test_ingestion.test_text_macro._router_returning`.
+    """
+    router = AsyncMock()
+
+    async def _fake_execute(
+        _stage_name: str,
+        *,
+        response_validator: Any | None = None,
+        **_render_context: Any,
+    ) -> StageResult:
+        if response_validator is not None:
+            response_validator(payload)
+        return _stage_result(payload)
+
+    router.execute_for_stage.side_effect = _fake_execute
+    return router
+
+
 class TestProcessMacroHappyPath:
     """Successful Pass 2a path with valid LLM JSON output."""
 
@@ -55,16 +82,12 @@ class TestProcessMacroHappyPath:
     async def test_returns_document_summary_draft(self) -> None:
         """LLM returns document-level metadata; concepts aggregate from segments."""
         processor = WebProcessor()
+        # assemble_text() = "Lead paragraph.\n\nFollow-up content." (35 chars).
         doc = _make_doc("Lead paragraph.", "Follow-up content.")
-        router = AsyncMock()
-        # v2 prompt does NOT ask LLM for document-level concepts —
-        # they are computed post-LLM as a union over segments. With
-        # empty segments the aggregation result is an empty list.
-        router.execute_for_stage.return_value = _stage_result(
+        router = _router_returning(
             '{"title": "Article", "description": "Brief web article.",'
-            ' "content_char_count": 34,'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 34,'
+            '   {"order": 0, "start_pos": 0, "end_pos": 35,'
             '    "title": null, "description": "Single-segment article body.",'
             '    "main_concepts": ["topic"], "secondary_concepts": ["aside"]}'
             " ]}"
@@ -77,9 +100,9 @@ class TestProcessMacroHappyPath:
         # Aggregated from the single segment.
         assert draft.main_concepts == ["topic"]
         assert draft.secondary_concepts == ["aside"]
-        assert draft.content_char_count == 34
         call_kwargs = router.execute_for_stage.await_args.kwargs
         assert call_kwargs["text"] == "Lead paragraph.\n\nFollow-up content."
+        assert call_kwargs["response_validator"] is not None
         assert router.execute_for_stage.await_args.args == ("pass_2a_mapping",)
 
 

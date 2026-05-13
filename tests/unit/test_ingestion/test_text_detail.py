@@ -61,15 +61,13 @@ def _draft(
 
 
 def _summary(segments: list[DocumentSegmentDraft]) -> DocumentSummaryDraft:
-    # Per fixup 2.1.7.1 invariants: content_char_count must equal last
-    # segment end_pos when segments non-empty.
-    content_char_count = segments[-1].end_pos if segments else 0
+    # Fixup 2.1.7.2: content_char_count derived server-side, no longer
+    # a Pydantic field. Pass 2b consumes only structural segment metadata.
     return DocumentSummaryDraft(
         title="t",
         description="d",
         main_concepts=[],
         secondary_concepts=[],
-        content_char_count=content_char_count,
         segments=segments,
     )
 

@@ -105,15 +105,16 @@ def _mock_processors(
     )
     _ = content  # parameter kept for legacy callers; serialisation is real
 
-    # Segment drafts with content pre-filled so ``process_detail`` is a
-    # straight passthrough -- the test verifies ``DocumentSegmentRepository
-    # .create_batch`` materialisation, not the slicing path itself
-    # (that lives in unit tests).
+    # Segment drafts cover the real_doc.assemble_text() output
+    # (70 chars: 34 + "\n\n" + 34) per fixup 2.1.7.2 server-side
+    # coverage assertion. Content pre-filled so process_detail is a
+    # straight passthrough -- this test verifies repository
+    # materialisation, not slicing (that lives in unit tests).
     seg_drafts = [
         DocumentSegmentDraft(
             order=0,
             start_pos=0,
-            end_pos=10,
+            end_pos=36,
             title="Seg A",
             description="First test segment.",
             main_concepts=["alpha"],
@@ -122,8 +123,8 @@ def _mock_processors(
         ),
         DocumentSegmentDraft(
             order=1,
-            start_pos=10,
-            end_pos=20,
+            start_pos=36,
+            end_pos=70,
             title="Seg B",
             description="Second test segment.",
             main_concepts=["beta"],
@@ -140,9 +141,9 @@ def _mock_processors(
             description="d",
             main_concepts=["alpha", "beta"],
             secondary_concepts=["gamma"],
-            # content_char_count must equal last segment end_pos per
-            # fixup 2.1.7.1 invariants (segments cover 0..20).
-            content_char_count=20,
+            # Fixup 2.1.7.2: content_char_count derived server-side
+            # from doc.assemble_text() — no longer a Pydantic field on
+            # the draft.
             segments=seg_drafts,
         )
     )

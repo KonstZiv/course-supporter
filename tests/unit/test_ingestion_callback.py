@@ -445,7 +445,6 @@ class TestCallbackIntegrationWithArqTask:
                 description="d",
                 main_concepts=[],
                 secondary_concepts=[],
-                content_char_count=10,
             )
         )
         mock_processor.process_detail = AsyncMock(return_value=[])

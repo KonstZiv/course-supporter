@@ -104,7 +104,6 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
             description="Python generators primer",
             main_concepts=[],
             secondary_concepts=[],
-            content_char_count=100,
         )
     )
     processor.process_detail = AsyncMock(return_value=[])
@@ -250,7 +249,6 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
             description="d",
             main_concepts=[],
             secondary_concepts=[],
-            content_char_count=10,
         )
     )
     processor.process_detail = AsyncMock(return_value=[])

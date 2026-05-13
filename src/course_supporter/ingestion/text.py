@@ -18,6 +18,7 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
+from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -274,34 +275,60 @@ class TextProcessor(MaterialProcessor):
         if not text.strip():
             msg = "Cannot run Pass 2a on empty document (no content chunks)"
             raise ProcessingError(msg)
+        reference_text_length = len(text)
+        parsed: dict[str, DocumentSummaryDraft] = {}
+
+        def _coverage_validator(content: str) -> None:
+            """StageRouter response_validator hook (fixup 2.1.7.2).
+
+            Translates a Pydantic ``ValidationError`` into
+            :class:`StructuralRetryError` so the router's existing
+            instructor-style retry path fires (one retry on the
+            same model with feedback appended; ladder fallback on
+            second failure).
+            """
+            try:
+                draft_local = DocumentSummaryDraft.model_validate_json(
+                    content,
+                    context={"reference_text_length": reference_text_length},
+                )
+            except ValidationError as exc:
+                error_types = sorted({e.get("type", "unknown") for e in exc.errors()})
+                first = exc.errors()[0]
+                first_loc = ".".join(str(x) for x in first.get("loc", []))
+                logger.warning(
+                    "pass2a.validation.failed",
+                    source_type=doc.source_type.value,
+                    validation_error_types=error_types,
+                    first_error_msg=first.get("msg", ""),
+                    first_error_loc=first_loc,
+                    reference_text_length=reference_text_length,
+                )
+                feedback = (
+                    f"{first.get('msg', 'validation error')} "
+                    f"(field: {first_loc or '<root>'}). "
+                    "Regenerate the response with valid output."
+                )
+                raise StructuralRetryError(feedback) from exc
+            parsed["draft"] = draft_local
+
         result = await router.execute_for_stage(
             "pass_2a_mapping",
+            response_validator=_coverage_validator,
             text=text,
         )
-        try:
-            draft = DocumentSummaryDraft.model_validate_json(result.content)
-        except ValidationError as exc:
-            # Fixup 2.1.7.1 — Pass 2a output offset invariants. Strict
-            # prompt-literal validators (see ``ingestion/schemas.py``)
-            # reject malformed LLM output before the orphan-prone Pass 2a
-            # commit path. Surface a structured event so operator can
-            # track malformed rate (DD-2.1-AB Instructor adoption signal).
-            error_types = sorted({e.get("type", "unknown") for e in exc.errors()})
-            logger.warning(
-                "pass2a.validation.failed",
-                source_type=doc.source_type.value,
-                model=result.model_used,
-                provider=result.provider_used,
-                attempt_count=result.attempt_count,
-                validation_error_types=error_types,
-                retry_will_fire=False,
-            )
-            msg = (
-                f"Pass 2a output failed offset invariants "
-                f"(provider={result.provider_used} model={result.model_used}): "
-                f"{exc.error_count()} validation error(s)"
-            )
-            raise ProcessingError(msg) from exc
+        # Validator stored the parsed draft on the winning attempt;
+        # if execute_for_stage returned, validator succeeded at least
+        # once (otherwise it would have raised LadderExhaustedError).
+        draft = parsed["draft"]
+        logger.debug(
+            "pass2a.validation.ok",
+            source_type=doc.source_type.value,
+            provider=result.provider_used,
+            model=result.model_used,
+            attempt_count=result.attempt_count,
+            reference_text_length=reference_text_length,
+        )
 
         # Algorithmic aggregation of document-level concepts from
         # per-segment concepts (vision.md §2.2, KD-2.1-O). LLM emits

@@ -4,10 +4,18 @@ Verifies Pass 2a behaviour for text materials with a mocked
 StageRouter -- no real LLM calls. Pivot 1 signals (JSON parse, concept
 quality, latency) surface only against real LLMs and are handled via
 manual smoke + ratify per pre-flight section 3.E.
+
+Fixup 2.1.7.2 wired the coverage closure as ``response_validator``
+on :meth:`StageRouter.execute_for_stage`, so the fake router below
+invokes the closure on its canned payload before returning a
+:class:`StageResult` -- mirroring production semantics (validator
+runs inside the attempt scope, raises StructuralRetryError on
+schema mismatch).
 """
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +23,7 @@ import pytest
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.ingestion.text import TextProcessor
+from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import (
     ChunkType,
@@ -49,6 +58,32 @@ def _stage_result(payload: str) -> StageResult:
     )
 
 
+def _router_returning(payload: str) -> AsyncMock:
+    """StageRouter mock that invokes ``response_validator`` (fixup 2.1.7.2).
+
+    The closure passed by ``process_macro`` is the only place where
+    Pydantic ``model_validate_json`` runs in the refactored flow,
+    so the mock must call it on the canned payload before returning
+    a :class:`StageResult`. Any ``StructuralRetryError`` raised by
+    the closure propagates as-is (no router-level retry simulated
+    in unit tests).
+    """
+    router = AsyncMock()
+
+    async def _fake_execute(
+        _stage_name: str,
+        *,
+        response_validator: Any | None = None,
+        **_render_context: Any,
+    ) -> StageResult:
+        if response_validator is not None:
+            response_validator(payload)
+        return _stage_result(payload)
+
+    router.execute_for_stage.side_effect = _fake_execute
+    return router
+
+
 class TestProcessMacroHappyPath:
     """Successful Pass 2a path with valid LLM JSON output."""
 
@@ -57,12 +92,10 @@ class TestProcessMacroHappyPath:
         """LLM returns document-level metadata; concepts aggregate from segments."""
         processor = TextProcessor()
         doc = _make_doc("Heading paragraph.", "Body paragraph two.")
-        router = AsyncMock()
         # v2 prompt does NOT ask LLM for document-level concepts —
         # they are computed post-LLM as a union over segments.
-        router.execute_for_stage.return_value = _stage_result(
-            '{"title": "Sample", "description": "A test document.",'
-            ' "content_char_count": 36, "segments": []}'
+        router = _router_returning(
+            '{"title": "Sample", "description": "A test document.", "segments": []}'
         )
 
         draft = await processor.process_macro(doc, router)
@@ -72,10 +105,10 @@ class TestProcessMacroHappyPath:
         # No segments → aggregation yields empty lists.
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
-        assert draft.content_char_count == 36
         router.execute_for_stage.assert_awaited_once()
         call_kwargs = router.execute_for_stage.await_args.kwargs
         assert call_kwargs["text"] == "Heading paragraph.\n\nBody paragraph two."
+        assert call_kwargs["response_validator"] is not None
         assert router.execute_for_stage.await_args.args == ("pass_2a_mapping",)
 
     @pytest.mark.asyncio
@@ -83,12 +116,12 @@ class TestProcessMacroHappyPath:
         """KD-2.1-O: segments carry metadata only; ``content`` stays None."""
         processor = TextProcessor()
         doc = _make_doc("alpha.", "beta.")
-        router = AsyncMock()
         # Contiguous segments per fixup 2.1.7.1 invariants (no gaps; first
-        # starts at 0; last ends at content_char_count).
-        router.execute_for_stage.return_value = _stage_result(
+        # starts at 0; last segment ends at total text length — matches
+        # the reference text length passed via Pydantic context per
+        # fixup 2.1.7.2).
+        router = _router_returning(
             '{"title": "T", "description": "D",'
-            ' "content_char_count": 13,'
             ' "segments": ['
             '   {"order": 0, "start_pos": 0, "end_pos": 6,'
             '    "title": "Alpha section",'
@@ -119,19 +152,20 @@ class TestProcessMacroConceptsAggregation:
     async def test_concepts_aggregation_from_segments(self) -> None:
         """Sorted union of segment concepts populates document-level fields."""
         processor = TextProcessor()
+        # assemble_text() = "a\n\nb\n\nc" (7 chars). Contiguous cover
+        # 0..7 split per fixup 2.1.7.1; last end_pos matches the
+        # reference text length passed via Pydantic context.
         doc = _make_doc("a", "b", "c")
-        router = AsyncMock()
-        router.execute_for_stage.return_value = _stage_result(
+        router = _router_returning(
             '{"title": "T", "description": "D",'
-            ' "content_char_count": 30,'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 10,'
+            '   {"order": 0, "start_pos": 0, "end_pos": 3,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": ["A", "B"], "secondary_concepts": ["X"]},'
-            '   {"order": 1, "start_pos": 10, "end_pos": 20,'
+            '   {"order": 1, "start_pos": 3, "end_pos": 5,'
             '    "title": null, "description": "d1",'
             '    "main_concepts": ["B", "C"], "secondary_concepts": ["Y"]},'
-            '   {"order": 2, "start_pos": 20, "end_pos": 30,'
+            '   {"order": 2, "start_pos": 5, "end_pos": 7,'
             '    "title": null, "description": "d2",'
             '    "main_concepts": ["D"], "secondary_concepts": ["Z"]}'
             " ]}"
@@ -146,17 +180,16 @@ class TestProcessMacroConceptsAggregation:
     async def test_concepts_aggregation_main_wins_over_secondary(self) -> None:
         """Conflict rule: a concept that is main anywhere stays in main."""
         processor = TextProcessor()
+        # assemble_text() = "a\n\nb" (4 chars).
         doc = _make_doc("a", "b")
-        router = AsyncMock()
-        router.execute_for_stage.return_value = _stage_result(
+        router = _router_returning(
             '{"title": "T", "description": "D",'
-            ' "content_char_count": 20,'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 10,'
+            '   {"order": 0, "start_pos": 0, "end_pos": 2,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": ["yield", "generator"],'
             '    "secondary_concepts": ["StopIteration"]},'
-            '   {"order": 1, "start_pos": 10, "end_pos": 20,'
+            '   {"order": 1, "start_pos": 2, "end_pos": 4,'
             '    "title": null, "description": "d1",'
             '    "main_concepts": ["itertools"],'
             '    "secondary_concepts": ["yield"]}'
@@ -201,32 +234,63 @@ class TestProcessMacroEmptyDocument:
 
 
 class TestProcessMacroValidationError:
-    """LLM output that fails Pydantic validation surfaces a ProcessingError.
+    """LLM output that fails Pydantic validation surfaces a StructuralRetryError.
 
-    Fixup 2.1.7.1 wraps Pydantic ValidationError into ProcessingError so
-    the upstream worker pipeline gets a consistent error type with a
-    descriptive message; the original ValidationError is preserved via
-    ``__cause__`` for traceability.
+    Fixup 2.1.7.2 moved validation into a StageRouter ``response_validator``
+    closure: the closure translates ``ValidationError`` to
+    :class:`StructuralRetryError` so the router's instructor-style retry
+    + ladder fallback can fire. In unit tests the mocked router does not
+    simulate retry, so the exception propagates as-is for the test
+    surface. The original ``ValidationError`` is preserved as
+    ``__cause__`` for debugging.
     """
 
     @pytest.mark.asyncio
-    async def test_missing_required_field_surfaces_processing_error(
+    async def test_missing_required_field_surfaces_structural_retry(
         self,
     ) -> None:
         from pydantic import ValidationError
 
-        from course_supporter.ingestion.base import ProcessingError
-
         processor = TextProcessor()
         doc = _make_doc("hello")
-        router = AsyncMock()
-        router.execute_for_stage.return_value = _stage_result(
+        router = _router_returning(
             '{"title": "T",'
             ' "main_concepts": [], "secondary_concepts": [],'
-            ' "content_char_count": 5, "segments": []}'
+            ' "segments": []}'
         )
 
-        with pytest.raises(ProcessingError) as exc_info:
+        with pytest.raises(StructuralRetryError) as exc_info:
             await processor.process_macro(doc, router)
         # Original ValidationError preserved as cause for debugging.
         assert isinstance(exc_info.value.__cause__, ValidationError)
+
+    @pytest.mark.asyncio
+    async def test_coverage_mismatch_surfaces_structural_retry(self) -> None:
+        """Reference text length passed via Pydantic context catches
+        a LLM-emitted ``segments[-1].end_pos`` that overshoots / undershoots
+        the deterministic document length."""
+        from pydantic import ValidationError
+
+        processor = TextProcessor()
+        # assemble_text() = "hello world" (11 chars).
+        doc = _make_doc("hello world")
+        # end_pos=20 overshoots the 11-char reference document.
+        router = _router_returning(
+            '{"title": "T", "description": "D",'
+            ' "segments": ['
+            '   {"order": 0, "start_pos": 0, "end_pos": 20,'
+            '    "title": null, "description": "d0",'
+            '    "main_concepts": [], "secondary_concepts": []}'
+            " ]}"
+        )
+
+        with pytest.raises(StructuralRetryError) as exc_info:
+            await processor.process_macro(doc, router)
+        assert isinstance(exc_info.value.__cause__, ValidationError)
+        # Feedback message should be actionable (mention coverage).
+        cause = exc_info.value.__cause__
+        assert any(
+            "cover" in err.get("msg", "")
+            or "reference_text_length" in err.get("msg", "")
+            for err in cause.errors()
+        )

@@ -23,7 +23,6 @@ class TestORMModels:
             "authored_documents",
             "document_summaries",
             "document_segments",
-            "structure_snapshots",
             "jobs",
             "external_service_calls",
         }

@@ -50,7 +50,7 @@ class MentorContext:
     node_type: str
     response_language: str
 
-    # Task details (from StructureNodeEditable)
+    # Task details
     task_description: str | None = None
     learning_goal: str | None = None
     difficulty: str | None = None
@@ -106,8 +106,7 @@ def _parse_submission_summary(sub: HomeworkSubmission) -> PastSubmissionSummary:
     """
     review = sub.review_result or {}
     analysis = review.get("analysis", {})
-    matched = sub.matched_task
-    task_title = matched.title if matched else "(unknown)"
+    task_title = "(unknown)"
 
     raw_issues = analysis.get("issues", [])
     issues_summary = (

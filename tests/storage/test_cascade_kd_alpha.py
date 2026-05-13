@@ -24,12 +24,12 @@ Two invariants are locked here:
    statements that would trip the soft-delete protection trigger or
    silently rewrite columns.
 
-The five Phase-5-bound relationships (``CourseNode.snapshots``,
+The Phase-5-bound relationships (``CourseNode.snapshots``,
 ``CourseNode.editables``, ``StructureNode.children``,
 ``StructureNodeEditable.children``, ``StructureSnapshot.structure_nodes``)
-are excluded from the strip and stay at ``"all, delete-orphan"`` until
-the StructureSnapshot family is removed; the tests assert that
-preservation explicitly so a future drift cannot land silently.
+were removed in C9.4 along with the StructureSnapshot family; the
+``TestPhase5BoundRelationshipsPreserved`` block that locked their
+preservation no longer applies and was dropped with the ORM classes.
 """
 
 from __future__ import annotations
@@ -53,8 +53,6 @@ from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
     DocumentSummary,
-    StructureNodeEditable,
-    StructureSnapshot,
     Student,
     Tenant,
 )
@@ -112,32 +110,6 @@ class TestKDAlphaStrippedRelationships:
         assert "delete-orphan" not in cascade
         assert "save-update" in cascade
         assert "merge" in cascade
-
-
-class TestPhase5BoundRelationshipsPreserved:
-    """The five Phase-5-bound legacy relationships keep their original
-    ``"all, delete-orphan"`` cascade until the StructureSnapshot /
-    StructureNodeEditable family is removed."""
-
-    def test_course_node_snapshots_preserved(self) -> None:
-        cascade = CourseNode.snapshots.property.cascade
-        assert "delete-orphan" in cascade
-        assert "delete" in cascade
-
-    def test_course_node_editables_preserved(self) -> None:
-        cascade = CourseNode.editables.property.cascade
-        assert "delete-orphan" in cascade
-        assert "delete" in cascade
-
-    def test_structure_node_editable_children_preserved(self) -> None:
-        cascade = StructureNodeEditable.children.property.cascade
-        assert "delete-orphan" in cascade
-        assert "delete" in cascade
-
-    def test_structure_snapshot_structure_nodes_preserved(self) -> None:
-        cascade = StructureSnapshot.structure_nodes.property.cascade
-        assert "delete-orphan" in cascade
-        assert "delete" in cascade
 
 
 # ── Invariant 2: Decoupling (real DB, observational) ──────────────

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 class MatchedTaskInfo(BaseModel):
     """Compact task descriptor included in the 'matched' webhook."""
 
-    id: str = Field(description="StructureNodeEditable UUID.")
+    id: str = Field(description="Matched task UUID.")
     title: str
     node_type: str = Field(description="exercise, concept, lesson, etc.")
 

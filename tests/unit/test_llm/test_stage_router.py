@@ -649,3 +649,204 @@ class TestPersistFailureDoesNotMask:
         assert result.content == "recovered"
         assert result.attempt_count == 2  # initial + INFRASTRUCTURE retry
         assert provider.complete.await_count == 2
+
+
+class TestResponseValidator:
+    """``response_validator`` hook drives ladder retry on schema failure."""
+
+    async def test_validator_none_preserves_legacy_behaviour(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without a validator, the first non-empty response wins (regression
+        guard against the new keyword-only parameter changing existing
+        behaviour for current callers).
+        """
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        provider = _ok_provider("legacy answer")
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        result = await router.execute_for_stage("demo")
+
+        assert result.content == "legacy answer"
+        assert result.attempt_count == 1
+        assert provider.complete.await_count == 1
+
+    async def test_validator_passes_returns_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Validator returning normally → response surfaces unchanged."""
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        provider = _ok_provider("good content")
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        seen: list[str] = []
+
+        def _validator(content: str) -> None:
+            seen.append(content)
+
+        result = await router.execute_for_stage("demo", response_validator=_validator)
+
+        assert result.content == "good content"
+        assert seen == ["good content"]
+
+    async def test_validator_raises_structural_retry_succeeds_on_retry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First call's content fails validator → structural retry on same
+        rung with feedback → retry content passes → success.
+        """
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        provider = AsyncMock(spec=LLMProvider)
+        provider.enabled = True
+        provider.complete = AsyncMock(
+            side_effect=[
+                _ok_response("bad-output"),
+                _ok_response("good-output"),
+            ]
+        )
+        provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        call_count = {"n": 0}
+
+        def _validator(content: str) -> None:
+            call_count["n"] += 1
+            if content == "bad-output":
+                raise StructuralRetryError("coverage mismatch: 100 vs 90")
+
+        result = await router.execute_for_stage("demo", response_validator=_validator)
+
+        assert result.content == "good-output"
+        assert result.attempt_count == 2  # initial + structural retry
+        assert call_count["n"] == 2
+
+        # Confirm feedback landed in the retry prompt.
+        retry_request = provider.complete.await_args_list[1].args[0]
+        assert "failed validation" in retry_request.prompt
+        assert "coverage mismatch: 100 vs 90" in retry_request.prompt
+
+    async def test_validator_fails_on_retry_falls_through_to_next_rung(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Validator rejects both initial and retry on rung 0 → next rung
+        runs and (with no validator failure there) succeeds.
+        """
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        bad = AsyncMock(spec=LLMProvider)
+        bad.enabled = True
+        bad.complete = AsyncMock(
+            side_effect=[
+                _ok_response("bad-1"),
+                _ok_response("bad-2"),
+            ]
+        )
+        bad.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+
+        good = _ok_provider("acceptable")
+
+        router = StageRouter(
+            _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
+            {"anthropic": bad, "gemini": good},
+        )
+
+        bad_contents = {"bad-1", "bad-2"}
+
+        def _validator(content: str) -> None:
+            if content in bad_contents:
+                raise StructuralRetryError(f"schema mismatch: {content}")
+
+        result = await router.execute_for_stage("demo", response_validator=_validator)
+
+        assert result.content == "acceptable"
+        assert result.provider_used == "gemini"
+        # 1 initial + 1 structural retry on bad rung, then 1 success on good.
+        assert result.attempt_count == 3
+
+    async def test_all_rungs_fail_validator_raises_ladder_exhausted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Validator rejects every rung → LadderExhaustedError surfaces
+        with per-attempt feedback in the attempts list.
+        """
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        bad_a = AsyncMock(spec=LLMProvider)
+        bad_a.enabled = True
+        bad_a.complete = AsyncMock(
+            side_effect=[_ok_response("a-1"), _ok_response("a-2")]
+        )
+        bad_a.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+
+        bad_b = AsyncMock(spec=LLMProvider)
+        bad_b.enabled = True
+        bad_b.complete = AsyncMock(
+            side_effect=[_ok_response("b-1"), _ok_response("b-2")]
+        )
+        bad_b.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+
+        router = StageRouter(
+            _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
+            {"anthropic": bad_a, "gemini": bad_b},
+        )
+
+        def _always_fail(content: str) -> None:
+            raise StructuralRetryError(f"reject {content}")
+
+        with pytest.raises(LadderExhaustedError) as exc_info:
+            await router.execute_for_stage("demo", response_validator=_always_fail)
+
+        attempts = exc_info.value.attempts
+        assert len(attempts) == 2
+        # Each rung's "reason" comes from _structural_retry exhaustion.
+        for _provider, _model, reason in attempts:
+            assert "STRUCTURAL" in reason
+
+    async def test_validator_skipped_on_empty_content(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty content path is handled by the existing SEMANTIC fallback
+        in ``_attempt_entry``; the validator must NOT be invoked on an
+        empty string (otherwise schema-parsing the empty string would
+        produce a misleading StructuralRetryError instead of the
+        established SEMANTIC fallback).
+        """
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        empty_provider = AsyncMock(spec=LLMProvider)
+        empty_provider.enabled = True
+        empty_provider.complete = AsyncMock(return_value=_ok_response(content=""))
+        empty_provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+        good = _ok_provider("answer")
+
+        router = StageRouter(
+            _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
+            {"anthropic": empty_provider, "gemini": good},
+        )
+
+        observed: list[str] = []
+
+        def _validator(content: str) -> None:
+            observed.append(content)
+
+        result = await router.execute_for_stage("demo", response_validator=_validator)
+
+        assert result.provider_used == "gemini"
+        # Validator saw the good content but NOT the empty string.
+        assert observed == ["answer"]

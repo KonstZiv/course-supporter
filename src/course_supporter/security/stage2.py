@@ -51,7 +51,7 @@ parses; downstream business policy lives elsewhere.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from pydantic import ValidationError
@@ -139,7 +139,7 @@ async def run_stage2_safety_check(
     # the v1.md template's StrictUndefined Jinja2 environment does not
     # raise UndefinedError; the template uses ``{% if course_title %}``
     # to gate the entire course-context block on truthiness.
-    render_context: dict[str, str] = {
+    render_context: dict[str, Any] = {
         "submission_text": submission_text,
         "course_title": course_context.course_title if course_context else "",
         "course_description": (

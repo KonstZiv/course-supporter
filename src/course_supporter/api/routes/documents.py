@@ -21,6 +21,7 @@ Routes
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Annotated
 
@@ -44,8 +45,7 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.jobs.cancellation_service import JobCancellationService
-from course_supporter.models.methodist import AssignmentType
-from course_supporter.models.source import MaterialRole, SourceType
+from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.security import AUTHORED_POLICY, run_stage1
 from course_supporter.security.exceptions import (
     ErrorCategory,
@@ -237,7 +237,19 @@ async def create_document(
     actual_filename: str | None = filename
     actual_url: str
 
+    raw_hash: str | None = None
+    raw_size_bytes: int | None = None
     if file is not None:
+        # KD-2.1-E — Strategy A: SHA-256 from the bytes already loaded
+        # for Stage 1 (line ~217 above). No streaming wrapper needed --
+        # Stage 1 forces full-bytes-in-memory anyway, hash compute is
+        # zero marginal cost on those same bytes. Closes DD-1.1-1
+        # (AuthoredDocument.raw_hash never populated production-wide).
+        # Pair-populate raw_size_bytes per INVESTIGATION.md §6.5 Strategy A
+        # original design (sealed PHASE.md §"Коміт 8" silent on the size
+        # half of the pair — D17 acknowledged deviation).
+        raw_hash = hashlib.sha256(upload_content).hexdigest()
+        raw_size_bytes = len(upload_content)
         if actual_filename is None:
             actual_filename = file.filename
         safe_name = sanitize_s3_key(actual_filename or "upload")
@@ -262,6 +274,8 @@ async def create_document(
         material_role=material_role,
         task_type=task_type,
         language=language,
+        raw_hash=raw_hash,
+        raw_size_bytes=raw_size_bytes,
     )
 
     job = await enqueue_ingestion(
@@ -379,7 +393,7 @@ async def confirm_upload(
 
     # Verify file exists in S3
     try:
-        await s3.head_object(body.key)
+        head_response = await s3.head_object(body.key)
     except Exception:
         raise HTTPException(  # noqa: B904
             status_code=404,
@@ -387,6 +401,47 @@ async def confirm_upload(
         )
 
     actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
+
+    # KD-2.1-D — full Stage 1 on the confirm_upload path. Mirrors the
+    # multipart create_document Stage 1 block (lines ~192-233). Size
+    # pre-check via head_response.ContentLength fast-fails before the
+    # bytes fetch; full Stage 1 (libmagic MIME + extension match +
+    # archive structure + unicode + regex) gates AuthoredDocument
+    # creation. Closes DD-1.2-4 — confirm_upload was Stage-1-less
+    # since Phase 1.2 (KD14 explicit gap noted in §6.1(a) ratify).
+    upload_ext = extension_of(actual_filename)
+    max_size = get_max_size_for_extension(upload_ext, AUTHORED_POLICY)
+    content_length = head_response["ContentLength"]
+    if content_length > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "SECURITY_REJECTED",
+                "category": ErrorCategory.SIZE_LIMIT.value,
+                "details": (
+                    f"file size {content_length} bytes exceeds authored "
+                    f"limit {max_size} bytes for {upload_ext!r}"
+                ),
+            },
+        )
+
+    body_bytes = await s3.get_object(body.key)
+    try:
+        run_stage1(
+            filename=actual_filename,
+            content=body_bytes,
+            context="authored",
+        )
+    except SecurityRejectedError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "SECURITY_REJECTED",
+                "category": exc.category.value,
+                "details": exc.detail,
+            },
+        ) from exc
+
     s3_url = s3.get_object_url(body.key)
 
     document_repo = AuthoredDocumentRepository(session)
@@ -398,6 +453,8 @@ async def confirm_upload(
         material_role=body.material_role,
         task_type=body.task_type,
         language=body.language,
+        raw_hash=hashlib.sha256(body_bytes).hexdigest(),
+        raw_size_bytes=len(body_bytes),
     )
 
     job = await enqueue_ingestion(

@@ -50,12 +50,7 @@ class TestOnSuccess:
     """IngestionCallback.on_success — happy path."""
 
     async def test_material_processing_completed(self) -> None:
-        """AuthoredDocument complete_processing called with the entry id only.
-
-        Hotfix-9 dropped ``processed_content`` + ``processed_hash`` kwargs —
-        per vision §1.2 those columns no longer live on AuthoredDocument.
-        Method is now a pure state transition (pending → ready).
-        """
+        """AuthoredDocument complete_processing called with the entry id only."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
@@ -112,31 +107,6 @@ class TestOnSuccess:
             )
 
         session.commit.assert_awaited_once()
-
-    async def test_fingerprint_hook_called(self) -> None:
-        """_invalidate_fingerprints is called on success."""
-        callback, _ = _make_callback()
-        mid = uuid.uuid4()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            patch.object(
-                callback, "_invalidate_fingerprints", new_callable=AsyncMock
-            ) as mock_fp,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=mid,
-                content_json="{}",
-            )
-
-        mock_fp.assert_awaited_once()
-        call_kwargs = mock_fp.call_args
-        assert call_kwargs.kwargs["material_id"] == mid
 
     async def test_repos_receive_same_session(self) -> None:
         """Both repositories are instantiated with the same session."""
@@ -245,6 +215,100 @@ class TestOnFailure:
         job_cls.assert_called_once_with(session)
 
 
+class TestOnFailureStage2Discrimination:
+    """Phase 2.1 C6 — ``error_category`` discriminator branches.
+
+    Confirms KD-2.1-P contract: only ``STAGE2_REJECTED`` triggers an
+    additional cascade soft-delete; infrastructure failures (ratify
+    item E) and any other category leave the entity intact.
+    """
+
+    async def test_stage2_rejected_triggers_soft_delete(self) -> None:
+        """STAGE2_REJECTED branch calls _soft_delete_rejected_document."""
+        from course_supporter.security.exceptions import ErrorCategory
+
+        callback, _ = _make_callback()
+        jid = uuid.uuid4()
+        mid = uuid.uuid4()
+
+        with (
+            patch(_ENTRY_REPO) as entry_cls,
+            patch(_JOB_REPO) as job_cls,
+            patch.object(
+                callback, "_soft_delete_rejected_document", new_callable=AsyncMock
+            ) as mock_soft_delete,
+        ):
+            entry_cls.return_value.fail_processing = AsyncMock()
+            _setup_job_mock(job_cls)
+
+            await callback.on_failure(
+                job_id=jid,
+                material_id=mid,
+                error_message="off-topic content rejected",
+                error_category=ErrorCategory.STAGE2_REJECTED,
+            )
+
+        mock_soft_delete.assert_awaited_once()
+        call_kwargs = mock_soft_delete.call_args.kwargs
+        assert call_kwargs["material_id"] == mid
+
+    async def test_no_category_preserves_legacy_flow(self) -> None:
+        """error_category=None does NOT trigger soft-delete."""
+        callback, _ = _make_callback()
+
+        with (
+            patch(_ENTRY_REPO) as entry_cls,
+            patch(_JOB_REPO) as job_cls,
+            patch.object(
+                callback, "_soft_delete_rejected_document", new_callable=AsyncMock
+            ) as mock_soft_delete,
+        ):
+            entry_cls.return_value.fail_processing = AsyncMock()
+            _setup_job_mock(job_cls)
+
+            await callback.on_failure(
+                job_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                error_message="infrastructure timeout",
+                error_category=None,
+            )
+
+        mock_soft_delete.assert_not_awaited()
+        entry_cls.return_value.fail_processing.assert_awaited_once()
+
+    async def test_other_category_does_not_trigger_soft_delete(self) -> None:
+        """Non-STAGE2_REJECTED categories preserve legacy flow.
+
+        Stage 1 synchronous rejections (PROMPT_INJECTION etc) carry
+        a category but should NOT cascade soft-delete — the document
+        was rejected before any LLM call, no Stage 2 row to anchor.
+        Future C6+ extensions of this branch must opt-in explicitly.
+        """
+        from course_supporter.security.exceptions import ErrorCategory
+
+        callback, _ = _make_callback()
+
+        with (
+            patch(_ENTRY_REPO) as entry_cls,
+            patch(_JOB_REPO) as job_cls,
+            patch.object(
+                callback, "_soft_delete_rejected_document", new_callable=AsyncMock
+            ) as mock_soft_delete,
+        ):
+            entry_cls.return_value.fail_processing = AsyncMock()
+            _setup_job_mock(job_cls)
+
+            await callback.on_failure(
+                job_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                error_message="regex prompt-injection match",
+                error_category=ErrorCategory.PROMPT_INJECTION,
+            )
+
+        mock_soft_delete.assert_not_awaited()
+        entry_cls.return_value.fail_processing.assert_awaited_once()
+
+
 class TestOnSuccessErrors:
     """IngestionCallback.on_success — error propagation."""
 
@@ -312,16 +376,6 @@ class TestOnFailureErrors:
                 )
 
 
-class TestHooksAreNoOp:
-    """Extension hooks are callable and do nothing (yet)."""
-
-    async def test_invalidate_fingerprints_is_noop(self) -> None:
-        """_invalidate_fingerprints completes without error."""
-        callback, _ = _make_callback()
-        session = AsyncMock()
-        await callback._invalidate_fingerprints(session, material_id=uuid.uuid4())
-
-
 class TestCallbackIntegrationWithArqTask:
     """Verify arq_ingest_material delegates to IngestionCallback."""
 
@@ -336,9 +390,24 @@ class TestCallbackIntegrationWithArqTask:
         # metadata must be a real dict so .get() returns None (no
         # detected_language to cache).
         mock_doc.metadata = {}
+        chunk = MagicMock()
+        chunk.text = "Source content"
+        mock_doc.chunks = [chunk]
+
+        from course_supporter.ingestion.schemas import DocumentSummaryDraft
+        from course_supporter.security.schemas import SafetyResult
 
         mock_processor = MagicMock()
         mock_processor.process_raw = AsyncMock(return_value=mock_doc)
+        mock_processor.process_macro = AsyncMock(
+            return_value=DocumentSummaryDraft(
+                title="t",
+                description="d",
+                main_concepts=[],
+                secondary_concepts=[],
+            )
+        )
+        mock_processor.process_detail = AsyncMock(return_value=[])
 
         session = AsyncMock()
         session.commit = AsyncMock()
@@ -353,32 +422,72 @@ class TestCallbackIntegrationWithArqTask:
 
         mock_entry = MagicMock()
         mock_entry.source_url = "https://example.com"
+        mock_entry.course_node_id = uuid.uuid4()
 
-        ctx = {"session_factory": factory, "model_router": router}
+        ctx = {
+            "session_factory": factory,
+            "model_router": router,
+            "stage_router": MagicMock(),
+        }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (
             "course_supporter.storage.authored_document_repository"
             ".AuthoredDocumentRepository"
         )
+        _arq_node_repo = (
+            "course_supporter.storage.course_node_repository.CourseNodeRepository"
+        )
+        _arq_summary_repo = (
+            "course_supporter.storage.document_summary_repository"
+            ".DocumentSummaryRepository"
+        )
+        _arq_segment_repo = (
+            "course_supporter.storage.document_segment_repository"
+            ".DocumentSegmentRepository"
+        )
         _factory = "course_supporter.api.tasks.create_processors"
         _heavy = "course_supporter.api.tasks.create_heavy_steps"
+        _stage2 = "course_supporter.security.stage2.run_stage2_safety_check"
+
+        safe_verdict = SafetyResult(
+            is_safe=True,
+            violations=[],
+            confidence=0.9,
+            reasoning="benign",
+        )
 
         with (
             patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
             patch("course_supporter.job_priority.check_work_window"),
             patch(_arq_job_repo) as job_cls,
             patch(_arq_entry_repo) as entry_cls,
+            patch(_arq_node_repo) as node_cls,
+            patch(_arq_summary_repo) as summary_cls,
+            patch(_arq_segment_repo) as segment_cls,
             patch(_heavy),
             patch(_factory, return_value={"web": mock_processor}),
             patch(
                 "course_supporter.api.tasks.set_tenant_from_job",
                 new=AsyncMock(),
             ),
+            patch(_stage2, new=AsyncMock(return_value=safe_verdict)),
         ):
             job_cls.return_value.update_status = AsyncMock()
+            job_cls.return_value.update_stage = AsyncMock()
             entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
             entry_cls.return_value.set_pending = AsyncMock()
+            entry_cls.return_value.store_safety_result = AsyncMock()
+            node_cls.return_value.get_root_for = AsyncMock(
+                return_value=MagicMock(title="t", description="d")
+            )
+            node_cls.return_value.get_by_id = AsyncMock(
+                return_value=MagicMock(title="t", description="d")
+            )
+            summary_cls.return_value.create = AsyncMock(
+                return_value=MagicMock(id=uuid.uuid4()),
+            )
+            segment_cls.return_value.create_batch = AsyncMock(return_value=[])
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 
@@ -410,7 +519,11 @@ class TestCallbackIntegrationWithArqTask:
         factory = MagicMock(return_value=ctx_manager)
         router = MagicMock()
 
-        ctx = {"session_factory": factory, "model_router": router}
+        ctx = {
+            "session_factory": factory,
+            "model_router": router,
+            "stage_router": MagicMock(),
+        }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
         _arq_entry_repo = (

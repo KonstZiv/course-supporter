@@ -423,11 +423,12 @@ class TestStructuredLogging:
 
 
 class TestErrorCategoryPublicContract:
-    def test_nine_categories_present(self) -> None:
+    def test_ten_categories_present(self) -> None:
         # 7 categories Phase 0.6 baseline + 2 Phase 2.1 C2 additions:
         # ARCHIVE_BOMB + SYMLINK_VIOLATION per KD-2.1-I (2-set ratify
         # 2026-05-11) — legacy safety/exceptions.py raisers migrated
-        # to canonical ErrorCategory.
+        # to canonical ErrorCategory. + 1 Phase 2.1 C6 addition:
+        # STAGE2_REJECTED per KD-2.1-P (LLM verdict ``is_safe=False``).
         assert {c.value for c in ErrorCategory} == {
             "size_limit",
             "forbidden_type",
@@ -438,6 +439,7 @@ class TestErrorCategoryPublicContract:
             "charset_violation",
             "archive_bomb",
             "symlink_violation",
+            "stage2_rejected",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))
@@ -445,7 +447,11 @@ class TestErrorCategoryPublicContract:
         v = category.value
         assert v == v.lower()
         assert " " not in v
-        assert v.replace("_", "").isalpha()
+        # Phase 2.1 C6: ``stage2_rejected`` introduces a digit; loosen
+        # the alpha-only check to alphanumeric so the rule still
+        # excludes whitespace / punctuation without forbidding stage
+        # numbers (KD-2.1-I extension pattern).
+        assert v.replace("_", "").isalnum()
 
 
 # ── 9. Stage1Result shape ──────────────────────────────────────────

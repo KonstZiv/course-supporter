@@ -10,7 +10,6 @@ from course_supporter.storage.orm import (
     HomeworkStatus,
     HomeworkSubmission,
     Job,
-    StructureNodeEditable,
     Student,
     Tenant,
     _uuid7,
@@ -153,12 +152,13 @@ class TestHomeworkSubmissionForeignKeys:
         assert fk.target_fullname == "course_nodes.id"
         assert fk.ondelete == "CASCADE"
 
-    def test_matched_task_id_fk(self) -> None:
-        """matched_task_id FK with SET NULL."""
+    def test_matched_task_id_no_fk_post_c9_4(self) -> None:
+        """matched_task_id has no FK post-C9.4 (orphan column per DD-2.1-AG)."""
         col = HomeworkSubmission.__table__.c.matched_task_id
-        fk = next(iter(col.foreign_keys))
-        assert fk.target_fullname == "structure_nodes_editable.id"
-        assert fk.ondelete == "SET NULL"
+        assert not col.foreign_keys, (
+            "matched_task_id FK to structure_nodes_editable dropped in C9.4 "
+            "with the table; column retained per DD-2.1-AG for Phase 4 reroute."
+        )
 
     def test_job_id_fk(self) -> None:
         """job_id FK with SET NULL."""
@@ -222,11 +222,6 @@ class TestHomeworkSubmissionRelationships:
         """node relationship to CourseNode."""
         rel = HomeworkSubmission.__mapper__.relationships["node"]
         assert rel.mapper.class_ is CourseNode
-
-    def test_matched_task_relationship(self) -> None:
-        """matched_task relationship to StructureNodeEditable."""
-        rel = HomeworkSubmission.__mapper__.relationships["matched_task"]
-        assert rel.mapper.class_ is StructureNodeEditable
 
     def test_job_relationship(self) -> None:
         """job relationship to Job."""

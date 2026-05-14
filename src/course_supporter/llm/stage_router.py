@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -125,12 +126,24 @@ class StageRouter:
     async def execute_for_stage(
         self,
         stage_name: str,
+        *,
+        response_validator: Callable[[str], None] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a named stage.
 
         Args:
             stage_name: Stage name registered in ``ladders_*.yaml``.
+            response_validator: Optional callable invoked on each
+                non-empty ``response.content`` within the ladder
+                attempt scope. Raise :class:`StructuralRetryError`
+                from the validator to trigger the existing
+                instructor-style retry path (one retry on the same
+                model with feedback appended; on second failure
+                proceeds to the next ladder rung). Default ``None``
+                preserves the legacy behaviour of returning the first
+                non-empty response without any router-side schema
+                check.
             **render_context: Variables for the prompt template's
                 Jinja2 placeholders.
 
@@ -185,7 +198,7 @@ class StageRouter:
 
             request = self._build_request(prompt, entry, stage_name)
             response, used_count, reason = await self._attempt_entry(
-                provider, entry, request, stage_name
+                provider, entry, request, stage_name, response_validator
             )
             total_attempt_count += used_count
 
@@ -224,6 +237,7 @@ class StageRouter:
         entry: LadderEntry,
         request: LLMRequest,
         stage_name: str,
+        response_validator: Callable[[str], None] | None,
     ) -> tuple[LLMResponse | None, int, str]:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
 
@@ -238,7 +252,7 @@ class StageRouter:
             attempts_used += 1
             try:
                 response = await self._call_with_log(
-                    provider, entry, request, stage_name
+                    provider, entry, request, stage_name, response_validator
                 )
             except StructuralRetryError as exc:
                 (
@@ -246,7 +260,7 @@ class StageRouter:
                     retry_count,
                     retry_reason,
                 ) = await self._structural_retry(
-                    provider, entry, request, exc, stage_name
+                    provider, entry, request, exc, stage_name, response_validator
                 )
                 attempts_used += retry_count
                 if retry_response is not None:
@@ -291,6 +305,7 @@ class StageRouter:
         original_request: LLMRequest,
         exc: StructuralRetryError,
         stage_name: str,
+        response_validator: Callable[[str], None] | None,
     ) -> tuple[LLMResponse | None, int, str]:
         """Single retry attempt with feedback appended to the user prompt."""
         retry_request = original_request.model_copy(
@@ -304,7 +319,7 @@ class StageRouter:
         )
         try:
             response = await self._call_with_log(
-                provider, entry, retry_request, stage_name
+                provider, entry, retry_request, stage_name, response_validator
             )
         except Exception as retry_exc:
             return None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}"
@@ -322,13 +337,27 @@ class StageRouter:
         entry: LadderEntry,
         request: LLMRequest,
         stage_name: str,
+        response_validator: Callable[[str], None] | None,
     ) -> LLMResponse:
-        """One LLM call. Persists ESC for the attempt in ``finally``."""
+        """One LLM call. Persists ESC for the attempt in ``finally``.
+
+        If ``response_validator`` is non-None and the provider returns
+        non-empty content, the validator runs before this function
+        returns. A :class:`StructuralRetryError` raised from the
+        validator propagates so :meth:`_attempt_entry` can route it
+        through :meth:`_structural_retry`. The ESC row for this
+        attempt records ``success=True`` (transport-level success)
+        with ``error_message`` carrying the validator feedback —
+        truthful telemetry for "API call succeeded but content
+        failed router policy".
+        """
         start = time.perf_counter()
         response: LLMResponse | None = None
         error_message: str | None = None
         try:
             response = await provider.complete(request)
+            if response_validator is not None and response.content:
+                response_validator(response.content)
             return response
         except Exception as exc:
             error_message = str(exc)

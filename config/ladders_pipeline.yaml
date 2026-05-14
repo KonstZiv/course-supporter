@@ -14,3 +14,39 @@ stages:
         model: claude-sonnet-4-20250514
       - provider: gemini
         model: gemini-2.5-flash
+
+  # Pass 2a -- cost-first semantic mapping for text/web ingestion
+  # (KD-2.1-A, KD-2.1-O). Produces DocumentSummary fields (title /
+  # description / content_char_count) and segment boundaries used by
+  # Pass 2b (Phase 2.1 commit 7); document-level main_concepts and
+  # secondary_concepts are aggregated algorithmically from segments
+  # in TextProcessor / WebProcessor.process_macro.
+  #
+  # Ladder rationale (ratified 2026-05-12):
+  #   1. deepseek-v4-flash — cost-first primary. DeepSeekProvider
+  #      forces thinking={"type":"disabled"}, giving non-think mode
+  #      latency ~19s and ~1.8k output tokens for a 10k-char Ukrainian
+  #      tutorial (Phase A+B spike, 5/5 deterministic runs). Cost per
+  #      call ~$0.0014 — 15-30x cheaper than premium tier.
+  #   2. gemini-2.5-flash — second tier. Rotation across 14 keys per
+  #      memory; free-tier flash quota supports the workload when
+  #      DeepSeek is unavailable.
+  #   3. claude-haiku-4-5-20251001 — third tier. Anthropic snapshot
+  #      pinned per repo convention (date-stamped for deterministic
+  #      reproducibility). Cheapest Claude tier appropriate for the
+  #      structured-output workload.
+  #
+  # Snapshot convention: anthropic models pinned (date-stamped
+  # snapshot for deterministic reproducibility per
+  # ladders_methodist.yaml + ladders_pipeline.yaml example_stage
+  # precedent); gemini / deepseek models use aliases (latest stable;
+  # provider-side stability guarantee per existing repo convention).
+  pass_2a_mapping:
+    prompt_ref: "prompts/pass_2a_mapping/v1.md"
+    ladder:
+      - provider: deepseek
+        model: deepseek-v4-flash
+      - provider: gemini
+        model: gemini-2.5-flash
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001

@@ -9,7 +9,6 @@ from course_supporter.ingestion.base import (
     ProcessingError,
     UnsupportedFormatError,
 )
-from course_supporter.models.course import CourseContext, SlideTimecodeRef
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -86,27 +85,6 @@ class TestSourceDocument:
         )
         assert len(doc.chunks) == 2
         assert doc.chunks[0].chunk_type == ChunkType.HEADING
-
-
-class TestCourseContext:
-    def test_course_context_empty(self) -> None:
-        """CourseContext with no documents."""
-        ctx = CourseContext(documents=[])
-        assert ctx.documents == []
-        assert ctx.slide_video_mappings == []
-        assert isinstance(ctx.created_at, datetime)
-
-    def test_course_context_with_mappings(self) -> None:
-        """CourseContext with documents and slide-video mappings."""
-        doc = SourceDocument(source_type=SourceType.VIDEO, source_url="file:///v.mp4")
-        mapping = SlideTimecodeRef(slide_number=1, video_timecode_start="00:05:30")
-        ctx = CourseContext(
-            documents=[doc],
-            slide_video_mappings=[mapping],
-        )
-        assert len(ctx.documents) == 1
-        assert ctx.slide_video_mappings[0].slide_number == 1
-        assert ctx.slide_video_mappings[0].video_timecode_start == "00:05:30"
 
 
 class TestMaterialProcessor:

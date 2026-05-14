@@ -46,7 +46,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
     """Map ``(job.job_type, job.input_params)`` → ARQ task call shape.
 
     Transitional dispatch over the legacy ``job_type`` strings
-    currently emitted by ``enqueue.py`` and ``methodist_orchestrator``.
+    currently emitted by ``enqueue.py``.
     Phase 2.x rewrite of orchestrators to KD13's 4-value :class:`JobType`
     enum will collapse this to a 4-case match (and will likely add a
     ``s3_cleanup`` arm — currently the ``s3_cleanup_task`` worker
@@ -75,47 +75,11 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         job.priority,
                     ],
                 )
-            case "generate_structure":
-                return _ReenqueueDispatch(
-                    arq_function="arq_generate_structure",
-                    args=[
-                        jid,
-                        p["root_node_id"],
-                        p.get("target_node_id"),
-                        p["mode"],
-                    ],
-                )
-            case "generate" | "reconcile" | "refine":
-                return _ReenqueueDispatch(
-                    arq_function="arq_execute_step",
-                    args=[
-                        jid,
-                        p["root_node_id"],
-                        p["target_node_id"],
-                        p["mode"],
-                        p["step_type"],
-                    ],
-                )
-            case "reconcile_preview":
-                return _ReenqueueDispatch(
-                    arq_function="arq_reconcile_preview",
-                    args=[jid, p["node_id"]],
-                )
             case "homework":
                 return _ReenqueueDispatch(
                     arq_function="arq_process_homework",
                     args=[jid, p["submission_id"]],
                     queue_name="homework",
-                )
-            case "methodist_bottom_up" | "methodist_top_down":
-                return _ReenqueueDispatch(
-                    arq_function="arq_execute_methodist_step",
-                    args=[
-                        jid,
-                        p["course_node_id"],
-                        p["editable_id"],
-                        p["phase"],
-                    ],
                 )
             case "s3_cleanup":
                 # KD13 s3_cleanup_task uses kw-only args; carried via
@@ -134,9 +98,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                     detail=(
                         f"Reactivate not supported for job_type="
                         f"{job.job_type!r}. Supported types: ingest, "
-                        f"generate_structure, reconcile_preview, generate, "
-                        f"reconcile, refine, homework, methodist_bottom_up, "
-                        f"methodist_top_down, s3_cleanup."
+                        f"homework, s3_cleanup."
                     ),
                 )
     except KeyError as exc:

@@ -95,7 +95,7 @@ def format_user_prompt(template: str, context: str, **kwargs: str) -> str:
     Args:
         template: Prompt template with {context} placeholder and
             optional extra placeholders (e.g. {existing_structure}).
-        context: Serialized CourseContext to inject.
+        context: Serialized context payload to inject.
         **kwargs: Additional template variables (e.g. existing_structure).
 
     Returns:

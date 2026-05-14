@@ -4,121 +4,7 @@ from __future__ import annotations
 
 from course_supporter.homework.mentor_context import (
     _build_student_history,
-    _extract_methodist_fields,
 )
-
-
-class TestExtractMethodistFields:
-    """Extract grading criteria, steps, etc. from Methodist output."""
-
-    def test_full_methodist_output(self) -> None:
-        """All fields present in Methodist output."""
-        mc = {
-            "learning_objectives": ["Understand loops", "Apply list comprehension"],
-            "common_misconceptions": ["for-else is like if-else"],
-            "teaching_recommendations": "Start with simple examples",
-            "key_concepts_detailed": [
-                {"name": "list comprehension", "definition": "Concise list creation"},
-                {"name": "generator", "definition": "Lazy evaluation"},
-            ],
-            "recommended_assignments": [
-                {
-                    "title": "Loop exercise",
-                    "description": "Write a loop that filters data",
-                    "grading_criteria": "Correct output, clean code",
-                    "steps": ["Read input", "Filter", "Output"],
-                }
-            ],
-        }
-        result = _extract_methodist_fields(mc, "Loop exercise")
-
-        assert result["learning_objectives"] == [
-            "Understand loops",
-            "Apply list comprehension",
-        ]
-        assert result["grading_criteria"] == "Correct output, clean code"
-        assert result["assignment_steps"] == ["Read input", "Filter", "Output"]
-        assert result["common_misconceptions"] == ["for-else is like if-else"]
-        assert len(result["key_concepts"]) == 2
-
-    def test_empty_methodist_output(self) -> None:
-        """None or empty Methodist output returns empty dict."""
-        assert _extract_methodist_fields(None, None) == {}
-        assert _extract_methodist_fields({}, None) == {}
-
-    def test_partial_methodist_no_assignments(self) -> None:
-        """Methodist output without assignment recommendations."""
-        mc = {
-            "learning_objectives": ["Understand OOP"],
-            "common_misconceptions": [],
-        }
-        result = _extract_methodist_fields(mc, "Loop exercise")
-        assert result["learning_objectives"] == ["Understand OOP"]
-        assert result.get("grading_criteria") is None
-
-    def test_key_concepts_skip_empty_names(self) -> None:
-        """Key concepts with empty names are filtered out."""
-        mc = {
-            "key_concepts_detailed": [
-                {"name": "valid", "definition": "ok"},
-                {"name": "", "definition": "skip"},
-                {"definition": "also skip"},
-            ],
-        }
-        result = _extract_methodist_fields(mc, "Loop exercise")
-        assert len(result["key_concepts"]) == 1
-        assert result["key_concepts"][0]["name"] == "valid"
-
-    def test_assignment_matched_by_title(self) -> None:
-        """Correct assignment is selected when title matches."""
-        mc = {
-            "recommended_assignments": [
-                {
-                    "title": "First task",
-                    "grading_criteria": "Wrong criteria",
-                    "steps": ["wrong"],
-                },
-                {
-                    "title": "Second task",
-                    "grading_criteria": "Correct criteria",
-                    "steps": ["right"],
-                },
-            ],
-        }
-        result = _extract_methodist_fields(mc, "Second task")
-        assert result["grading_criteria"] == "Correct criteria"
-        assert result["assignment_steps"] == ["right"]
-
-    def test_assignment_fallback_to_first(self) -> None:
-        """Falls back to first assignment when title doesn't match."""
-        mc = {
-            "recommended_assignments": [
-                {
-                    "title": "First task",
-                    "grading_criteria": "First criteria",
-                    "steps": ["first"],
-                },
-                {
-                    "title": "Second task",
-                    "grading_criteria": "Second criteria",
-                },
-            ],
-        }
-        result = _extract_methodist_fields(mc, "Nonexistent task")
-        assert result["grading_criteria"] == "First criteria"
-
-    def test_assignment_title_case_insensitive(self) -> None:
-        """Assignment title matching is case-insensitive."""
-        mc = {
-            "recommended_assignments": [
-                {
-                    "title": "Loop Exercise",
-                    "grading_criteria": "Correct",
-                },
-            ],
-        }
-        result = _extract_methodist_fields(mc, "loop exercise")
-        assert result["grading_criteria"] == "Correct"
 
 
 class TestBuildStudentHistory:
@@ -127,19 +13,21 @@ class TestBuildStudentHistory:
     def _make_submission(
         self,
         *,
-        task_title: str = "Exercise 1",
         score: int = 80,
         passed: bool = True,
         issues: list[str] | None = None,
         notable: list[str] | None = None,
     ) -> object:
-        """Create a mock submission with review_result."""
+        """Create a mock submission with review_result.
+
+        Post-C9.4 (DD-2.1-AG): ``matched_task`` relationship was removed
+        with the ``StructureNodeEditable`` ORM class — history entries
+        unconditionally carry ``task_title == "(unknown)"`` until the
+        Phase 4 NodeSummaryFinal reroute repopulates them.
+        """
         from unittest.mock import MagicMock
 
         sub = MagicMock()
-        matched = MagicMock()
-        matched.title = task_title
-        sub.matched_task = matched
         sub.review_result = {
             "analysis": {
                 "score": score,
@@ -153,27 +41,25 @@ class TestBuildStudentHistory:
     def test_builds_history(self) -> None:
         subs = [
             self._make_submission(
-                task_title="Lists",
                 score=90,
                 passed=True,
                 issues=["Missing edge case"],
                 notable=["Elegant comprehension"],
             ),
             self._make_submission(
-                task_title="Dicts",
                 score=70,
                 passed=True,
             ),
         ]
         history = _build_student_history(subs)
         assert len(history) == 2
-        assert history[0].task_title == "Lists"
+        assert history[0].task_title == "(unknown)"
         assert history[0].score == 90
         assert "Missing edge case" in history[0].issues_summary
         assert "Elegant comprehension" in history[0].notable_solutions_summary
 
     def test_max_entries(self) -> None:
-        subs = [self._make_submission(task_title=f"T{i}") for i in range(10)]
+        subs = [self._make_submission() for _ in range(10)]
         history = _build_student_history(subs, max_entries=3)
         assert len(history) == 3
 
@@ -185,7 +71,6 @@ class TestBuildStudentHistory:
         from unittest.mock import MagicMock
 
         sub = MagicMock()
-        sub.matched_task = None
         sub.review_result = None
         history = _build_student_history([sub])
         assert len(history) == 1
@@ -198,9 +83,6 @@ class TestBuildStudentHistory:
 
         sub = MagicMock()
         sub.id = "test-id"
-        matched = MagicMock()
-        matched.title = "Exercise 1"
-        sub.matched_task = matched
         sub.review_result = {}
         history = _build_student_history([sub])
         assert len(history) == 1

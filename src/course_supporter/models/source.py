@@ -23,6 +23,21 @@ class MaterialRole(StrEnum):
     METHODOLOGICAL = "methodological"
 
 
+class AssignmentType(StrEnum):
+    """Assignment types with increasing complexity and duration.
+
+    Translocated from models/methodist.py in C9.0 (K-stop-1 resolution):
+    AuthoredDocument.task_type is a core document taxonomy attribute,
+    not a methodist-internal concept. Methodist legacy layer is deleted
+    in C9.3 (Phase 5 + methodist cleanup).
+    """
+
+    TEST = "test"
+    SHORT_TASK = "short_task"
+    TASK = "task"
+    PROJECT = "project"
+
+
 class ChunkType(StrEnum):
     """Types of content chunks produced by processors."""
 
@@ -71,3 +86,15 @@ class SourceDocument(BaseModel):
     chunks: list[ContentChunk] = Field(default_factory=list)
     processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def assemble_text(self) -> str:
+        """Canonical reference text used for LLM offset semantics.
+
+        Pass 2a routes this exact string through the mapping prompt; the
+        emitted ``start_pos`` / ``end_pos`` are inclusive/exclusive char
+        offsets into it. Pass 2b slices this same string to materialise
+        ``DocumentSegment.content``, and Stage 2 LLM safety check sees the
+        same body. Centralising the assembly here prevents silent offset
+        drift between the three pipeline stages.
+        """
+        return "\n\n".join(chunk.text for chunk in self.chunks if chunk.text)

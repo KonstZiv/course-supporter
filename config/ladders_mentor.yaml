@@ -22,16 +22,26 @@ stages:
   # against a fixed schema -- frontier reasoning capability would be
   # overkill. Override of the factory default mistral-large-latest is
   # intentional; do NOT "fix" by reverting to large unless safety-
-  # accuracy telemetry shows small underperforming. deepseek-chat and
-  # gemini-2.5-flash are equivalent-tier fallbacks for infrastructure
-  # outages on the primary; ladder order is by historical reliability,
-  # not capability.
+  # accuracy telemetry shows small underperforming. deepseek-v4-flash
+  # and gemini-2.5-flash are equivalent-tier fallbacks for
+  # infrastructure outages on the primary; ladder order is by
+  # historical reliability, not capability.
+  #
+  # Snapshot convention: this ladder uses provider aliases for all
+  # three rungs (mistral / deepseek / gemini) -- "latest stable",
+  # relying on provider-side stability guarantees per existing repo
+  # convention (mirrors ladders_pipeline.yaml pass_2a_mapping). Where
+  # an Anthropic model appears in a ladder it is pinned to a
+  # date-stamped snapshot for deterministic reproducibility; no
+  # Anthropic rung is used here. Migrating the alias rungs to pinned
+  # snapshots is tracked as a cross-cutting operational item, not a
+  # Phase 2.1 concern.
   safety_check:
     prompt_ref: "prompts/safety_check/v1.md"
     ladder:
       - provider: mistral
         model: mistral-small-latest
       - provider: deepseek
-        model: deepseek-chat
+        model: deepseek-v4-flash
       - provider: gemini
         model: gemini-2.5-flash

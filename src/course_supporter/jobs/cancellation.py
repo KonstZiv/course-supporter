@@ -22,7 +22,7 @@ boundary, ≪ pipeline cost) for a clean exit window.
 
 **Worker integration is documented but NOT wired in this commit.**
 Phase 2.x rewrites the pipeline workers (``arq_ingest_material``,
-``arq_execute_methodist_step``, etc.) to call
+etc.) to call
 ``await checker.raise_if_cancelled(job_id)`` between stages and
 to wrap the call in a specific ``except JobCancelledError`` that
 runs cleanup + returns gracefully (without flipping the Job to

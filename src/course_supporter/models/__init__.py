@@ -1,24 +1,7 @@
 """Pydantic schemas for course-supporter domain models."""
 
-from course_supporter.models.course import (
-    ConceptOutput,
-    CourseContext,
-    CourseStructure,
-    ExerciseOutput,
-    LessonOutput,
-    ModuleDifficulty,
-    ModuleOutput,
-    SlideRange,
-    SlideTimecodeRef,
-    WebReference,
-)
-from course_supporter.models.outline import (
-    CodeSnippet,
-    MaterialOutline,
-    OutlineSection,
-    PresenterInfo,
-)
 from course_supporter.models.source import (
+    AssignmentType,
     ChunkType,
     ContentChunk,
     SourceDocument,
@@ -26,22 +9,9 @@ from course_supporter.models.source import (
 )
 
 __all__ = [
+    "AssignmentType",
     "ChunkType",
-    "CodeSnippet",
-    "ConceptOutput",
     "ContentChunk",
-    "CourseContext",
-    "CourseStructure",
-    "ExerciseOutput",
-    "LessonOutput",
-    "MaterialOutline",
-    "ModuleDifficulty",
-    "ModuleOutput",
-    "OutlineSection",
-    "PresenterInfo",
-    "SlideRange",
-    "SlideTimecodeRef",
     "SourceDocument",
     "SourceType",
-    "WebReference",
 ]

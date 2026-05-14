@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.api.tasks import arq_ingest_material
+from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceDocument, SourceType
 
 _FACTORY = "course_supporter.api.tasks.create_processors"
@@ -13,6 +14,22 @@ _HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 _ENTRY_REPO = (
     "course_supporter.storage.authored_document_repository.AuthoredDocumentRepository"
 )
+_SUMMARY_REPO = (
+    "course_supporter.storage.document_summary_repository.DocumentSummaryRepository"
+)
+_SEGMENT_REPO = (
+    "course_supporter.storage.document_segment_repository.DocumentSegmentRepository"
+)
+
+
+def _default_summary_draft() -> DocumentSummaryDraft:
+    """Build a minimal valid DocumentSummaryDraft for mock Pass 2a."""
+    return DocumentSummaryDraft(
+        title="t",
+        description="d",
+        main_concepts=[],
+        secondary_concepts=[],
+    )
 
 
 @pytest.fixture()
@@ -42,11 +59,13 @@ def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
 def _make_arq_ctx(
     factory: MagicMock | None = None,
     router: MagicMock | None = None,
+    stage_router: MagicMock | None = None,
 ) -> dict[str, object]:
     """Build an ARQ worker context dict for testing."""
     return {
         "session_factory": factory or _make_session_factory(),
         "model_router": router,
+        "stage_router": stage_router or MagicMock(),
     }
 
 
@@ -54,6 +73,7 @@ def _mock_processors(
     doc: SourceDocument | None = None,
     *,
     source_type: SourceType = SourceType.WEB,
+    summary_draft: DocumentSummaryDraft | None = None,
 ) -> dict[SourceType, MagicMock]:
     """Create a processors dict with a mock processor instance."""
     if doc is None:
@@ -63,6 +83,10 @@ def _mock_processors(
         )
     mock_proc = MagicMock()
     mock_proc.process_raw = AsyncMock(return_value=doc)
+    mock_proc.process_macro = AsyncMock(
+        return_value=summary_draft or _default_summary_draft(),
+    )
+    mock_proc.process_detail = AsyncMock(return_value=[])
     return {source_type: mock_proc}
 
 
@@ -84,7 +108,78 @@ def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
     return entry
 
 
-@pytest.mark.usefixtures("_bypass_tenant_lookup")
+@pytest.fixture()
+def _patch_summary_repo() -> None:  # type: ignore[misc]
+    """Auto-patch DocumentSummaryRepository so Pass 2a inside arq_ingest_material
+    materialises against a mock (no DB) yielding a usable summary instance."""
+    with patch(_SUMMARY_REPO) as cls:
+        cls.return_value.create = AsyncMock(
+            return_value=MagicMock(id=uuid.uuid4()),
+        )
+        yield
+
+
+@pytest.fixture()
+def _patch_segment_repo() -> None:  # type: ignore[misc]
+    """Auto-patch DocumentSegmentRepository so Pass 2b runs without DB.
+
+    ``create_batch`` returns an empty list; mocked ``process_detail``
+    already returns ``[]`` so Pass 2b is a no-op end-to-end for these
+    legacy tests that pre-date Phase 2.1 C7.
+    """
+    with patch(_SEGMENT_REPO) as cls:
+        cls.return_value.create_batch = AsyncMock(return_value=[])
+        yield
+
+
+@pytest.fixture()
+def _patch_stage2_check() -> None:  # type: ignore[misc]
+    """Auto-patch Stage 2 to return is_safe=True (Phase 2.1 C6).
+
+    Pass-through verdict so existing test scenarios (which were
+    designed against the pre-C6 flow without LLM safety checks)
+    continue covering Pass 2a + callback delegation without a real
+    LLM call. Scenarios that want to exercise the reject branch
+    re-patch ``run_stage2_safety_check`` directly.
+    """
+    from course_supporter.security.schemas import SafetyResult
+
+    safe = SafetyResult(
+        is_safe=True,
+        violations=[],
+        confidence=0.95,
+        reasoning="benign",
+    )
+    with patch(
+        "course_supporter.security.stage2.run_stage2_safety_check",
+        new=AsyncMock(return_value=safe),
+    ):
+        yield
+
+
+@pytest.fixture()
+def _patch_node_repo_for_stage2() -> MagicMock:  # type: ignore[misc]
+    """Auto-patch CourseNodeRepository so Stage 2's course_context build
+    resolves root/target nodes without real DB queries.
+    """
+    with patch(
+        "course_supporter.storage.course_node_repository.CourseNodeRepository"
+    ) as cls:
+        node = MagicMock()
+        node.title = "Course"
+        node.description = "Desc"
+        cls.return_value.get_root_for = AsyncMock(return_value=node)
+        cls.return_value.get_by_id = AsyncMock(return_value=node)
+        yield cls
+
+
+@pytest.mark.usefixtures(
+    "_bypass_tenant_lookup",
+    "_patch_summary_repo",
+    "_patch_segment_repo",
+    "_patch_stage2_check",
+    "_patch_node_repo_for_stage2",
+)
 class TestArqIngestMaterial:
     """Tests for the ARQ-based arq_ingest_material function."""
 
@@ -108,11 +203,14 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=_mock_processors()),
         ):
             mock_job_repo_cls.return_value.update_status = AsyncMock()
+            mock_job_repo_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx,
@@ -154,10 +252,12 @@ class TestArqIngestMaterial:
         ):
             mock_job = mock_job_cls.return_value
             mock_job.update_status = AsyncMock()
+            mock_job.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
@@ -200,6 +300,7 @@ class TestArqIngestMaterial:
             ),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=_mock_entry()
             )
@@ -238,6 +339,7 @@ class TestArqIngestMaterial:
             patch(_FACTORY, return_value=_mock_processors()),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=None)
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
@@ -307,6 +409,7 @@ class TestArqIngestMaterial:
 
         mock_proc = MagicMock()
         mock_proc.process_raw = capture_process
+        mock_proc.process_macro = AsyncMock(return_value=_default_summary_draft())
         procs = {SourceType.TEXT: mock_proc}
 
         with (
@@ -323,11 +426,14 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "exists", AsyncMock(return_value=False)),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj
             )
             mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
             mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
 
             await arq_ingest_material(
                 ctx,
@@ -388,6 +494,7 @@ class TestArqIngestMaterial:
             patch.object(anyio.Path, "unlink", mock_unlink),
         ):
             mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
             mock_entry_cls.return_value.get_by_id = AsyncMock(
                 return_value=mock_entry_obj
             )

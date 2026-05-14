@@ -21,13 +21,9 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.documents import router as documents_router
-from course_supporter.api.routes.editable import router as editable_router
-from course_supporter.api.routes.generation import router as generation_router
 from course_supporter.api.routes.homework import router as homework_router
 from course_supporter.api.routes.jobs import router as jobs_router
-from course_supporter.api.routes.methodist import router as methodist_router
 from course_supporter.api.routes.nodes import router as nodes_router
-from course_supporter.api.routes.reconciliation import router as reconciliation_router
 from course_supporter.api.routes.storage import router as storage_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
@@ -244,10 +240,6 @@ async def unhandled_exception_handler(
     )
 
 
-app.include_router(editable_router, prefix="/api/v1")
-app.include_router(generation_router, prefix="/api/v1")
-app.include_router(methodist_router, prefix="/api/v1")
-app.include_router(reconciliation_router, prefix="/api/v1")
 app.include_router(nodes_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(homework_router, prefix="/api/v1")

@@ -393,7 +393,8 @@ class AudioPass2aResult(BaseModel):
     """Pass 2a LLM output for the audio source type (KD-2.2-H).
 
     Top-level container for the Pass 2a metadata-mapping call.
-    Carries up to 10 segments (KD-2.2-H prompt cap). Three
+    Carries doc-level synthesis (``title``, ``description``) plus
+    up to 10 segments (KD-2.2-H prompt cap). Three
     ``model_validator(mode="after")`` gates enforce the structural
     invariants over the segment sequence:
 
@@ -410,8 +411,38 @@ class AudioPass2aResult(BaseModel):
       ``word_idx`` range exactly. Closes the mechanical failure
       mode observed in the DeepSeek narrow probe (DD-2.2-X,
       2026-05-15).
+
+    Doc-level fields (PHASE.md v0.3 correction 2026-05-15):
+    ``title`` + ``description`` symmetric до text/web
+    :class:`DocumentSummaryDraft` contract. :class:`AudioProcessor`
+    ``process_macro`` робить pass-through conversion of these
+    fields into the returned :class:`DocumentSummaryDraft` without
+    algorithmic derivation; preserves LLM judgement over
+    client-side filename-based defaults (dev-time orientation:
+    quality > simplicity).
     """
 
+    title: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Doc-level title summarising the opening theme of the "
+            "audio (target ≤80 chars per prompt directive; schema "
+            "cap 128). ``None`` tolerates the «talk without explicit "
+            "theme» edge case, parallel до text/web "
+            "DocumentSummaryDraft contract."
+        ),
+    )
+    description: str = Field(
+        max_length=512,
+        description=(
+            "Doc-level description (2-3 sentences) covering the "
+            "doc subject and main-concepts coverage. Required; "
+            "schema cap 512 chars. Pass 2a LLM emits this field "
+            "alongside ``segments``; AudioProcessor.process_macro "
+            "passes it through to DocumentSummaryDraft.description."
+        ),
+    )
     segments: list[AudioSegmentDraft] = Field(
         default_factory=list,
         max_length=10,

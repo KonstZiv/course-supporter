@@ -122,6 +122,18 @@ class DocumentSegmentDraft(BaseModel):
             "char-offset bridge; ``None`` for text/web."
         ),
     )
+    noisy: bool = Field(
+        default=False,
+        description=(
+            "True if Pass 2a flagged the segment as containing speech "
+            "disfluencies (audio source_type, KD-2.2-F v0.4); routes "
+            "Pass 2c selective denoise in "
+            "``AudioProcessor.process_detail`` and drives the UI "
+            "noisy-badge per KD-2.2-J item 5. Default ``False`` for "
+            "text / web / video — non-audio source_types preserve "
+            "backward-compat without caller changes."
+        ),
+    )
 
     @field_validator("start_pos")
     @classmethod

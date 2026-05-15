@@ -33,6 +33,31 @@ class STTSegment(BaseModel):
     text: str
 
 
+class STTWord(BaseModel):
+    """Single STT word output — KD-2.2-C primitive of ``STTResult.words``.
+
+    STT-domain primitive emitted by the provider with per-word time
+    anchors (start_sec / end_sec). Lives at the top of
+    :class:`STTResult` (not per-segment). Position index is implicit
+    via ``enumerate(STTResult.words)``; no explicit ``word_idx``
+    field. ``logprob`` is provider-optional — ElevenLabs Scribe v2
+    surfaces word-level log probability, other providers may omit
+    it. Consumed by the Pass 2a audio pipeline through the
+    ``word_idx`` bridge (KD-2.2-F, helper lives in
+    ``ingestion/audio.py``).
+    """
+
+    start_sec: float = Field(description="Word start time (seconds).")
+    end_sec: float = Field(
+        description="Word end time (seconds, > start_sec).",
+    )
+    text: str = Field(description="Word text as transcribed by STT.")
+    logprob: float | None = Field(
+        default=None,
+        description="Word-level log probability if surfaced by provider.",
+    )
+
+
 class STTResult(BaseModel):
     """Output of an STT transcription call.
 

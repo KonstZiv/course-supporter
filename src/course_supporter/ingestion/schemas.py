@@ -287,27 +287,10 @@ class DocumentSummaryDraft(BaseModel):
 # nesting via JSON. ``order`` fields are deliberately absent on
 # audio classes — position is implicit via ``enumerate(...)`` and
 # the LLM hallucination surface is reduced.
-
-
-class STTWord(BaseModel):
-    """Single STT word output (KD-2.2-C).
-
-    Per KD-2.2-C, ``STTWord`` lives at the top of ``STTResult``
-    (not per-segment). Position index is implicit via
-    ``enumerate(words)``; no explicit ``word_idx`` field.
-    ``logprob`` is provider-optional — ElevenLabs Scribe v2 surfaces
-    word-level log probability, other providers may omit it.
-    """
-
-    start_sec: float = Field(description="Word start time (seconds).")
-    end_sec: float = Field(
-        description="Word end time (seconds, > start_sec).",
-    )
-    text: str = Field(description="Word text as transcribed by STT.")
-    logprob: float | None = Field(
-        default=None,
-        description="Word-level log probability if surfaced by provider.",
-    )
+#
+# STTWord (the STT-domain primitive consumed by Pass 2a via the
+# ``word_idx`` bridge of KD-2.2-F) lives canonically in
+# :mod:`course_supporter.stt.schemas` per KD-2.2-C.
 
 
 class AudioSubsegmentDraft(BaseModel):

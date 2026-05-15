@@ -9,7 +9,7 @@ import httpx
 import structlog
 
 from course_supporter.stt.providers.base import STTProvider
-from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment
+from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment, STTWord
 from course_supporter.stt.utils import guess_content_type, iso639_1_to_3, iso639_3_to_1
 
 logger = structlog.get_logger()
@@ -27,7 +27,7 @@ class ElevenLabsSTTProvider(STTProvider):
     def __init__(
         self,
         api_keys: Sequence[str],
-        default_model: str = "scribe_v1",
+        default_model: str = "scribe_v2",
     ) -> None:
         super().__init__()
         self._clients = tuple(
@@ -77,17 +77,61 @@ class ElevenLabsSTTProvider(STTProvider):
         # Only surface as detected_language when caller did not set it.
         detected_out = lang_out if request.language is None else None
 
+        words = _build_words(body)
         segments = _build_segments(body)
+        # KD-2.2-C: audio_duration_sec derived deterministically from the
+        # last word's end-time anchor. Scribe response shape may surface a
+        # top-level ``duration`` key, but Scribe v2 contract is unverified
+        # in this commit (sub-area #9 smoke gate will confirm). Word-end
+        # derivation is empirically reliable whenever words are surfaced.
+        audio_duration_sec = words[-1].end_sec if words else None
 
         return STTResult(
             text=text,
             segments=segments,
+            words=words,
             language=lang_out,
             detected_language=detected_out,
+            audio_duration_sec=audio_duration_sec,
             provider=self.provider_name,
             model_id=self._default_model,
             latency_ms=timer.elapsed_ms,
         )
+
+
+def _build_words(body: dict[str, object]) -> list[STTWord]:
+    """Build STTWord list from ElevenLabs response top-level ``words``.
+
+    Per KD-2.2-C, ``STTWord`` is the STT-domain primitive surfaced
+    top-level on :class:`STTResult` — not merely consumed for the
+    ~15-second segment merge in :func:`_build_segments`. ``logprob``
+    is parsed defensively: present when the provider surfaces it
+    (Scribe variants), ``None`` otherwise.
+    """
+    raw = body.get("words")
+    if not raw or not isinstance(raw, list):
+        return []
+
+    words: list[STTWord] = []
+    for w in raw:
+        if not isinstance(w, dict):
+            continue
+        text = w.get("text", "")
+        start = w.get("start", 0.0)
+        end = w.get("end", 0.0)
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            continue
+        raw_logprob = w.get("logprob")
+        logprob = float(raw_logprob) if isinstance(raw_logprob, (int, float)) else None
+        words.append(
+            STTWord(
+                start_sec=float(start),
+                end_sec=float(end),
+                text=str(text),
+                logprob=logprob,
+            )
+        )
+    return words
 
 
 def _build_segments(body: dict[str, object]) -> list[STTSegment]:

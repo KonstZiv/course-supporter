@@ -66,6 +66,15 @@ class STTResult(BaseModel):
 
     text: str
     segments: list[STTSegment] = Field(default_factory=list)
+    words: list[STTWord] = Field(
+        default_factory=list,
+        description=(
+            "Per-word transcription with provider time anchors "
+            "(KD-2.2-C). Top-level optional field surfaced when "
+            "the provider exposes word-level alignment (ElevenLabs "
+            "Scribe, Deepgram). Empty list when not surfaced."
+        ),
+    )
     language: str | None = None
     detected_language: str | None = Field(
         default=None,

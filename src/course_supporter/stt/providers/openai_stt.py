@@ -78,11 +78,21 @@ class OpenAISTTProvider(STTProvider):
         if request.language is None and isinstance(detected_raw, str) and detected_raw:
             detected = detected_raw
 
+        # KD-2.2-C §1.N2 collateral fix: populate audio_duration_sec for
+        # whisper-* verbose_json responses (top-level ``duration`` field).
+        # gpt-4o-mini-transcribe (json response_format) does not surface
+        # duration; remains None.
+        raw_duration = getattr(result, "duration", None)
+        audio_duration_sec = (
+            float(raw_duration) if isinstance(raw_duration, (int, float)) else None
+        )
+
         return STTResult(
             text=text,
             segments=segments,
             language=request.language,
             detected_language=detected,
+            audio_duration_sec=audio_duration_sec,
             provider=self.provider_name,
             model_id=model,
             latency_ms=timer.elapsed_ms,

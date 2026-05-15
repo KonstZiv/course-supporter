@@ -106,6 +106,22 @@ class DocumentSegmentDraft(BaseModel):
             "populated by the LLM in Pass 2a."
         ),
     )
+    start_time_sec: float | None = Field(
+        default=None,
+        description=(
+            "Optional segment start time in seconds (KD-2.2-F). "
+            "Populated for audio/video source types via the Pass 2b "
+            "char-offset bridge; ``None`` for text/web."
+        ),
+    )
+    end_time_sec: float | None = Field(
+        default=None,
+        description=(
+            "Optional segment end time in seconds (KD-2.2-F). "
+            "Populated for audio/video source types via the Pass 2b "
+            "char-offset bridge; ``None`` for text/web."
+        ),
+    )
 
     @field_validator("start_pos")
     @classmethod
@@ -253,3 +269,369 @@ class DocumentSummaryDraft(BaseModel):
                 "the total document character count'"
             )
         return self
+
+
+# Audio source-type schemas (Phase 2.2, KD-2.2-H + KD-2.2-I).
+#
+# These models live alongside the text/web ``DocumentSegmentDraft`` +
+# ``DocumentSummaryDraft`` above. The audio pipeline emits Pass 2a
+# segment metadata via :class:`AudioPass2aResult`; Pass 2b
+# algorithmically materialises char offsets via the cumulative-word
+# bridge (KD-2.2-F, helper lives in ``ingestion/audio.py``); Pass 2c
+# selectively denoises noisy segments via the single-string output
+# pattern of :class:`AudioPass2cResult` (KD-2.2-I).
+#
+# Depth is enforced through the Python type system (KD-2.2-H):
+# :class:`AudioSubsegmentDraft` is a leaf class without a
+# ``subsegments`` field, so the LLM cannot emit a third-level
+# nesting via JSON. ``order`` fields are deliberately absent on
+# audio classes — position is implicit via ``enumerate(...)`` and
+# the LLM hallucination surface is reduced.
+
+
+class STTWord(BaseModel):
+    """Single STT word output (KD-2.2-C).
+
+    Per KD-2.2-C, ``STTWord`` lives at the top of ``STTResult``
+    (not per-segment). Position index is implicit via
+    ``enumerate(words)``; no explicit ``word_idx`` field.
+    ``logprob`` is provider-optional — ElevenLabs Scribe v2 surfaces
+    word-level log probability, other providers may omit it.
+    """
+
+    start_sec: float = Field(description="Word start time (seconds).")
+    end_sec: float = Field(
+        description="Word end time (seconds, > start_sec).",
+    )
+    text: str = Field(description="Word text as transcribed by STT.")
+    logprob: float | None = Field(
+        default=None,
+        description="Word-level log probability if surfaced by provider.",
+    )
+
+
+class AudioSubsegmentDraft(BaseModel):
+    """Leaf audio segment (Pass 2a output, KD-2.2-H).
+
+    No ``subsegments`` field — the Python type system enforces the
+    2-level maximum depth (KD-2.2-H: third-level nesting is
+    rejected at parse time, not at validator time). No ``order``
+    field — position is implicit via
+    ``enumerate(parent.subsegments)``.
+    """
+
+    start_word_idx: int = Field(
+        description=("Inclusive start word index into the ``STTResult.words`` stream."),
+    )
+    end_word_idx: int = Field(
+        description=(
+            "Exclusive end word index into the ``STTResult.words`` "
+            "stream (must be > ``start_word_idx``)."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Optional short heading for this subsegment.",
+    )
+    description: str = Field(
+        description=("1-2 sentence description of what this subsegment covers."),
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings taught in this subsegment.",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings mentioned but not taught.",
+    )
+    noisy: bool = Field(
+        description=(
+            "True if speech disfluencies warrant a Pass 2c denoise "
+            "call for this subsegment."
+        ),
+    )
+
+
+class AudioSegmentDraft(BaseModel):
+    """Top-level audio segment (Pass 2a output, KD-2.2-H).
+
+    Carries optional ``subsegments`` (2-level hierarchy capped at 5
+    entries per KD-2.2-H prompt rule). Together with the parent
+    ``AudioPass2aResult.segments`` cap of 10, the LLM hierarchy is
+    bounded to ``10 * 5 = 50`` nodes.
+
+    No ``order`` field — position is implicit via
+    ``enumerate(AudioPass2aResult.segments)``.
+    """
+
+    start_word_idx: int = Field(
+        description=("Inclusive start word index into the ``STTResult.words`` stream."),
+    )
+    end_word_idx: int = Field(
+        description=(
+            "Exclusive end word index into the ``STTResult.words`` "
+            "stream (must be > ``start_word_idx``)."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Optional short heading for this segment.",
+    )
+    description: str = Field(
+        description=("1-2 sentence description of what this segment covers."),
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings taught in this segment.",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings mentioned but not taught.",
+    )
+    noisy: bool = Field(
+        description=(
+            "True if speech disfluencies warrant a Pass 2c denoise "
+            "call for this segment (raw slice) or for each of its "
+            "subsegments individually."
+        ),
+    )
+    subsegments: list[AudioSubsegmentDraft] = Field(
+        default_factory=list,
+        max_length=5,
+        description=(
+            "Optional sub-level segments. Empty list means the "
+            "segment is flat; non-empty triggers the "
+            "``_subsegments_cover_parent`` validator (KD-2.2-H)."
+        ),
+    )
+
+
+class AudioPass2aResult(BaseModel):
+    """Pass 2a LLM output for the audio source type (KD-2.2-H).
+
+    Top-level container for the Pass 2a metadata-mapping call.
+    Carries up to 10 segments (KD-2.2-H prompt cap). Three
+    ``model_validator(mode="after")`` gates enforce the structural
+    invariants over the segment sequence:
+
+    * :meth:`_segments_contiguous` — segments are adjacent on
+      ``word_idx`` (``prev.end_word_idx == next.start_word_idx``),
+      first segment starts at 0, and each segment has
+      ``end_word_idx > start_word_idx``.
+    * :meth:`_full_cover` — ``segments[-1].end_word_idx`` equals
+      ``total_word_count`` read from
+      ``ValidationInfo.context["total_word_count"]``. Skipped when
+      context is absent (unit-test fixtures, ad-hoc tooling).
+    * :meth:`_subsegments_cover_parent` — within each segment that
+      has subsegments, the subsegments cover the parent
+      ``word_idx`` range exactly. Closes the mechanical failure
+      mode observed in the DeepSeek narrow probe (DD-2.2-X,
+      2026-05-15).
+    """
+
+    segments: list[AudioSegmentDraft] = Field(
+        default_factory=list,
+        max_length=10,
+        description=("Top-level audio segments (KD-2.2-H cap of 10)."),
+    )
+
+    @model_validator(mode="after")
+    def _segments_contiguous(self) -> AudioPass2aResult:
+        """Strict adjacency over ``word_idx`` (KD-2.2-H).
+
+        * ``segments[0].start_word_idx == 0``.
+        * For every adjacent pair,
+          ``prev.end_word_idx == next.start_word_idx``.
+        * Each segment has ``end_word_idx > start_word_idx``.
+
+        Empty ``segments`` is allowed (trivially short audio
+        document with no surfaced structure).
+        """
+        if not self.segments:
+            return self
+
+        first = self.segments[0]
+        if first.start_word_idx != 0:
+            raise ValueError(
+                f"first audio segment must start at word_idx 0; got "
+                f"start_word_idx={first.start_word_idx}"
+            )
+
+        for prev, nxt in zip(self.segments, self.segments[1:], strict=False):
+            if prev.end_word_idx != nxt.start_word_idx:
+                raise ValueError(
+                    f"audio segments must be contiguous on word_idx; "
+                    f"prev.end_word_idx={prev.end_word_idx} != "
+                    f"nxt.start_word_idx={nxt.start_word_idx}"
+                )
+
+        for seg in self.segments:
+            if seg.end_word_idx <= seg.start_word_idx:
+                raise ValueError(
+                    f"audio segment must have end_word_idx > "
+                    f"start_word_idx; got start={seg.start_word_idx}, "
+                    f"end={seg.end_word_idx}"
+                )
+
+        return self
+
+    @model_validator(mode="after")
+    def _full_cover(self, info: ValidationInfo) -> AudioPass2aResult:
+        """Trailing-words coverage gated on Pydantic context.
+
+        When parsed via
+        ``AudioPass2aResult.model_validate_json(content,
+        context={"total_word_count": N})``, asserts that
+        ``segments[-1].end_word_idx == N``. The caller (Pass 2a
+        ``response_validator`` closure in ``ingestion/audio.py``)
+        translates the resulting :class:`pydantic.ValidationError`
+        into :class:`~course_supporter.llm.errors.StructuralRetryError`,
+        so trailing undercoverage drives the existing
+        instructor-style retry + ladder fallback chain (KD7 /
+        KD16).
+
+        Skipped silently when context is ``None`` or
+        ``total_word_count`` is absent. Empty ``segments`` also
+        skips the check — :meth:`_segments_contiguous` is the
+        sole structural gate in that case.
+        """
+        if not self.segments:
+            return self
+        context = info.context
+        if context is None:
+            return self
+        expected_total = context.get("total_word_count")
+        if expected_total is None:
+            return self
+        actual_last = self.segments[-1].end_word_idx
+        if actual_last != expected_total:
+            raise ValueError(
+                f"audio segments do not cover the word stream "
+                f"exactly: last.end_word_idx={actual_last} != "
+                f"total_word_count={expected_total} "
+                f"(segment_count={len(self.segments)}); "
+                "prompt rule: 'last segment must cover trailing words'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _subsegments_cover_parent(self) -> AudioPass2aResult:
+        """Within each segment, subsegments cover the parent range.
+
+        Closes the mechanical failure mode observed in the DeepSeek
+        narrow probe (DD-2.2-X, 2026-05-15): parent's
+        ``end_word_idx`` was inherited from the last subsegment,
+        leaving trailing words uncovered whenever the subsegments
+        did not extend to the parent's actual end.
+
+        For every segment with a non-empty ``subsegments`` list:
+
+        * ``subsegments[0].start_word_idx == segment.start_word_idx``.
+        * ``subsegments[-1].end_word_idx == segment.end_word_idx``.
+        * Subsegments are contiguous on ``word_idx`` within the
+          parent (``prev.end_word_idx == next.start_word_idx``).
+        * Each subsegment has
+          ``end_word_idx > start_word_idx``.
+
+        Empty ``subsegments`` is allowed — flat segments without
+        2-level hierarchy bypass this gate (parent's invariants
+        are enforced by :meth:`_segments_contiguous`).
+        """
+        for seg in self.segments:
+            if not seg.subsegments:
+                continue
+
+            first_sub = seg.subsegments[0]
+            if first_sub.start_word_idx != seg.start_word_idx:
+                raise ValueError(
+                    f"first subsegment must start at "
+                    f"parent.start_word_idx; parent.start="
+                    f"{seg.start_word_idx} != first_sub.start="
+                    f"{first_sub.start_word_idx}"
+                )
+
+            last_sub = seg.subsegments[-1]
+            if last_sub.end_word_idx != seg.end_word_idx:
+                raise ValueError(
+                    f"last subsegment must end at "
+                    f"parent.end_word_idx; parent.end="
+                    f"{seg.end_word_idx} != last_sub.end="
+                    f"{last_sub.end_word_idx} "
+                    f"(prompt rule: subsegments cover parent's "
+                    f"full range)"
+                )
+
+            for prev, nxt in zip(seg.subsegments, seg.subsegments[1:], strict=False):
+                if prev.end_word_idx != nxt.start_word_idx:
+                    raise ValueError(
+                        f"subsegments within a segment must be "
+                        f"contiguous on word_idx; "
+                        f"prev.end_word_idx={prev.end_word_idx} != "
+                        f"nxt.start_word_idx={nxt.start_word_idx}"
+                    )
+
+            for sub in seg.subsegments:
+                if sub.end_word_idx <= sub.start_word_idx:
+                    raise ValueError(
+                        f"audio subsegment must have end_word_idx "
+                        f"> start_word_idx; got "
+                        f"start={sub.start_word_idx}, "
+                        f"end={sub.end_word_idx}"
+                    )
+
+        return self
+
+
+class AudioPass2cInput(BaseModel):
+    """Pass 2c selective-denoise prompt input (KD-2.2-I).
+
+    Carries a single noisy segment's raw text plus the Pass 2a
+    metadata that contextualises the denoise prompt. Routed
+    selectively: only segments (or subsegments) with
+    ``noisy=True`` flow through Pass 2c. Rationale (KD-2.2-I):
+    denoise spends model budget per noisy segment rather than on
+    the entire document.
+    """
+
+    content: str = Field(
+        description=(
+            "Raw text of the noisy segment (space-joined "
+            "``STTResult.words`` slice for the segment range)."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Parent segment title (Pass 2a output).",
+    )
+    description: str = Field(
+        description="Parent segment description (Pass 2a output).",
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Main concepts from the parent segment.",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Secondary concepts from the parent segment.",
+    )
+
+
+class AudioPass2cResult(BaseModel):
+    """Pass 2c selective-denoise LLM output (KD-2.2-I).
+
+    Single-string content output — distinct from
+    :class:`AudioPass2aResult`'s JSON-object shape. The
+    ``StageRouter.response_validator`` closure (Phase 2.1 fixup
+    2.1.7.2) wraps the raw string LLM response into this model;
+    :class:`pydantic.ValidationError` raised here is translated to
+    :class:`~course_supporter.llm.errors.StructuralRetryError`, so
+    the ladder retry + fallback chain (KD7 / KD16) handles
+    Pass 2c structural failures symmetrically to Pass 2a.
+    """
+
+    content: str = Field(
+        description=(
+            "Denoised version of the segment text — disfluencies "
+            "removed, semantic content and word order preserved."
+        ),
+    )

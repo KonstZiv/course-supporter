@@ -24,6 +24,8 @@ from course_supporter.service_logging import (
 )
 
 if TYPE_CHECKING:
+    from arq.connections import ArqRedis
+
     from course_supporter.llm.router import ModelRouter
     from course_supporter.storage.s3 import S3Client
 
@@ -101,10 +103,12 @@ async def arq_ingest_material(
     :class:`~course_supporter.ingestion_callback.IngestionCallback`.
 
     Args:
-        ctx: ARQ worker context (session_factory, model_router, engine).
+        ctx: ARQ worker context (session_factory, model_router,
+            stage_router, s3_client, engine, plus framework-injected
+            ``redis`` ArqRedis pool used by AudioProcessor word-cache).
         job_id: Job UUID as string (ARQ serializes via JSON).
         material_id: AuthoredDocument UUID as string.
-        source_type: One of 'video', 'presentation', 'text', 'web'.
+        source_type: One of 'video', 'presentation', 'text', 'web', 'audio'.
         source_url: URL or S3 path to the source file.
         priority: Job priority ('normal' or 'immediate').
     """
@@ -138,6 +142,7 @@ async def arq_ingest_material(
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     router: ModelRouter = ctx["model_router"]
     stage_router: StageRouter = ctx["stage_router"]
+    redis: ArqRedis = ctx["redis"]
     callback = IngestionCallback(session_factory)
 
     log = structlog.get_logger().bind(
@@ -155,7 +160,9 @@ async def arq_ingest_material(
     from course_supporter.stt.setup import create_stt_router
 
     stt_router = create_stt_router(get_settings(), session_factory)
-    processors = create_processors(heavy, vd_pipeline=vd, stt_router=stt_router)
+    processors = create_processors(
+        heavy, vd_pipeline=vd, stt_router=stt_router, redis=redis
+    )
     s3: S3Client | None = ctx.get("s3_client")
 
     detected_language: str | None = None

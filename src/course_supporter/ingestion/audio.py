@@ -92,6 +92,7 @@ from pydantic import ValidationError
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     ProcessingError,
+    UnsupportedFormatError,
 )
 from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
@@ -260,6 +261,13 @@ class AudioProcessor(MaterialProcessor):
                 f"requires word-level alignment per KD-2.2-C. Verify "
                 f"the provider is Scribe v2 or a compatible word-level "
                 f"STT model."
+            )
+
+        duration = result.audio_duration_sec
+        if duration is not None and duration > self.MAX_DURATION_SEC:
+            raise UnsupportedFormatError(
+                f"Audio duration ({duration / 60:.1f} min) exceeds maximum "
+                f"{self.MAX_DURATION_SEC / 60:.0f} min per Phase 2.2 vision §5."
             )
 
         await self._store_words(job_id, result.words)

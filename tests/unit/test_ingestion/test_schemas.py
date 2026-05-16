@@ -27,7 +27,7 @@ class TestSourceType:
 
     def test_source_type_matches_orm_enum(self) -> None:
         """SourceType values match ORM source_type_enum."""
-        assert len(SourceType) == 4
+        assert len(SourceType) == 5
 
 
 class TestChunkType:

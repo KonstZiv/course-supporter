@@ -14,6 +14,7 @@ class SourceType(StrEnum):
     PRESENTATION = "presentation"
     TEXT = "text"
     WEB = "web"
+    AUDIO = "audio"
 
 
 class MaterialRole(StrEnum):
@@ -96,5 +97,12 @@ class SourceDocument(BaseModel):
         ``DocumentSegment.content``, and Stage 2 LLM safety check sees the
         same body. Centralising the assembly here prevents silent offset
         drift between the three pipeline stages.
+
+        Separator is source_type-conditional (KD-2.2-E): audio transcripts
+        join word/segment text with a single space because STT output is
+        already whitespace-tokenised continuous speech; other source types
+        keep the paragraph-style "\\n\\n" separator preserving authored
+        chunk boundaries (slides, paragraphs, scenes).
         """
-        return "\n\n".join(chunk.text for chunk in self.chunks if chunk.text)
+        separator = " " if self.source_type == SourceType.AUDIO else "\n\n"
+        return separator.join(chunk.text for chunk in self.chunks if chunk.text)

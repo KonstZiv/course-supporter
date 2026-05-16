@@ -47,6 +47,7 @@ def _build_ctx(processor: MagicMock) -> dict[str, Any]:
         "session_factory": factory,
         "model_router": MagicMock(),
         "stage_router": MagicMock(),
+        "redis": MagicMock(),
     }, processor
 
 

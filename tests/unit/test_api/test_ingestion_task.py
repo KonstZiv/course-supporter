@@ -66,6 +66,7 @@ def _make_arq_ctx(
         "session_factory": factory or _make_session_factory(),
         "model_router": router,
         "stage_router": stage_router or MagicMock(),
+        "redis": MagicMock(),
     }
 
 

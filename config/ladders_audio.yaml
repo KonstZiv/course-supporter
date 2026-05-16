@@ -1,0 +1,95 @@
+# Audio source-type stage ladders (Phase 2.2, KD-2.2-A + KD-2.2-G).
+#
+# Per-source-type calibration lives in its own file (separate from
+# ``ladders_pipeline.yaml``) because audio Pass 2a has different
+# cost / quality / determinism characteristics than text/web Pass 2a:
+# the input is a word-aligned transcript, the output binds
+# ``word_idx`` ranges (KD-2.2-F bridge), and the rung 1 winner is
+# Gemini Flash Lite rather than DeepSeek V4 Flash. ``ladder_config.py``
+# discovers this file automatically via the ``ladders_*.yaml`` glob
+# (loader at ``src/course_supporter/llm/ladder_config.py:116``).
+#
+# Two stages live here:
+#   * ``audio_pass_2a_mapping``  — Pass 2a metadata mapping. JSON-object
+#                                  output validated against
+#                                  ``AudioPass2aResult`` (KD-2.2-H).
+#   * ``audio_pass_2c_denoise``  — Pass 2c selective denoise. Single
+#                                  plain-text output wrapped into
+#                                  ``AudioPass2cResult.content`` by the
+#                                  StageRouter ``response_validator``
+#                                  closure (KD-2.2-I; distinct pattern
+#                                  from Pass 2a's JSON-object shape).
+#
+# Ladder rationale (ratified 2026-05-15 per INVESTIGATION.md §1.1 P1):
+#   1. gemini-3.1-flash-lite — cost-first primary. P1 multi-candidate
+#      probe (3 runs, 3 materials) returned 3/3 valid hierarchies with
+#      0% variance at ~$0.005/call and ~6.1s p50 latency for a
+#      ~125-minute Ukrainian audio transcript. Model identifier swap
+#      preview → GA was ratified at the same session — the GA channel
+#      is expected to behave identically (verification deferred to the
+#      §4 acceptance gate 6.5 smoke check).
+#   2. gemini-2.5-flash — second tier. 3/3 JSON-valid but 0/3
+#      hierarchy-valid in the P1 probe (off-by-one ``end_word_idx``
+#      interpretation). The Pass 2a prompt landed in sub-area #3
+#      ``8d300ab`` documents the exclusive convention explicitly in
+#      the Index rules section and in Calibration Example 1 — fall
+#      through here is expected to succeed post-prompt-correction.
+#   3. claude-haiku-4-5-20251001 — third tier, snapshot-pinned per
+#      repo convention. Pencilled-in without empirical probe (the P1
+#      run hit credit-balance exhaustion); production smoke at
+#      ladder-exhaustion will be the first real signal.
+#
+# DeepSeek V4 Flash is NOT included as a rung. A separate narrow
+# probe (vision-side commissioned, same session) returned
+# 1/3 hierarchy-valid with the mechanical failure mode where the
+# parent's ``end_word_idx`` inherits from the last subsegment,
+# leaving trailing words uncovered. Codified as DD-2.2-X in
+# PHASE.md §2.5; re-probe candidate if production Gemini Flash Lite
+# cost turns out to be material (DeepSeek is 15-30× cheaper).
+#
+# Snapshot convention: anthropic models pinned (date-stamped snapshot
+# for deterministic reproducibility per ``ladders_methodist.yaml`` +
+# ``ladders_pipeline.yaml`` precedent); gemini models use aliases
+# (latest stable; provider-side stability guarantee per existing
+# repo convention).
+
+stages:
+  # Pass 2a metadata mapping for audio ingestion (KD-2.2-A + KD-2.2-H).
+  # Input: word-aligned transcript (``STTResult.words``) with
+  # ``total_word_count`` context. Output: ``AudioPass2aResult`` JSON
+  # — segments with ``start_word_idx``/``end_word_idx``, optional
+  # subsegments (≤5 per segment), ``noisy`` flags, concept tiers.
+  # Schema invariants enforced by Pydantic validators:
+  # ``_segments_contiguous`` + ``_full_cover`` + ``_subsegments_cover_parent``.
+  audio_pass_2a_mapping:
+    prompt_ref: "prompts/audio_pass_2a_mapping/v1.md"
+    ladder:
+      - provider: gemini
+        model: gemini-3.1-flash-lite
+      - provider: gemini
+        model: gemini-2.5-flash
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001
+
+  # Pass 2c selective denoise for audio ingestion (KD-2.2-A + KD-2.2-I).
+  # Input: a single noisy segment's raw text plus Pass 2a metadata
+  # (title / description / concepts) for orientation. Output: a
+  # single plain-text string — cleaned transcript with disfluencies
+  # removed, semantic content and word order preserved. The
+  # StageRouter ``response_validator`` wraps the raw LLM string
+  # into ``AudioPass2cResult.content`` at consumption time.
+  #
+  # Same ladder shape as ``audio_pass_2a_mapping`` per KD-2.2-A
+  # ("same shape, separate config block"): denoise quality
+  # characteristics are expected to track Pass 2a closely on this
+  # rung selection — both stages emit short, structured outputs
+  # over short, focused inputs.
+  audio_pass_2c_denoise:
+    prompt_ref: "prompts/audio_pass_2c_denoise/v1.md"
+    ladder:
+      - provider: gemini
+        model: gemini-3.1-flash-lite
+      - provider: gemini
+        model: gemini-2.5-flash
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001

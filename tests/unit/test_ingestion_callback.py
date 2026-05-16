@@ -428,6 +428,7 @@ class TestCallbackIntegrationWithArqTask:
             "session_factory": factory,
             "model_router": router,
             "stage_router": MagicMock(),
+            "redis": MagicMock(),
         }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
@@ -523,6 +524,7 @@ class TestCallbackIntegrationWithArqTask:
             "session_factory": factory,
             "model_router": router,
             "stage_router": MagicMock(),
+            "redis": MagicMock(),
         }
 
         _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"

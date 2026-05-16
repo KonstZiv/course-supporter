@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.heavy_steps import (
     DescribeSlidesFunc,
     ParsePDFFunc,
@@ -26,6 +27,8 @@ from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 
 if TYPE_CHECKING:
+    from arq.connections import ArqRedis
+
     from course_supporter.config import Settings
     from course_supporter.ingestion.base import MaterialProcessor
     from course_supporter.llm.router import ModelRouter
@@ -147,18 +150,27 @@ def create_processors(
     *,
     vd_pipeline: VDPipeline | None = None,
     stt_router: STTRouter | None = None,
+    redis: ArqRedis | None = None,
 ) -> dict[SourceType, MaterialProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
         heavy: Bundle of heavy step callables.
         vd_pipeline: Optional VDPipeline for video visual analysis.
-        stt_router: Optional STTRouter for video transcription.
+        stt_router: Optional STTRouter for video and audio transcription.
             When provided, VideoProcessor uses STTRouter instead of Whisper.
             When None, falls back to WhisperVideoProcessor.
+        redis: Optional ArqRedis client for the audio word-cache
+            (KD-2.2-D). AudioProcessor is registered only when both
+            ``stt_router`` and ``redis`` are non-None — both dependencies
+            are required for the three-stage pipeline (STT in stage 1 +
+            cache hand-off across stages).
 
     Returns:
         Mapping from SourceType to fully-wired processor instances.
+        ``SourceType.AUDIO`` is absent from the result when the combined
+        guard above is unsatisfied; factory dispatch in ``api/tasks.py``
+        raises ``KeyError`` for unwired source types.
     """
     video_processor: MaterialProcessor
     if stt_router is not None:
@@ -171,7 +183,7 @@ def create_processors(
             transcribe_func=heavy.transcribe,
         )
 
-    return {
+    result: dict[SourceType, MaterialProcessor] = {
         SourceType.VIDEO: video_processor,
         SourceType.PRESENTATION: PresentationProcessor(
             parse_pdf_func=heavy.parse_pdf,
@@ -182,3 +194,11 @@ def create_processors(
             scrape_func=heavy.scrape_web,
         ),
     }
+
+    if stt_router is not None and redis is not None:
+        result[SourceType.AUDIO] = AudioProcessor(
+            stt_router=stt_router,
+            redis=redis,
+        )
+
+    return result

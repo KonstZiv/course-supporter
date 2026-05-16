@@ -13,7 +13,7 @@ from course_supporter.ingestion.audio import (
     AudioProcessor,
     chars_per_word_cumsum,
 )
-from course_supporter.ingestion.base import ProcessingError
+from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
     AudioSegmentDraft,
@@ -44,7 +44,10 @@ def _word(text: str, start: float, end: float) -> STTWord:
 
 
 def _stt_result(
-    words: list[STTWord], segments: list[STTSegment] | None = None
+    words: list[STTWord],
+    segments: list[STTSegment] | None = None,
+    *,
+    audio_duration_sec: float | None = None,
 ) -> STTResult:
     """Build STTResult mirroring Scribe v2 word-level alignment."""
     if segments is None and words:
@@ -62,6 +65,7 @@ def _stt_result(
         words=words,
         provider="mock-scribe",
         model_id="mock-scribe-v2",
+        audio_duration_sec=audio_duration_sec,
     )
 
 
@@ -294,6 +298,50 @@ class TestProcessRaw:
 
         expected = " ".join(w.text for w in words)
         assert doc.assemble_text() == expected
+
+    async def test_duration_exceeded_raises_unsupported_format(self) -> None:
+        """KD-2.2-D area — audio_duration_sec > MAX raises before cache write."""
+        words = [_word("hi", 0.0, 0.3)]
+        result = _stt_result(words, audio_duration_sec=200 * 60)
+        redis = _mock_redis()
+        proc = AudioProcessor(stt_router=_mock_stt_router(result), redis=redis)
+        set_job_from_arq(uuid.uuid4())
+
+        with pytest.raises(UnsupportedFormatError, match=r"exceeds maximum"):
+            await proc.process_raw(_mock_authored_document())
+
+        # Fail-fast — cache must not be populated on rejected upload.
+        assert redis._store == {}
+
+    async def test_duration_at_exact_boundary_proceeds(self) -> None:
+        """D4 strict `>` — 150 min exactly passes (boundary inclusive)."""
+        words = [_word("hi", 0.0, 0.3)]
+        result = _stt_result(words, audio_duration_sec=150 * 60)
+        proc = AudioProcessor(stt_router=_mock_stt_router(result), redis=_mock_redis())
+        set_job_from_arq(uuid.uuid4())
+
+        doc = await proc.process_raw(_mock_authored_document())
+        assert doc.source_type == SourceType.AUDIO
+
+    async def test_duration_just_over_boundary_raises(self) -> None:
+        """Boundary regression guard — 151 min triggers reject."""
+        words = [_word("hi", 0.0, 0.3)]
+        result = _stt_result(words, audio_duration_sec=151 * 60)
+        proc = AudioProcessor(stt_router=_mock_stt_router(result), redis=_mock_redis())
+        set_job_from_arq(uuid.uuid4())
+
+        with pytest.raises(UnsupportedFormatError, match=r"exceeds maximum"):
+            await proc.process_raw(_mock_authored_document())
+
+    async def test_duration_none_proceeds(self) -> None:
+        """D3 fail-open — None duration skips check (defensive; provider gap)."""
+        words = [_word("hi", 0.0, 0.3)]
+        result = _stt_result(words, audio_duration_sec=None)
+        proc = AudioProcessor(stt_router=_mock_stt_router(result), redis=_mock_redis())
+        set_job_from_arq(uuid.uuid4())
+
+        doc = await proc.process_raw(_mock_authored_document())
+        assert doc.source_type == SourceType.AUDIO
 
 
 # ──────────────────────────────────────────────────────────────────────

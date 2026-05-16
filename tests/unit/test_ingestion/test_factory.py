@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.factory import (
     HeavySteps,
     create_heavy_steps,
@@ -187,3 +188,36 @@ class TestCreateProcessors:
         web = processors[SourceType.WEB]
         assert isinstance(web, WebProcessor)
         assert web._scrape_func is heavy.scrape_web
+
+
+class TestCreateProcessorsAudio:
+    """KD-2.2-K AUDIO factory dispatch — combined-guard activation."""
+
+    def test_audio_registered_when_both_deps_present(self) -> None:
+        """AUDIO entry present + AudioProcessor wired with stt_router + redis."""
+        heavy = create_heavy_steps()
+        mock_stt = AsyncMock(spec=STTRouter)
+        mock_redis = AsyncMock()
+        processors = create_processors(heavy, stt_router=mock_stt, redis=mock_redis)
+
+        assert SourceType.AUDIO in processors
+        audio = processors[SourceType.AUDIO]
+        assert isinstance(audio, AudioProcessor)
+        assert audio._stt_router is mock_stt
+        assert audio._redis is mock_redis
+
+    def test_audio_absent_when_redis_missing(self) -> None:
+        """Combined guard rejects: stt_router present, redis None."""
+        heavy = create_heavy_steps()
+        mock_stt = AsyncMock(spec=STTRouter)
+        processors = create_processors(heavy, stt_router=mock_stt)
+
+        assert SourceType.AUDIO not in processors
+
+    def test_audio_absent_when_stt_router_missing(self) -> None:
+        """Combined guard rejects: redis present, stt_router None."""
+        heavy = create_heavy_steps()
+        mock_redis = AsyncMock()
+        processors = create_processors(heavy, redis=mock_redis)
+
+        assert SourceType.AUDIO not in processors

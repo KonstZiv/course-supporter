@@ -3,11 +3,17 @@
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     ProcessingError,
     UnsupportedFormatError,
+)
+from course_supporter.ingestion.schemas import (
+    AudioPass2aResult,
+    AudioSegmentDraft,
+    AudioSubsegmentDraft,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -97,3 +103,147 @@ class TestMaterialProcessor:
         """UnsupportedFormatError is a subclass of ProcessingError."""
         assert issubclass(UnsupportedFormatError, ProcessingError)
         assert issubclass(ProcessingError, Exception)
+
+
+class TestAudioPass2aResultGates:
+    """KD-2.2-H schema acceptance gates for Pass 2a output structure."""
+
+    @staticmethod
+    def _segment(
+        start: int,
+        end: int,
+        *,
+        noisy: bool = False,
+        subsegments: list[AudioSubsegmentDraft] | None = None,
+    ) -> AudioSegmentDraft:
+        """Helper: build a minimal AudioSegmentDraft with required fields."""
+        return AudioSegmentDraft(
+            start_word_idx=start,
+            end_word_idx=end,
+            description="desc",
+            noisy=noisy,
+            subsegments=subsegments or [],
+        )
+
+    @staticmethod
+    def _subsegment(
+        start: int, end: int, *, noisy: bool = False
+    ) -> AudioSubsegmentDraft:
+        return AudioSubsegmentDraft(
+            start_word_idx=start,
+            end_word_idx=end,
+            description="sub-desc",
+            noisy=noisy,
+        )
+
+    def test_trailing_words_coverage(self) -> None:
+        """_full_cover gate raises when last.end_word_idx < total_word_count.
+
+        Closes the trailing-word undercoverage failure mode (KD-2.2-H prompt
+        rule: 'last segment must cover trailing words'). Context-driven
+        check via ValidationInfo.context["total_word_count"].
+        """
+        payload = {
+            "description": "doc desc",
+            "segments": [
+                self._segment(0, 50).model_dump(),
+                self._segment(50, 90).model_dump(),
+            ],
+        }
+        import json as _json
+
+        with pytest.raises(ValidationError, match="do not cover the word stream"):
+            AudioPass2aResult.model_validate_json(
+                _json.dumps(payload), context={"total_word_count": 100}
+            )
+
+    def test_subsegments_cover_parent(self) -> None:
+        """_subsegments_cover_parent gate raises on parent-cover violation.
+
+        Closes the DeepSeek mechanical failure mode (DD-2.2-X, 2026-05-15):
+        parent.end_word_idx inherited from last subsegment leaves trailing
+        words within parent uncovered.
+        """
+        bad_subs = [
+            self._subsegment(0, 30),
+            self._subsegment(30, 60),
+        ]
+        with pytest.raises(ValidationError, match="last subsegment must end"):
+            AudioPass2aResult(
+                description="doc",
+                segments=[
+                    self._segment(0, 100, subsegments=bad_subs),
+                ],
+            )
+
+    def test_max_segments_enforced(self) -> None:
+        """Pydantic max_length=10 enforces KD-2.2-H prompt segment cap."""
+        too_many = [self._segment(i * 10, (i + 1) * 10) for i in range(11)]
+        with pytest.raises(ValidationError, match="at most 10"):
+            AudioPass2aResult(description="doc", segments=too_many)
+
+    def test_max_subsegments_enforced(self) -> None:
+        """Pydantic max_length=5 enforces KD-2.2-H prompt subsegment cap."""
+        too_many_subs = [self._subsegment(i * 10, (i + 1) * 10) for i in range(6)]
+        with pytest.raises(ValidationError, match="at most 5"):
+            AudioSegmentDraft(
+                start_word_idx=0,
+                end_word_idx=60,
+                description="desc",
+                noisy=False,
+                subsegments=too_many_subs,
+            )
+
+    def test_no_third_level_nesting(self) -> None:
+        """Type system enforces 2-level max depth (KD-2.2-H).
+
+        AudioSubsegmentDraft has no ``subsegments`` field — third-level
+        nesting cannot be expressed in the Python type system, so even
+        if an LLM emits a ``subsegments`` key on a leaf, Pydantic strips
+        it (extra="ignore" default) and the resulting leaf has no way
+        to surface deeper structure. Verify both legs of the
+        enforcement: field absence + payload-key drop.
+        """
+        assert "subsegments" not in AudioSubsegmentDraft.model_fields
+
+        payload = {
+            "start_word_idx": 0,
+            "end_word_idx": 10,
+            "description": "leaf",
+            "noisy": False,
+            "subsegments": [{"start_word_idx": 0, "end_word_idx": 5}],
+        }
+        leaf = AudioSubsegmentDraft.model_validate(payload)
+        assert not hasattr(leaf, "subsegments")
+        # Round-trip also drops the field — third-level nesting
+        # cannot propagate through Pydantic serialization.
+        assert "subsegments" not in leaf.model_dump()
+
+    def test_doc_level_fields_required(self) -> None:
+        """Title/description Field validation per PHASE.md v0.3 contract.
+
+        ``description`` required (must be present + non-None) with
+        max_length=512 cap. ``title`` optional with max_length=128 cap and
+        ``None`` default for the «talk without explicit theme» edge case.
+        """
+        with pytest.raises(ValidationError, match="description"):
+            AudioPass2aResult.model_validate({"segments": []})
+
+        long_title = "x" * 129
+        with pytest.raises(ValidationError, match="at most 128"):
+            AudioPass2aResult(
+                title=long_title,
+                description="doc",
+                segments=[],
+            )
+
+        long_desc = "x" * 513
+        with pytest.raises(ValidationError, match="at most 512"):
+            AudioPass2aResult(
+                description=long_desc,
+                segments=[],
+            )
+
+        ok = AudioPass2aResult(title=None, description="ok doc", segments=[])
+        assert ok.title is None
+        assert ok.description == "ok doc"

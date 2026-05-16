@@ -121,12 +121,14 @@ def _build_words(body: dict[str, object]) -> list[STTWord]:
         end = w.get("end", 0.0)
         if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
             continue
+        start_float = float(start)
+        end_float = float(end)
         raw_logprob = w.get("logprob")
         logprob = float(raw_logprob) if isinstance(raw_logprob, (int, float)) else None
         words.append(
             STTWord(
-                start_sec=float(start),
-                end_sec=float(end),
+                start_sec=start_float,
+                end_sec=end_float,
                 text=str(text),
                 logprob=logprob,
             )

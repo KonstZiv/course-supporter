@@ -19,7 +19,7 @@ import json
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import (
@@ -29,6 +29,7 @@ from course_supporter.ingestion.schemas import (
 )
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import set_job_from_arq
+from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.stt.schemas import STTResult, STTSegment, STTWord
 
 _FIXTURE_PATH = (
@@ -91,8 +92,9 @@ def _mock_redis() -> AsyncMock:
     return redis
 
 
-def _mock_authored_document() -> MagicMock:
-    doc = MagicMock()
+def _mock_authored_document() -> Mock:
+    """AuthoredDocument stand-in with spec_set for attribute-access safety."""
+    doc = Mock(spec_set=AuthoredDocument)
     doc.source_type = SourceType.AUDIO
     doc.source_url = "/tmp/fixture-audio.mp3"
     doc.filename = "scribe_v1_ukrainian_124min.mp3"

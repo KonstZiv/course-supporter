@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -27,6 +27,7 @@ from course_supporter.models.source import (
     SourceType,
 )
 from course_supporter.service_logging import set_job_from_arq
+from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.stt.schemas import STTResult, STTSegment, STTWord
 
 if TYPE_CHECKING:
@@ -93,9 +94,9 @@ def _mock_authored_document(
     source_type: SourceType = SourceType.AUDIO,
     source_url: str = "/tmp/audio.mp3",
     filename: str | None = "audio.mp3",
-) -> MagicMock:
-    """Lightweight AuthoredDocument stand-in (only fields read by process_raw)."""
-    doc = MagicMock()
+) -> Mock:
+    """AuthoredDocument stand-in with spec_set for attribute-access safety."""
+    doc = Mock(spec_set=AuthoredDocument)
     doc.source_type = source_type
     doc.source_url = source_url
     doc.filename = filename
@@ -343,23 +344,12 @@ class TestProcessMacro:
         job_id = uuid.uuid4()
         set_job_from_arq(job_id)
 
-        # populate the cache via process_raw so process_macro's _fetch_words hits
-        await proc.process_raw(_mock_authored_document())
-        # re-build SourceDocument identical to process_raw output for downstream
-        doc = SourceDocument(
-            source_type=SourceType.AUDIO,
-            source_url="/tmp/audio.mp3",
-            title="audio.mp3",
-            chunks=[
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text=" ".join(w.text for w in words),
-                    index=0,
-                    start_sec=words[0].start_sec,
-                    end_sec=words[-1].end_sec,
-                )
-            ],
-        )
+        # Drive process_raw end-to-end: populates the word-cache (process_macro
+        # _fetch_words consumer) AND yields the canonical SourceDocument the
+        # production pipeline would hand off to process_macro. Using this exact
+        # instance guards against drift between process_raw's actual output
+        # shape and a manually-reconstructed test stand-in.
+        doc = await proc.process_raw(_mock_authored_document())
         stage_router = _mock_stage_router_for_pass2a(pass2a)
         return proc, doc, stage_router
 

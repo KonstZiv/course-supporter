@@ -20,7 +20,14 @@ class Environment(StrEnum):
     TESTING = "testing"
 
 
-_LLM_PROVIDER_KEYS = ("gemini", "anthropic", "openai", "deepseek", "mistral")
+_LLM_PROVIDER_KEYS = (
+    "gemini",
+    "anthropic",
+    "openai",
+    "deepseek",
+    "mistral",
+    "dashscope",
+)
 _STT_PROVIDER_KEYS = ("elevenlabs", "deepgram")
 _ALL_PROVIDER_KEYS = _LLM_PROVIDER_KEYS + _STT_PROVIDER_KEYS
 
@@ -132,6 +139,11 @@ class Settings(BaseSettings):
     mistral_api_key_raw: SecretStr | None = Field(
         None, validation_alias="mistral_api_key"
     )
+    # Internal field name uses provider naming (dashscope) while the
+    # env var keeps the operator-facing brand name (ALIBABA_API_KEY).
+    dashscope_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="alibaba_api_key"
+    )
     elevenlabs_api_key_raw: SecretStr | None = Field(
         None, validation_alias="elevenlabs_api_key"
     )
@@ -176,6 +188,11 @@ class Settings(BaseSettings):
         return pool.next_key() if pool else None
 
     @property
+    def dashscope_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("dashscope")
+        return pool.next_key() if pool else None
+
+    @property
     def elevenlabs_api_key(self) -> SecretStr | None:
         pool = self._key_pools.get("elevenlabs")
         return pool.next_key() if pool else None
@@ -196,7 +213,8 @@ class Settings(BaseSettings):
     anthropic_default_model: str = "claude-sonnet-4-20250514"
     openai_default_model: str = "gpt-4o-mini"
     deepseek_default_model: str = "deepseek-chat"
-    mistral_default_model: str = "mistral-large-latest"
+    mistral_default_model: str = "mistral-large-2512"
+    dashscope_default_model: str = "qwen3-vl-32b-instruct"
 
     # --- STT Default Models ---
     elevenlabs_default_model: str = "scribe_v1"
@@ -211,6 +229,13 @@ class Settings(BaseSettings):
     # --- Mistral ---
     # Mistral uses OpenAI-compatible API via OpenAI SDK with custom base_url.
     mistral_base_url: str = "https://api.mistral.ai/v1"
+
+    # --- Alibaba DashScope ---
+    # SDK uses module-level globals for base URL; DashScopeProvider sets
+    # `dashscope.base_http_api_url` at init time. Default points to the
+    # Singapore International endpoint; operators using MaaS workspaces
+    # (eu-central-1, etc.) override DASHSCOPE_BASE_URL in their env.
+    dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
 
     # --- Visual Description (VD) Pipeline ---
     # Primary Vision LLM for per-frame analysis (VisualAnalyzer Eyes step).

@@ -49,6 +49,7 @@ dependencies = [
     "ImageHash>=4.3",
     # Security: magic-bytes file type detection (KD14)
     "python-magic>=0.4.27",
+    "dashscope>=1.25.18",
 ]
 
 [dependency-groups]
@@ -170,6 +171,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "uuid_utils.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dashscope.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

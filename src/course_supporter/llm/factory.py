@@ -47,6 +47,10 @@ PROVIDER_CONFIGS: dict[str, ProviderFactoryConfig] = {
         get_base_url=lambda s: s.mistral_base_url,
         extra_kwargs={"provider_name": "mistral"},
     ),
+    "dashscope": ProviderFactoryConfig(
+        get_default_model=lambda s: s.dashscope_default_model,
+        get_base_url=lambda s: s.dashscope_base_url,
+    ),
 }
 
 

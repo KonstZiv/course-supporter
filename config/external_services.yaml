@@ -101,7 +101,12 @@ providers:
   mistral:
     type: llm
     models:
-      - id: mistral-large-latest
+      - id: mistral-large-2512
+        # Mistral Large 3 (Dec 2025 release, Apache 2.0). Pinned to the
+        # explicit dated revision per Phase 2.3 SPIKE-RESULTS-v2 §3 —
+        # spike v2 sealed this ID; alias `mistral-large-latest` is
+        # avoided to keep production runs reproducible across silent
+        # Mistral version bumps.
         capabilities: [structured_output, long_context]
         max_context: 131072
         max_output_tokens: 8192
@@ -115,6 +120,22 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0001
         cost_per_1k_out: 0.0003
+
+  dashscope:
+    type: llm
+    models:
+      - id: qwen3-vl-32b-instruct
+        # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
+        # PROVISIONAL pricing — values reflect DashScope International
+        # Singapore tier public docs; eu-central-1 MaaS workspace
+        # pricing may differ and should be reconciled after the first
+        # production billing cycle.
+        capabilities: [vision, structured_output, long_context]
+        max_context: 131072
+        max_output_tokens: 8192
+        unit_type: tokens
+        cost_per_1k_in: 0.00076
+        cost_per_1k_out: 0.00228
 
   whisper:
     type: transcription
@@ -248,12 +269,12 @@ actions:
     strategy: budget
     requires: [structured_output]
     chain:
-      default: [deepseek-chat, mistral-large-latest, gemini-2.5-flash]
+      default: [deepseek-chat, mistral-large-2512, gemini-2.5-flash]
 
   homework_humanize:
     strategy: quality
     chain:
-      default: [claude-opus-4-20250514, gemini-2.5-pro, mistral-large-latest]
+      default: [claude-opus-4-20250514, gemini-2.5-pro, mistral-large-2512]
 
   describe_slides:
     strategy: default

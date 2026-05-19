@@ -45,7 +45,25 @@ class TestChunkType:
         assert ChunkType.PARAGRAPH == "paragraph"
         assert ChunkType.HEADING == "heading"
         assert ChunkType.WEB_CONTENT == "web_content"
-        assert ChunkType.METADATA == "metadata"
+        assert ChunkType.VISUAL_SCENE == "visual_scene"
+
+    def test_chunk_type_metadata_removed(self) -> None:
+        # Phase 2.3 KD-2.3-J orphan cleanup: ``METADATA`` had no
+        # producer in the codebase and no consumer outside this test
+        # file, so it is dropped. (``SLIDE_DESCRIPTION`` removal is
+        # bundled into sub-area #4 alongside the PresentationProcessor
+        # rewrite that still emits it; see PHASE-2-3.md §2.1.)
+        assert "METADATA" not in ChunkType.__members__
+        assert "metadata" not in {c.value for c in ChunkType}
+
+    def test_chunk_type_keeps_visual_scene_and_slide_text(self) -> None:
+        # Positive gate: KD-2.3-J explicitly preserves these enum
+        # values. ``VISUAL_SCENE`` has an active producer in
+        # ``ingestion/video.py``; ``SLIDE_TEXT`` becomes the canonical
+        # per-slide chunk type after the sub-area #4 rewrite (v0.3 N3
+        # empty-text filter).
+        assert ChunkType.VISUAL_SCENE in ChunkType
+        assert ChunkType.SLIDE_TEXT in ChunkType
 
 
 class TestContentChunk:
@@ -247,3 +265,62 @@ class TestAudioPass2aResultGates:
         ok = AudioPass2aResult(title=None, description="ok doc", segments=[])
         assert ok.title is None
         assert ok.description == "ok doc"
+
+
+# ── Phase 2.3 KD-2.3-Q — DocumentSegmentDraft presentation slide fields ──
+
+
+class TestDocumentSegmentDraftSlideFields:
+    """``start_slide`` / ``end_slide`` optionals for the presentation pipeline.
+
+    Mirrors the audio Phase 2.2 ``start_time_sec`` / ``end_time_sec``
+    pattern: optional with ``None`` defaults so existing audio/text/
+    web/video callers stay backward-compatible without code changes.
+    Populated by Pass 2b for the presentation source type via the
+    slide-boundary bridge (KD-2.3-Q).
+    """
+
+    @staticmethod
+    def _base_payload() -> dict[str, object]:
+        return {
+            "order": 0,
+            "start_pos": 0,
+            "end_pos": 100,
+            "description": "Segment description.",
+        }
+
+    def test_start_slide_end_slide_default_to_none(self) -> None:
+        from course_supporter.ingestion.schemas import DocumentSegmentDraft
+
+        draft = DocumentSegmentDraft(**self._base_payload())  # type: ignore[arg-type]
+        assert draft.start_slide is None
+        assert draft.end_slide is None
+
+    def test_start_slide_end_slide_accept_slide_numbers(self) -> None:
+        from course_supporter.ingestion.schemas import DocumentSegmentDraft
+
+        payload = self._base_payload() | {"start_slide": 3, "end_slide": 7}
+        draft = DocumentSegmentDraft(**payload)  # type: ignore[arg-type]
+        assert draft.start_slide == 3
+        assert draft.end_slide == 7
+
+    def test_existing_callers_unchanged_without_slide_fields(self) -> None:
+        # Regression guard: audio/text/web/video callers never pass
+        # the slide fields. Constructing a draft without them must
+        # succeed (no required-field ValidationError) and leave both
+        # fields at their ``None`` defaults so the audio Phase 2.2
+        # ``start_time_sec`` / ``end_time_sec`` semantics carry over.
+        from course_supporter.ingestion.schemas import DocumentSegmentDraft
+
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=50,
+            description="Audio segment.",
+            start_time_sec=0.0,
+            end_time_sec=12.5,
+        )
+        assert draft.start_slide is None
+        assert draft.end_slide is None
+        assert draft.start_time_sec == 0.0
+        assert draft.end_time_sec == 12.5

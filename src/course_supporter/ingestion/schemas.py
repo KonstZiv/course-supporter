@@ -122,6 +122,27 @@ class DocumentSegmentDraft(BaseModel):
             "char-offset bridge; ``None`` for text/web."
         ),
     )
+    start_slide: int | None = Field(
+        default=None,
+        description=(
+            "Optional 1-indexed inclusive slide number where the "
+            "segment begins (KD-2.3-Q). Populated for the presentation "
+            "source type via the Pass 2b slide-boundary bridge; "
+            "``None`` for audio/text/web/video. Preserved even when "
+            "the slide's chunk was filtered out by the empty-text "
+            "guard (KD-2.3-O / v0.3 N3), so downstream UI can still "
+            "address the original slide number."
+        ),
+    )
+    end_slide: int | None = Field(
+        default=None,
+        description=(
+            "Optional 1-indexed inclusive slide number where the "
+            "segment ends (KD-2.3-Q). Populated for the presentation "
+            "source type via the Pass 2b slide-boundary bridge; "
+            "``None`` for audio/text/web/video."
+        ),
+    )
     noisy: bool = Field(
         default=False,
         description=(

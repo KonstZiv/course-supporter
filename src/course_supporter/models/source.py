@@ -1,4 +1,25 @@
-"""Source material schemas for ingestion pipeline."""
+"""Source material schemas for ingestion pipeline.
+
+``SourceDocument.assemble_text`` joins per-chunk text with a
+source_type-conditional separator (KD-2.2-E baseline, KD-2.3-L
+presentation carry-forward):
+
+* ``SourceType.AUDIO`` uses a single space — STT output arrives
+  pre-tokenised as a continuous word stream, so any wider separator
+  would inject phantom whitespace into the reference text seen by the
+  LLM (Pass 2a) and by the segment-content slice (Pass 2b).
+* ``SourceType.TEXT`` and ``SourceType.WEB`` use ``"\\n\\n"`` to
+  preserve authored paragraph boundaries — the authored chunk shape
+  itself encodes structural intent.
+* ``SourceType.PRESENTATION`` uses ``"\\n\\n"`` so slide-level text
+  blocks remain visually separable in the assembled reference text and
+  align with the Pass 2a structural-segment contract (one segment may
+  span multiple slides; segment boundaries are slide-aligned via the
+  ``chars_per_slide_cumsum`` bridge in
+  :mod:`course_supporter.ingestion.presentation`).
+* ``SourceType.VIDEO`` keeps the ``"\\n\\n"`` default; transcript +
+  visual-scene chunks remain visually separable for downstream stages.
+"""
 
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -48,7 +69,6 @@ class ChunkType(StrEnum):
     PARAGRAPH = "paragraph"
     HEADING = "heading"
     WEB_CONTENT = "web_content"
-    METADATA = "metadata"
     VISUAL_SCENE = "visual_scene"
 
 

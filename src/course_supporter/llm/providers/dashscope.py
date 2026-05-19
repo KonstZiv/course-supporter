@@ -59,10 +59,14 @@ _OVERFLOW_CODE_PREFIXES = (
     "InvalidParameter.InputTooLong",
     "InvalidParameter.ContextTooLong",
 )
+# Each branch requires both a domain term (input/context/tokens) AND an
+# overflow verb (too long / exceed) to avoid false-positive matches on
+# unrelated 400 messages that happen to mention "max tokens" or
+# "context length". Aligns with providers/gemini.py strictness.
 _OVERFLOW_MESSAGE_PATTERN = re.compile(
     r"input (?:length|token) (?:too long|exceed)|"
-    r"context (?:length|window)|"
-    r"max(?:imum)? (?:input |context )?tokens?",
+    r"context (?:length|window) exceed|"
+    r"max(?:imum)? (?:input |context )?tokens? exceed",
     re.IGNORECASE,
 )
 
@@ -83,7 +87,12 @@ def _detect_image_mime(data: bytes) -> str:
     Mirrors the convention used by ``providers/gemini.py``: falls back to
     ``application/octet-stream`` for unknown formats so the SDK surfaces
     a clear error rather than silently mislabeling bytes. DashScope
-    accepts JPEG/PNG/GIF/WEBP.
+    accepts JPEG/PNG/GIF/WEBP; any other MIME (including the fallback)
+    triggers the SDK's ``InvalidParameter`` path at call time. We
+    deliberately defer that rejection to the SDK boundary instead of
+    raising an in-process error here, so the failure surfaces alongside
+    the rest of the DashScope error taxonomy that ``classify_error``
+    already maps to ``ErrorCategory``.
     """
     for signature, mime in _IMAGE_MIME_SIGNATURES:
         if data.startswith(signature):

@@ -232,6 +232,18 @@ class TestExtractText:
         response.output = None
         assert provider._extract_text(response) == ""
 
+    def test_empty_choices_list_returns_empty_string(self) -> None:
+        """Empty ``choices`` is guarded — no IndexError on ``choices[0]``.
+
+        Documents the safety property flagged by a review heuristic. The
+        ``if not choices`` guard treats both ``None`` and ``[]`` as empty,
+        so ``choices[0]`` never executes for an empty list.
+        """
+        provider = _make_provider()
+        response = MagicMock()
+        response.output = {"choices": []}
+        assert provider._extract_text(response) == ""
+
     def test_string_content_returned_as_is(self) -> None:
         """If ``content`` is already a string the helper returns it directly."""
         provider = _make_provider()

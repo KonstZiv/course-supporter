@@ -94,8 +94,11 @@ class TestPureHelpers:
         data = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 4
         assert _detect_image_mime(data) == "image/webp"
 
-    def test_detect_image_mime_unknown_falls_back_to_png(self) -> None:
-        assert _detect_image_mime(b"\x00garbage bytes") == "image/png"
+    def test_detect_image_mime_unknown_falls_back_to_octet_stream(self) -> None:
+        # Aligns with providers/gemini.py: an unrecognised payload returns
+        # ``application/octet-stream`` so the SDK surfaces a clear error
+        # rather than silently mislabeling bytes.
+        assert _detect_image_mime(b"\x00garbage bytes") == "application/octet-stream"
 
     def test_strip_markdown_json_fenced(self) -> None:
         text = '```json\n{"status": "ok"}\n```'
@@ -108,6 +111,46 @@ class TestPureHelpers:
     def test_strip_markdown_json_fence_without_lang_tag(self) -> None:
         text = '```\n{"status": "ok"}\n```'
         assert _strip_markdown_json(text) == '{"status": "ok"}'
+
+
+# ── __init__ side effects ───────────────────────────────────────
+
+
+class TestInitGlobalState:
+    """Provider-init side effects on the DashScope SDK module globals.
+
+    The SDK exposes no per-client config object; ``base_http_api_url``
+    is a module-level write that binds every subsequent call. The
+    tests below cover both branches of the init-time guard so the
+    reviewer's "untested global state" concern is closed.
+    """
+
+    def test_base_url_sets_sdk_global(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import dashscope
+
+        sentinel = "https://example.maas/api/v1"
+        # monkeypatch auto-restores the original value at test teardown,
+        # so we cannot leak state into other tests in the suite.
+        monkeypatch.setattr(dashscope, "base_http_api_url", "ORIGINAL")
+        DashScopeProvider(
+            api_keys=("k",),
+            default_model="qwen3-vl-32b-instruct",
+            base_url=sentinel,
+        )
+        assert dashscope.base_http_api_url == sentinel
+
+    def test_base_url_none_leaves_sdk_global_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dashscope
+
+        monkeypatch.setattr(dashscope, "base_http_api_url", "ORIGINAL")
+        DashScopeProvider(
+            api_keys=("k",),
+            default_model="qwen3-vl-32b-instruct",
+            base_url=None,
+        )
+        assert dashscope.base_http_api_url == "ORIGINAL"
 
 
 # ── _build_messages ─────────────────────────────────────────────

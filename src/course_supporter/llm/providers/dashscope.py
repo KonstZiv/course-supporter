@@ -80,15 +80,17 @@ _MD_JSON_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
 def _detect_image_mime(data: bytes) -> str:
     """Detect image MIME type from magic bytes.
 
-    DashScope accepts JPEG/PNG/GIF/WEBP. Falls back to ``image/png``
-    for unknown formats — safe default since most VL pipelines emit PNG.
+    Mirrors the convention used by ``providers/gemini.py``: falls back to
+    ``application/octet-stream`` for unknown formats so the SDK surfaces
+    a clear error rather than silently mislabeling bytes. DashScope
+    accepts JPEG/PNG/GIF/WEBP.
     """
     for signature, mime in _IMAGE_MIME_SIGNATURES:
         if data.startswith(signature):
             return mime
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    return "image/png"
+    return "application/octet-stream"
 
 
 def _strip_markdown_json(text: str) -> str:
@@ -125,7 +127,10 @@ class DashScopeProvider(LLMProvider):
 
     provider_name = "dashscope"
 
-    # Qwen3-VL-32B-instruct supports up to 8192 output tokens.
+    # Qwen3-VL-32B-instruct supports up to 8192 output tokens; we cap at
+    # 4096 by default as a conservative cost guard for unbounded calls.
+    # Production ladders override per-action via ``LLMRequest.max_tokens``
+    # whenever a longer response is genuinely required.
     DEFAULT_MAX_TOKENS = 4096
     default_max_output_tokens: int = DEFAULT_MAX_TOKENS
 
@@ -227,20 +232,24 @@ class DashScopeProvider(LLMProvider):
         ``list[dict]`` like ``[{"text": "..."}]``. Falls back to
         ``output.text`` for simpler single-turn responses, and to
         plain string content for compatibility.
+
+        DashScope SDK output objects extend ``DictMixin`` and always
+        expose ``.get()``, so we call it directly without defensive
+        ``hasattr`` guards.
         """
         output = response.output
         if not output:
             return ""
-        text_field = output.get("text") if hasattr(output, "get") else None
+        text_field = output.get("text")
         if text_field:
             return str(text_field)
-        choices = output.get("choices") if hasattr(output, "get") else None
+        choices = output.get("choices")
         if not choices:
             return ""
-        message = choices[0].get("message") if hasattr(choices[0], "get") else None
+        message = choices[0].get("message")
         if not message:
             return ""
-        content = message.get("content") if hasattr(message, "get") else None
+        content = message.get("content")
         if not content:
             return ""
         if isinstance(content, str):

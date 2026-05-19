@@ -152,33 +152,14 @@ class TestCreateProcessors:
 
         assert isinstance(processors[SourceType.WEB], WebProcessor)
 
-    def test_presentation_processor_has_parse_pdf_func(self) -> None:
-        """PresentationProcessor has injected parse_pdf_func."""
-        heavy = create_heavy_steps()
-        processors = create_processors(heavy)
-
-        pres = processors[SourceType.PRESENTATION]
-        assert isinstance(pres, PresentationProcessor)
-        assert pres._parse_pdf_func is heavy.parse_pdf
-
-    def test_presentation_processor_has_describe_func(self) -> None:
-        """PresentationProcessor has injected describe_slides_func."""
-        router = AsyncMock()
-        heavy = create_heavy_steps(router=router)
-        processors = create_processors(heavy)
-
-        pres = processors[SourceType.PRESENTATION]
-        assert isinstance(pres, PresentationProcessor)
-        assert pres._describe_slides_func is heavy.describe_slides
-
-    def test_presentation_processor_none_without_router(self) -> None:
-        """PresentationProcessor has None describe_slides when no router."""
-        heavy = create_heavy_steps()
-        processors = create_processors(heavy)
-
-        pres = processors[SourceType.PRESENTATION]
-        assert isinstance(pres, PresentationProcessor)
-        assert pres._describe_slides_func is None
+    # Phase 2.3 sub-area #4: the three tests that asserted on the
+    # Design-1 DI attributes (``_parse_pdf_func`` /
+    # ``_describe_slides_func``) were removed. The three-stage
+    # PresentationProcessor takes no constructor args (Design 2; router
+    # arrives via the ``process_macro`` method arg per TextProcessor /
+    # WebProcessor precedent), so there is no injected dependency to
+    # assert on. ``test_presentation_processor_type`` above is the
+    # positive wiring gate.
 
     def test_web_processor_has_scrape_func(self) -> None:
         """WebProcessor has injected scrape_func."""

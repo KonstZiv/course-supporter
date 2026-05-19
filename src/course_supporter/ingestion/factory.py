@@ -185,10 +185,7 @@ def create_processors(
 
     result: dict[SourceType, MaterialProcessor] = {
         SourceType.VIDEO: video_processor,
-        SourceType.PRESENTATION: PresentationProcessor(
-            parse_pdf_func=heavy.parse_pdf,
-            describe_slides_func=heavy.describe_slides,
-        ),
+        SourceType.PRESENTATION: PresentationProcessor(),
         SourceType.TEXT: TextProcessor(),
         SourceType.WEB: WebProcessor(
             scrape_func=heavy.scrape_web,

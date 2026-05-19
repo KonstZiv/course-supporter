@@ -14,6 +14,8 @@ from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
     AudioSegmentDraft,
     AudioSubsegmentDraft,
+    PresentationPass2aResult,
+    PresentationSegment,
 )
 from course_supporter.models.source import (
     ChunkType,
@@ -41,20 +43,21 @@ class TestChunkType:
         """All expected chunk types exist with correct string values."""
         assert ChunkType.TRANSCRIPT == "transcript"
         assert ChunkType.SLIDE_TEXT == "slide_text"
-        assert ChunkType.SLIDE_DESCRIPTION == "slide_description"
         assert ChunkType.PARAGRAPH == "paragraph"
         assert ChunkType.HEADING == "heading"
         assert ChunkType.WEB_CONTENT == "web_content"
         assert ChunkType.VISUAL_SCENE == "visual_scene"
 
-    def test_chunk_type_metadata_removed(self) -> None:
-        # Phase 2.3 KD-2.3-J orphan cleanup: ``METADATA`` had no
-        # producer in the codebase and no consumer outside this test
-        # file, so it is dropped. (``SLIDE_DESCRIPTION`` removal is
-        # bundled into sub-area #4 alongside the PresentationProcessor
-        # rewrite that still emits it; see PHASE-2-3.md §2.1.)
+    def test_chunk_type_orphans_removed(self) -> None:
+        # Phase 2.3 KD-2.3-J orphan cleanup: ``METADATA`` (sub-area #1)
+        # and ``SLIDE_DESCRIPTION`` (sub-area #4, bundled with the
+        # PresentationProcessor rewrite that previously emitted it) are
+        # both dropped. Gate 8 full verification.
         assert "METADATA" not in ChunkType.__members__
-        assert "metadata" not in {c.value for c in ChunkType}
+        assert "SLIDE_DESCRIPTION" not in ChunkType.__members__
+        values = {c.value for c in ChunkType}
+        assert "metadata" not in values
+        assert "slide_description" not in values
 
     def test_chunk_type_keeps_visual_scene_and_slide_text(self) -> None:
         # Positive gate: KD-2.3-J explicitly preserves these enum
@@ -324,3 +327,85 @@ class TestDocumentSegmentDraftSlideFields:
         assert draft.end_slide is None
         assert draft.start_time_sec == 0.0
         assert draft.end_time_sec == 12.5
+
+
+# ── Phase 2.3 KD-2.3-H — PresentationPass2aResult validator gates ───
+
+
+class TestPresentationPass2aResultGates:
+    """Structural invariants the spike v2 calibrated against."""
+
+    @staticmethod
+    def _segments(*ranges: tuple[int, int]) -> list[dict[str, object]]:
+        return [
+            {
+                "start_slide": s,
+                "end_slide": e,
+                "title": f"Seg {s}-{e}",
+                "description": f"Covers {s}-{e}.",
+            }
+            for s, e in ranges
+        ]
+
+    def test_valid_contiguous_segments(self) -> None:
+        result = PresentationPass2aResult.model_validate(
+            {
+                "title": "Deck",
+                "description": "A deck.",
+                "segments": self._segments((1, 2), (3, 5)),
+            }
+        )
+        assert len(result.segments) == 2
+        assert isinstance(result.segments[0], PresentationSegment)
+
+    def test_first_segment_must_start_at_slide_1(self) -> None:
+        with pytest.raises(ValidationError, match="must start at slide 1"):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": self._segments((2, 3), (4, 5))}
+            )
+
+    def test_non_contiguous_segments_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="must be contiguous"):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": self._segments((1, 2), (4, 5))}
+            )
+
+    def test_miller_rule_lower_bound(self) -> None:
+        with pytest.raises(ValidationError, match="Miller's rule"):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": self._segments((1, 5))}
+            )
+
+    def test_miller_rule_upper_bound(self) -> None:
+        eight = self._segments(*[(i, i) for i in range(1, 9)])
+        with pytest.raises(ValidationError, match="Miller's rule"):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": eight}
+            )
+
+    def test_end_slide_before_start_slide_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="end_slide >="):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": self._segments((1, 2), (3, 2))}
+            )
+
+    def test_last_segment_must_cover_n_slides_via_context(self) -> None:
+        with pytest.raises(ValidationError, match="do not cover all slides"):
+            PresentationPass2aResult.model_validate(
+                {"description": "d", "segments": self._segments((1, 2), (3, 4))},
+                context={"n_slides": 6},
+            )
+
+    def test_last_segment_cover_passes_with_matching_context(self) -> None:
+        result = PresentationPass2aResult.model_validate(
+            {"description": "d", "segments": self._segments((1, 2), (3, 4))},
+            context={"n_slides": 4},
+        )
+        assert result.segments[-1].end_slide == 4
+
+    def test_cover_check_skipped_without_context(self) -> None:
+        # No context → coverage gate skipped; structural gate still runs.
+        result = PresentationPass2aResult.model_validate(
+            {"description": "d", "segments": self._segments((1, 2), (3, 9))}
+        )
+        assert result.segments[-1].end_slide == 9

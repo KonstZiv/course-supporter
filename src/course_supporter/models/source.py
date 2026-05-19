@@ -65,7 +65,6 @@ class ChunkType(StrEnum):
 
     TRANSCRIPT = "transcript"
     SLIDE_TEXT = "slide_text"
-    SLIDE_DESCRIPTION = "slide_description"
     PARAGRAPH = "paragraph"
     HEADING = "heading"
     WEB_CONTENT = "web_content"

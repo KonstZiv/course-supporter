@@ -49,6 +49,7 @@ dependencies = [
     "ImageHash>=4.3",
     # Security: magic-bytes file type detection (KD14)
     "python-magic>=0.4.27",
+    "dashscope>=1.25.18",
 ]
 
 [dependency-groups]
@@ -170,6 +171,17 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "uuid_utils.*"
+ignore_missing_imports = true
+
+# Alibaba DashScope SDK 1.25.18 ships without a ``py.typed`` marker, so
+# mypy strict mode cannot resolve its imports. We accept the loss of
+# static checking across the SDK surface in exchange for not maintaining
+# in-tree stub files for a third-party package under active development;
+# if upstream adds ``py.typed`` (or publishes types-dashscope), drop this
+# override. Our own ``DashScopeProvider`` adapter remains fully typed
+# because all SDK objects cross the boundary as ``Any`` returns / kwargs.
+[[tool.mypy.overrides]]
+module = "dashscope.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

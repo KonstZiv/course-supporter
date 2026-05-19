@@ -20,7 +20,7 @@ stages:
   # Model pick rationale (KD-D cost optimization): mistral-small-latest
   # is the economical primary because the task is binary classification
   # against a fixed schema -- frontier reasoning capability would be
-  # overkill. Override of the factory default mistral-large-latest is
+  # overkill. Override of the factory default mistral-large-2512 is
   # intentional; do NOT "fix" by reverting to large unless safety-
   # accuracy telemetry shows small underperforming. deepseek-v4-flash
   # and gemini-2.5-flash are equivalent-tier fallbacks for

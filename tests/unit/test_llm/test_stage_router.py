@@ -850,3 +850,117 @@ class TestResponseValidator:
         assert result.provider_used == "gemini"
         # Validator saw the good content but NOT the empty string.
         assert observed == ["answer"]
+
+
+# ── Sub-area #0 — multimodal contents= + LadderEntry per-rung overrides ──
+# Phase 2.3 KD-2.3-R + KD-2.3-S + v0.3 N1 propagation chain coverage.
+
+
+class TestExecuteForStageContents:
+    """``execute_for_stage(..., contents=[...])`` reaches ``LLMRequest.contents``."""
+
+    async def test_contents_kwarg_propagates_to_llm_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("ok")
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        await router.execute_for_stage("demo", contents=[png])
+
+        request = provider.complete.await_args.args[0]
+        assert request.contents == [png]
+
+    async def test_omitting_contents_leaves_request_contents_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Backward-compat: text-only callers (audio/text/web/security)
+        # must continue producing requests with ``contents is None``.
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("ok")
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.contents is None
+
+
+class TestLadderEntryOverridesPropagation:
+    """Per-rung ``reasoning`` / ``max_output_tokens`` map into the request."""
+
+    async def test_reasoning_override_propagates_to_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("ok")
+
+        config = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/example/v1.md",
+                    ladder=[
+                        LadderEntry(
+                            provider="anthropic",
+                            model="claude-x",
+                            reasoning={"exclude": True},
+                        )
+                    ],
+                ),
+            }
+        )
+        router = StageRouter(config, {"anthropic": provider})
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.reasoning == {"exclude": True}
+
+    async def test_max_output_tokens_override_propagates_to_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("ok")
+
+        config = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/example/v1.md",
+                    ladder=[
+                        LadderEntry(
+                            provider="anthropic",
+                            model="claude-x",
+                            max_output_tokens=4096,
+                        )
+                    ],
+                ),
+            }
+        )
+        router = StageRouter(config, {"anthropic": provider})
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.max_tokens == 4096
+
+    async def test_no_overrides_leave_request_fields_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Default ``LadderEntry`` (no overrides) preserves provider-side
+        # fallbacks: request.reasoning is None and request.max_tokens
+        # is None so the provider uses its class-level default.
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("ok")
+        router = StageRouter(_config(), {"anthropic": provider})
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.reasoning is None
+        assert request.max_tokens is None

@@ -214,6 +214,44 @@ class TestModelDirect:
                 {"provider": "anthropic", "model": "x", "extra": True}
             )
 
+    def test_ladder_entry_defaults_overrides_to_none(self) -> None:
+        # Backward compatibility: YAML without overrides parses cleanly
+        # and both override fields default to ``None`` so providers fall
+        # back to their own class-level defaults.
+        entry = LadderEntry.model_validate({"provider": "p", "model": "m"})
+        assert entry.reasoning is None
+        assert entry.max_output_tokens is None
+
+    def test_ladder_entry_accepts_reasoning_override(self) -> None:
+        entry = LadderEntry.model_validate(
+            {
+                "provider": "dashscope",
+                "model": "qwen3-vl-32b-instruct",
+                "reasoning": {"exclude": True},
+            }
+        )
+        assert entry.reasoning == {"exclude": True}
+        assert entry.max_output_tokens is None
+
+    def test_ladder_entry_accepts_max_output_tokens_override(self) -> None:
+        entry = LadderEntry.model_validate(
+            {"provider": "gemini", "model": "gemini-2.5-pro", "max_output_tokens": 4096}
+        )
+        assert entry.max_output_tokens == 4096
+        assert entry.reasoning is None
+
+    def test_ladder_entry_accepts_both_overrides_together(self) -> None:
+        entry = LadderEntry.model_validate(
+            {
+                "provider": "dashscope",
+                "model": "qwen3-vl-32b-instruct",
+                "reasoning": {"exclude": True},
+                "max_output_tokens": 2048,
+            }
+        )
+        assert entry.reasoning == {"exclude": True}
+        assert entry.max_output_tokens == 2048
+
     def test_stage_config_extra_forbid(self) -> None:
         with pytest.raises(ValidationError):
             StageConfig.model_validate(

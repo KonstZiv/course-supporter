@@ -288,3 +288,104 @@ class TestRealConfigs:
         for stage in config.stages.values():
             assert stage.prompt_ref
             assert stage.ladder  # min_length=1 enforced
+
+    # ── Phase 2.3 sub-area #3 — presentation ladder coverage ──
+    # Verifies ``config/ladders_presentation.yaml`` parses cleanly,
+    # the two stages register with the expected rungs, and the
+    # KD-2.3-S per-rung overrides (reasoning + max_output_tokens)
+    # land on the LadderEntry objects in their canonical shape.
+
+    def test_presentation_ladder_loads_via_load_ladder_config(self) -> None:
+        config = load_ladder_config(Path("config"))
+
+        assert "presentation_pass_1_vision" in config.stages
+        assert "presentation_pass_2a_mapping" in config.stages
+
+    def test_presentation_pass_1_vision_ladder_has_3_rungs(self) -> None:
+        config = load_ladder_config(Path("config"))
+        stage = config.get_stage("presentation_pass_1_vision")
+
+        assert stage.prompt_ref == "prompts/presentation_pass_1_vision/v1.md"
+        rungs = [(e.provider, e.model) for e in stage.ladder]
+        assert rungs == [
+            ("dashscope", "qwen3-vl-32b-instruct"),
+            ("gemini", "gemini-3-flash-preview"),
+            ("gemini", "gemini-2.5-flash"),
+        ]
+
+    def test_presentation_pass_2a_mapping_ladder_has_2_rungs(self) -> None:
+        config = load_ladder_config(Path("config"))
+        stage = config.get_stage("presentation_pass_2a_mapping")
+
+        assert stage.prompt_ref == "prompts/presentation_pass_2a_mapping/v1.md"
+        rungs = [(e.provider, e.model) for e in stage.ladder]
+        assert rungs == [
+            ("mistral", "mistral-large-2512"),
+            ("gemini", "gemini-2.5-pro"),
+        ]
+
+    def test_pass_1_primary_rung_carries_reasoning_exclude_override(self) -> None:
+        # KD-2.3-S end-to-end propagation gate: YAML
+        # ``reasoning: {exclude: true}`` lands on
+        # ``LadderEntry.reasoning`` as ``{"exclude": True}`` so the
+        # DashScope kwarg propagation shipped in sub-area #0
+        # (f89ce84) reaches the SDK boundary. Defensive guard for
+        # Qwen3-VL non-reasoning by construction.
+        config = load_ladder_config(Path("config"))
+        primary = config.get_stage("presentation_pass_1_vision").ladder[0]
+
+        assert primary.provider == "dashscope"
+        assert primary.model == "qwen3-vl-32b-instruct"
+        assert primary.reasoning == {"exclude": True}
+        assert primary.max_output_tokens is None
+
+    def test_pass_2a_fallback_rung_carries_max_output_tokens_4096_override(
+        self,
+    ) -> None:
+        # KD-2.3-E + KD-2.3-S override gate: Gemini 2.5 Pro's
+        # thinking-mode budget needs ``max_output_tokens >= 4096``
+        # or the model risks being cut off mid-JSON before emitting
+        # the closing brace. Per-rung override threads through
+        # ``LadderEntry.max_output_tokens -> LLMRequest.max_tokens``.
+        config = load_ladder_config(Path("config"))
+        fallback = config.get_stage("presentation_pass_2a_mapping").ladder[1]
+
+        assert fallback.provider == "gemini"
+        assert fallback.model == "gemini-2.5-pro"
+        assert fallback.max_output_tokens == 4096
+        assert fallback.reasoning is None
+
+    def test_presentation_fallback_rungs_have_no_overrides(self) -> None:
+        # Negative gate: fallback rungs without explicit overrides
+        # default both fields to ``None`` so providers fall back to
+        # their class-level defaults (e.g. ``DashScopeProvider.
+        # default_max_output_tokens``). Catches accidental override
+        # leakage from one rung into another in YAML edits.
+        config = load_ladder_config(Path("config"))
+
+        pass_1_fallbacks = config.get_stage("presentation_pass_1_vision").ladder[1:]
+        for rung in pass_1_fallbacks:
+            assert rung.reasoning is None
+            assert rung.max_output_tokens is None
+
+        pass_2a_primary = config.get_stage(
+            "presentation_pass_2a_mapping",
+        ).ladder[0]
+        assert pass_2a_primary.reasoning is None
+        assert pass_2a_primary.max_output_tokens is None
+
+    def test_presentation_prompt_refs_point_to_existing_files(self) -> None:
+        # Cross-sub-area regression guard: sub-area #2 sealed both
+        # prompt files; sub-area #3 references them by relative
+        # path. A typo or rename in either layer surfaces as a
+        # FileNotFoundError here instead of at production
+        # ``StageRouter.execute_for_stage`` time.
+        config = load_ladder_config(Path("config"))
+        for stage_name in (
+            "presentation_pass_1_vision",
+            "presentation_pass_2a_mapping",
+        ):
+            stage = config.get_stage(stage_name)
+            assert Path(stage.prompt_ref).is_file(), (
+                f"prompt_ref for {stage_name!r} not found: {stage.prompt_ref}"
+            )

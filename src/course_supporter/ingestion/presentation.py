@@ -170,6 +170,7 @@ class PresentationProcessor(MaterialProcessor):
         # task; a ``None`` value at ``process_macro`` time signals a
         # call-ordering violation (cache-miss guard, analog to
         # ``audio.py`` word-cache miss).
+        # DD-2.3-AJ: explicit-state-passing refactor (Phase 2.5, all processors).
         self._slide_raw: list[SlideRaw] | None = None
 
     async def process_raw(

@@ -39,7 +39,7 @@ class TestAuthoredPolicy:
         )
 
     def test_extensions_include_documents(self) -> None:
-        assert {"pdf", "pptx", "md", "docx", "txt", "html"} <= (
+        assert {"pdf", "pptx", "ppt", "md", "docx", "txt", "html"} <= (
             AUTHORED_POLICY.allowed_extensions
         )
 
@@ -50,6 +50,7 @@ class TestAuthoredPolicy:
     def test_size_limits(self) -> None:
         assert AUTHORED_POLICY.max_file_size_bytes == 100 * 1024 * 1024
         assert AUTHORED_POLICY.max_video_size_bytes == 5 * 1024 * 1024 * 1024
+        assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
 
     def test_archive_disabled(self) -> None:
         assert AUTHORED_POLICY.max_archive_unzipped_bytes is None
@@ -81,6 +82,7 @@ class TestHomeworkPolicy:
     def test_size_limits(self) -> None:
         assert HOMEWORK_POLICY.max_file_size_bytes == 1 * 1024 * 1024
         assert HOMEWORK_POLICY.max_video_size_bytes is None
+        assert HOMEWORK_POLICY.max_presentation_size_bytes is None
 
     def test_archive_caps(self) -> None:
         assert HOMEWORK_POLICY.max_archive_unzipped_bytes == 10 * 1024 * 1024
@@ -126,8 +128,10 @@ class TestVideoSizeResolver:
         )
 
     def test_document_extension_returns_default(self) -> None:
+        # ``md`` is neither video nor presentation -> default cap applies.
+        # (``pdf`` moved to the presentation override in Phase 2.3 #6.)
         assert (
-            get_max_size_for_extension("pdf", AUTHORED_POLICY)
+            get_max_size_for_extension("md", AUTHORED_POLICY)
             == AUTHORED_POLICY.max_file_size_bytes
         )
 
@@ -143,6 +147,38 @@ class TestVideoSizeResolver:
         assert (
             get_max_size_for_extension("MP4", AUTHORED_POLICY)
             == AUTHORED_POLICY.max_video_size_bytes
+        )
+
+
+# ── Presentation size resolver (Phase 2.3 #6, KD-2.3-M) ────────────
+
+
+class TestPresentationSizeResolver:
+    @pytest.mark.parametrize("ext", ["pdf", "pptx", "ppt"])
+    def test_presentation_extension_returns_presentation_cap(self, ext: str) -> None:
+        assert (
+            get_max_size_for_extension(ext, AUTHORED_POLICY)
+            == AUTHORED_POLICY.max_presentation_size_bytes
+        )
+
+    def test_authored_policy_presentation_size_cap_50mb(self) -> None:
+        assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
+
+    def test_homework_presentation_extension_returns_default(self) -> None:
+        # HOMEWORK has no presentation override (None) -- pdf falls back to
+        # the 1 MB default cap, not the authored 50 MB presentation cap.
+        assert (
+            get_max_size_for_extension("pdf", HOMEWORK_POLICY)
+            == HOMEWORK_POLICY.max_file_size_bytes
+        )
+
+    def test_ppt_in_authored_whitelist(self) -> None:
+        assert "ppt" in AUTHORED_POLICY.allowed_extensions
+
+    def test_uppercase_presentation_extension_normalized(self) -> None:
+        assert (
+            get_max_size_for_extension("PDF", AUTHORED_POLICY)
+            == AUTHORED_POLICY.max_presentation_size_bytes
         )
 
 

@@ -7,7 +7,6 @@ lambda/serverless implementations via a settings flag.
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -15,8 +14,6 @@ import structlog
 
 from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.heavy_steps import (
-    DescribeSlidesFunc,
-    ParsePDFFunc,
     ScrapeWebFunc,
     TranscribeFunc,
 )
@@ -44,47 +41,23 @@ class HeavySteps:
 
     Each field is an async callable conforming to the protocol
     defined in :mod:`course_supporter.ingestion.heavy_steps`.
-    ``describe_slides`` is None when no ModelRouter is available;
-    PresentationProcessor handles None gracefully (text-only extraction).
     """
 
     transcribe: TranscribeFunc
-    parse_pdf: ParsePDFFunc
-    describe_slides: DescribeSlidesFunc | None  # None → text-only PDF
     scrape_web: ScrapeWebFunc
 
 
-def create_heavy_steps(
-    *,
-    router: ModelRouter | None = None,
-) -> HeavySteps:
+def create_heavy_steps() -> HeavySteps:
     """Build heavy steps with local implementations.
-
-    Args:
-        router: ModelRouter instance for Vision LLM calls.
-            If provided, ``local_describe_slides`` is bound
-            with the router via ``functools.partial``.
-            If None, ``describe_slides`` is set to None.
 
     Returns:
         HeavySteps bundle with all callable implementations.
     """
-    from course_supporter.ingestion.parse_pdf import local_parse_pdf
     from course_supporter.ingestion.scrape_web import local_scrape_web
     from course_supporter.ingestion.transcribe import local_transcribe
 
-    describe_slides_func: DescribeSlidesFunc | None = None
-    if router is not None:
-        from course_supporter.ingestion.describe_slides import (
-            local_describe_slides,
-        )
-
-        describe_slides_func = functools.partial(local_describe_slides, router=router)
-
     return HeavySteps(
         transcribe=local_transcribe,
-        parse_pdf=local_parse_pdf,
-        describe_slides=describe_slides_func,
         scrape_web=local_scrape_web,
     )
 
@@ -185,10 +158,7 @@ def create_processors(
 
     result: dict[SourceType, MaterialProcessor] = {
         SourceType.VIDEO: video_processor,
-        SourceType.PRESENTATION: PresentationProcessor(
-            parse_pdf_func=heavy.parse_pdf,
-            describe_slides_func=heavy.describe_slides,
-        ),
+        SourceType.PRESENTATION: PresentationProcessor(),
         SourceType.TEXT: TextProcessor(),
         SourceType.WEB: WebProcessor(
             scrape_func=heavy.scrape_web,

@@ -24,7 +24,7 @@ _GEMINI_OVERFLOW_PATTERN = re.compile(
 
 # Image MIME signatures (magic bytes). Only the formats Gemini accepts
 # and that we actually produce are listed: VD frame_sampler emits JPEG
-# (ffmpeg frame_%06d.jpg), describe_slides emits PNG (PyMuPDF
+# (ffmpeg frame_%06d.jpg), presentation ingestion emits PNG (PyMuPDF
 # pixmap.tobytes("png")). WebP/HEIC/HEIF are left in because Gemini
 # supports them and users may one day paste such content.
 _IMAGE_MIME_SIGNATURES: tuple[tuple[bytes, str], ...] = (

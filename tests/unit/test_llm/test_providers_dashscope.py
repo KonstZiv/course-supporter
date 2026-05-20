@@ -451,6 +451,51 @@ class TestCompleteAsync:
         )
         assert {"text": "describe"} in user_content
 
+    @pytest.mark.asyncio
+    async def test_reasoning_kwarg_propagates_to_sdk_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Phase 2.3 KD-2.3-S v0.3 N1: per-rung ``reasoning`` override
+        # configured on a LadderEntry flows through LLMRequest.reasoning
+        # and lands as a kwarg on the DashScope SDK call. The defensive
+        # guard for Qwen3-VL (``{"exclude": True}``) is only meaningful
+        # if the kwarg actually reaches the SDK boundary.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        request = LLMRequest(
+            prompt="hi",
+            model="qwen3-vl-32b-instruct",
+            reasoning={"exclude": True},
+        )
+        await provider.complete(request)
+
+        kwargs = fake_call.await_args.kwargs
+        assert kwargs["reasoning"] == {"exclude": True}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_kwarg_omitted_when_request_field_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Backward compatibility: a request without the override must NOT
+        # surface a ``reasoning`` kwarg to the SDK — the DashScope default
+        # behaviour stays in effect for non-Qwen-VL models that share the
+        # provider class.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        request = LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+        await provider.complete(request)
+
+        kwargs = fake_call.await_args.kwargs
+        assert "reasoning" not in kwargs
+
 
 # ── complete_structured() async ─────────────────────────────────
 

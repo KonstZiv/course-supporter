@@ -128,6 +128,7 @@ class StageRouter:
         stage_name: str,
         *,
         response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a named stage.
@@ -144,6 +145,14 @@ class StageRouter:
                 preserves the legacy behaviour of returning the first
                 non-empty response without any router-side schema
                 check.
+            contents: Optional multimodal payload (raw image bytes per
+                element) propagated verbatim to
+                :class:`LLMRequest.contents`. Distinct from any
+                ``content`` Jinja render-context variable that some
+                text-only stages already use. Providers that support
+                multimodal input (e.g. DashScope, Gemini) encode each
+                ``bytes`` element as an inline image; text-only
+                providers ignore the field.
             **render_context: Variables for the prompt template's
                 Jinja2 placeholders.
 
@@ -196,7 +205,7 @@ class StageRouter:
                 attempts.append((entry.provider, entry.model, "provider disabled"))
                 continue
 
-            request = self._build_request(prompt, entry, stage_name)
+            request = self._build_request(prompt, entry, stage_name, contents=contents)
             response, used_count, reason = await self._attempt_entry(
                 provider, entry, request, stage_name, response_validator
             )
@@ -221,14 +230,26 @@ class StageRouter:
         prompt: StagePrompt,
         entry: LadderEntry,
         stage_name: str,
+        *,
+        contents: list[bytes] | None = None,
     ) -> LLMRequest:
-        """Map StagePrompt + LadderEntry to the legacy LLMRequest."""
+        """Map StagePrompt + LadderEntry to the legacy LLMRequest.
+
+        Per-rung overrides on ``entry`` (``reasoning`` /
+        ``max_output_tokens``) propagate into the corresponding
+        :class:`LLMRequest` fields so providers receive the
+        configured value. ``None`` defaults preserve provider-side
+        fallbacks (e.g. ``DashScopeProvider.default_max_output_tokens``).
+        """
         return LLMRequest(
             prompt=prompt.user or "",
             system_prompt=prompt.system,
             model=entry.model,
             action=stage_name,
             strategy="default",
+            contents=contents,
+            reasoning=entry.reasoning,
+            max_tokens=entry.max_output_tokens,
         )
 
     async def _attempt_entry(

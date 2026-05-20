@@ -283,6 +283,12 @@ class DashScopeProvider(LLMProvider):
             kwargs["temperature"] = request.temperature
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
+        if request.reasoning is not None:
+            # Per-rung reasoning override (e.g. ``{"exclude": True}``)
+            # propagated verbatim. DashScope SDK forwards the kwarg to
+            # the Qwen reasoning-mode control; omitting it preserves
+            # the model's default behaviour.
+            kwargs["reasoning"] = request.reasoning
 
         with self._measure_latency() as timer:
             response = await AioMultiModalConversation.call(**kwargs)

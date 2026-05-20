@@ -1,0 +1,149 @@
+# Presentation source-type stage ladders (Phase 2.3, KD-2.3-G + KD-2.3-H).
+#
+# Per-source-type calibration lives in its own file (separate from
+# ``ladders_audio.yaml`` and ``ladders_pipeline.yaml``) because the
+# presentation pipeline has its own cost/quality/determinism profile:
+# Pass 1 is per-slide vision description (multimodal input via
+# KD-2.3-R ``contents=`` kwarg), Pass 2a is segment grouping over a
+# slide-list (text-only input, 1-indexed inclusive slide boundaries,
+# Miller's rule 2-7 cognitive cap). The loader at
+# ``src/course_supporter/llm/ladder_config.py`` discovers this file
+# automatically via the ``ladders_*.yaml`` glob.
+#
+# Two stages live here:
+#   * ``presentation_pass_1_vision``       — Pass 1 per-slide VD.
+#                                            Plain-text output (NOT
+#                                            JSON), symmetric with
+#                                            audio Pass 2c shape.
+#                                            Image bytes flow through
+#                                            ``StageRouter.execute_for_stage(
+#                                            ..., contents=[png_bytes])``.
+#   * ``presentation_pass_2a_mapping``     — Pass 2a slide grouping.
+#                                            JSON output validated at
+#                                            sub-area #4 by the
+#                                            ``response_validator``
+#                                            closure (PresentationPass2aResult
+#                                            schema, sub-area #4 territory).
+#
+# Ladder rationale (ratified 2026-05-19 per SPIKE-RESULTS-2-3-v2.md §3):
+#
+# Pass 1 — 3 rungs:
+#   1. dashscope/qwen3-vl-32b-instruct — cost-first primary.
+#      Spike v2: $0.00045/slide (cheapest), zero reasoning overhead,
+#      perfect Ukrainian preservation across 24-slide test set.
+#      Routes through ``DashScopeProvider`` (KD-2.3-A/D native client).
+#      Per-rung ``reasoning: {exclude: true}`` override (KD-2.3-S) acts
+#      as defensive guard so the non-reasoning VL model is never
+#      accidentally asked to reason. Propagation chain
+#      LadderEntry -> LLMRequest.reasoning -> DashScope SDK kwarg
+#      shipped in sub-area #0 (``f89ce84``).
+#   2. gemini/gemini-3-flash-preview — fallback 1.
+#      Spike v2: $0.00161/slide, 4.02s avg latency (FASTEST), structured
+#      output + thinking levels capable. Pricing in
+#      ``external_services.yaml`` is currently PROVISIONAL (copied from
+#      gemini-2.5-flash); update once Google publishes official rates
+#      for the preview tier. Preview-tier stability acknowledged in
+#      SPIKE-RESULTS §4 deferred concern #6.
+#   3. gemini/gemini-2.5-flash — fallback 2 / deep tier.
+#      Spike v2: $0.00164/slide, 5.25s latency. Cross-source-type
+#      reuse with Phase 2.2 audio Pass 2a precedent (KD-2.3-X
+#      opportunistic, not default — empirical fit confirmed by spike).
+#
+# Pass 2a — 2 rungs:
+#   1. mistral/mistral-large-2512 — primary.
+#      Spike v2: $0.0016/material avg, 4.78s latency, best granularity
+#      (7 segments на 39-slide upper bound). Routes through
+#      ``OpenAICompatProvider`` (``PROVIDER_REGISTRY["mistral"]``).
+#   2. gemini/gemini-2.5-pro — fallback (premium ceiling).
+#      Spike v2: $0.023/material premium. Per-rung
+#      ``max_output_tokens: 4096`` override (KD-2.3-S + KD-2.3-E):
+#      Gemini 2.5 Pro's thinking-mode budget needs a higher
+#      max_tokens floor than the provider default; without the
+#      override the model is liable to be cut off mid-JSON before
+#      emitting the closing brace.
+#
+# Anthropic Sonnet 4.6 R3 rung **deferred** per DD-2.3-AD (Anthropic
+# native top-up not performed; vision-side trigger condition: Pass 2a
+# LadderExhaustedError > 1 per 50 presentations in production). Pass
+# 2a ladder currently has 2 rungs; promote DD-2.3-AD to a third rung
+# if the trigger fires.
+#
+# Mistral structured-output mechanism — KD-2.3-T probe outcome
+# (sub-area #3 probe-deliverable, ratified 2026-05-19): **Path 3
+# (system-prompt injection)**.
+#   * ``PROVIDER_REGISTRY["mistral"] = OpenAICompatProvider`` —
+#     Mistral has no standalone provider module; routes through the
+#     OpenAI-compatible client.
+#   * ``OpenAICompatProvider.complete()`` (the only path StageRouter
+#     reaches) does NOT pass ``response_format`` to
+#     ``chat.completions.create``. JSON-output contract is enforced
+#     entirely by the Pass 2a prompt body (sub-area #2 ``beb4499``)
+#     — strict ``## System`` directive plus six hard-gate constraints.
+#   * StageRouter ``response_validator`` (sub-area #4 territory)
+#     parses ``response.content`` against the
+#     ``PresentationPass2aResult`` schema; a
+#     ``pydantic.ValidationError`` is translated to
+#     :class:`StructuralRetryError` so the existing instructor-style
+#     retry + ladder fallback chain (KD7) handles parse failures.
+#   * **Cross-sub-area carry-forward to sub-area #4:** the
+#     response_validator MUST include a markdown-fence-strip helper
+#     analog to ``DashScopeProvider._strip_markdown_json``
+#     (``dashscope.py:104-108``) before JSON parse, because Mistral
+#     may occasionally wrap its JSON output in ```` ```json ```` fences
+#     despite the explicit prompt directive (industry-known LLM RLHF
+#     behaviour).
+#   * Path 1 (``response_format`` kwarg propagation through
+#     ``LLMRequest`` + ``OpenAICompatProvider`` extension) NOT
+#     activated — premature optimisation without empirical evidence
+#     of need. DD-2.3-AG candidate: if production telemetry shows
+#     consistent fence emission OR the markdown-strip + StructuralRetry
+#     loop accounts for non-trivial retry cost, file a follow-up DD
+#     to revisit Path 1 in a later sub-area / phase.
+#
+# Snapshot convention: anthropic models pinned (date-stamped
+# snapshot, deferred until DD-2.3-AD trigger fires); gemini / mistral
+# / dashscope models use aliases (latest stable; provider-side
+# stability guarantee per existing repo convention; mistral pin
+# ``mistral-large-2512`` ratified in pre-flight PR #422 per
+# PHASE-2-3.md §1.9).
+
+stages:
+  # Pass 1 per-slide vision description (KD-2.3-G + KD-2.3-R).
+  # Input: per-slide image bytes through ``contents=`` kwarg +
+  # ``slide_number`` / ``raw_text`` Jinja render context.
+  # Output: plain-text description per slide (NOT JSON; symmetric
+  # with audio Pass 2c output pattern).
+  # Invocation site (sub-area #4 territory): per-slide
+  # ``asyncio.gather`` over all slides inside
+  # ``PresentationProcessor.process_macro``.
+  presentation_pass_1_vision:
+    prompt_ref: "prompts/presentation_pass_1_vision/v1.md"
+    ladder:
+      - provider: dashscope
+        model: qwen3-vl-32b-instruct
+        reasoning: {exclude: true}
+      - provider: gemini
+        model: gemini-3-flash-preview
+      - provider: gemini
+        model: gemini-2.5-flash
+
+  # Pass 2a slide grouping (KD-2.3-H + KD-2.3-T Path 3).
+  # Input: per-slide VD list from Pass 1 + n_slides + file_title
+  # Jinja render context (input-agnostic phrasing per sub-area #2
+  # ratify clarification — content may be raw extracted text OR
+  # LLM-generated description).
+  # Output: ``PresentationPass2aResult`` JSON validated at sub-area
+  # #4 by the response_validator closure; markdown-fence strip
+  # required (see KD-2.3-T probe note above).
+  # Invocation site (sub-area #4 territory): single
+  # ``StageRouter.execute_for_stage`` call inside
+  # ``PresentationProcessor.process_macro`` after Pass 1 gather
+  # completes.
+  presentation_pass_2a_mapping:
+    prompt_ref: "prompts/presentation_pass_2a_mapping/v1.md"
+    ladder:
+      - provider: mistral
+        model: mistral-large-2512
+      - provider: gemini
+        model: gemini-2.5-pro
+        max_output_tokens: 4096

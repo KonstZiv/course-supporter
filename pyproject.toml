@@ -215,6 +215,7 @@ markers = [
     "requires_db: test needs a running PostgreSQL instance",
     "requires_redis: test needs a running Redis instance",
     "audio_smoke: real-API audio pipeline smoke test (requires RUN_SMOKE=1)",
+    "presentation_smoke: real-API presentation pipeline smoke test (requires RUN_SMOKE=1)",
 ]
 
 [tool.coverage.run]

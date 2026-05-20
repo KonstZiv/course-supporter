@@ -13,6 +13,7 @@ The legacy module remains untouched until Phase 5 cleanup.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -28,12 +29,25 @@ class LadderEntry(BaseModel):
     The router walks ladder entries in order; ``provider`` must match
     a registered provider name from
     :mod:`course_supporter.llm.providers`.
+
+    Optional per-rung overrides:
+
+    * ``reasoning`` — vendor-specific reasoning-mode kwargs propagated
+      to :class:`LLMRequest.reasoning` and through to the provider.
+      Example: ``{"exclude": True}`` for Qwen3-VL via DashScope so the
+      non-reasoning VL model does not accidentally receive a reasoning
+      directive that would silently degrade output structure.
+    * ``max_output_tokens`` — per-rung floor for the provider's
+      ``max_tokens`` kwarg. ``None`` preserves the provider's class-level
+      default (e.g. ``DashScopeProvider.default_max_output_tokens``).
     """
 
     model_config = _FORBID
 
     provider: str
     model: str
+    reasoning: dict[str, Any] | None = None
+    max_output_tokens: int | None = None
 
 
 class StageConfig(BaseModel):

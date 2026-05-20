@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,24 +21,19 @@ from course_supporter.stt.router import STTRouter
 
 
 class TestCreateHeavySteps:
-    def test_with_router(self) -> None:
-        """All three fields populated when router is provided."""
-        router = AsyncMock()
-        heavy = create_heavy_steps(router=router)
+    def test_returns_heavy_steps_bundle(self) -> None:
+        """Factory returns a HeavySteps with surviving fields populated."""
+        heavy = create_heavy_steps()
 
         assert isinstance(heavy, HeavySteps)
         assert heavy.transcribe is not None
-        assert heavy.parse_pdf is not None
-        assert heavy.describe_slides is not None
         assert heavy.scrape_web is not None
 
-    def test_without_router(self) -> None:
-        """describe_slides is None when no router provided."""
+    def test_takes_no_args(self) -> None:
+        """create_heavy_steps takes no args post CA-1 (router param dropped)."""
         heavy = create_heavy_steps()
 
         assert heavy.transcribe is not None
-        assert heavy.parse_pdf is not None
-        assert heavy.describe_slides is None
         assert heavy.scrape_web is not None
 
     def test_transcribe_is_local_transcribe(self) -> None:
@@ -49,13 +43,6 @@ class TestCreateHeavySteps:
         heavy = create_heavy_steps()
         assert heavy.transcribe is local_transcribe
 
-    def test_parse_pdf_is_local_parse_pdf(self) -> None:
-        """parse_pdf points to local_parse_pdf."""
-        from course_supporter.ingestion.parse_pdf import local_parse_pdf
-
-        heavy = create_heavy_steps()
-        assert heavy.parse_pdf is local_parse_pdf
-
     def test_scrape_web_is_local_scrape_web(self) -> None:
         """scrape_web points to local_scrape_web."""
         from course_supporter.ingestion.scrape_web import local_scrape_web
@@ -63,34 +50,10 @@ class TestCreateHeavySteps:
         heavy = create_heavy_steps()
         assert heavy.scrape_web is local_scrape_web
 
-    def test_describe_slides_bound_with_router(self) -> None:
-        """describe_slides is a partial with router already bound."""
-        router = AsyncMock()
-        heavy = create_heavy_steps(router=router)
-
-        assert heavy.describe_slides is not None
-        assert isinstance(heavy.describe_slides, functools.partial)
-        assert heavy.describe_slides.keywords["router"] is router
-
-    def test_describe_slides_wraps_local_describe_slides(self) -> None:
-        """The partial wraps local_describe_slides."""
-        from course_supporter.ingestion.describe_slides import (
-            local_describe_slides,
-        )
-
-        router = AsyncMock()
-        heavy = create_heavy_steps(router=router)
-
-        assert isinstance(heavy.describe_slides, functools.partial)
-        assert heavy.describe_slides.func is local_describe_slides
-
-    @pytest.mark.parametrize(
-        "field", ["transcribe", "parse_pdf", "describe_slides", "scrape_web"]
-    )
+    @pytest.mark.parametrize("field", ["transcribe", "scrape_web"])
     def test_heavy_steps_is_frozen(self, field: str) -> None:
         """HeavySteps is immutable — all fields reject assignment."""
-        router = AsyncMock()
-        heavy = create_heavy_steps(router=router)
+        heavy = create_heavy_steps()
 
         from dataclasses import FrozenInstanceError
 

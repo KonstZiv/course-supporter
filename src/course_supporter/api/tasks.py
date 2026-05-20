@@ -153,7 +153,7 @@ async def arq_ingest_material(
     set_job_from_arq(jid)
     log.info("ingestion_started")
 
-    heavy = create_heavy_steps(router=router)
+    heavy = create_heavy_steps()
     vd = create_vd_pipeline(router=router)
 
     from course_supporter.config import get_settings

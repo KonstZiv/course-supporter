@@ -1,8 +1,8 @@
-"""Dynamic stop words for cross-modal alignment.
+"""Dynamic stop-word sets for natural and programming languages.
 
 Provides stop words for natural languages and programming language
-reserved words. Used by CrossModalAligner to filter noise during
-semantic identifier matching.
+reserved words, used to filter noise during semantic identifier
+matching.
 
 Supported natural languages: English, Ukrainian, German, Serbian,
     Croatian, Montenegrin, Spanish, Turkish, Romanian, Bulgarian,

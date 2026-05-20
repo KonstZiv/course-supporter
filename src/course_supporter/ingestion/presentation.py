@@ -106,6 +106,7 @@ _RENDER_DPI = 150
 # Markdown-fence strip for Pass 2a JSON (KD-2.3-T Path 3 carry-forward).
 # Mistral may wrap its JSON in ```json fences despite the prompt
 # directive; this mirrors ``DashScopeProvider._strip_markdown_json``.
+# Revisit = DD-2.3-AG (response_format Path 1 if fence emission proves costly).
 # Kept local — sharing a one-line regex across providers/processors
 # would be premature coupling.
 _MD_JSON_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)

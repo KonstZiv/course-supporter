@@ -268,6 +268,7 @@ class PresentationProcessor(MaterialProcessor):
         """
         with tempfile.TemporaryDirectory(prefix="pptx_normalize_") as tmpdir:
             profile_uri = (Path(tmpdir) / "lo_profile").as_uri()
+            # DD-2.3-AK: no CPU/memory rlimit on soffice (Phase 2.5 ops-hardening).
             proc = await asyncio.create_subprocess_exec(
                 "soffice",
                 "--headless",

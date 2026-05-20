@@ -44,6 +44,12 @@ _VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {"mp4", "mov", "avi", "mkv", "webm"}
 )
 
+# Presentation extensions get the dedicated ``max_presentation_size_bytes``
+# cap (50 MB) when present on the active policy -- tighter than the 100 MB
+# document default. ``None`` on the policy means no presentation override
+# applies (e.g. homework, where ``pdf`` stays on the default cap).
+_PRESENTATION_EXTENSIONS: Final[frozenset[str]] = frozenset({"pdf", "pptx", "ppt"})
+
 
 @dataclass(frozen=True, slots=True)
 class ContextPolicy:
@@ -62,6 +68,11 @@ class ContextPolicy:
             :data:`_VIDEO_EXTENSIONS`. ``None`` means video is not
             allowed in this context (relies on
             ``allowed_extensions`` to also exclude video).
+        max_presentation_size_bytes: Override cap applied to
+            extensions in :data:`_PRESENTATION_EXTENSIONS` (pdf /
+            pptx / ppt). ``None`` means no presentation override
+            applies; the extension falls back to
+            ``max_file_size_bytes``.
         max_archive_unzipped_bytes: Cumulative byte budget for
             archive extraction (KD-A); ``None`` means archives are
             not allowed in this context.
@@ -85,6 +96,7 @@ class ContextPolicy:
     allowed_extensions: frozenset[str]
     max_file_size_bytes: int
     max_video_size_bytes: int | None
+    max_presentation_size_bytes: int | None
     max_archive_unzipped_bytes: int | None
     max_archive_nesting_depth: int | None
     enable_llm_safety_check: bool
@@ -107,9 +119,10 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
             "m4a",
             "ogg",
             "flac",
-            # documents (6)
+            # documents (7)
             "pdf",
             "pptx",
+            "ppt",
             "md",
             "docx",
             "txt",
@@ -118,6 +131,7 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     ),
     max_file_size_bytes=100 * 1024 * 1024,
     max_video_size_bytes=5 * 1024 * 1024 * 1024,
+    max_presentation_size_bytes=50 * 1024 * 1024,
     max_archive_unzipped_bytes=None,
     max_archive_nesting_depth=None,
     enable_llm_safety_check=True,
@@ -141,6 +155,7 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     ),
     max_file_size_bytes=1 * 1024 * 1024,
     max_video_size_bytes=None,
+    max_presentation_size_bytes=None,
     max_archive_unzipped_bytes=10 * 1024 * 1024,
     max_archive_nesting_depth=3,
     enable_llm_safety_check=True,
@@ -174,9 +189,14 @@ def policy_for(context: Literal["authored", "homework"]) -> ContextPolicy:
 def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     """Return the per-file size cap applicable to ``extension`` under ``policy``.
 
-    Returns ``policy.max_video_size_bytes`` if the extension is in
-    :data:`_VIDEO_EXTENSIONS` and the policy provides a video
-    override; otherwise ``policy.max_file_size_bytes``.
+    Resolution order (overrides are keyed on disjoint extension sets):
+
+    * ``policy.max_video_size_bytes`` when the extension is in
+      :data:`_VIDEO_EXTENSIONS` and the policy provides a video override.
+    * ``policy.max_presentation_size_bytes`` when the extension is in
+      :data:`_PRESENTATION_EXTENSIONS` and the policy provides a
+      presentation override.
+    * ``policy.max_file_size_bytes`` otherwise.
 
     The extension argument is lower-cased internally for whitelist
     comparison; callers may pass either case.
@@ -184,4 +204,9 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     ext = extension.lower()
     if ext in _VIDEO_EXTENSIONS and policy.max_video_size_bytes is not None:
         return policy.max_video_size_bytes
+    if (
+        ext in _PRESENTATION_EXTENSIONS
+        and policy.max_presentation_size_bytes is not None
+    ):
+        return policy.max_presentation_size_bytes
     return policy.max_file_size_bytes

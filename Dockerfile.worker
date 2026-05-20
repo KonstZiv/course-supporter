@@ -1,0 +1,68 @@
+# Worker image (Phase 2.3 sub-area #7, KD-2.3-I FLAG D).
+#
+# Identical to ``Dockerfile`` (the API image) plus headless LibreOffice for
+# PPTX/PPT -> PDF normalization in the ingestion worker. Kept as a SEPARATE
+# Dockerfile (deliberate duplication, NOT a shared base) so the API image
+# stays lightweight -- the sealed KD-2.3-I operational note (~250 MB savings).
+# A base-extraction refactor is deferred to DD-2.3-AI (trigger: a third
+# consumer of the shared build structure). The worker command, ``expose: []``
+# and ``healthcheck: disable`` are set in docker-compose.prod.yaml.
+
+# ── Build stage ──
+FROM python:3.13-slim AS builder
+
+WORKDIR /build
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install dependencies (cached layer)
+COPY pyproject.toml uv.lock .python-version ./
+ENV UV_LINK_MODE=copy
+RUN uv sync --no-dev --frozen --no-install-project
+
+# Copy application code
+COPY src/ src/
+COPY config/ config/
+COPY prompts/ prompts/
+COPY migrations/ migrations/
+COPY alembic.ini .
+COPY scripts/ scripts/
+
+# ── Runtime stage ──
+FROM python:3.13-slim
+
+# System dependencies: libpq for psycopg, ffmpeg for ingestion, libmagic1 for
+# security file-type detection (KD14), libreoffice-impress for the worker-side
+# PPTX/PPT -> PDF normalize (KD-2.3-I; pulls libreoffice-core -> soffice). The
+# trailing ``libreoffice --version`` is a build-time gate: a broken install
+# fails the image build instead of surfacing at deploy/runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 curl ffmpeg libmagic1 libreoffice-impress \
+    && rm -rf /var/lib/apt/lists/* \
+    && libreoffice --version
+
+RUN groupadd -r app && useradd -r -g app -d /app app
+WORKDIR /app
+RUN mkdir -p /app/.cache && chown app:app /app/.cache
+
+# Copy virtual environment and application
+COPY --from=builder /build/.venv .venv/
+COPY --from=builder /build/src src/
+COPY --from=builder /build/config config/
+COPY --from=builder /build/prompts prompts/
+COPY --from=builder /build/migrations migrations/
+COPY --from=builder /build/alembic.ini .
+COPY --from=builder /build/scripts scripts/
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV XDG_CACHE_HOME="/app/.cache"
+
+USER app
+
+# Default command (overridden by docker-compose.prod.yaml worker service to
+# ``arq course_supporter.worker.WorkerSettings``).
+CMD ["python", "-m", "arq", "course_supporter.worker.WorkerSettings"]

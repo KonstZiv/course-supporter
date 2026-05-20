@@ -17,6 +17,10 @@ class LLMRequest(BaseModel):
     action: str = ""  # video_analysis, course_structuring, ...
     strategy: str = "default"  # default, quality, budget
     contents: list[Any] | None = None  # multimodal: [url, text, Part, ...]
+    # Vendor-specific reasoning-mode kwargs (e.g. ``{"exclude": True}`` for
+    # Qwen3-VL via DashScope). Providers that recognise the field propagate
+    # it verbatim; others ignore it.
+    reasoning: dict[str, Any] | None = None
 
 
 class LLMResponse(BaseModel):

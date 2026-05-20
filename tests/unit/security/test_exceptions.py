@@ -62,6 +62,32 @@ class TestErrorCategoryPhase21Additions:
         assert not (legacy_values & phase_21_values)
 
 
+class TestErrorCategoryPhase23Additions:
+    """Verify SLIDE_COUNT_LIMIT exists with the correct value (KD-2.3-M)."""
+
+    def test_slide_count_limit_value(self) -> None:
+        assert ErrorCategory.SLIDE_COUNT_LIMIT.value == "slide_count_limit"
+
+    def test_slide_count_limit_is_str_enum(self) -> None:
+        assert isinstance(ErrorCategory.SLIDE_COUNT_LIMIT, str)
+        assert ErrorCategory.SLIDE_COUNT_LIMIT.value == "slide_count_limit"
+
+    def test_slide_count_limit_no_collision(self) -> None:
+        existing = {
+            "size_limit",
+            "forbidden_type",
+            "magic_mismatch",
+            "archive_violation",
+            "suspicious_unicode",
+            "prompt_injection",
+            "charset_violation",
+            "archive_bomb",
+            "symlink_violation",
+            "stage2_rejected",
+        }
+        assert ErrorCategory.SLIDE_COUNT_LIMIT.value not in existing
+
+
 class TestSecurityRejectedErrorBaseConstructor:
     """Verify constructor preserves legacy contract (category + detail)."""
 

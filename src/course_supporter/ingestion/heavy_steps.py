@@ -2,8 +2,6 @@
 
 Defines typed contracts for all heavy (serverless-ready) operations:
 - Transcription (Whisper / Gemini)
-- Slide image description (Vision LLM)
-- PDF text extraction (fitz / OCR)
 - Web scraping (trafilatura)
 
 Each heavy step is a plain async callable with a clean contract:
@@ -70,81 +68,6 @@ TranscribeFunc = Callable[[str, TranscribeParams], Awaitable[Transcript]]
 """Async callable: (audio_path, params) → Transcript.
 
 First argument is the path to a WAV audio file on local disk.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Slide / image description (Vision LLM)
-# ---------------------------------------------------------------------------
-
-DEFAULT_SLIDE_DESCRIPTION_PROMPT = (
-    "Describe this slide. "
-    "Focus on diagrams, charts, and key visual elements. "
-    "Ignore decorative elements."
-)
-
-
-class DescribeSlidesParams(BaseModel):
-    """Parameters for slide image description via Vision LLM."""
-
-    dpi: int = Field(
-        default=150,
-        gt=0,
-        description="Resolution for rendering PDF pages to images.",
-    )
-    prompt: str = Field(
-        default=DEFAULT_SLIDE_DESCRIPTION_PROMPT,
-        description="Prompt sent to the Vision model for each slide.",
-    )
-
-
-class SlideDescription(BaseModel):
-    """Vision LLM description of a single slide image."""
-
-    slide_number: int
-    description: str
-
-
-DescribeSlidesFunc = Callable[
-    [str, DescribeSlidesParams],
-    Awaitable[list[SlideDescription]],
-]
-"""Async callable: (pdf_path, params) → list[SlideDescription].
-
-First argument is the path to a PDF file on local disk.
-Returns descriptions for every page that has visual content.
-"""
-
-
-# ---------------------------------------------------------------------------
-# PDF text extraction (fitz / OCR / future Lambda)
-# ---------------------------------------------------------------------------
-
-
-class ParsePDFParams(BaseModel):
-    """Parameters for PDF text extraction."""
-
-    ocr_enabled: bool = Field(
-        default=False,
-        description="Whether to run OCR on image-only pages.",
-    )
-
-
-class PDFPageText(BaseModel):
-    """Extracted text from a single PDF page."""
-
-    page_number: int
-    text: str
-
-
-ParsePDFFunc = Callable[
-    [str, ParsePDFParams],
-    Awaitable[list[PDFPageText]],
-]
-"""Async callable: (pdf_path, params) → list[PDFPageText].
-
-First argument is the path to a PDF file on local disk.
-Returns extracted text for every page that has content.
 """
 
 

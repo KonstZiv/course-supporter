@@ -122,6 +122,27 @@ class DocumentSegmentDraft(BaseModel):
             "char-offset bridge; ``None`` for text/web."
         ),
     )
+    start_slide: int | None = Field(
+        default=None,
+        description=(
+            "Optional 1-indexed inclusive slide number where the "
+            "segment begins (KD-2.3-Q). Populated for the presentation "
+            "source type via the Pass 2b slide-boundary bridge; "
+            "``None`` for audio/text/web/video. Preserved even when "
+            "the slide's chunk was filtered out by the empty-text "
+            "guard (KD-2.3-O / v0.3 N3), so downstream UI can still "
+            "address the original slide number."
+        ),
+    )
+    end_slide: int | None = Field(
+        default=None,
+        description=(
+            "Optional 1-indexed inclusive slide number where the "
+            "segment ends (KD-2.3-Q). Populated for the presentation "
+            "source type via the Pass 2b slide-boundary bridge; "
+            "``None`` for audio/text/web/video."
+        ),
+    )
     noisy: bool = Field(
         default=False,
         description=(
@@ -661,3 +682,170 @@ class AudioPass2cResult(BaseModel):
             "removed, semantic content and word order preserved."
         ),
     )
+
+
+# Presentation source-type schemas (Phase 2.3, KD-2.3-F + KD-2.3-H).
+#
+# Pass 2a maps a slide-list into contiguous segments. Unlike the audio
+# pipeline, the presentation Pass 2a output carries NO concepts
+# (per spike v2 calibration + KD2d: per-slide VD output is clean by
+# construction; concept extraction is not part of the presentation
+# Pass 2a contract). The segment shape is intentionally minimal —
+# ``{start_slide, end_slide, title, description}`` — matching the
+# sealed ``prompts/presentation_pass_2a_mapping/v1.md`` JSON contract.
+# ``DocumentSummary.main_concepts`` / ``secondary_concepts`` are empty
+# lists for the presentation source_type; the UI handles empty arrays.
+
+
+class PresentationSegment(BaseModel):
+    """One Pass 2a segment for the presentation source type (KD-2.3-H).
+
+    Slide boundaries are 1-indexed inclusive on both ends:
+    ``start_slide=3, end_slide=5`` covers slides 3, 4, and 5. The
+    char-offset bridge (``PresentationProcessor.process_macro``) maps
+    these slide numbers onto ``DocumentSegmentDraft.start_pos`` /
+    ``end_pos`` via the ``chars_per_slide_cumsum`` helper.
+
+    No ``order`` field — position is implicit through array order
+    (parallel to the audio segment classes). No concept fields —
+    presentation Pass 2a is segmentation-only per KD2d.
+    """
+
+    start_slide: int = Field(
+        description="Inclusive 1-indexed slide number where the segment begins.",
+    )
+    end_slide: int = Field(
+        description=(
+            "Inclusive 1-indexed slide number where the segment ends "
+            "(must be >= start_slide)."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Optional short heading for this segment.",
+    )
+    description: str = Field(
+        description="One-sentence description of what this segment covers.",
+    )
+
+
+class PresentationPass2aResult(BaseModel):
+    """Pass 2a LLM output for the presentation source type (KD-2.3-H).
+
+    Top-level container for the slide-mapping call. Carries doc-level
+    synthesis (``title`` / ``description``) plus a contiguous segment
+    sequence. Two ``model_validator(mode="after")`` gates enforce the
+    structural invariants the spike v2 calibrated against:
+
+    * :meth:`_segments_contiguous` — segments tile the slide range
+      without gaps or overlap (``segments[i+1].start_slide ==
+      segments[i].end_slide + 1``), the first segment starts at slide
+      1, each segment has ``end_slide >= start_slide``, and the count
+      satisfies Miller's rule (``2 <= count <= 7``).
+    * :meth:`_last_segment_covers_n_slides` — ``segments[-1].end_slide``
+      equals ``n_slides`` read from
+      ``ValidationInfo.context["n_slides"]``. Skipped when context is
+      absent (unit-test fixtures, ad-hoc tooling) so the structural
+      gate above remains the sole check in that case.
+
+    A Pydantic ``ValidationError`` raised here is translated to
+    :class:`StructuralRetryError` by the ``process_macro``
+    response_validator closure, so structural failures drive the
+    existing instructor-style retry + ladder fallback chain (KD7).
+    """
+
+    title: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Doc-level title summarising the presentation theme "
+            "(schema cap 128). ``None`` tolerates a deck without an "
+            "explicit theme, parallel to the audio "
+            "``AudioPass2aResult`` contract."
+        ),
+    )
+    description: str = Field(
+        max_length=512,
+        description=(
+            "Doc-level description (1-3 sentences) covering the "
+            "presentation subject. Required; schema cap 512 chars."
+        ),
+    )
+    segments: list[PresentationSegment] = Field(
+        default_factory=list,
+        description="Contiguous slide-range segments (Miller's rule 2-7).",
+    )
+
+    @model_validator(mode="after")
+    def _segments_contiguous(self) -> PresentationPass2aResult:
+        """Strict adjacency over slide numbers + Miller's rule.
+
+        * ``2 <= len(segments) <= 7`` (cognitive-chunking cap).
+        * ``segments[0].start_slide == 1``.
+        * each segment has ``end_slide >= start_slide``.
+        * ``segments[i+1].start_slide == segments[i].end_slide + 1``.
+
+        Unlike the audio result, an empty ``segments`` list is NOT
+        allowed — the presentation prompt commits to at least 2
+        segments, so an empty or single-segment payload is a
+        structural failure that should drive a retry.
+        """
+        count = len(self.segments)
+        if not (2 <= count <= 7):
+            raise ValueError(
+                f"presentation segments must number between 2 and 7 "
+                f"(Miller's rule); got {count}"
+            )
+
+        first = self.segments[0]
+        if first.start_slide != 1:
+            raise ValueError(
+                f"first presentation segment must start at slide 1; got "
+                f"start_slide={first.start_slide}"
+            )
+
+        for seg in self.segments:
+            if seg.end_slide < seg.start_slide:
+                raise ValueError(
+                    f"presentation segment must have end_slide >= "
+                    f"start_slide; got start={seg.start_slide}, "
+                    f"end={seg.end_slide}"
+                )
+
+        for prev, nxt in zip(self.segments, self.segments[1:], strict=False):
+            if nxt.start_slide != prev.end_slide + 1:
+                raise ValueError(
+                    f"presentation segments must be contiguous; "
+                    f"prev.end_slide={prev.end_slide} + 1 != "
+                    f"nxt.start_slide={nxt.start_slide}"
+                )
+
+        return self
+
+    @model_validator(mode="after")
+    def _last_segment_covers_n_slides(
+        self, info: ValidationInfo
+    ) -> PresentationPass2aResult:
+        """Trailing-slide coverage gated on Pydantic context.
+
+        When parsed via
+        ``PresentationPass2aResult.model_validate_json(content,
+        context={"n_slides": N})``, asserts ``segments[-1].end_slide
+        == N``. Skipped silently when context is ``None`` or
+        ``n_slides`` is absent.
+        """
+        if not self.segments:
+            return self
+        context = info.context
+        if context is None:
+            return self
+        expected = context.get("n_slides")
+        if expected is None:
+            return self
+        actual_last = self.segments[-1].end_slide
+        if actual_last != expected:
+            raise ValueError(
+                f"presentation segments do not cover all slides: "
+                f"last.end_slide={actual_last} != n_slides={expected}"
+            )
+        return self

@@ -9,11 +9,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from structlog.testing import capture_logs
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
+from course_supporter.api.routes.documents import (
+    _enforce_presentation_slide_cap,
+    _presentation_slide_count,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.jobs.cancellation_service import JobCancellationService
+from course_supporter.models.source import SourceType
+from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -29,6 +36,35 @@ STUB_TENANT = TenantContext(
 )
 
 ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
+RUN_STAGE1 = "course_supporter.api.routes.documents.run_stage1"
+GET_MAX_SIZE = "course_supporter.api.routes.documents.get_max_size_for_extension"
+
+
+def _make_pdf_bytes(n_pages: int) -> bytes:
+    """Synthesize a tiny valid PDF with ``n_pages`` blank pages (in-test)."""
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(n_pages):
+        doc.new_page()
+    data: bytes = doc.tobytes()
+    doc.close()
+    return data
+
+
+def _make_pptx_bytes(n_slides: int) -> bytes:
+    """Synthesize a tiny valid PPTX with ``n_slides`` blank slides (in-test)."""
+    import io
+
+    from pptx import Presentation
+
+    prs = Presentation()
+    blank = prs.slide_layouts[6]
+    for _ in range(n_slides):
+        prs.slides.add_slide(blank)
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
 
 
 def _mock_node(
@@ -333,6 +369,260 @@ class TestCreateDocument:
             )
         assert resp.status_code == 201
         assert resp.json()["filename"] == "notes.md"
+
+
+class TestPresentationSlideCountInspection:
+    """KD-2.3-M -- _presentation_slide_count helper (HTTP-side, <=200 ms)."""
+
+    def test_pdf_counts_pages(self) -> None:
+        assert _presentation_slide_count("pdf", _make_pdf_bytes(7)) == 7
+
+    def test_pptx_counts_slides(self) -> None:
+        assert _presentation_slide_count("pptx", _make_pptx_bytes(4)) == 4
+
+    def test_ppt_skips_returns_none(self) -> None:
+        # Legacy binary -- python-pptx cannot read it; defer to worker (CA-3).
+        assert _presentation_slide_count("ppt", b"\xd0\xcf\x11\xe0legacy") is None
+
+    def test_non_presentation_extension_returns_none(self) -> None:
+        assert _presentation_slide_count("md", b"# hello") is None
+
+    def test_skip_on_corrupt_pdf(self) -> None:
+        # Magic-valid (%PDF) but structurally broken -> fitz.FileDataError ->
+        # skip with a warning (defer to worker); no exception escapes (CA-4).
+        with capture_logs() as logs:
+            result = _presentation_slide_count("pdf", b"%PDF-1.4 dummy")
+        assert result is None
+        assert any(e["event"] == "slide_count_inspect_failed" for e in logs)
+
+    def test_skip_on_corrupt_pptx(self) -> None:
+        # Non-ZIP garbage -> zipfile.BadZipFile -> skip with a warning (CA-4).
+        with capture_logs() as logs:
+            result = _presentation_slide_count("pptx", b"not a pptx at all")
+        assert result is None
+        assert any(e["event"] == "slide_count_inspect_failed" for e in logs)
+
+
+class TestEnforcePresentationSlideCap:
+    """Guard semantics for _enforce_presentation_slide_cap (KD-2.3-M + B guard)."""
+
+    def test_raises_over_limit_for_presentation(self) -> None:
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            _enforce_presentation_slide_cap(
+                SourceType.PRESENTATION, "pdf", _make_pdf_bytes(101)
+            )
+        assert exc_info.value.category == ErrorCategory.SLIDE_COUNT_LIMIT
+
+    def test_passes_at_limit(self) -> None:
+        # Exactly 100 is allowed; only > 100 rejects.
+        _enforce_presentation_slide_cap(
+            SourceType.PRESENTATION, "pdf", _make_pdf_bytes(100)
+        )
+
+    def test_noop_for_non_presentation_source_type(self) -> None:
+        # B guard: a long text-source PDF is NOT a presentation -> no check.
+        _enforce_presentation_slide_cap(SourceType.TEXT, "pdf", _make_pdf_bytes(150))
+
+    def test_noop_for_ppt(self) -> None:
+        _enforce_presentation_slide_cap(
+            SourceType.PRESENTATION, "ppt", b"\xd0\xcf\x11\xe0"
+        )
+
+
+class TestPresentationSlideCountRoute:
+    """KD-2.3-M -- slide-count gate wired into the upload endpoints (gate 23).
+
+    FORBIDDEN_TYPE prong: ``test_forbidden_type_for_non_whitelisted_extension``
+    below. NOTE the sealed gate-23 example uses ``.docx``, but docx IS in
+    AUTHORED_POLICY.allowed_extensions (accepted, 201) -- so a genuinely
+    non-whitelisted extension exercises the FORBIDDEN_TYPE wiring instead.
+    """
+
+    async def test_pdf_over_limit_returns_slide_count_limit(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "deck.pdf",
+                        io.BytesIO(_make_pdf_bytes(101)),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["code"] == "SECURITY_REJECTED"
+        assert detail["category"] == "slide_count_limit"
+
+    async def test_pdf_under_limit_passes(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = _mock_entry(node_id=node_id, source_type="presentation")
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "deck.pdf",
+                        io.BytesIO(_make_pdf_bytes(5)),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+
+    async def test_ppt_skips_slide_count(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # .ppt skips the HTTP gate (CA-3 -> worker enforces): 201 even though
+        # the file is a presentation, because python-pptx cannot read .ppt.
+        entry = _mock_entry(node_id=node_id, source_type="presentation")
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "legacy.ppt",
+                        io.BytesIO(b"\xd0\xcf\x11\xe0legacy-binary"),
+                        "application/vnd.ms-powerpoint",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+
+    async def test_text_source_pdf_skips_gate(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # B guard: a 150-page PDF uploaded as source_type=text is NOT subject
+        # to the presentation slide-count gate.
+        entry = _mock_entry(node_id=node_id, source_type="text")
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "text"},
+                files={
+                    "file": (
+                        "notes.pdf",
+                        io.BytesIO(_make_pdf_bytes(150)),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+
+    async def test_oversize_presentation_returns_size_limit(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # SIZE_LIMIT prong of gate 23. The 50 MB literal is unit-tested in
+        # test_policies; here the resolver is patched to a tiny cap to
+        # exercise the route wiring without a 50 MB fixture (ratified strategy).
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(GET_MAX_SIZE, return_value=5),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "deck.pdf",
+                        io.BytesIO(_make_pdf_bytes(2)),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["category"] == "size_limit"
+
+    async def test_forbidden_type_for_non_whitelisted_extension(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # Gate 23 FORBIDDEN_TYPE prong via a genuinely non-whitelisted ext
+        # (real run_stage1 rejects on the extension whitelist).
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents",
+            data={"source_type": "presentation"},
+            files={
+                "file": (
+                    "payload.exe",
+                    io.BytesIO(b"binary"),
+                    "application/octet-stream",
+                )
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["category"] == "forbidden_type"
+
+    async def test_confirm_upload_pptx_over_limit(
+        self, client: AsyncClient, node_id: uuid.UUID, mock_s3: AsyncMock
+    ) -> None:
+        # D: the presigned confirm path enforces the slide-count gate too.
+        pptx_bytes = _make_pptx_bytes(110)
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/deck.pptx"
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": len(pptx_bytes)})
+        mock_s3.get_object = AsyncMock(return_value=pptx_bytes)
+        mock_s3.get_object_url = MagicMock(return_value="http://localhost:9000/x")
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={"key": key, "source_type": "presentation"},
+            )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["category"] == "slide_count_limit"
 
 
 class TestCreateDocumentOpenAPISpec:

@@ -423,12 +423,14 @@ class TestStructuredLogging:
 
 
 class TestErrorCategoryPublicContract:
-    def test_ten_categories_present(self) -> None:
+    def test_eleven_categories_present(self) -> None:
         # 7 categories Phase 0.6 baseline + 2 Phase 2.1 C2 additions:
         # ARCHIVE_BOMB + SYMLINK_VIOLATION per KD-2.1-I (2-set ratify
         # 2026-05-11) — legacy safety/exceptions.py raisers migrated
         # to canonical ErrorCategory. + 1 Phase 2.1 C6 addition:
         # STAGE2_REJECTED per KD-2.1-P (LLM verdict ``is_safe=False``).
+        # + 1 Phase 2.3 #6 addition: SLIDE_COUNT_LIMIT per KD-2.3-M
+        # (presentation slide-count cap; reuses SecurityRejectedError).
         assert {c.value for c in ErrorCategory} == {
             "size_limit",
             "forbidden_type",
@@ -440,6 +442,7 @@ class TestErrorCategoryPublicContract:
             "archive_bomb",
             "symlink_violation",
             "stage2_rejected",
+            "slide_count_limit",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))

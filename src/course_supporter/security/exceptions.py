@@ -80,6 +80,13 @@ class ErrorCategory(StrEnum):
       authored materials). Superset of :data:`PROMPT_INJECTION`:
       that value covers regex-detected attacks; this one covers any
       LLM verdict ``is_safe=False`` regardless of violation category.
+    * ``SLIDE_COUNT_LIMIT`` -- a presentation upload exceeds the
+      per-deck slide cap (100), checked HTTP-side via PyMuPDF (PDF)
+      or python-pptx (PPTX) as fast pre-validation. Added Phase 2.3
+      sub-area #6 per KD-2.3-M; reuses :class:`SecurityRejectedError`
+      (no new exception class). ``.ppt`` is skipped HTTP-side
+      (python-pptx reads only OOXML ``.pptx``) and enforced
+      worker-side after LibreOffice convert in Phase 2.3 sub-area #7.
     """
 
     SIZE_LIMIT = "size_limit"
@@ -92,6 +99,7 @@ class ErrorCategory(StrEnum):
     ARCHIVE_BOMB = "archive_bomb"
     SYMLINK_VIOLATION = "symlink_violation"
     STAGE2_REJECTED = "stage2_rejected"
+    SLIDE_COUNT_LIMIT = "slide_count_limit"
 
 
 class SecurityRejectedError(Exception):

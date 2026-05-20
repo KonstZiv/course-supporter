@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Annotated
+from typing import Annotated, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -74,6 +74,86 @@ SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
 ]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
+
+# KD-2.3-I / KD-2.3-M — HTTP-side slide-count cap for presentation uploads.
+# Fast pre-validation (<200 ms) keeps the heavy LibreOffice convert in the
+# ARQ worker (sub-area #4 / #7), not the request handler.
+_MAX_PRESENTATION_SLIDES: Final[int] = 100
+
+
+def _presentation_slide_count(ext: str, content: bytes) -> int | None:
+    """Count slides/pages of a presentation upload for the slide-count gate.
+
+    Returns the count for the formats inspectable in-process well under the
+    KD-2.3-I 200 ms budget:
+
+    * ``pdf`` -- PyMuPDF page count (mirrors the worker
+      ``_extract_pdf_pages`` open pattern).
+    * ``pptx`` -- python-pptx slide count.
+
+    Returns ``None`` (skip the gate, defer to the worker) for:
+
+    * ``ppt`` -- legacy binary PowerPoint; python-pptx reads only OOXML
+      ``.pptx`` and PyMuPDF cannot open ``.ppt``.
+    * a magic-valid but structurally corrupt ``pdf`` / ``pptx`` payload --
+      it cannot be counted HTTP-side, so the gate is skipped and the worker
+      enforces authoritatively after the LibreOffice convert (CA-3) -- the
+      same defer-to-worker semantic as the ``.ppt`` skip.
+    """
+    ext_lower = ext.lower()
+    if ext_lower not in ("pdf", "pptx"):
+        # ``ppt`` (legacy binary) and any non-presentation extension: skip.
+        return None
+
+    import io
+    import zipfile
+
+    import fitz
+    from pptx import Presentation
+    from pptx.exc import PackageNotFoundError
+
+    try:
+        if ext_lower == "pdf":
+            with fitz.open(stream=content, filetype="pdf") as doc:
+                return int(doc.page_count)
+        return len(Presentation(io.BytesIO(content)).slides)
+    except (fitz.FileDataError, PackageNotFoundError, zipfile.BadZipFile) as exc:
+        # Magic-valid but structurally corrupt payload: skip the gate and let
+        # the worker enforce post-LibreOffice (CA-3). Narrow catch only --
+        # broad ``except`` would mask real bugs (Rule #14 spirit). ``KeyError``
+        # (a valid ZIP that is not a PPTX package) is deliberately NOT caught:
+        # run_stage1's libmagic MIME check rejects a non-PPTX ZIP as a type
+        # mismatch before this runs in production, and KeyError is too generic
+        # to swallow safely.
+        logger.warning(
+            "slide_count_inspect_failed",
+            extension=ext_lower,
+            byte_size=len(content),
+            exception_type=type(exc).__name__,
+        )
+        return None
+
+
+def _enforce_presentation_slide_cap(
+    source_type: SourceType, ext: str, content: bytes
+) -> None:
+    """Raise on a presentation upload that exceeds the slide cap.
+
+    No-op unless ``source_type`` is ``PRESENTATION`` and the format is
+    HTTP-inspectable and over :data:`_MAX_PRESENTATION_SLIDES`. Reuses
+    :class:`SecurityRejectedError` (KD-2.3-M — no new exception class); the
+    caller's existing ``except SecurityRejectedError`` block maps it to the
+    uniform HTTP 400 ``SECURITY_REJECTED`` shape.
+    """
+    if source_type != SourceType.PRESENTATION:
+        return
+    count = _presentation_slide_count(ext, content)
+    if count is not None and count > _MAX_PRESENTATION_SLIDES:
+        raise SecurityRejectedError(
+            ErrorCategory.SLIDE_COUNT_LIMIT,
+            f"slide count {count} exceeds presentation limit "
+            f"{_MAX_PRESENTATION_SLIDES}",
+        )
 
 
 async def _require_node_for_tenant(
@@ -222,6 +302,7 @@ async def create_document(
                 content=upload_content,
                 context="authored",
             )
+            _enforce_presentation_slide_cap(source_type, upload_ext, upload_content)
         except SecurityRejectedError as exc:
             raise HTTPException(
                 status_code=400,
@@ -432,6 +513,7 @@ async def confirm_upload(
             content=body_bytes,
             context="authored",
         )
+        _enforce_presentation_slide_cap(body.source_type, upload_ext, body_bytes)
     except SecurityRejectedError as exc:
         raise HTTPException(
             status_code=400,

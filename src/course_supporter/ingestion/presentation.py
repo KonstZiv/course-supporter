@@ -78,6 +78,14 @@ logger = structlog.get_logger()
 SUPPORTED_EXTENSIONS = frozenset({".pdf", ".pptx", ".ppt"})
 _PPTX_EXTENSIONS = frozenset({".pptx", ".ppt"})
 
+# Worker-side slide-count cap (CA-3). Enforced post-LibreOffice convert in
+# _extract_pdf_pages -- the authoritative gate for ``.ppt`` (which the
+# HTTP-side check in api/routes/documents.py cannot inspect, as python-pptx
+# reads only OOXML). The HTTP gate keeps its own independent copy of this
+# limit (documents.py:_MAX_PRESENTATION_SLIDES) -- two independent
+# enforcement layers, deliberately not consolidated.
+_MAX_PRESENTATION_SLIDES = 100
+
 _PASS_1_STAGE_NAME = "presentation_pass_1_vision"  # noqa: S105
 _PASS_2A_STAGE_NAME = "presentation_pass_2a_mapping"  # noqa: S105
 
@@ -307,6 +315,13 @@ class PresentationProcessor(MaterialProcessor):
         slides: list[SlideRaw] = []
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         try:
+            if doc.page_count > _MAX_PRESENTATION_SLIDES:
+                # CA-3 fail-fast (KD-2.3-F): reject before the text+render
+                # loop so an over-limit deck wastes no PyMuPDF rendering.
+                raise ProcessingError(
+                    f"PRESENTATION_SLIDE_LIMIT: {doc.page_count} slides "
+                    f"exceeds limit {_MAX_PRESENTATION_SLIDES}"
+                )
             for i in range(doc.page_count):
                 page = doc.load_page(i)
                 raw_text = page.get_text("text").strip()

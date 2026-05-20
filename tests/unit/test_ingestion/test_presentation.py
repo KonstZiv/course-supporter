@@ -350,6 +350,34 @@ class TestProcessRaw:
 # ── _normalize_pptx_to_pdf error paths ──────────────────────────────
 
 
+class TestSlideCountLimit:
+    """CA-3 — worker-side slide-count cap in _extract_pdf_pages (KD-2.3-F)."""
+
+    @staticmethod
+    def _write_pdf(path: Path, n_pages: int) -> Path:
+        import fitz
+
+        doc = fitz.open()
+        for _ in range(n_pages):
+            doc.new_page()
+        doc.save(str(path))
+        doc.close()
+        return path
+
+    async def test_at_limit_passes(self, tmp_path: Path) -> None:
+        # Exactly 100 slides is allowed; only > 100 rejects (boundary).
+        pdf = self._write_pdf(tmp_path / "deck100.pdf", 100)
+        proc = PresentationProcessor()
+        doc = await proc.process_raw(_make_source(pdf))
+        assert doc.metadata["slide_count"] == 100
+
+    async def test_over_limit_raises(self, tmp_path: Path) -> None:
+        pdf = self._write_pdf(tmp_path / "deck101.pdf", 101)
+        proc = PresentationProcessor()
+        with pytest.raises(ProcessingError, match="PRESENTATION_SLIDE_LIMIT"):
+            await proc.process_raw(_make_source(pdf))
+
+
 class TestNormalizeErrors:
     async def test_nonzero_exit_raises_normalize_failed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

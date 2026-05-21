@@ -45,3 +45,19 @@ stages:
         model: deepseek-v4-flash
       - provider: gemini
         model: gemini-2.5-flash
+
+  # Authored-context Stage 2 (Phase 2.3 hotfix). Same cheap binary
+  # classifier ladder as ``safety_check``; routed to the authored
+  # prompt via ``run_stage2_safety_check(content_kind="authored")``.
+  # Authored materials are trusted more than homework: advertising,
+  # branding, contact info, and external links are NOT violations;
+  # off_topic is high-bar. Injection / policy / suspicious preserved.
+  safety_check_authored:
+    prompt_ref: "prompts/safety_check_authored/v1.md"
+    ladder:
+      - provider: mistral
+        model: mistral-small-latest
+      - provider: deepseek
+        model: deepseek-v4-flash
+      - provider: gemini
+        model: gemini-2.5-flash

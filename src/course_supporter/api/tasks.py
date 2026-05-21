@@ -242,6 +242,7 @@ async def arq_ingest_material(
                 submission_text,
                 router=stage_router,
                 course_context=course_context,
+                content_kind="authored",
             )
             await entry_repo.store_safety_result(
                 mid, safety_result=safety_result.model_dump(mode="json")

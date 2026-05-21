@@ -51,7 +51,7 @@ parses; downstream business policy lives elsewhere.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from pydantic import ValidationError
@@ -79,6 +79,7 @@ async def run_stage2_safety_check(
     *,
     router: StageRouter,
     course_context: CourseContext | None = None,
+    content_kind: Literal["homework", "authored"] = "homework",
 ) -> SafetyResult:
     """Execute the ``safety_check`` stage and parse the verdict.
 
@@ -113,6 +114,12 @@ async def run_stage2_safety_check(
             (migrated from removed ``SafetyChecker`` to this
             canonical orchestrator) without forcing the same shape
             onto every Stage 2 caller.
+        content_kind: Selects the Stage 2 prompt. ``"homework"``
+            (default) uses ``safety_check``; ``"authored"`` uses
+            ``safety_check_authored`` — a higher-trust prompt where
+            advertising / branding / external links are NOT violations
+            and ``off_topic`` is high-bar (Phase 2.3 hotfix). Verdict
+            shape and parsing are identical for both.
 
     Returns:
         Parsed :class:`SafetyResult` (typed Pydantic model). The
@@ -150,8 +157,15 @@ async def run_stage2_safety_check(
         "outline_summary": (course_context.outline_summary if course_context else ""),
     }
 
+    # Authored materials route to a higher-trust prompt (advertising /
+    # branding / external links are NOT violations; off_topic high-bar);
+    # homework keeps the default classifier. Verdict shape + parsing are
+    # identical across both — only the prompt body differs (Phase 2.3 hotfix).
+    stage_name = (
+        "safety_check_authored" if content_kind == "authored" else "safety_check"
+    )
     result = await router.execute_for_stage(
-        "safety_check",
+        stage_name,
         **render_context,
     )
 

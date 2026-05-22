@@ -10,6 +10,7 @@ RUN_SMOKE spike (C6), not exercised here.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +77,9 @@ def _valid_content(render_context: dict[str, Any]) -> str:
 class _FakeStageRouter:
     """StageRouter double: records calls, echoes a valid chunk response."""
 
-    def __init__(self, content_fn: Any = _valid_content) -> None:
+    def __init__(
+        self, content_fn: Callable[[dict[str, Any]], str] = _valid_content
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self._content_fn = content_fn
 

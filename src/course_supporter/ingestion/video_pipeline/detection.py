@@ -203,7 +203,10 @@ def _compute_ssim(gray1: Any, gray2: Any, *, win_size: int = 11) -> float:
     sigma2_sq = cv2.GaussianBlur(g2 * g2, (win_size, win_size), 1.5) - mu2 * mu2
     sigma12 = cv2.GaussianBlur(g1 * g2, (win_size, win_size), 1.5) - mu1 * mu2
     num = (2 * mu1 * mu2 + c1) * (2 * sigma12 + c2)
-    den = (mu1 * mu1 + mu2 * mu2 + c1) * (sigma1_sq + sigma2_sq + c2)
+    # c1/c2 are the SSIM stability constants — they already floor den at
+    # ~c1*c2 (~380), so it is never near zero. The epsilon is purely
+    # belt-and-suspenders against float-variance pathology / NaN.
+    den = (mu1 * mu1 + mu2 * mu2 + c1) * (sigma1_sq + sigma2_sq + c2) + 1e-12
     return float(np.mean(num / den))
 
 

@@ -53,7 +53,9 @@ _DOWNLOAD_TIMEOUT_SEC = 600.0
 _PROBE_TIMEOUT_SEC = 30.0
 _EXTRACT_TIMEOUT_SEC = 600.0
 
-_ERR_TAIL = 500  # bytes of stderr surfaced in error messages
+# Bytes of stderr surfaced in error messages — the *tail*, since ffmpeg /
+# yt-dlp print version/config banners first and the actual error last.
+_ERR_TAIL = 1024
 
 
 async def _run(cmd: list[str], *, timeout_sec: float) -> tuple[int, bytes, bytes]:
@@ -116,7 +118,7 @@ async def download_video(url: str, dest_dir: Path) -> Path:
     if rc != 0:
         raise ProcessingError(
             f"yt-dlp download failed (code {rc}) for {url}: "
-            f"{err.decode(errors='replace')[:_ERR_TAIL]}"
+            f"{err.decode(errors='replace')[-_ERR_TAIL:]}"
         )
     # Filesystem inspection off the event loop (ASYNC240).
     return await asyncio.to_thread(_resolve_download, dest_dir, url)
@@ -160,7 +162,7 @@ async def probe_metadata(path: Path) -> VideoFileMetadata:
     if rc != 0:
         raise UnsupportedFormatError(
             f"ffprobe failed (code {rc}) on {path.name}: "
-            f"{err.decode(errors='replace')[:_ERR_TAIL]}"
+            f"{err.decode(errors='replace')[-_ERR_TAIL:]}"
         )
     try:
         data = json.loads(out)
@@ -237,7 +239,7 @@ async def extract_audio(video_path: Path, dest_dir: Path) -> Path:
     if rc != 0:
         raise ProcessingError(
             f"ffmpeg audio extraction failed (code {rc}) on "
-            f"{video_path.name}: {err.decode(errors='replace')[:_ERR_TAIL]}"
+            f"{video_path.name}: {err.decode(errors='replace')[-_ERR_TAIL:]}"
         )
     if not await asyncio.to_thread(audio_path.exists):
         raise ProcessingError(f"ffmpeg produced no audio output for {video_path.name}.")

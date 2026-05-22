@@ -90,7 +90,11 @@ class TestCreateProcessors:
         mock_redis = AsyncMock()
 
         with_deps = create_processors(heavy, stt_router=mock_router, redis=mock_redis)
-        assert isinstance(with_deps[SourceType.VIDEO], VideoProcessor)
+        video = with_deps[SourceType.VIDEO]
+        assert isinstance(video, VideoProcessor)
+        # Deps are actually wired in (symmetric with the AUDIO assertions).
+        assert video._stt_router is mock_router
+        assert video._redis is mock_redis
 
         without_redis = create_processors(heavy, stt_router=mock_router)
         assert SourceType.VIDEO not in without_redis

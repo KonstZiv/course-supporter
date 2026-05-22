@@ -105,6 +105,12 @@ class SamplingParams:
 _DEFAULT_PARAMS = SamplingParams()
 _DECODE_CACHE_SIZE = 8  # bounds memory: ~prev+cur working set, sequential access
 
+# Named constants for vd-ported magic numbers (behaviour unchanged).
+_PIP_MASK_GRAY = 128  # neutral grey written over a PiP region before metrics
+_FLOW_MIN_MAGNITUDE_PX = 1.0  # per-pixel flow magnitude that counts as motion
+_FLOW_MIN_SIGNIFICANT_PX = 100  # min moving pixels for a meaningful flow reading
+_PIP_MIN_ZONE_MOTION = 1.0  # min mean zone motion to treat a zone as a PiP candidate
+
 
 class _Rect(NamedTuple):
     """Pixel rectangle (x1, y1, x2, y2)."""
@@ -149,7 +155,7 @@ class _DecodeCache:
         img = cv2.imread(str(path))
         if img is not None and self._mask is not None:
             m = self._mask
-            img[m.y1 : m.y2, m.x1 : m.x2] = 128
+            img[m.y1 : m.y2, m.x1 : m.x2] = _PIP_MASK_GRAY
         self._bgr[path] = img
         if len(self._bgr) > self._maxsize:
             self._bgr.popitem(last=False)
@@ -227,8 +233,8 @@ def _flow_coherence(gray1: Any, gray2: Any, *, downscale_max: int) -> float:
     no_flow: Any = None  # cv2 stub rejects a bare None literal for `flow`
     flow = cv2.calcOpticalFlowFarneback(g1, g2, no_flow, 0.5, 3, 15, 3, 5, 1.2, 0)
     mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-    significant = mag > 1.0
-    if int(np.count_nonzero(significant)) < 100:
+    significant = mag > _FLOW_MIN_MAGNITUDE_PX
+    if int(np.count_nonzero(significant)) < _FLOW_MIN_SIGNIFICANT_PX:
         return 0.0
     sig_angles = ang[significant]
     mean_angle = float(
@@ -335,7 +341,7 @@ def _detect_pip(
     second_motion = ranked[1][1] if len(ranked) > 1 else 0.0
     confidence = (best_motion - second_motion) / (best_motion + 1e-6)
 
-    if confidence < confidence_threshold or best_motion < 1.0:
+    if confidence < confidence_threshold or best_motion < _PIP_MIN_ZONE_MOTION:
         return None
     r = zones[best_name]
     return PiPMask(

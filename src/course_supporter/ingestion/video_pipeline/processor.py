@@ -117,8 +117,12 @@ class VideoProcessor(MaterialProcessor):
                 tmp=tmp,
             )
             await self._store_stt_result(job_id, stt)
-            scenes = await steps.step_3_detection(stt)
-            frame_descriptions = await steps.step_4_pass1_vision(scenes)
+            detection_result = await steps.step_3_detection(
+                video_path, file_metadata, tmp=tmp
+            )
+            frame_descriptions = await steps.step_4_pass1_vision(
+                detection_result.scenes
+            )
             doc = self._assemble_source_document(source, stt, frame_descriptions)
 
         if stt.detected_language:

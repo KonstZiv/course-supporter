@@ -1,11 +1,12 @@
 """Unit tests for the video_pipeline VideoProcessor (Phase 2.4).
 
-Krok 1-2 are real as of task 2.4.2 (ingestion + STT); the external
-toolchain (``media.download_video`` / ``probe_metadata`` /
-``extract_audio``) and the ``stt_router`` are mocked here so the unit
-layer needs neither ffmpeg nor a network. Krok 3-7 remain stubs. The
-real ffmpeg/ffprobe edge runs in the ``requires_ffmpeg`` integration
-test; the full orchestrator topology in ``tests/integration``.
+Krok 1-3 are real as of task 2.4.3 (ingestion + STT + detection); the
+external toolchain (``media.*``, the ``stt_router``, and Krok 3's
+``detection.detect``) is mocked here so the unit layer needs neither
+ffmpeg nor cv2 work nor a network. Krok 4-7 remain stubs. The real
+ffmpeg/cv2 detection edge runs in ``test_video_detection.py``
+(``requires_ffmpeg``); the full orchestrator topology in
+``tests/integration``.
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ from course_supporter.ingestion.schemas import (
 )
 from course_supporter.ingestion.video_pipeline import VideoProcessor, steps
 from course_supporter.ingestion.video_pipeline.schemas import (
+    ChangeClass,
+    DetectionResult,
+    SampledFrame,
+    Scene,
     SttResult,
     VideoFileMetadata,
 )
@@ -35,6 +40,7 @@ _PKG = "course_supporter.ingestion.video_pipeline"
 _DOWNLOAD = f"{_PKG}.media.download_video"
 _PROBE = f"{_PKG}.media.probe_metadata"
 _EXTRACT = f"{_PKG}.media.extract_audio"
+_STEP3 = f"{_PKG}.steps.step_3_detection"
 _STEP4 = f"{_PKG}.steps.step_4_pass1_vision"
 _GET_JOB_ID = f"{_PKG}.processor.get_current_job_id"
 
@@ -44,6 +50,27 @@ _JOB_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 def _meta(duration_ms: int = 60_000) -> VideoFileMetadata:
     return VideoFileMetadata(
         duration_ms=duration_ms, codec="h264", resolution="1280x720"
+    )
+
+
+def _detection_result() -> DetectionResult:
+    """One-scene, one-frame detection stand-in for process_raw tests."""
+    return DetectionResult(
+        scenes=[
+            Scene(
+                scene_id=0,
+                start_ms=0,
+                end_ms=1000,
+                frames=[
+                    SampledFrame(
+                        frame_position_ms=0,
+                        change_class=ChangeClass.FIRST,
+                        frame_path=Path("/tmp/x/frames/frame_000001.jpg"),
+                    )
+                ],
+            )
+        ],
+        pip_mask=None,
     )
 
 
@@ -182,6 +209,7 @@ class TestProcessRawPipeline:
             patch(_GET_JOB_ID, return_value=_JOB_ID),
             patch(_PROBE, new=AsyncMock(return_value=meta)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
+            patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
         ):
             doc = await proc.process_raw(_mock_authored_document())
 
@@ -205,6 +233,7 @@ class TestProcessRawPipeline:
             patch(_GET_JOB_ID, return_value=_JOB_ID),
             patch(_PROBE, new=AsyncMock(return_value=meta)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
+            patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
         ):
             await proc.process_raw(_mock_authored_document())
 
@@ -275,6 +304,7 @@ class TestFailureInjectionSeam:
             patch(_GET_JOB_ID, return_value=_JOB_ID),
             patch(_PROBE, new=AsyncMock(return_value=meta)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
+            patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
             patch(_STEP4, new=AsyncMock(side_effect=ProcessingError("vision boom"))),
             pytest.raises(ProcessingError, match="vision boom"),
         ):

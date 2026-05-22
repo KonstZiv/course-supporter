@@ -52,6 +52,8 @@ _MAX_VIDEO_SIZE_BYTES: int = (
 _DOWNLOAD_TIMEOUT_SEC = 600.0
 _PROBE_TIMEOUT_SEC = 30.0
 _EXTRACT_TIMEOUT_SEC = 600.0
+_FRAME_EXTRACT_TIMEOUT_SEC = 900.0
+_SINGLE_FRAME_TIMEOUT_SEC = 30.0
 
 # Bytes of stderr surfaced in error messages — the *tail*, since ffmpeg /
 # yt-dlp print version/config banners first and the actual error last.
@@ -244,3 +246,83 @@ async def extract_audio(video_path: Path, dest_dir: Path) -> Path:
     if not await asyncio.to_thread(audio_path.exists):
         raise ProcessingError(f"ffmpeg produced no audio output for {video_path.name}.")
     return audio_path
+
+
+async def extract_frames_fps(
+    video_path: Path,
+    fps: float,
+    dest_dir: Path,
+) -> list[Path]:
+    """Extract frames at a fixed ``fps`` into ``dest_dir`` as JPEGs (Krok 3).
+
+    Returns the sorted JPEG paths. ffmpeg failure or zero frames →
+    ``ProcessingError`` (operational; an undecodable stream yields no
+    frames). Filesystem inspection runs off the event loop (ASYNC240).
+    """
+    await asyncio.to_thread(dest_dir.mkdir, parents=True, exist_ok=True)
+    pattern = str(dest_dir / "frame_%06d.jpg")
+    rc, _out, err = await _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            f"fps={fps}",
+            "-q:v",
+            "2",
+            pattern,
+        ],
+        timeout_sec=_FRAME_EXTRACT_TIMEOUT_SEC,
+    )
+    if rc != 0:
+        raise ProcessingError(
+            f"ffmpeg frame extraction failed (code {rc}) on "
+            f"{video_path.name}: {err.decode(errors='replace')[-_ERR_TAIL:]}"
+        )
+    frames = await asyncio.to_thread(_sorted_glob, dest_dir, "frame_*.jpg")
+    if not frames:
+        raise ProcessingError(
+            f"ffmpeg extracted no frames from {video_path.name} "
+            f"(empty or undecodable stream)."
+        )
+    return frames
+
+
+async def extract_single_frame(
+    video_path: Path,
+    timestamp_sec: float,
+    out_path: Path,
+) -> bool:
+    """Extract one frame at ``timestamp_sec`` (Krok 3 gap fill).
+
+    Best-effort: returns ``False`` (rather than raising) on ffmpeg
+    failure or timeout, so a single missed gap-fill frame does not abort
+    the whole pipeline (mirrors the reference behaviour).
+    """
+    await asyncio.to_thread(out_path.parent.mkdir, parents=True, exist_ok=True)
+    try:
+        rc, _out, _err = await _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{timestamp_sec:.2f}",
+                "-i",
+                str(video_path),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(out_path),
+            ],
+            timeout_sec=_SINGLE_FRAME_TIMEOUT_SEC,
+        )
+    except ProcessingError:
+        return False
+    return rc == 0 and await asyncio.to_thread(out_path.exists)
+
+
+def _sorted_glob(directory: Path, pattern: str) -> list[Path]:
+    """Sorted glob (sync helper run off the event loop)."""
+    return sorted(p for p in directory.glob(pattern) if p.is_file())

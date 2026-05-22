@@ -78,8 +78,8 @@ class VideoProcessor(MaterialProcessor):
         frame_descriptions = await steps.step_4_pass1_vision(scenes)
         return self._assemble_source_document(source, stt, frame_descriptions)
 
+    @staticmethod
     def _assemble_source_document(
-        self,
         source: AuthoredDocument,
         stt: SttResult,
         frame_descriptions: list[FrameDescription],

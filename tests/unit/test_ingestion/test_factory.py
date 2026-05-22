@@ -14,7 +14,7 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
-from course_supporter.ingestion.video import VideoProcessor, WhisperVideoProcessor
+from course_supporter.ingestion.video_pipeline import VideoProcessor
 from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 from course_supporter.stt.router import STTRouter
@@ -75,24 +75,22 @@ class TestCreateProcessors:
             SourceType.WEB,
         }
 
-    def test_video_processor_with_stt_router(self) -> None:
-        """VIDEO maps to VideoProcessor when stt_router is provided."""
+    def test_video_maps_to_skeleton_processor(self) -> None:
+        """VIDEO maps to the new video_pipeline skeleton VideoProcessor.
+
+        Phase 2.4 task 2.4.1 rewired VIDEO from the legacy
+        ``ingestion.video`` processors (VideoProcessor / WhisperVideoProcessor)
+        to the ``ingestion.video_pipeline`` skeleton, which takes no
+        constructor deps and is independent of ``stt_router`` presence.
+        """
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
-        processors = create_processors(heavy, stt_router=mock_router)
 
-        video = processors[SourceType.VIDEO]
-        assert isinstance(video, VideoProcessor)
-        assert video._stt_router is mock_router
+        with_router = create_processors(heavy, stt_router=mock_router)
+        without_router = create_processors(heavy)
 
-    def test_video_processor_fallback_to_whisper(self) -> None:
-        """VIDEO maps to WhisperVideoProcessor when no stt_router."""
-        heavy = create_heavy_steps()
-        processors = create_processors(heavy)
-
-        video = processors[SourceType.VIDEO]
-        assert isinstance(video, WhisperVideoProcessor)
-        assert video._transcribe_func is heavy.transcribe
+        assert isinstance(with_router[SourceType.VIDEO], VideoProcessor)
+        assert isinstance(without_router[SourceType.VIDEO], VideoProcessor)
 
     def test_presentation_processor_type(self) -> None:
         """PRESENTATION maps to PresentationProcessor."""

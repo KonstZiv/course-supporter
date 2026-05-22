@@ -19,7 +19,7 @@ from course_supporter.ingestion.heavy_steps import (
 )
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
-from course_supporter.ingestion.video import VideoProcessor, WhisperVideoProcessor
+from course_supporter.ingestion.video_pipeline import VideoProcessor
 from course_supporter.ingestion.web import WebProcessor
 from course_supporter.models.source import SourceType
 
@@ -129,10 +129,13 @@ def create_processors(
 
     Args:
         heavy: Bundle of heavy step callables.
-        vd_pipeline: Optional VDPipeline for video visual analysis.
-        stt_router: Optional STTRouter for video and audio transcription.
-            When provided, VideoProcessor uses STTRouter instead of Whisper.
-            When None, falls back to WhisperVideoProcessor.
+        vd_pipeline: Optional VDPipeline (legacy ``vd/`` visual analysis).
+            Unused since Phase 2.4 task 2.4.1 — the new skeleton
+            VideoProcessor takes no deps; retained for the real Pass 1
+            vision wiring (task 2.4.4).
+        stt_router: Optional STTRouter for audio transcription (and, from
+            task 2.4.2, video STT). AudioProcessor uses it today; the
+            VIDEO skeleton does not yet consume it.
         redis: Optional ArqRedis client for the audio word-cache
             (KD-2.2-D). AudioProcessor is registered only when both
             ``stt_router`` and ``redis`` are non-None — both dependencies
@@ -145,19 +148,17 @@ def create_processors(
         guard above is unsatisfied; factory dispatch in ``api/tasks.py``
         raises ``KeyError`` for unwired source types.
     """
-    video_processor: MaterialProcessor
-    if stt_router is not None:
-        video_processor = VideoProcessor(
-            stt_router=stt_router,
-            vd_pipeline=vd_pipeline,
-        )
-    else:
-        video_processor = WhisperVideoProcessor(
-            transcribe_func=heavy.transcribe,
-        )
-
+    # Phase 2.4 task 2.4.1 — VIDEO routes to the new skeleton
+    # VideoProcessor (``ingestion.video_pipeline``). Its 7-step pipeline is
+    # stubbed (zero external calls); real edges land in tasks 2.4.2-2.4.7
+    # and the legacy ``ingestion.video`` processors are removed in 2.4.9.
+    # The skeleton takes no constructor deps — ``stt_router`` (real STT,
+    # task 2.4.2) and ``vd_pipeline`` (real Pass 1 vision, task 2.4.4) are
+    # retained on the factory for that future wiring; passing them into
+    # the skeleton would couple the new namespace to legacy ``vd/`` types
+    # (isolation per 2.4.1 acceptance #3).
     result: dict[SourceType, MaterialProcessor] = {
-        SourceType.VIDEO: video_processor,
+        SourceType.VIDEO: VideoProcessor(),
         SourceType.PRESENTATION: PresentationProcessor(),
         SourceType.TEXT: TextProcessor(),
         SourceType.WEB: WebProcessor(

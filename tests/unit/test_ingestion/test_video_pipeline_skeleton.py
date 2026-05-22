@@ -28,6 +28,7 @@ from course_supporter.ingestion.video_pipeline.schemas import (
 )
 from course_supporter.models.source import ChunkType, SourceDocument, SourceType
 from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.stt.router import STTRouter
 from course_supporter.stt.schemas import STTResult, STTWord
 
 _PKG = "course_supporter.ingestion.video_pipeline"
@@ -57,7 +58,7 @@ def _mock_authored_document(source_url: str = "/local/lecture.mp4") -> Mock:
 
 def _stt_router(words_sec: list[tuple[str, float, float]]) -> AsyncMock:
     """STTRouter whose ``transcribe`` returns the given word stream."""
-    router = AsyncMock()
+    router = AsyncMock(spec=STTRouter)
     router.transcribe = AsyncMock(
         return_value=STTResult(
             text=" ".join(t for t, _, _ in words_sec),
@@ -252,7 +253,7 @@ class TestErrorTaxonomy:
     async def test_stt_failure_propagates(self) -> None:
         """Operational: STT provider failure propagates out of process_raw."""
         meta = _meta()
-        router = AsyncMock()
+        router = AsyncMock(spec=STTRouter)
         router.transcribe = AsyncMock(side_effect=ProcessingError("scribe down"))
         proc = _make_processor(stt_router=router)
         with (

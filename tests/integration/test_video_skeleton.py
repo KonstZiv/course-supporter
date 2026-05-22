@@ -49,6 +49,7 @@ from course_supporter.storage.orm import (
     DocumentSegment,
     DocumentSummary,
 )
+from course_supporter.stt.router import STTRouter
 from course_supporter.stt.schemas import STTResult, STTWord
 
 pytestmark = pytest.mark.requires_db
@@ -105,7 +106,7 @@ def tiny_video(tmp_path: Path) -> Path:
 
 def _stt_router_with_words() -> AsyncMock:
     """STTRouter mock returning a two-word transcript (no ElevenLabs call)."""
-    router = AsyncMock()
+    router = AsyncMock(spec=STTRouter)
     router.transcribe = AsyncMock(
         return_value=STTResult(
             text="hello world",

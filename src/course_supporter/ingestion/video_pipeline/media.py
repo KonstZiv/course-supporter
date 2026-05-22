@@ -30,17 +30,24 @@ import structlog
 
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
+from course_supporter.security.policies import AUTHORED_POLICY
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = structlog.get_logger()
 
-# 5 GB — mirrors ``AUTHORED_POLICY.max_video_size_bytes``. Enforced
-# worker-side for the URL path because the HTTP ``file.size`` guard does
-# not reach yt-dlp downloads (D2: ``--max-filesize`` + this post-download
-# check are the two layers).
-_MAX_VIDEO_SIZE_BYTES = 5 * 1024 * 1024 * 1024
+# Single source of truth: the authored upload policy's video size cap
+# (5 GB). Enforced worker-side for the URL path because the HTTP
+# ``file.size`` guard does not reach yt-dlp downloads (D2). Both layers —
+# yt-dlp ``--max-filesize`` and the post-download check — derive from this
+# byte value (passing bytes to yt-dlp also avoids the ``5G`` unit
+# ambiguity). ``max_video_size_bytes`` is Optional on ``ContextPolicy``;
+# the authored policy always sets it, and the fallback keeps the type
+# ``int`` with a safe default.
+_MAX_VIDEO_SIZE_BYTES: int = (
+    AUTHORED_POLICY.max_video_size_bytes or 5 * 1024 * 1024 * 1024
+)
 
 _DOWNLOAD_TIMEOUT_SEC = 600.0
 _PROBE_TIMEOUT_SEC = 30.0
@@ -97,7 +104,7 @@ async def download_video(url: str, dest_dir: Path) -> Path:
         "--merge-output-format",
         "mp4",
         "--max-filesize",
-        "5G",
+        str(_MAX_VIDEO_SIZE_BYTES),
         "--no-playlist",
         "--quiet",
         "--no-warnings",

@@ -63,34 +63,40 @@ class TestCreateHeavySteps:
 
 class TestCreateProcessors:
     def test_returns_all_source_types(self) -> None:
-        """Dict contains all four SourceType keys."""
+        """With STT + Redis present the dict contains all five SourceType keys."""
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
-        processors = create_processors(heavy, stt_router=mock_router)
+        mock_redis = AsyncMock()
+        processors = create_processors(heavy, stt_router=mock_router, redis=mock_redis)
 
         assert set(processors.keys()) == {
             SourceType.VIDEO,
             SourceType.PRESENTATION,
             SourceType.TEXT,
             SourceType.WEB,
+            SourceType.AUDIO,
         }
 
-    def test_video_maps_to_skeleton_processor(self) -> None:
-        """VIDEO maps to the new video_pipeline skeleton VideoProcessor.
+    def test_video_maps_to_video_pipeline_processor(self) -> None:
+        """VIDEO maps to the ``ingestion.video_pipeline`` VideoProcessor.
 
-        Phase 2.4 task 2.4.1 rewired VIDEO from the legacy
-        ``ingestion.video`` processors (VideoProcessor / WhisperVideoProcessor)
-        to the ``ingestion.video_pipeline`` skeleton, which takes no
-        constructor deps and is independent of ``stt_router`` presence.
+        Phase 2.4 task 2.4.2 wired the real VideoProcessor with the
+        ``stt_router`` + ``redis`` deps (STT in Krok 2 + the Redis STT
+        carrier), so VIDEO now follows the AUDIO combined-guard: present
+        only when both deps are supplied, absent otherwise.
         """
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
+        mock_redis = AsyncMock()
 
-        with_router = create_processors(heavy, stt_router=mock_router)
-        without_router = create_processors(heavy)
+        with_deps = create_processors(heavy, stt_router=mock_router, redis=mock_redis)
+        assert isinstance(with_deps[SourceType.VIDEO], VideoProcessor)
 
-        assert isinstance(with_router[SourceType.VIDEO], VideoProcessor)
-        assert isinstance(without_router[SourceType.VIDEO], VideoProcessor)
+        without_redis = create_processors(heavy, stt_router=mock_router)
+        assert SourceType.VIDEO not in without_redis
+
+        without_deps = create_processors(heavy)
+        assert SourceType.VIDEO not in without_deps
 
     def test_presentation_processor_type(self) -> None:
         """PRESENTATION maps to PresentationProcessor."""

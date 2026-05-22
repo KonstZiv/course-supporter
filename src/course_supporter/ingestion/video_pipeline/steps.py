@@ -1,18 +1,22 @@
-"""Seven pipeline gnízda (steps) as offline stubs (Phase 2.4 task 2.4.1).
+"""Seven pipeline gnízda (steps) of the canonical 7-step video flow.
 
-Each function is one gnízdo of the canonical 7-step video flow
-(``PHASE-2-4.md`` §1). In the skeleton every step is a deterministic
-stub: zero network / disk / LLM, returns a mock structure of the §1
-shape. Data flows in-memory between steps (return values / arguments);
-no ``Job.stage_progress`` or Redis is written in the skeleton.
+Each function is one gnízdo of ``PHASE-2-4.md`` §1. Krok 1-2 are real
+as of task 2.4.2 (ingestion via S3/yt-dlp + ffprobe; STT via ffmpeg
+audio extraction → ElevenLabs Scribe core); Krok 3-7 remain offline
+stubs returning mock §1 structures (tasks 2.4.3-2.4.7 fill them).
 
-Filling order (per ``PHASE-2-4.md`` §3): each later task (2.4.2-2.4.7)
-replaces the body of exactly one step here with real logic, without
-touching its neighbours. Real implementations raise
-:class:`~course_supporter.ingestion.base.ProcessingError` per their
-own error taxonomy (drafted per-task); the skeleton's failure-injection
-point is to patch any one of these step functions to raise (see
-``tests/integration/test_video_skeleton.py``).
+Data flows in-memory between steps (return values / arguments). The
+real STT carrier is *additionally* written to Redis by the processor
+(``video_stt_result:{job_id}``) for the future Pass 2a consumer — that
+producer write lives in ``processor.py``, not here.
+
+Filling order (per ``PHASE-2-4.md`` §3): each task replaces one or two
+step bodies, leaving neighbours and the ``VideoProcessor`` orchestration
+untouched. Real steps raise
+:class:`~course_supporter.ingestion.base.UnsupportedFormatError`
+(constraint) or :class:`~course_supporter.ingestion.base.ProcessingError`
+(operational) per the per-task taxonomy (D3); the failure-injection seam
+is to patch any step (or ``media.*``) to raise (see the tests).
 
 Steps 1-4 are invoked from ``VideoProcessor.process_raw``; step 5 from
 ``process_macro``; steps 6-7 from ``process_detail``.
@@ -20,12 +24,16 @@ Steps 1-4 are invoked from ``VideoProcessor.process_raw``; step 5 from
 
 from __future__ import annotations
 
+import itertools
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from course_supporter.ingestion.base import UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
+from course_supporter.ingestion.video_pipeline import media
 from course_supporter.ingestion.video_pipeline.schemas import (
     ChangeClass,
     FrameDescription,
@@ -41,45 +49,116 @@ from course_supporter.ingestion.video_pipeline.schemas import (
 if TYPE_CHECKING:
     from course_supporter.models.source import SourceDocument
     from course_supporter.storage.orm import AuthoredDocument
+    from course_supporter.stt.router import STTRouter
+
+# 150 min — mirrors AudioProcessor.MAX_DURATION_SEC (Phase 2.2 vision §5).
+# Enforced worker-side after ffprobe, BEFORE STT, so an over-long video
+# never reaches the (billable) Scribe call.
+_MAX_DURATION_MS = 150 * 60 * 1000
+
+# Minimum inter-word silence (ms) treated as a Pass 2a boundary candidate.
+# rationale: starting default; calibrated in 2.4.5 (the real consumer of
+# pauses — Pass 2a segment boundaries, KD2c).
+_PAUSE_THRESHOLD_MS = 700
 
 
 # ── Krok 1-4 — invoked from process_raw ────────────────────────────
 
 
-async def step_1_ingest(source: AuthoredDocument) -> VideoFileMetadata:
-    """Krok 1 — resolve container metadata (§1).
+async def step_1_ingest(
+    source: AuthoredDocument,
+    *,
+    tmp: Path,
+) -> tuple[Path, VideoFileMetadata]:
+    """Krok 1 — resolve the local video + probe container metadata (§1).
 
-    Skeleton: no S3 download / ffprobe (task 2.4.2). Reads
-    ``source_url`` only to mirror the real signature; never opens the
-    file. Returns a fixed mock metadata shape.
+    Two source paths (the S3 download already happened in the
+    orchestrator's ``_resolve_s3_url``, so an ``s3://`` upload arrives as
+    a local temp path here):
+
+    * ``http(s)://`` → yt-dlp video-stream download into ``tmp``;
+    * anything else → treated as an already-local file path.
+
+    Then ffprobe fills ``file_metadata`` and the 150-min duration cap is
+    enforced (constraint → ``UnsupportedFormatError``, R1 ``state=ERROR``)
+    before any STT cost is incurred. Returns the resolved local path
+    (consumed by Krok 2) alongside the metadata.
     """
-    _ = source.source_url
-    return VideoFileMetadata(
-        duration_ms=600_000,
-        codec="h264",
-        resolution="1920x1080",
-    )
+    url = source.source_url
+    if url.startswith(("http://", "https://")):
+        video_path = await media.download_video(url, tmp)
+    else:
+        video_path = Path(url)
+
+    file_metadata = await media.probe_metadata(video_path)
+
+    if file_metadata.duration_ms > _MAX_DURATION_MS:
+        raise UnsupportedFormatError(
+            f"Video duration ({file_metadata.duration_ms / 60_000:.1f} min) "
+            f"exceeds maximum {_MAX_DURATION_MS // 60_000} min."
+        )
+
+    return video_path, file_metadata
 
 
 async def step_2_stt(
-    source: AuthoredDocument,
+    video_path: Path,
     file_metadata: VideoFileMetadata,
+    *,
+    stt_router: STTRouter,
+    tmp: Path,
 ) -> SttResult:
-    """Krok 2 — speech-to-text (§1).
+    """Krok 2 — extract the audio track and transcribe it (§1).
 
-    Skeleton: no audio extraction / ElevenLabs call (task 2.4.2).
-    Returns a tiny deterministic word stream plus one pause candidate.
+    ffmpeg extracts a Scribe-friendly mono 16 kHz mp3 into ``tmp`` (the
+    processor-owned tempdir, so it is cleaned with the rest — the S3
+    source path lives outside ``tmp`` and must not collect siblings).
+    The file path is handed to the reused audio ElevenLabs Scribe core
+    via ``STTRouter.transcribe`` (one external call). The STT-domain
+    result (seconds) is converted to the §1 ms-based ``SttResult``;
+    ``pauses`` are derived from inter-word silence (no provider field
+    surfaces them). ``duration_ms`` comes from ffprobe (Krok 1), not STT
+    word-ends.
     """
-    _ = source.source_url
-    return SttResult(
-        language="en",
-        duration_ms=file_metadata.duration_ms,
-        words=[
-            SttWord(text="Hello", start_ms=0, end_ms=500),
-            SttWord(text="world", start_ms=500, end_ms=1000),
-        ],
-        pauses=[SttPause(start_ms=1000, end_ms=1500)],
+    audio_path = await media.extract_audio(video_path, tmp)
+
+    # language=None mirrors AudioProcessor: always auto-detect; the
+    # orchestrator caches the detected language back onto the entry.
+    result = await stt_router.transcribe(
+        "transcribe",
+        str(audio_path),
+        language=None,
     )
+
+    words = [
+        SttWord(
+            text=w.text,
+            start_ms=round(w.start_sec * 1000),
+            end_ms=round(w.end_sec * 1000),
+        )
+        for w in result.words
+    ]
+
+    return SttResult(
+        language=result.language or "und",
+        duration_ms=file_metadata.duration_ms,
+        words=words,
+        pauses=_derive_pauses(words),
+        detected_language=result.detected_language,
+    )
+
+
+def _derive_pauses(words: list[SttWord]) -> list[SttPause]:
+    """Derive Pass 2a boundary candidates from inter-word silence (KD2c).
+
+    Scribe surfaces no explicit pause field, so a pause is any gap
+    ``>= _PAUSE_THRESHOLD_MS`` between consecutive words.
+    """
+    pauses: list[SttPause] = []
+    for prev, nxt in itertools.pairwise(words):
+        if nxt.start_ms - prev.end_ms >= _PAUSE_THRESHOLD_MS:
+            pauses.append(SttPause(start_ms=prev.end_ms, end_ms=nxt.start_ms))
+    return pauses
 
 
 async def step_3_detection(stt: SttResult) -> list[Scene]:

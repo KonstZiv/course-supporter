@@ -1,12 +1,12 @@
-"""Mock data-structure shapes for the video pipeline skeleton (Phase 2.4).
+"""Data-structure shapes for the video pipeline (Phase 2.4 §1, Krok 1-4).
 
-These carriers mirror the *forms* of the per-step structures described in
-``PHASE-2-4.md`` §1 (Krok 1-4 intermediate state). The skeleton (task
-2.4.1) threads them in-memory between gnízda — no DB / Redis / external
-calls. Tasks 2.4.2-2.4.7 replace the stub bodies in :mod:`steps` with
-real logic; the shapes here are deliberately minimal and may be widened
-(or moved to the proper inter-stage transport — Redis per the audio
-precedent — when a real, large transient payload motivates it).
+These carriers mirror the per-step structures described in
+``PHASE-2-4.md`` §1. Krok 1-2 (``VideoFileMetadata`` / ``SttResult``) are
+real as of task 2.4.2: ``SttResult`` is the **inter-stage carrier**
+serialised to Redis (``video_stt_result:{job_id}``) for the future Pass
+2a consumer (Krok 5, task 2.4.5). Krok 3-4 carriers (``Scene`` /
+``FrameDescription``) are still produced by stubs; tasks 2.4.3-2.4.4
+fill them.
 
 Pass 2a/2b/2c (Krok 5-7) reuse the existing pipeline carriers
 ``DocumentSummaryDraft`` / ``DocumentSegmentDraft`` rather than redefining
@@ -48,16 +48,26 @@ class SttPause(BaseModel):
 
 
 class SttResult(BaseModel):
-    """Krok 2 — STT output (ElevenLabs Scribe in the real pipeline, §1).
+    """Krok 2 — STT output (ElevenLabs Scribe via the audio core, §1).
 
     ``words`` is a word-level stream (not a flat string) so downstream
-    Pass 2a/2b can align segment boundaries to ``pauses``.
+    Pass 2a/2b can align segment boundaries to ``pauses``. ``duration_ms``
+    comes from ffprobe (Krok 1), not STT word-end derivation.
+    Serialised to Redis as the inter-stage carrier for Pass 2a.
     """
 
     language: str
     duration_ms: int
     words: list[SttWord] = Field(default_factory=list)
     pauses: list[SttPause] = Field(default_factory=list)
+    detected_language: str | None = Field(
+        default=None,
+        description=(
+            "ISO 639-1 code reported by the provider on auto-detection; "
+            "surfaced to the orchestrator's language-cache (None when the "
+            "caller pinned the language)."
+        ),
+    )
 
 
 class ChangeClass(StrEnum):

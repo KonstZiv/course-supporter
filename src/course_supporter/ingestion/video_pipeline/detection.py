@@ -185,10 +185,16 @@ class _FrameMetrics(NamedTuple):
     edge_diff: float
 
 
-def _compute_dhash(bgr: Any, hash_size: int) -> Any:
-    """dHash of an (already PiP-masked) BGR frame via imagehash."""
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return imagehash.dhash(Image.fromarray(rgb), hash_size=hash_size)
+def _compute_dhash(gray: Any, hash_size: int) -> Any:
+    """dHash of an (already PiP-masked) grayscale frame via imagehash.
+
+    Takes grayscale (reused from the decode cache, which derives it for
+    the other metrics) — ``imagehash.dhash`` converts to ``"L"``
+    internally, so feeding gray skips a redundant BGR→RGB conversion.
+    cv2 ``BGR2GRAY`` and PIL ``convert("L")`` share the ITU-R 601 luma, so
+    the coarse 17px gradient hash is unchanged.
+    """
+    return imagehash.dhash(Image.fromarray(gray), hash_size=hash_size)
 
 
 def _compute_ssim(gray1: Any, gray2: Any, *, win_size: int = 11) -> float:
@@ -448,8 +454,10 @@ def _segment_scenes(
 
     for entry in entries:
         if entry.dhash is None:
-            bgr = cache.bgr(entry.path)
-            entry.dhash = _compute_dhash(bgr, p.hash_size) if bgr is not None else None
+            gray = cache.gray(entry.path)
+            entry.dhash = (
+                _compute_dhash(gray, p.hash_size) if gray is not None else None
+            )
 
     classes: list[ChangeClass] = []
     for i, entry in enumerate(entries):
@@ -563,8 +571,8 @@ def _pip_and_dedup(
     cache = _DecodeCache(mask)
     entries: list[_Entry] = []
     for i, path in enumerate(raw_paths):
-        bgr = cache.bgr(path)
-        dhash = _compute_dhash(bgr, p.hash_size) if bgr is not None else None
+        gray = cache.gray(path)
+        dhash = _compute_dhash(gray, p.hash_size) if gray is not None else None
         entries.append(
             _Entry(path=path, timestamp_sec=round(i * interval, 2), dhash=dhash)
         )

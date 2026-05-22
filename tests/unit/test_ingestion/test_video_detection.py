@@ -40,11 +40,11 @@ def _write_noise(path: Path, seed: int) -> Path:
 
 
 def _entry(path: Path, ts: float) -> detection._Entry:
-    bgr = cv2.imread(str(path))
+    gray = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2GRAY)
     return detection._Entry(
         path=path,
         timestamp_sec=ts,
-        dhash=detection._compute_dhash(bgr, _PARAMS.hash_size),
+        dhash=detection._compute_dhash(gray, _PARAMS.hash_size),
     )
 
 

@@ -37,7 +37,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.ingestion.video_pipeline import VideoProcessor
-from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
+from course_supporter.ingestion.video_pipeline.schemas import (
+    ChangeClass,
+    DetectionResult,
+    SampledFrame,
+    Scene,
+    VideoFileMetadata,
+)
 from course_supporter.models.source import SourceType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -61,6 +67,7 @@ _STAGE2 = "course_supporter.security.stage2.run_stage2_safety_check"
 _PKG = "course_supporter.ingestion.video_pipeline"
 _PROBE = f"{_PKG}.media.probe_metadata"
 _EXTRACT = f"{_PKG}.media.extract_audio"
+_STEP3 = f"{_PKG}.steps.step_3_detection"
 
 _SOURCE_URL = "s3://bucket/lecture.mp4"
 _MOCK_META = VideoFileMetadata(duration_ms=60_000, codec="h264", resolution="1280x720")
@@ -68,11 +75,12 @@ _MOCK_META = VideoFileMetadata(duration_ms=60_000, codec="h264", resolution="128
 
 @pytest.fixture
 def tiny_video(tmp_path: Path) -> Path:
-    """A 1 s 320x240 h264+aac mp4 generated via ffmpeg (requires_ffmpeg only).
+    """A 4 s 320x240 h264+aac mp4 generated via ffmpeg (requires_ffmpeg only).
 
     Avoids a committed binary (``*.mp4`` is gitignored): the fixture only
     materialises for the ``requires_ffmpeg`` test, which is skipped when
-    ffmpeg is absent — so ``shutil.which`` always resolves here.
+    ffmpeg is absent — so ``shutil.which`` always resolves here. 4 s so
+    Krok 3 (fps=0.5) extracts more than one frame.
     """
     out = tmp_path / "tiny.mp4"
     ffmpeg = shutil.which("ffmpeg")
@@ -84,11 +92,11 @@ def tiny_video(tmp_path: Path) -> Path:
             "-f",
             "lavfi",
             "-i",
-            "color=c=blue:s=320x240:d=1",
+            "color=c=blue:s=320x240:d=4",
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:duration=1",
+            "sine=frequency=440:duration=4",
             "-c:v",
             "libx264",
             "-c:a",
@@ -146,6 +154,27 @@ def _video_processors(
             redis=AsyncMock(),
         )
     }
+
+
+def _detection_result() -> DetectionResult:
+    """One-scene detection stand-in (keeps the ffmpeg-free topology test off cv2)."""
+    return DetectionResult(
+        scenes=[
+            Scene(
+                scene_id=0,
+                start_ms=0,
+                end_ms=1000,
+                frames=[
+                    SampledFrame(
+                        frame_position_ms=0,
+                        change_class=ChangeClass.FIRST,
+                        frame_path=Path("/tmp/x/frames/frame_000001.jpg"),
+                    )
+                ],
+            )
+        ],
+        pip_mask=None,
+    )
 
 
 async def _seed_video_job(
@@ -240,7 +269,7 @@ class TestVideoTopology:
         session_factory: async_sessionmaker[AsyncSession],
         committed_seeds: dict[str, uuid.UUID],
     ) -> None:
-        """Krok 1-2 (mocked toolchain) + stub 3-7 → state=ready + persist."""
+        """Krok 1-3 (mocked toolchain/cv2) + stub 4-7 → state=ready + persist."""
         mid = committed_seeds["material_id"]
         job_id = await _seed_video_job(session_factory, committed_seeds)
         ctx = _build_ctx(session_factory)
@@ -252,6 +281,7 @@ class TestVideoTopology:
             patch(_STAGE2, new=AsyncMock(return_value=_safe_verdict())),
             patch(_PROBE, new=AsyncMock(return_value=_MOCK_META)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
+            patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
         ):
             await arq_ingest_material(ctx, str(job_id), str(mid), "video", _SOURCE_URL)
 

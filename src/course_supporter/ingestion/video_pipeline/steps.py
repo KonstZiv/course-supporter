@@ -33,12 +33,11 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
-from course_supporter.ingestion.video_pipeline import media
+from course_supporter.ingestion.video_pipeline import detection, media
 from course_supporter.ingestion.video_pipeline.schemas import (
-    ChangeClass,
+    DetectionResult,
     FrameDescription,
     FrameKind,
-    SampledFrame,
     Scene,
     SttPause,
     SttResult,
@@ -161,22 +160,22 @@ def _derive_pauses(words: list[SttWord]) -> list[SttPause]:
     return pauses
 
 
-async def step_3_detection(stt: SttResult) -> list[Scene]:
-    """Krok 3 — pre-LLM scene detection + frame sampling (§1).
+async def step_3_detection(
+    video_path: Path,
+    file_metadata: VideoFileMetadata,
+    *,
+    tmp: Path,
+) -> DetectionResult:
+    """Krok 3 — pre-LLM scene detection + frame sampling + dedup (§1).
 
-    Skeleton: no ffmpeg / scenedetect (task 2.4.3). Emits one mock
-    scene spanning the full duration with a single anchor frame.
+    Delegates to :func:`detection.detect` (ffmpeg fps extraction → PiP
+    detection → 5-metric tiered dedup → gap fill → 3-gate scene boundary).
+    Zero LLM, deterministic. JPEG frames live in ``tmp`` (processor-owned;
+    cleaned with the rest) and are referenced by ``SampledFrame.frame_path``
+    for Pass 1. ffmpeg/cv2 failure → ``ProcessingError`` (raised by
+    ``detection``/``media``); zero frames → ``ProcessingError`` (R1).
     """
-    return [
-        Scene(
-            scene_id=0,
-            start_ms=0,
-            end_ms=stt.duration_ms,
-            frames=[
-                SampledFrame(frame_position_ms=0, change_class=ChangeClass.FIRST),
-            ],
-        ),
-    ]
+    return await detection.detect(video_path, file_metadata, tmp)
 
 
 async def step_4_pass1_vision(scenes: list[Scene]) -> list[FrameDescription]:

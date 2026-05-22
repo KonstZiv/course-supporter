@@ -16,6 +16,7 @@ them here.
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -84,22 +85,55 @@ class ChangeClass(StrEnum):
 
 
 class SampledFrame(BaseModel):
-    """One kept frame after dedup, tagged with its change class (§1 Krok 3)."""
+    """One kept frame after dedup, tagged with its change class (§1 Krok 3).
+
+    ``frame_path`` points to the raw (unmasked) JPEG in the processor-owned
+    tempdir — valid only while Krok 4 (Pass 1) runs in the same
+    ``process_raw`` scope, then cleaned. Pass 1 reads it to send the frame
+    to the vision LLM (applying ``DetectionResult.pip_mask`` itself).
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
 
     frame_position_ms: int
     change_class: ChangeClass
+    frame_path: Path
 
 
 class Scene(BaseModel):
-    """Krok 3 — a detected scene spanning ``[start_ms, end_ms]`` (§1).
-
-    Real detection (ffmpeg + scenedetect, 3-gate) lands in task 2.4.3.
-    """
+    """Krok 3 — a detected scene spanning ``[start_ms, end_ms]`` (§1)."""
 
     scene_id: int
     start_ms: int
     end_ms: int
     frames: list[SampledFrame] = Field(default_factory=list)
+
+
+class PiPMask(BaseModel):
+    """Picture-in-Picture overlay box (talking-head corner), §1 Krok 3.
+
+    Krok 3 *detects* the box via temporal-diff motion analysis; it does
+    NOT mask the output JPEGs (those stay raw). Pass 1 applies the mask
+    when building the vision call. Mirrors the ``vd/`` knowledge shape.
+    """
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class DetectionResult(BaseModel):
+    """Krok 3 output — scenes (with nested kept frames) + optional PiP mask.
+
+    Consumed in-memory by Krok 4 (Pass 1): ``scenes`` carry the frame
+    files + change classes (anchor/diff decision), ``pip_mask`` lets Pass
+    1 mask the talking-head corner.
+    """
+
+    scenes: list[Scene] = Field(default_factory=list)
+    pip_mask: PiPMask | None = None
 
 
 class FrameKind(StrEnum):

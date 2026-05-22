@@ -68,6 +68,7 @@ _PKG = "course_supporter.ingestion.video_pipeline"
 _PROBE = f"{_PKG}.media.probe_metadata"
 _EXTRACT = f"{_PKG}.media.extract_audio"
 _STEP3 = f"{_PKG}.steps.step_3_detection"
+_STEP4 = f"{_PKG}.steps.step_4_pass1_vision"
 
 _SOURCE_URL = "s3://bucket/lecture.mp4"
 _MOCK_META = VideoFileMetadata(duration_ms=60_000, codec="h264", resolution="1280x720")
@@ -147,11 +148,16 @@ def _build_ctx(
 def _video_processors(
     stt_router: AsyncMock | None = None,
 ) -> dict[SourceType, VideoProcessor]:
-    """Inject the real VideoProcessor at the VIDEO dispatch key."""
+    """Inject the real VideoProcessor at the VIDEO dispatch key.
+
+    The vision call (Krok 4) is patched at the ``step_4_pass1_vision`` seam
+    in each test, so the injected ``stage_router`` is a bare mock here.
+    """
     return {
         SourceType.VIDEO: VideoProcessor(
             stt_router=stt_router or _stt_router_with_words(),
             redis=AsyncMock(),
+            stage_router=MagicMock(),
         )
     }
 
@@ -282,6 +288,7 @@ class TestVideoTopology:
             patch(_PROBE, new=AsyncMock(return_value=_MOCK_META)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
             patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
+            patch(_STEP4, new=AsyncMock(return_value=[])),
         ):
             await arq_ingest_material(ctx, str(job_id), str(mid), "video", _SOURCE_URL)
 
@@ -353,6 +360,9 @@ class TestVideoRealFfmpeg:
             patch(_HEAVY),
             patch(_FACTORY, return_value=_video_processors()),
             patch(_STAGE2, new=AsyncMock(return_value=_safe_verdict())),
+            # Real ffprobe + ffmpeg + cv2 detection; the vision LLM (Krok 4)
+            # stays mocked — real Pass 1 is the RUN_SMOKE calibration concern.
+            patch(_STEP4, new=AsyncMock(return_value=[])),
         ):
             await arq_ingest_material(
                 ctx, str(job_id), str(mid), "video", str(tiny_video)

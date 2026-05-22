@@ -26,6 +26,8 @@ from course_supporter.ingestion.video_pipeline import VideoProcessor, steps
 from course_supporter.ingestion.video_pipeline.schemas import (
     ChangeClass,
     DetectionResult,
+    FrameDescription,
+    FrameKind,
     SampledFrame,
     Scene,
     SttResult,
@@ -99,22 +101,37 @@ def _stt_router(words_sec: list[tuple[str, float, float]]) -> AsyncMock:
     return router
 
 
+def _frame_descriptions() -> list[FrameDescription]:
+    """A one-anchor Pass 1 stand-in for the process_raw chaining tests."""
+    return [
+        FrameDescription(
+            scene_id=0,
+            frame_position_ms=0,
+            description="Slide: intro title.",
+            kind=FrameKind.ANCHOR,
+        )
+    ]
+
+
 def _make_processor(
     *,
     stt_router: AsyncMock | None = None,
     redis: AsyncMock | None = None,
+    stage_router: Mock | None = None,
 ) -> VideoProcessor:
     return VideoProcessor(
         stt_router=stt_router or _stt_router([("Hello", 0.0, 0.5)]),
         redis=redis or AsyncMock(),
+        stage_router=stage_router or AsyncMock(),
     )
 
 
 class TestVideoProcessorConstruction:
-    def test_requires_stt_router_and_redis(self) -> None:
-        """VideoProcessor wires with the two real-edge deps (mirror audio)."""
-        proc = VideoProcessor(stt_router=Mock(), redis=Mock())
-        assert isinstance(proc, VideoProcessor)
+    def test_requires_stt_router_redis_and_stage_router(self) -> None:
+        """VideoProcessor wires the three real-edge deps (STT/Redis/vision)."""
+        stt, redis, stage = Mock(), Mock(), Mock()
+        proc = VideoProcessor(stt_router=stt, redis=redis, stage_router=stage)
+        assert proc._stage_router is stage
 
 
 class TestStep1Ingest:
@@ -210,6 +227,7 @@ class TestProcessRawPipeline:
             patch(_PROBE, new=AsyncMock(return_value=meta)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
             patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
+            patch(_STEP4, new=AsyncMock(return_value=_frame_descriptions())),
         ):
             doc = await proc.process_raw(_mock_authored_document())
 
@@ -234,6 +252,7 @@ class TestProcessRawPipeline:
             patch(_PROBE, new=AsyncMock(return_value=meta)),
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
             patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
+            patch(_STEP4, new=AsyncMock(return_value=_frame_descriptions())),
         ):
             await proc.process_raw(_mock_authored_document())
 

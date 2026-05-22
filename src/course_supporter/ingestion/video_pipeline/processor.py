@@ -24,9 +24,14 @@ per task 2.4.1 acceptance #3).
 Factory dispatch invariant: ``create_processors`` routes by
 ``source_type`` so this processor only receives ``SourceType.VIDEO``
 inputs; no entry guard is needed (matches AudioProcessor / Phase 2.2).
-``stt_router`` + ``redis`` are required constructor deps (STT in Krok 2 +
-the Redis carrier) — the factory registers VIDEO only when both are
-present, symmetric with AUDIO.
+``stt_router`` + ``redis`` + ``stage_router`` are required constructor
+deps (STT in Krok 2, the Redis carrier, and the Pass 1 vision ladder in
+Krok 4) — the factory registers VIDEO only when all three are present.
+``stage_router`` is the VIDEO-only extra over AUDIO: Pass 1 lives in
+``process_raw`` (Stage 2 safety reads ``doc.assemble_text()`` built from
+the frame descriptions), so the vision ladder cannot arrive via the
+``process_macro`` method argument and is injected here instead
+(direct-injection, the video step of DD-2.3-AF).
 """
 
 from __future__ import annotations
@@ -70,9 +75,10 @@ _STT_RESULT_KEY_TMPL = "video_stt_result:{job_id}"
 class VideoProcessor(MaterialProcessor):
     """Video source-type processor — three-stage ingestion over 7 gnízda.
 
-    See module docstring for the 7-step → 3-method mapping and the Redis
-    inter-stage carrier. Requires ``stt_router`` (Krok 2 transcription)
-    and ``redis`` (STT-carrier write) — mirrors ``AudioProcessor``.
+    See module docstring for the 7-step → 3-method mapping, the Redis
+    inter-stage carrier, and the asymmetry vs ``AudioProcessor``. Requires
+    ``stt_router`` (Krok 2 transcription), ``redis`` (STT-carrier write),
+    and ``stage_router`` (Krok 4 Pass 1 vision ladder).
     """
 
     def __init__(
@@ -80,10 +86,12 @@ class VideoProcessor(MaterialProcessor):
         *,
         stt_router: STTRouter,
         redis: ArqRedis,
+        stage_router: StageRouter,
     ) -> None:
         super().__init__()
         self._stt_router = stt_router
         self._redis = redis
+        self._stage_router = stage_router
 
     async def process_raw(
         self,
@@ -94,11 +102,11 @@ class VideoProcessor(MaterialProcessor):
         """Krok 1-4 → ``SourceDocument``.
 
         Reads ``job_id`` from the ContextVar (set at ARQ task entry) for
-        the Redis carrier key. All transient files (yt-dlp download +
-        extracted audio) live in a processor-owned tempdir cleaned on
-        exit. The ``router`` parameter is accepted for ABC symmetry but
-        unused (the real Pass 1 vision call wires its own ladder in task
-        2.4.4).
+        the Redis carrier key. All transient files (yt-dlp download,
+        extracted audio, sampled frame JPEGs) live in a processor-owned
+        tempdir cleaned on exit. The ``router`` (``ModelRouter``) parameter
+        is accepted for ABC symmetry but unused; Pass 1 (Krok 4) uses the
+        injected ``self._stage_router`` (the vision ladder), not this arg.
         """
         job_id = get_current_job_id()
         if job_id is None:
@@ -121,7 +129,7 @@ class VideoProcessor(MaterialProcessor):
                 video_path, file_metadata, tmp=tmp
             )
             frame_descriptions = await steps.step_4_pass1_vision(
-                detection_result.scenes
+                detection_result, file_metadata, stage_router=self._stage_router
             )
             doc = self._assemble_source_document(source, stt, frame_descriptions)
 

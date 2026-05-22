@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from course_supporter.config import Settings
     from course_supporter.ingestion.base import MaterialProcessor
     from course_supporter.llm.router import ModelRouter
+    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.stt.router import STTRouter
     from course_supporter.vd.pipeline import VDPipeline
 
@@ -124,26 +125,33 @@ def create_processors(
     vd_pipeline: VDPipeline | None = None,
     stt_router: STTRouter | None = None,
     redis: ArqRedis | None = None,
+    stage_router: StageRouter | None = None,
 ) -> dict[SourceType, MaterialProcessor]:
     """Create processor instances wired with heavy steps.
 
     Args:
         heavy: Bundle of heavy step callables.
         vd_pipeline: Optional VDPipeline (legacy ``vd/`` visual analysis).
-            Unused by the new video_pipeline namespace; retained for the
-            real Pass 1 vision wiring (task 2.4.4). Passing it into the
-            VIDEO processor would couple the new namespace to legacy
-            ``vd/`` types (isolation per 2.4.1 acceptance #3).
+            Unused by the new video_pipeline namespace (its Pass 1 wiring
+            is ``stage_router`` below). Passing it into the VIDEO processor
+            would couple the new namespace to legacy ``vd/`` types
+            (isolation per 2.4.1 acceptance #3).
         stt_router: Optional STTRouter for VIDEO + AUDIO transcription.
         redis: Optional ArqRedis client for the STT inter-stage carriers
             (video ``video_stt_result``; audio word-cache KD-2.2-D).
+        stage_router: Optional StageRouter for the VIDEO Pass 1 vision
+            ladder (Krok 4). VIDEO-only — AUDIO routes its Pass 2a/2c via
+            the ``process_macro`` / ``process_detail`` method argument, so
+            it needs no injected stage_router.
 
     Returns:
-        Mapping from SourceType to fully-wired processor instances.
-        ``SourceType.VIDEO`` and ``SourceType.AUDIO`` are absent when the
-        combined guard below is unsatisfied (both need STT + Redis);
-        factory dispatch in ``api/tasks.py`` raises ``KeyError`` for
-        unwired source types.
+        Mapping from SourceType to fully-wired processor instances. The
+        dispatch guard is **asymmetric**: AUDIO needs STT + Redis; VIDEO
+        needs STT + Redis **and** ``stage_router`` (its Pass 1 lives in
+        ``process_raw``, before Stage 2 safety, so the vision ladder is
+        injected rather than passed to ``process_macro``). Each is absent
+        when its deps are unmet; factory dispatch in ``api/tasks.py``
+        raises ``KeyError`` for an unwired source type.
     """
     result: dict[SourceType, MaterialProcessor] = {
         SourceType.PRESENTATION: PresentationProcessor(),
@@ -153,18 +161,22 @@ def create_processors(
         ),
     }
 
-    # VIDEO + AUDIO share the same two deps: STT in stage 1 + a Redis
-    # inter-stage carrier across stages. Phase 2.4 task 2.4.2 wired the
-    # real VideoProcessor (``ingestion.video_pipeline``); the legacy
-    # ``ingestion.video`` processors are removed in 2.4.9.
+    # AUDIO needs STT (stage 1) + a Redis inter-stage carrier. VIDEO needs
+    # those two plus the StageRouter for its Krok 4 Pass 1 vision call —
+    # injected because Pass 1 runs inside ``process_raw`` (the vision
+    # ladder can't arrive via the ``process_macro`` method arg). Phase 2.4
+    # task 2.4.2 wired the real VideoProcessor (``ingestion.video_pipeline``);
+    # the legacy ``ingestion.video`` processors are removed in 2.4.9.
     if stt_router is not None and redis is not None:
-        result[SourceType.VIDEO] = VideoProcessor(
-            stt_router=stt_router,
-            redis=redis,
-        )
         result[SourceType.AUDIO] = AudioProcessor(
             stt_router=stt_router,
             redis=redis,
         )
+        if stage_router is not None:
+            result[SourceType.VIDEO] = VideoProcessor(
+                stt_router=stt_router,
+                redis=redis,
+                stage_router=stage_router,
+            )
 
     return result

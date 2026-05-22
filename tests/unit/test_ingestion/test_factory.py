@@ -16,6 +16,7 @@ from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
 from course_supporter.ingestion.video_pipeline import VideoProcessor
 from course_supporter.ingestion.web import WebProcessor
+from course_supporter.llm.stage_router import StageRouter
 from course_supporter.models.source import SourceType
 from course_supporter.stt.router import STTRouter
 
@@ -63,11 +64,16 @@ class TestCreateHeavySteps:
 
 class TestCreateProcessors:
     def test_returns_all_source_types(self) -> None:
-        """With STT + Redis present the dict contains all five SourceType keys."""
+        """All five keys present with STT + Redis + StageRouter (VIDEO needs all)."""
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
         mock_redis = AsyncMock()
-        processors = create_processors(heavy, stt_router=mock_router, redis=mock_redis)
+        processors = create_processors(
+            heavy,
+            stt_router=mock_router,
+            redis=mock_redis,
+            stage_router=AsyncMock(spec=StageRouter),
+        )
 
         assert set(processors.keys()) == {
             SourceType.VIDEO,
@@ -80,24 +86,41 @@ class TestCreateProcessors:
     def test_video_maps_to_video_pipeline_processor(self) -> None:
         """VIDEO maps to the ``ingestion.video_pipeline`` VideoProcessor.
 
-        Phase 2.4 task 2.4.2 wired the real VideoProcessor with the
-        ``stt_router`` + ``redis`` deps (STT in Krok 2 + the Redis STT
-        carrier), so VIDEO now follows the AUDIO combined-guard: present
-        only when both deps are supplied, absent otherwise.
+        Task 2.4.4 added a third VIDEO dep — ``stage_router`` for the Krok 4
+        Pass 1 vision ladder. The dispatch guard is asymmetric: VIDEO needs
+        STT + Redis **and** stage_router; AUDIO needs only STT + Redis (its
+        Pass 2a/2c route via the method argument). VIDEO is absent if any of
+        its three deps is missing.
         """
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
         mock_redis = AsyncMock()
+        mock_stage = AsyncMock(spec=StageRouter)
 
-        with_deps = create_processors(heavy, stt_router=mock_router, redis=mock_redis)
+        with_deps = create_processors(
+            heavy,
+            stt_router=mock_router,
+            redis=mock_redis,
+            stage_router=mock_stage,
+        )
         video = with_deps[SourceType.VIDEO]
         assert isinstance(video, VideoProcessor)
-        # Deps are actually wired in (symmetric with the AUDIO assertions).
+        # All three deps are actually wired in.
         assert video._stt_router is mock_router
         assert video._redis is mock_redis
+        assert video._stage_router is mock_stage
 
-        without_redis = create_processors(heavy, stt_router=mock_router)
+        without_redis = create_processors(
+            heavy, stt_router=mock_router, stage_router=mock_stage
+        )
         assert SourceType.VIDEO not in without_redis
+
+        # D2 split: without stage_router, VIDEO is absent but AUDIO remains.
+        without_stage = create_processors(
+            heavy, stt_router=mock_router, redis=mock_redis
+        )
+        assert SourceType.VIDEO not in without_stage
+        assert SourceType.AUDIO in without_stage
 
         without_deps = create_processors(heavy)
         assert SourceType.VIDEO not in without_deps

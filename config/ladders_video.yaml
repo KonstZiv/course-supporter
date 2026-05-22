@@ -1,0 +1,68 @@
+# Video source-type stage ladders (Phase 2.4, KD8/KD-2.3-X + KD-2.3-R/S).
+#
+# Per-source-type calibration lives in its own file (loader at
+# ``src/course_supporter/llm/ladder_config.py`` discovers it via the
+# ``ladders_*.yaml`` glob; stage names are globally unique across files).
+# The video Pass 1 ("Eyes") profile differs from presentation Pass 1:
+# multi-frame chunk-diff (N frames per call, chain-diff anchor/diff) rather
+# than one image per call — but the canonical multimodal vehicle is the same
+# ``StageRouter.execute_for_stage(..., contents=[jpeg_bytes, ...])`` (KD-2.3-R).
+#
+# One stage lives here:
+#   * ``video_pass_1_vision`` — Pass 1 chain-diff frame description.
+#     Plain-text output (NOT JSON), parsed into N ``FrameDescription`` by
+#     the ``[FRAME HH:MM:SS]`` marker (symmetric with presentation Pass 1 /
+#     audio Pass 2c plain-text shape). Image bytes flow through
+#     ``contents=`` (PiP-masked by Pass 1 before the call).
+#
+# Ladder rationale (Phase 2.4 task 2.4.4; mechanism CI-landed,
+# preservation/N calibration is the operator-run RUN_SMOKE spike, C6):
+#
+# Pass 1 — 3 rungs (mirrors presentation Pass 1; same VL model family):
+#   1. dashscope/qwen3-vl-32b-instruct — cost-first primary (OCR / document
+#      strength; perfect Ukrainian preservation on the Phase 2.3 slide set).
+#      Routes through ``DashScopeProvider`` (KD-2.3-A native client). Per-rung
+#      ``reasoning: {exclude: true}`` (KD-2.3-S) keeps the non-reasoning VL
+#      model from being asked to reason. ``max_output_tokens: 8192`` is the
+#      model's hard output ceiling — the chunk packer (vision.py
+#      ``_BUDGET_TOKENS = 6144``) targets 3/4 of it so a real chunk's output
+#      stays clear of truncation; the explicit value lifts it above the
+#      provider default (4096), which is too small for a multi-frame chunk.
+#   2. gemini/gemini-3-flash-preview — fallback 1. Multi-image native
+#      (``GeminiProvider._build_contents`` wraps each bytes item as a Part).
+#      Registry ceiling is 65536, but the per-rung ``max_output_tokens: 8192``
+#      pins the budget contract rung-uniform so truncation surfaces as the
+#      same chunk-parse mismatch regardless of which rung answered (it never
+#      hides behind a silent fallback). Preview-tier pricing is PROVISIONAL.
+#   3. gemini/gemini-2.5-flash — fallback 2 / stable deep tier. Same 8192 pin.
+#
+# Anthropic (Claude) vision R3 rung **deferred** per DD-2.3-AD: no Claude
+# *vision* model is registered (presentation ladder is likewise Qwen→Gemini,
+# Anthropic native top-up not performed). Promote to a third rung when a
+# Claude vision model is registered AND a ladder-exhaustion trigger fires.
+#
+# Snapshot convention: gemini / dashscope models use aliases (latest stable;
+# provider-side stability per repo convention).
+
+stages:
+  # Pass 1 chain-diff frame description (KD-2.3-R + KD8/KD-2.3-X).
+  # Input: N PiP-masked frame JPEGs through ``contents=`` +
+  #   ``n_frames`` / ``frames`` (marker + mode per frame) Jinja render context.
+  # Output: plain-text — N marked blocks, parsed by the ``[FRAME HH:MM:SS]``
+  #   marker into N ``FrameDescription`` (anchor/diff). ``count != N`` or a
+  #   marker mismatch raises ``StructuralRetryError`` (one retry → fallback).
+  # Invocation site: ``video_pipeline.vision.run_pass_1`` (per-chunk
+  #   bounded-concurrency gather inside ``VideoProcessor.process_raw``).
+  video_pass_1_vision:
+    prompt_ref: "prompts/video_pass_1_vision/v1.md"
+    ladder:
+      - provider: dashscope
+        model: qwen3-vl-32b-instruct
+        reasoning: {exclude: true}
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-3-flash-preview
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-flash
+        max_output_tokens: 8192

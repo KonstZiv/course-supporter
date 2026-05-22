@@ -33,12 +33,10 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
-from course_supporter.ingestion.video_pipeline import detection, media
+from course_supporter.ingestion.video_pipeline import detection, media, vision
 from course_supporter.ingestion.video_pipeline.schemas import (
     DetectionResult,
     FrameDescription,
-    FrameKind,
-    Scene,
     SttPause,
     SttResult,
     SttWord,
@@ -46,6 +44,7 @@ from course_supporter.ingestion.video_pipeline.schemas import (
 )
 
 if TYPE_CHECKING:
+    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.models.source import SourceDocument
     from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.stt.router import STTRouter
@@ -178,24 +177,23 @@ async def step_3_detection(
     return await detection.detect(video_path, file_metadata, tmp)
 
 
-async def step_4_pass1_vision(scenes: list[Scene]) -> list[FrameDescription]:
-    """Krok 4 — Pass 1 / «Eyes» vision description (§1).
+async def step_4_pass1_vision(
+    detection_result: DetectionResult,
+    file_metadata: VideoFileMetadata,
+    *,
+    stage_router: StageRouter,
+) -> list[FrameDescription]:
+    """Krok 4 — Pass 1 / «Eyes» vision chain-diff description (§1).
 
-    Skeleton: no vision LLM / chunking (task 2.4.4). Emits one anchor
-    description per sampled frame.
+    Delegates to :func:`vision.run_pass_1`: budget-driven chunking, chain-diff
+    (anchor/diff per frame), PiP masking applied here, and chunk-response
+    parsing into ``FrameDescription`` by the ``[FRAME HH:MM:SS]`` marker.
+    Ladder ``video_pass_1_vision`` (Qwen3-VL → Gemini). Ladder exhaustion or
+    a persistent chunk-parse mismatch → ``ProcessingError`` (R1).
     """
-    descriptions: list[FrameDescription] = []
-    for scene in scenes:
-        for frame in scene.frames:
-            descriptions.append(
-                FrameDescription(
-                    scene_id=scene.scene_id,
-                    frame_position_ms=frame.frame_position_ms,
-                    description="Mock slide: title and bullet points.",
-                    kind=FrameKind.ANCHOR,
-                )
-            )
-    return descriptions
+    return await vision.run_pass_1(
+        detection_result, file_metadata, stage_router=stage_router
+    )
 
 
 # ── Krok 5 — invoked from process_macro ────────────────────────────

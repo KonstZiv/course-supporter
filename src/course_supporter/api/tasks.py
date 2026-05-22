@@ -161,7 +161,11 @@ async def arq_ingest_material(
 
     stt_router = create_stt_router(get_settings(), session_factory)
     processors = create_processors(
-        heavy, vd_pipeline=vd, stt_router=stt_router, redis=redis
+        heavy,
+        vd_pipeline=vd,
+        stt_router=stt_router,
+        redis=redis,
+        stage_router=stage_router,
     )
     s3: S3Client | None = ctx.get("s3_client")
 

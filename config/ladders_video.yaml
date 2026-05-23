@@ -66,3 +66,42 @@ stages:
       - provider: gemini
         model: gemini-2.5-flash
         max_output_tokens: 8192
+
+  # Pass 2a semantic mapping (KD-2.2-A/F/H word-idx contract; task 2.4.5).
+  # Input: transcript word-stream (``words_json`` + ``words_count``) + a
+  #   deterministic visual-overlay block (``visuals``) via Jinja render
+  #   context; image bytes do NOT flow here (text-reasoning, not vision).
+  # Output: JSON validated against ``AudioPass2aResult`` (reused — same
+  #   word-idx schema) by the ``step_5_pass2a_mapping`` response_validator;
+  #   a ``ValidationError`` → ``StructuralRetryError`` (Path 3, as audio).
+  #
+  # Ladder rationale (text-reasoning; mechanism CI-landed, ranking is the
+  # operator-run RUN_SMOKE spike per KD8/KD-2.3-X — calibrated *within* the
+  # registered text pool, NOT a unique per-source model):
+  #   1. gemini/gemini-2.5-flash — cost-first primary. Proven Pass-2a-capable
+  #      (audio Pass 2a rung). Clean JSON via the prompt directive (no
+  #      markdown-fence strip needed — the validator mirrors audio's).
+  #   2. gemini/gemini-2.5-pro — premium fallback (deeper reasoning for long
+  #      transcripts; presentation Pass 2a fallback precedent).
+  #   3. anthropic/claude-sonnet-4-5-20250929 — provider-diverse deep fallback
+  #      (rare; only if both gemini rungs exhaust). Current Sonnet snapshot —
+  #      NOT the deprecated claude-sonnet-4-20250514.
+  # Per-rung ``max_output_tokens: 8192`` guards a long segment+subsegment JSON
+  # against mid-object truncation (which would otherwise surface as a spurious
+  # validation failure). All three are registered in external_services.yaml
+  # (cost-tracked) — deliberately NOT a literal copy of the audio pool, two of
+  # whose rungs (gemini-3.1-flash-lite, claude-haiku-4-5) lack registry
+  # entries; the spike re-ranks and may diversify (a Mistral rung would need
+  # the markdown-fence strip, KD-2.3-T).
+  video_pass_2a_mapping:
+    prompt_ref: "prompts/video_pass_2a_mapping/v1.md"
+    ladder:
+      - provider: gemini
+        model: gemini-2.5-flash
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-pro
+        max_output_tokens: 8192
+      - provider: anthropic
+        model: claude-sonnet-4-5-20250929
+        max_output_tokens: 8192

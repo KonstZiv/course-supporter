@@ -36,6 +36,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.ingestion.base import ProcessingError
+from course_supporter.ingestion.schemas import (
+    DocumentSegmentDraft,
+    DocumentSummaryDraft,
+)
 from course_supporter.ingestion.video_pipeline import VideoProcessor
 from course_supporter.ingestion.video_pipeline.schemas import (
     ChangeClass,
@@ -44,7 +48,7 @@ from course_supporter.ingestion.video_pipeline.schemas import (
     Scene,
     VideoFileMetadata,
 )
-from course_supporter.models.source import SourceType
+from course_supporter.models.source import SourceDocument, SourceType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -69,6 +73,41 @@ _PROBE = f"{_PKG}.media.probe_metadata"
 _EXTRACT = f"{_PKG}.media.extract_audio"
 _STEP3 = f"{_PKG}.steps.step_3_detection"
 _STEP4 = f"{_PKG}.steps.step_4_pass1_vision"
+_STEP5 = f"{_PKG}.steps.step_5_pass2a_mapping"
+
+
+async def _fake_pass2a(
+    doc: SourceDocument, *, redis: object, stage_router: object
+) -> DocumentSummaryDraft:
+    """Stand-in for the real Krok 5 Pass 2a (no Redis carrier / LLM needed).
+
+    Builds a valid single-(noisy)-segment cover over the transcript
+    reference so the orchestrator's persist cascade + the Krok 6/7 stubs run;
+    the real word-idx mapping is unit-tested in ``test_video_pass2a.py``.
+    """
+    ref = doc.assemble_text()
+    segments = (
+        [
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=0,
+                end_pos=len(ref),
+                title="s",
+                description="d",
+                noisy=True,
+            )
+        ]
+        if ref
+        else []
+    )
+    return DocumentSummaryDraft(
+        title="t",
+        description="d",
+        main_concepts=[],
+        secondary_concepts=[],
+        segments=segments,
+    )
+
 
 _SOURCE_URL = "s3://bucket/lecture.mp4"
 _MOCK_META = VideoFileMetadata(duration_ms=60_000, codec="h264", resolution="1280x720")
@@ -289,6 +328,7 @@ class TestVideoTopology:
             patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))),
             patch(_STEP3, new=AsyncMock(return_value=_detection_result())),
             patch(_STEP4, new=AsyncMock(return_value=[])),
+            patch(_STEP5, new=_fake_pass2a),
         ):
             await arq_ingest_material(ctx, str(job_id), str(mid), "video", _SOURCE_URL)
 
@@ -361,8 +401,10 @@ class TestVideoRealFfmpeg:
             patch(_FACTORY, return_value=_video_processors()),
             patch(_STAGE2, new=AsyncMock(return_value=_safe_verdict())),
             # Real ffprobe + ffmpeg + cv2 detection; the vision LLM (Krok 4)
-            # stays mocked — real Pass 1 is the RUN_SMOKE calibration concern.
+            # and the text-mapping LLM (Krok 5) stay mocked — real Pass 1/2a
+            # are the RUN_SMOKE calibration concern.
             patch(_STEP4, new=AsyncMock(return_value=[])),
+            patch(_STEP5, new=_fake_pass2a),
         ):
             await arq_ingest_material(
                 ctx, str(job_id), str(mid), "video", str(tiny_video)

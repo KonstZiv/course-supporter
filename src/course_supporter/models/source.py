@@ -17,8 +17,18 @@ presentation carry-forward):
   span multiple slides; segment boundaries are slide-aligned via the
   ``chars_per_slide_cumsum`` bridge in
   :mod:`course_supporter.ingestion.presentation`).
-* ``SourceType.VIDEO`` keeps the ``"\\n\\n"`` default; transcript +
-  visual-scene chunks remain visually separable for downstream stages.
+* ``SourceType.VIDEO`` joins the **transcript word-stream only** with a
+  single space (audio-like word-idx mapping, Phase 2.4 task 2.4.5):
+  ``VISUAL_SCENE`` chunks are excluded from this mapping/slice reference
+  so the ``chars_per_word_cumsum`` bridge maps cleanly. The visual-scene
+  descriptions stay in ``chunks`` and reach the Stage 2 safety check via
+  :meth:`SourceDocument.safety_text` instead.
+
+Two reference surfaces (Phase 2.4 task 2.4.5): :meth:`assemble_text` is
+the **mapping/slice** reference (Pass 2a offsets, Pass 2b slice);
+:meth:`safety_text` is the **full authored surface** the Stage 2 LLM
+safety check sees. They coincide for every single-stream source type;
+only video (transcript + visual) splits them.
 """
 
 from datetime import UTC, datetime
@@ -108,20 +118,54 @@ class SourceDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def assemble_text(self) -> str:
-        """Canonical reference text used for LLM offset semantics.
+        """Mapping/slice reference text for LLM offset semantics.
 
         Pass 2a routes this exact string through the mapping prompt; the
         emitted ``start_pos`` / ``end_pos`` are inclusive/exclusive char
         offsets into it. Pass 2b slices this same string to materialise
-        ``DocumentSegment.content``, and Stage 2 LLM safety check sees the
-        same body. Centralising the assembly here prevents silent offset
-        drift between the three pipeline stages.
+        ``DocumentSegment.content``. Centralising the assembly here prevents
+        silent offset drift between those two stages.
 
-        Separator is source_type-conditional (KD-2.2-E): audio transcripts
-        join word/segment text with a single space because STT output is
-        already whitespace-tokenised continuous speech; other source types
-        keep the paragraph-style "\\n\\n" separator preserving authored
-        chunk boundaries (slides, paragraphs, scenes).
+        The Stage 2 LLM safety check uses :meth:`safety_text`, not this
+        method — they coincide for single-stream source types but diverge
+        for video (see below), where this reference narrows to the
+        transcript while safety still sees the full surface.
+
+        Separator is source_type-conditional (KD-2.2-E):
+
+        * audio / video transcripts join with a single space — STT output
+          is already whitespace-tokenised continuous speech, so the
+          word-idx bridge (``chars_per_word_cumsum``) expects exactly that;
+        * video additionally excludes ``VISUAL_SCENE`` chunks (task 2.4.5)
+          so the bridge maps over the transcript word-stream alone;
+        * text / web / presentation keep the paragraph-style "\\n\\n"
+          separator preserving authored chunk boundaries.
         """
+        if self.source_type == SourceType.VIDEO:
+            return " ".join(
+                chunk.text
+                for chunk in self.chunks
+                if chunk.text and chunk.chunk_type != ChunkType.VISUAL_SCENE
+            )
         separator = " " if self.source_type == SourceType.AUDIO else "\n\n"
         return separator.join(chunk.text for chunk in self.chunks if chunk.text)
+
+    def safety_text(self) -> str:
+        """Full authored surface for the Stage 2 LLM safety check (KD-2.1-P).
+
+        Distinct from :meth:`assemble_text`, which for video narrows to the
+        transcript word-stream to serve the word-idx mapping/slice bridge.
+        Stage 2 must still see every authored byte — including the
+        visual-scene descriptions that reproduce on-screen slide text/code —
+        so this method returns the complete surface.
+
+        Default ``== assemble_text()``: audio / text / web / presentation are
+        single-stream, so their safety surface already equals the mapping
+        reference (zero behaviour change). The video override is
+        byte-identical to the pre-task-2.4.5 ``assemble_text`` (a ``"\\n\\n"``
+        join of ALL chunks, transcript + visual), so the Stage 2 safety
+        surface is unchanged by the 2.4.5 reference rework.
+        """
+        if self.source_type == SourceType.VIDEO:
+            return "\n\n".join(chunk.text for chunk in self.chunks if chunk.text)
+        return self.assemble_text()

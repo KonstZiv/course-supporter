@@ -237,11 +237,13 @@ async def arq_ingest_material(
                 outline_summary="",
             )
 
-            # Canonical assembly via SourceDocument.assemble_text() —
-            # same string that Pass 2a's mapping LLM sees and that Pass 2b
-            # slices for DocumentSegment.content. Single source prevents
-            # silent offset drift between the three pipeline stages.
-            submission_text = doc.assemble_text()
+            # Stage 2 safety sees the full authored surface via safety_text().
+            # For single-stream source types this equals assemble_text() (the
+            # Pass 2a mapping reference that Pass 2b slices); for video it also
+            # includes the visual-scene descriptions, which the narrowed
+            # transcript-only assemble_text() reference excludes (task 2.4.5) —
+            # so on-screen slide text/code is never un-vetted by Stage 2.
+            submission_text = doc.safety_text()
             safety_result = await run_stage2_safety_check(
                 submission_text,
                 router=stage_router,

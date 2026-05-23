@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 
 from course_supporter.ingestion.base import MaterialProcessor, ProcessingError
 from course_supporter.ingestion.video_pipeline import steps
+from course_supporter.ingestion.video_pipeline.schemas import STT_RESULT_KEY_TMPL
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -69,7 +70,6 @@ if TYPE_CHECKING:
     from course_supporter.stt.router import STTRouter
 
 _STT_RESULT_TTL_SEC = 3600
-_STT_RESULT_KEY_TMPL = "video_stt_result:{job_id}"
 
 
 class VideoProcessor(MaterialProcessor):
@@ -146,7 +146,7 @@ class VideoProcessor(MaterialProcessor):
         ``SttResult.model_dump_json()`` — the audio word-cache pattern,
         NOT the ``jobs`` row (rule #12 deadlock).
         """
-        key = _STT_RESULT_KEY_TMPL.format(job_id=job_id)
+        key = STT_RESULT_KEY_TMPL.format(job_id=job_id)
         await self._redis.set(key, stt.model_dump_json(), ex=_STT_RESULT_TTL_SEC)
 
     @staticmethod
@@ -157,11 +157,20 @@ class VideoProcessor(MaterialProcessor):
     ) -> SourceDocument:
         """Build the canonical ``SourceDocument`` from Krok 2 + Krok 4 output.
 
-        Transcript words join into a single ``TRANSCRIPT`` chunk; each
-        Pass 1 frame description becomes a ``VISUAL_SCENE`` chunk.
-        ``assemble_text`` keeps the ``"\\n\\n"`` separator for video
-        (``models/source.py`` KD-2.2-E), so transcript and visual blocks
-        stay separable in the reference text that Pass 2a/2b operate on.
+        Transcript words join into a single ``TRANSCRIPT`` chunk; each Pass 1
+        frame description becomes a ``VISUAL_SCENE`` chunk carrying the full
+        ``FrameDescription`` fidelity in ``metadata``
+        (``frame_position_ms`` / ``kind`` / ``scene_id``) — task 2.4.5 reads
+        Pass 1 output back from these chunks (no separate instance-state
+        carry), so the chunks are the single source of the visual content.
+
+        Two reference surfaces follow from this shape (task 2.4.5):
+        ``assemble_text()`` excludes the ``VISUAL_SCENE`` chunks and returns
+        the transcript word-stream (the Pass 2a/2b mapping/slice bridge);
+        ``safety_text()`` keeps every chunk (the Stage 2 safety surface). The
+        ``assemble_text == " ".join(words)`` invariant is asserted here as the
+        runtime precondition for the ``chars_per_word_cumsum`` char-offset
+        bridge (KD-2.2-E precedent, ``audio.py``).
         """
         chunks: list[ContentChunk] = []
         index = 0
@@ -186,29 +195,49 @@ class VideoProcessor(MaterialProcessor):
                     text=frame.description,
                     index=index,
                     start_sec=frame.frame_position_ms / 1000.0,
+                    metadata={
+                        "frame_position_ms": frame.frame_position_ms,
+                        "kind": frame.kind.value,
+                        "scene_id": frame.scene_id,
+                    },
                 )
             )
             index += 1
 
-        return SourceDocument(
+        doc = SourceDocument(
             source_type=SourceType.VIDEO,
             source_url=source.source_url,
             title=source.filename or "",
             chunks=chunks,
         )
 
+        actual = doc.assemble_text()
+        assert actual == transcript_text, (
+            f"VideoProcessor invariant violated: assemble_text() "
+            f"(len={len(actual)}) != ' '.join(words) (len={len(transcript_text)}). "
+            f"assemble_text must exclude VISUAL_SCENE and space-join the "
+            f"transcript word-stream so the chars_per_word_cumsum bridge maps."
+        )
+        return doc
+
     async def process_macro(
         self,
         doc: SourceDocument,
         router: StageRouter,
     ) -> DocumentSummaryDraft:
-        """Krok 5 — Pass 2a mapping (stub).
+        """Krok 5 — Pass 2a semantic mapping (word-idx, task 2.4.5).
 
-        The ``router`` parameter is accepted to match the ABC / orchestrator
-        call site but unused in the skeleton (real Pass 2a wires the text
-        ladder in task 2.4.5).
+        Reads the STT word carrier from Redis (consumer side of the 2.4.2
+        producer write) and the Pass 1 visual descriptions from the
+        ``VISUAL_SCENE`` chunks, then maps the transcript word-stream into a
+        ``DocumentSummaryDraft`` via the ``video_pass_2a_mapping`` ladder
+        (text-reasoning). ``router`` is the StageRouter passed by the
+        orchestrator (method-arg, as audio / presentation), distinct from the
+        ``self._stage_router`` the Krok 4 vision Pass 1 uses.
         """
-        return await steps.step_5_pass2a_mapping(doc)
+        return await steps.step_5_pass2a_mapping(
+            doc, redis=self._redis, stage_router=router
+        )
 
     async def process_detail(
         self,

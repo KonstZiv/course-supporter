@@ -24,17 +24,25 @@ Steps 1-4 are invoked from ``VideoProcessor.process_raw``; step 5 from
 
 from __future__ import annotations
 
+import bisect
 import itertools
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from course_supporter.ingestion.base import UnsupportedFormatError
+import structlog
+from pydantic import ValidationError
+
+from course_supporter.ingestion.audio import chars_per_word_cumsum
+from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
+    AudioPass2aResult,
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
 from course_supporter.ingestion.video_pipeline import detection, media, vision
 from course_supporter.ingestion.video_pipeline.schemas import (
+    STT_RESULT_KEY_TMPL,
     DetectionResult,
     FrameDescription,
     SttPause,
@@ -42,12 +50,24 @@ from course_supporter.ingestion.video_pipeline.schemas import (
     SttWord,
     VideoFileMetadata,
 )
+from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.models.source import ChunkType
+from course_supporter.service_logging import get_current_job_id
 
 if TYPE_CHECKING:
+    from arq.connections import ArqRedis
+
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.models.source import SourceDocument
     from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.stt.router import STTRouter
+
+logger = structlog.get_logger()
+
+# Video Pass 2a ladder stage (config/ladders_video.yaml). The "PASS" token
+# trips ruff S105 (hardcoded-password heuristic) — it is a stage id, not a
+# secret, hence the noqa (mirrors audio.py).
+_PASS_2A_STAGE_NAME = "video_pass_2a_mapping"  # noqa: S105
 
 # 150 min — mirrors AudioProcessor.MAX_DURATION_SEC (Phase 2.2 vision §5).
 # Enforced worker-side after ffprobe, BEFORE STT, so an over-long video
@@ -199,67 +219,152 @@ async def step_4_pass1_vision(
 # ── Krok 5 — invoked from process_macro ────────────────────────────
 
 
-async def step_5_pass2a_mapping(doc: SourceDocument) -> DocumentSummaryDraft:
-    """Krok 5 — Pass 2a semantic mapping (§1).
+def _fmt_ts(position_ms: int) -> str:
+    """``frame_position_ms`` → ``MM:SS`` (minutes may exceed 59 for long video)."""
+    total_sec = position_ms // 1000
+    return f"{total_sec // 60:02d}:{total_sec % 60:02d}"
 
-    Skeleton: no premium text LLM (task 2.4.5). Builds a contiguous
-    segment cover over the assembled reference text so the persist
-    cascade (``DocumentSegmentRepository.create_batch`` bounds-check +
-    ``DocumentSummaryDraft`` contiguity validator) is exercised on real
-    data. The last segment is flagged ``noisy=True`` to drive the Pass
-    2c branch in :func:`step_7_pass2c_cleanup`.
+
+def _build_visual_overlay(doc: SourceDocument, words: list[SttWord]) -> str:
+    """Visual-overlay block (variant B): each frame anchored to a word index.
+
+    A separate block (NOT inline in the word-stream) so the transcript
+    word-index count stays untouched and the ``chars_per_word_cumsum`` bridge
+    maps cleanly. The word-anchor is **deterministic** — a bisect of
+    ``frame_position_ms`` into the word start times, not an LLM guess —
+    giving the mapping LLM a reliable «this slide appears around word N» cue.
+    ``frame_position_ms`` is read from the ``VISUAL_SCENE`` chunk ``metadata``
+    (exact int ms; no float round-trip through ``start_sec``).
     """
-    reference = doc.assemble_text()
-    total = len(reference)
-    segments: list[DocumentSegmentDraft] = []
+    visual_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.VISUAL_SCENE]
+    if not visual_chunks or not words:
+        return ""
+    word_starts = [w.start_ms for w in words]
+    lines: list[str] = []
+    for chunk in visual_chunks:
+        fp_ms = int(chunk.metadata.get("frame_position_ms", 0))
+        anchor = max(0, bisect.bisect_right(word_starts, fp_ms) - 1)
+        lines.append(f"[word ~{anchor}, {_fmt_ts(fp_ms)}] {chunk.text}")
+    return "\n".join(lines)
 
-    if total >= 2:
-        split = total // 2
-        segments.append(
-            DocumentSegmentDraft(
-                order=0,
-                start_pos=0,
-                end_pos=split,
-                title="Intro (mock)",
-                description="Mock opening segment.",
-                main_concepts=["mock-concept-a"],
-                secondary_concepts=[],
-                noisy=False,
-            )
+
+async def step_5_pass2a_mapping(
+    doc: SourceDocument,
+    *,
+    redis: ArqRedis,
+    stage_router: StageRouter,
+) -> DocumentSummaryDraft:
+    """Krok 5 — Pass 2a semantic mapping over the transcript word-stream (§1).
+
+    Mirrors the audio Pass 2a word-idx contract (KD-2.2-A/F/H): reuses
+    ``AudioPass2aResult`` (identical word-idx schema; the video-specific
+    ``noisy`` semantics live in the prompt, not the schema) and
+    ``chars_per_word_cumsum`` (the word-idx → char-offset bridge). Reads the
+    STT word carrier from Redis (consumer side of the 2.4.2 producer write)
+    and the Pass 1 visual descriptions from the ``VISUAL_SCENE`` chunks,
+    anchoring each visual to a transcript word so the LLM segments the clean
+    word-stream while seeing a deterministic visual-overlay block.
+
+    Failures (carrier cache miss, ladder exhausted, persistent JSON
+    validation fail, word-idx out of range) → ``ProcessingError`` (R1).
+    """
+    job_id = get_current_job_id()
+    if job_id is None:
+        raise ProcessingError(
+            "step_5_pass2a_mapping requires ContextVar job_id; the ARQ task "
+            "entry must set it before invocation."
         )
-        segments.append(
-            DocumentSegmentDraft(
-                order=1,
-                start_pos=split,
-                end_pos=total,
-                title="Body (mock, noisy)",
-                description="Mock body segment flagged noisy.",
-                main_concepts=["mock-concept-b"],
-                secondary_concepts=["mock-concept-a"],
-                noisy=True,
-            )
+
+    raw = await redis.get(STT_RESULT_KEY_TMPL.format(job_id=job_id))
+    if raw is None:
+        raise ProcessingError(
+            f"Video Pass 2a: STT carrier cache miss for job_id={job_id}. "
+            f"process_raw (Krok 2) must populate video_stt_result before "
+            f"process_macro runs."
         )
-    elif total == 1:
-        segments.append(
-            DocumentSegmentDraft(
-                order=0,
-                start_pos=0,
-                end_pos=1,
-                title="Whole (mock)",
-                description="Mock single segment.",
-                main_concepts=["mock-concept-a"],
-                secondary_concepts=[],
-                noisy=True,
+    stt = SttResult.model_validate_json(raw)
+    words = stt.words
+    total_word_count = len(words)
+
+    words_json = json.dumps(
+        [
+            {"text": w.text, "start": w.start_ms / 1000.0, "end": w.end_ms / 1000.0}
+            for w in words
+        ],
+        separators=(",", ":"),
+    )
+    visuals = _build_visual_overlay(doc, words)
+
+    parsed: dict[str, AudioPass2aResult] = {}
+
+    def _validator(content: str) -> None:
+        """Translate a Pydantic ``ValidationError`` into a ``StructuralRetryError``.
+
+        Reuses ``AudioPass2aResult`` (same word-idx schema) — the contiguity /
+        full-cover / subsegment-cover validators apply unchanged, with
+        ``total_word_count`` carried via the Pydantic context.
+        """
+        try:
+            local = AudioPass2aResult.model_validate_json(
+                content, context={"total_word_count": total_word_count}
             )
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            first_loc = ".".join(str(x) for x in first.get("loc", []))
+            logger.warning(
+                "video_pass2a.validation.failed",
+                job_id=str(job_id),
+                first_error_msg=first.get("msg", ""),
+                first_error_loc=first_loc,
+                total_word_count=total_word_count,
+            )
+            feedback = (
+                f"{first.get('msg', 'validation error')} "
+                f"(field: {first_loc or '<root>'}). "
+                "Regenerate the response with valid output."
+            )
+            raise StructuralRetryError(feedback) from exc
+        parsed["result"] = local
+
+    await stage_router.execute_for_stage(
+        _PASS_2A_STAGE_NAME,
+        response_validator=_validator,
+        words_count=total_word_count,
+        words_json=words_json,
+        visuals=visuals,
+    )
+    result = parsed["result"]
+
+    cumsum = chars_per_word_cumsum(words)
+    segment_drafts = [
+        DocumentSegmentDraft(
+            order=idx,
+            start_pos=cumsum[seg.start_word_idx],
+            end_pos=cumsum[seg.end_word_idx],
+            title=seg.title,
+            description=seg.description,
+            main_concepts=list(seg.main_concepts),
+            secondary_concepts=list(seg.secondary_concepts),
+            start_time_sec=words[seg.start_word_idx].start_ms / 1000.0,
+            end_time_sec=words[seg.end_word_idx - 1].end_ms / 1000.0,
+            noisy=seg.noisy,
         )
-    # total == 0 → empty segments (the validator allows an empty cover).
+        for idx, seg in enumerate(result.segments)
+    ]
+
+    all_main: set[str] = set()
+    all_secondary: set[str] = set()
+    for seg in result.segments:
+        all_main.update(seg.main_concepts)
+        all_secondary.update(seg.secondary_concepts)
+    all_secondary -= all_main
 
     return DocumentSummaryDraft(
-        title="Mock video summary",
-        description="Skeleton mock summary (Phase 2.4 task 2.4.1).",
-        main_concepts=["mock-concept-a", "mock-concept-b"],
-        secondary_concepts=[],
-        segments=segments,
+        title=result.title or "",
+        description=result.description,
+        main_concepts=sorted(all_main),
+        secondary_concepts=sorted(all_secondary),
+        segments=segment_drafts,
     )
 
 

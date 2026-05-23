@@ -20,6 +20,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+# Redis key for the STT inter-stage carrier — single source shared by the
+# producer (``VideoProcessor._store_stt_result``, Krok 2 / task 2.4.2) and
+# the consumer (``steps.step_5_pass2a_mapping``, Krok 5 / task 2.4.5). Kept
+# here (a leaf module) so neither side imports the other.
+STT_RESULT_KEY_TMPL = "video_stt_result:{job_id}"
+
 
 class VideoFileMetadata(BaseModel):
     """Krok 1 — container metadata probed from the uploaded video (§1).

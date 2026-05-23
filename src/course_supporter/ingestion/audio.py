@@ -83,7 +83,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 from arq.connections import ArqRedis
@@ -124,7 +125,20 @@ _PASS_2A_STAGE_NAME = "audio_pass_2a_mapping"  # noqa: S105
 _PASS_2C_STAGE_NAME = "audio_pass_2c_denoise"  # noqa: S105
 
 
-def chars_per_word_cumsum(words: list[STTWord]) -> list[int]:
+class SupportsText(Protocol):
+    """A word-like token exposing ``.text`` — the only field the bridge reads.
+
+    Lets :func:`chars_per_word_cumsum` serve any word-stream source type
+    structurally: audio ``STTWord`` and video ``SttWord`` both satisfy it
+    without a shared base class. (Phase 2.4 task 2.4.5 — video reuse;
+    DD-2.4-E covers extracting the bridge to a shared module if a third
+    cross-processor consumer appears.)
+    """
+
+    text: str
+
+
+def chars_per_word_cumsum(words: Sequence[SupportsText]) -> list[int]:
     """Word-index → char-offset bridge for audio Pass 2b (KD-2.2-F).
 
     Builds a cumulative offset array such that ``cumsum[i]`` is the

@@ -44,6 +44,7 @@ _PROBE = f"{_PKG}.media.probe_metadata"
 _EXTRACT = f"{_PKG}.media.extract_audio"
 _STEP3 = f"{_PKG}.steps.step_3_detection"
 _STEP4 = f"{_PKG}.steps.step_4_pass1_vision"
+_STEP5 = f"{_PKG}.steps.step_5_pass2a_mapping"
 _GET_JOB_ID = f"{_PKG}.processor.get_current_job_id"
 
 _JOB_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
@@ -237,6 +238,17 @@ class TestProcessRawPipeline:
         assert ChunkType.TRANSCRIPT in chunk_types
         assert ChunkType.VISUAL_SCENE in chunk_types
         assert doc.metadata["detected_language"] == "en"
+        # B' (task 2.4.5): VISUAL_SCENE chunks carry full FrameDescription
+        # fidelity in metadata so Pass 2a reads frame data from chunks (no
+        # instance-state). assemble_text excludes them (transcript-only).
+        visual = next(c for c in doc.chunks if c.chunk_type == ChunkType.VISUAL_SCENE)
+        assert visual.metadata["frame_position_ms"] == 0
+        assert visual.metadata["kind"] == "anchor"
+        assert visual.metadata["scene_id"] == 0
+        # assemble_text (mapping reference) is transcript-only — the visual
+        # description is excluded (it reaches Stage 2 via safety_text instead).
+        assert doc.assemble_text() == "Hello"
+        assert "Slide: intro title." not in doc.assemble_text()
 
     async def test_writes_stt_carrier_to_redis_in_readable_form(self) -> None:
         """Acceptance #4 — Redis payload round-trips via SttResult."""
@@ -341,24 +353,49 @@ def _doc_with_text(text: str) -> SourceDocument:
     )
 
 
-class TestMacroAndDetailStubs:
-    """Krok 5-7 stubs still produce a valid contiguous cover (unchanged)."""
+def _draft_over(doc: SourceDocument) -> DocumentSummaryDraft:
+    """A valid single-(noisy)-segment cover over ``doc`` for the macro/detail wiring."""
+    ref = doc.assemble_text()
+    return DocumentSummaryDraft(
+        title="t",
+        description="d",
+        main_concepts=[],
+        secondary_concepts=[],
+        segments=[
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=0,
+                end_pos=len(ref),
+                title="s",
+                description="d",
+                noisy=True,
+            )
+        ],
+    )
 
-    async def test_macro_returns_contiguous_cover(self) -> None:
+
+class TestMacroAndDetail:
+    """process_macro delegates to the real step_5 (Krok 5); step_6/7 stubs run."""
+
+    async def test_macro_delegates_to_step5(self) -> None:
+        """process_macro threads doc + redis + router into step_5 and returns it."""
         proc = _make_processor()
         doc = _doc_with_text("some reasonably long mock transcript text here")
+        draft = _draft_over(doc)
 
-        summary = await proc.process_macro(doc, Mock())
+        with patch(_STEP5, new=AsyncMock(return_value=draft)) as step5:
+            summary = await proc.process_macro(doc, Mock())
 
-        assert isinstance(summary, DocumentSummaryDraft)
-        assert summary.segments[0].start_pos == 0
-        assert summary.segments[-1].end_pos == len(doc.assemble_text())
-        assert summary.segments[-1].noisy is True
+        assert summary is draft
+        kwargs = step5.await_args.kwargs
+        assert kwargs["redis"] is proc._redis
+        assert "stage_router" in kwargs
 
     async def test_detail_fills_and_cleans(self) -> None:
+        """Krok 6-7 stubs slice content + prefix noisy segments (unchanged)."""
         proc = _make_processor()
         doc = _doc_with_text("some reasonably long mock transcript text here")
-        summary = await proc.process_macro(doc, Mock())
+        summary = _draft_over(doc)
 
         detail = await proc.process_detail(doc, summary)
 

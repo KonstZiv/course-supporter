@@ -139,19 +139,25 @@ def create_processors(
         stt_router: Optional STTRouter for VIDEO + AUDIO transcription.
         redis: Optional ArqRedis client for the STT inter-stage carriers
             (video ``video_stt_result``; audio word-cache KD-2.2-D).
-        stage_router: Optional StageRouter for the VIDEO Pass 1 vision
-            ladder (Krok 4). VIDEO-only — AUDIO routes its Pass 2a/2c via
-            the ``process_macro`` / ``process_detail`` method argument, so
-            it needs no injected stage_router.
+        stage_router: StageRouter injected into both audio + video
+            processors. VIDEO needs it for the Krok 4 Pass 1 vision ladder
+            (inside ``process_raw``, before Stage 2 safety). AUDIO needs it
+            for Pass 2c selective denoise: the orchestrator passes a router
+            only to ``process_macro``, never to ``process_detail``, so audio
+            Pass 2c (task 2.4.7) sources the injected router — without it the
+            denoise stays inert (the latent gap closed here). Optional so an
+            unmet dep simply leaves Pass 2c skipping; in production
+            ``api/tasks.py`` always supplies it from the job ctx.
 
     Returns:
         Mapping from SourceType to fully-wired processor instances. The
-        dispatch guard is **asymmetric**: AUDIO needs STT + Redis; VIDEO
-        needs STT + Redis **and** ``stage_router`` (its Pass 1 lives in
-        ``process_raw``, before Stage 2 safety, so the vision ladder is
-        injected rather than passed to ``process_macro``). Each is absent
-        when its deps are unmet; factory dispatch in ``api/tasks.py``
-        raises ``KeyError`` for an unwired source type.
+        dispatch guard is **asymmetric**: AUDIO needs STT + Redis (and takes
+        ``stage_router`` for Pass 2c when present); VIDEO needs STT + Redis
+        **and** ``stage_router`` (its Pass 1 lives in ``process_raw``, before
+        Stage 2 safety, so the vision ladder is injected rather than passed
+        to ``process_macro``). Each is absent when its required deps are
+        unmet; factory dispatch in ``api/tasks.py`` raises ``KeyError`` for
+        an unwired source type.
     """
     result: dict[SourceType, MaterialProcessor] = {
         SourceType.PRESENTATION: PresentationProcessor(),
@@ -161,16 +167,20 @@ def create_processors(
         ),
     }
 
-    # AUDIO needs STT (stage 1) + a Redis inter-stage carrier. VIDEO needs
-    # those two plus the StageRouter for its Krok 4 Pass 1 vision call —
-    # injected because Pass 1 runs inside ``process_raw`` (the vision
-    # ladder can't arrive via the ``process_macro`` method arg). Phase 2.4
-    # task 2.4.2 wired the real VideoProcessor (``ingestion.video_pipeline``);
-    # the legacy ``ingestion.video`` processors are removed in 2.4.9.
+    # AUDIO needs STT (stage 1) + a Redis inter-stage carrier; it also takes
+    # the StageRouter for Pass 2c selective denoise (task 2.4.7 — the
+    # orchestrator never passes a router to process_detail, so the injected
+    # one activates the denoise). VIDEO needs STT + Redis plus the StageRouter
+    # for its Krok 4 Pass 1 vision call — injected because Pass 1 runs inside
+    # ``process_raw`` (the vision ladder can't arrive via the ``process_macro``
+    # method arg). Phase 2.4 task 2.4.2 wired the real VideoProcessor
+    # (``ingestion.video_pipeline``); the legacy ``ingestion.video`` processors
+    # are removed in 2.4.9.
     if stt_router is not None and redis is not None:
         result[SourceType.AUDIO] = AudioProcessor(
             stt_router=stt_router,
             redis=redis,
+            stage_router=stage_router,
         )
         if stage_router is not None:
             result[SourceType.VIDEO] = VideoProcessor(

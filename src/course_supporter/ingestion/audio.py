@@ -195,10 +195,18 @@ class AudioProcessor(MaterialProcessor):
         *,
         stt_router: STTRouter,
         redis: ArqRedis,
+        stage_router: StageRouter | None = None,
     ) -> None:
         super().__init__()
         self._stt_router = stt_router
         self._redis = redis
+        # Pass 2c text-cleanup ladder (task 2.4.7). Optional so the ~20
+        # direct ``AudioProcessor(stt_router=, redis=)`` test constructions
+        # keep working; the factory injects the real router in production
+        # (``api/tasks.py`` ctx). When present it is the Pass 2c router
+        # source — process_detail prefers it over the (never-passed) ABC
+        # ``router`` method-arg, mirroring the VideoProcessor injection.
+        self._stage_router = stage_router
 
     async def _store_words(self, job_id: uuid.UUID, words: list[STTWord]) -> None:
         """Store STT words in Redis (KD-2.2-D inline cache).
@@ -475,8 +483,7 @@ class AudioProcessor(MaterialProcessor):
         ``doc.assemble_text()[start_pos:end_pos]``. The bridge
         offsets were populated in process_macro per KD-2.2-F.
 
-        Pass 2c (selective, only when ``router`` is provided):
-        segments з ``noisy=True`` go through the
+        Pass 2c (selective): segments з ``noisy=True`` go through the
         ``audio_pass_2c_denoise`` stage; the single-string response
         replaces the raw slice as the segment's ``content``. Non-
         noisy segments keep the raw slice.
@@ -486,13 +493,13 @@ class AudioProcessor(MaterialProcessor):
         validator but are not aggregated up for the routing
         decision (per module docstring rationale).
 
-        The ``router`` parameter is keyword-only optional —
-        AudioProcessor extends ``MaterialProcessor.process_detail``
-        ABC signature with this kwarg for Pass 2c routing. Sub-area
-        #7 (arq task wiring) passes ``stage_router`` at the call
-        site; until then, calling without ``router`` skips Pass 2c
-        with a warning and returns raw slices only (activation
-        deferral).
+        Router source (task 2.4.7): the orchestrator passes a router
+        only to ``process_macro``, never to ``process_detail`` — so
+        Pass 2c uses the ctor-injected ``self._stage_router`` (wired by
+        the factory in production), preferring it over the keyword-only
+        ``router`` method-arg, which is retained for ABC symmetry. Only
+        when neither is available (router-less direct construction in
+        tests) does Pass 2c skip with a warning and return raw slices.
         """
         reference_text = doc.assemble_text()
 
@@ -510,21 +517,25 @@ class AudioProcessor(MaterialProcessor):
         if not noisy_indices:
             return sliced
 
-        if router is None:
+        # Prefer the ctor-injected stage_router (factory wiring, task 2.4.7)
+        # over the never-passed ABC method-arg. In production one is always
+        # present, so the skip below is reachable only in router-less direct
+        # construction (tests).
+        effective_router = self._stage_router or router
+        if effective_router is None:
             logger.warning(
                 "audio_pass2c.skipped_no_router",
                 noisy_segment_count=len(noisy_indices),
                 reason=(
-                    "AudioProcessor.process_detail invoked without "
-                    "router; Pass 2c selective denoise skipped. "
-                    "Activation deferral until sub-area #7 wires "
-                    "stage_router at the call site."
+                    "AudioProcessor.process_detail has no stage_router "
+                    "(neither injected nor passed); Pass 2c selective "
+                    "denoise skipped, raw slices returned."
                 ),
             )
             return sliced
 
         denoise_results = await asyncio.gather(
-            *(self._denoise_segment(sliced[i], router) for i in noisy_indices)
+            *(self._denoise_segment(sliced[i], effective_router) for i in noisy_indices)
         )
         for i, cleaned in zip(noisy_indices, denoise_results, strict=True):
             sliced[i] = sliced[i].model_copy(update={"content": cleaned})

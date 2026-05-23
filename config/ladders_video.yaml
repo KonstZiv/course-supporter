@@ -83,8 +83,9 @@ stages:
   #      markdown-fence strip needed — the validator mirrors audio's).
   #   2. gemini/gemini-2.5-pro — premium fallback (deeper reasoning for long
   #      transcripts; presentation Pass 2a fallback precedent).
-  #   3. anthropic/claude-sonnet-4-20250514 — provider-diverse deep fallback
-  #      (rare; only if both gemini rungs exhaust).
+  #   3. anthropic/claude-sonnet-4-5-20250929 — provider-diverse deep fallback
+  #      (rare; only if both gemini rungs exhaust). Current Sonnet snapshot —
+  #      NOT the deprecated claude-sonnet-4-20250514.
   # Per-rung ``max_output_tokens: 8192`` guards a long segment+subsegment JSON
   # against mid-object truncation (which would otherwise surface as a spurious
   # validation failure). All three are registered in external_services.yaml
@@ -102,5 +103,5 @@ stages:
         model: gemini-2.5-pro
         max_output_tokens: 8192
       - provider: anthropic
-        model: claude-sonnet-4-20250514
+        model: claude-sonnet-4-5-20250929
         max_output_tokens: 8192

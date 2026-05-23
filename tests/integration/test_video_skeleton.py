@@ -184,19 +184,46 @@ def _build_ctx(
     }
 
 
+def _stage_router_for_denoise(cleaned: str = "cleaned transcript") -> AsyncMock:
+    """A stage_router that drives the Pass 2c validator with cleaned text.
+
+    Krok 4 (Pass 1 vision) is patched out in every test, so the injected
+    ``self._stage_router`` is only reached by Krok 7 (Pass 2c) — task 2.4.7
+    routes the noisy ``_fake_pass2a`` segment through it. The bare mock that
+    sufficed for the step_7 stub is no longer enough now that step_7 awaits a
+    real ``execute_for_stage`` and reads back the validated single-string.
+    """
+    router = AsyncMock()
+
+    async def _execute(
+        stage: str,
+        *,
+        response_validator: Any,
+        **template_kwargs: object,
+    ) -> MagicMock:
+        response_validator(cleaned)
+        return MagicMock()
+
+    router.execute_for_stage.side_effect = _execute
+    return router
+
+
 def _video_processors(
     stt_router: AsyncMock | None = None,
 ) -> dict[SourceType, VideoProcessor]:
     """Inject the real VideoProcessor at the VIDEO dispatch key.
 
-    The vision call (Krok 4) is patched at the ``step_4_pass1_vision`` seam
-    in each test, so the injected ``stage_router`` is a bare mock here.
+    The vision call (Krok 4) is patched at the ``step_4_pass1_vision`` seam in
+    each test; the injected ``stage_router`` is reached only by Krok 7 (Pass 2c,
+    task 2.4.7) and drives the denoise on the noisy ``_fake_pass2a`` segment —
+    an end-to-end check that the injected router (not the never-passed ABC arg)
+    reaches Pass 2c through the orchestrator.
     """
     return {
         SourceType.VIDEO: VideoProcessor(
             stt_router=stt_router or _stt_router_with_words(),
             redis=AsyncMock(),
-            stage_router=MagicMock(),
+            stage_router=_stage_router_for_denoise(),
         )
     }
 

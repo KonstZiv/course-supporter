@@ -24,6 +24,7 @@ Steps 1-4 are invoked from ``VideoProcessor.process_raw``; step 5 from
 
 from __future__ import annotations
 
+import asyncio
 import bisect
 import itertools
 import json
@@ -37,6 +38,7 @@ from course_supporter.ingestion.audio import chars_per_word_cumsum
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
+    AudioPass2cResult,
     DocumentSegmentDraft,
     DocumentSummaryDraft,
     VisualSceneRef,
@@ -69,6 +71,11 @@ logger = structlog.get_logger()
 # trips ruff S105 (hardcoded-password heuristic) — it is a stage id, not a
 # secret, hence the noqa (mirrors audio.py).
 _PASS_2A_STAGE_NAME = "video_pass_2a_mapping"  # noqa: S105
+
+# Video Pass 2c text-cleanup ladder stage (config/ladders_video.yaml). Separate
+# calibration unit from audio Pass 2c (own ladder + prompt) per KD-2.3-X; same
+# registered cheap-tier pool. noqa: S105 as above.
+_PASS_2C_STAGE_NAME = "video_pass_2c_denoise"  # noqa: S105
 
 # 150 min — mirrors AudioProcessor.MAX_DURATION_SEC (Phase 2.2 vision §5).
 # Enforced worker-side after ffprobe, BEFORE STT, so an over-long video
@@ -455,21 +462,88 @@ async def step_6_pass2b_slice(
     return sliced
 
 
+async def _denoise_segment(
+    draft: DocumentSegmentDraft,
+    stage_router: StageRouter,
+) -> str:
+    """Pass 2c denoise call for a single noisy transcript segment (KD2d).
+
+    Mirror of the audio Pass 2c precedent (``audio.py`` ``_denoise_segment``):
+    the cheap text ladder (``video_pass_2c_denoise``) cleans the raw transcript
+    slice (disfluencies / STT artefacts). The prompt commits to single-string
+    output (no JSON wrapping); the ``response_validator`` closure wraps the raw
+    response into ``AudioPass2cResult.content`` (reused — same single-string
+    contract, KD-2.2-I) and a :class:`pydantic.ValidationError` is translated to
+    :class:`StructuralRetryError` so the ladder retry + fallback runs before
+    terminal failure. Only the transcript ``content`` is cleaned — the
+    ``visual_content`` stream is clean by construction (KD2d) and never reaches
+    here. Returns the cleaned content as a plain string.
+    """
+    raw_content = draft.content or ""
+    parsed: dict[str, AudioPass2cResult] = {}
+
+    def _video_pass_2c_validator(content: str) -> None:
+        try:
+            local = AudioPass2cResult.model_validate({"content": content})
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            first_loc = ".".join(str(x) for x in first.get("loc", []))
+            logger.warning(
+                "video_pass2c.validation.failed",
+                segment_order=draft.order,
+                first_error_msg=first.get("msg", ""),
+                first_error_loc=first_loc,
+            )
+            feedback = (
+                f"{first.get('msg', 'validation error')} "
+                f"(field: {first_loc or '<root>'}). "
+                "Regenerate the response as plain cleaned text."
+            )
+            raise StructuralRetryError(feedback) from exc
+        parsed["result"] = local
+
+    await stage_router.execute_for_stage(
+        _PASS_2C_STAGE_NAME,
+        response_validator=_video_pass_2c_validator,
+        content=raw_content,
+        title=draft.title,
+        description=draft.description,
+        main_concepts_json=json.dumps(draft.main_concepts, separators=(",", ":")),
+        secondary_concepts_json=json.dumps(
+            draft.secondary_concepts, separators=(",", ":")
+        ),
+    )
+    return parsed["result"].content
+
+
 async def step_7_pass2c_cleanup(
     segments: list[DocumentSegmentDraft],
+    *,
+    stage_router: StageRouter,
 ) -> list[DocumentSegmentDraft]:
-    """Krok 7 — Pass 2c cleanup of noisy segments (§1).
+    """Krok 7 — Pass 2c selective denoise of noisy transcript segments (§1).
 
-    Skeleton: no cheap text LLM (task 2.4.7). Selective on ``noisy``,
-    mirroring the audio Pass 2c routing; the stub prefixes a marker
-    instead of denoising. Non-noisy segments keep their raw slice.
+    The cheap text ladder (``video_pass_2c_denoise``) cleans the transcript
+    ``content`` of segments Pass 2a flagged ``noisy=True`` (disfluencies, STT
+    artefacts); non-noisy segments keep their raw slice. Mirrors the audio
+    Pass 2c routing — ``asyncio.gather`` over the noisy subset (chunks
+    independent). **Only ``content`` is touched**: ``visual_content`` is clean
+    by construction (KD2d) and passes through ``model_copy`` untouched.
+
+    An empty noisy set returns the list as-is (zero LLM calls). The
+    ``content`` guard mirrors audio (a ``noisy`` segment whose ``content`` is
+    falsy is skipped — it cannot occur after Pass 2b but is guarded). Ladder
+    exhaustion propagates from ``execute_for_stage`` as ``ProcessingError``
+    (R1) up through ``process_detail``.
     """
-    cleaned: list[DocumentSegmentDraft] = []
-    for draft in segments:
-        if draft.noisy and draft.content is not None:
-            cleaned.append(
-                draft.model_copy(update={"content": f"[cleaned] {draft.content}"})
-            )
-        else:
-            cleaned.append(draft)
-    return cleaned
+    noisy_indices = [i for i, d in enumerate(segments) if d.noisy and d.content]
+    if not noisy_indices:
+        return segments
+
+    cleaned_contents = await asyncio.gather(
+        *(_denoise_segment(segments[i], stage_router) for i in noisy_indices)
+    )
+    result = list(segments)
+    for i, cleaned in zip(noisy_indices, cleaned_contents, strict=True):
+        result[i] = result[i].model_copy(update={"content": cleaned})
+    return result

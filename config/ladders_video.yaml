@@ -105,3 +105,48 @@ stages:
       - provider: anthropic
         model: claude-sonnet-4-5-20250929
         max_output_tokens: 8192
+
+  # Pass 2c selective denoise (KD2d + KD8/KD-2.3-X; task 2.4.7).
+  # Input: one noisy transcript segment per call — ``content`` (raw slice) +
+  #   the Pass 2a metadata (``title`` / ``description`` / concepts) via Jinja
+  #   render context; image bytes do NOT flow here (text-cleanup, not vision).
+  # Output: a single plain-text string (NOT JSON) — the cleaned transcript —
+  #   wrapped into ``AudioPass2cResult.content`` (reused, KD-2.2-I) by the
+  #   ``_denoise_segment`` response_validator; a ``ValidationError`` →
+  #   ``StructuralRetryError`` (one retry → fallback), symmetric with audio.
+  # Invocation site: ``video_pipeline.steps._denoise_segment`` (one call per
+  #   noisy segment, ``asyncio.gather`` over the subset inside step_7, which
+  #   ``VideoProcessor.process_detail`` runs with the injected stage_router).
+  #
+  # Ladder rationale (text-cleanup; mechanism CI-landed, ranking is the
+  # operator-run RUN_SMOKE spike per KD8/KD-2.3-X — calibrated *within* the
+  # registered cheap-tier pool, a separate calibration unit from audio Pass 2c
+  # (own ladder + prompt) so a video re-rank cannot silently perturb the
+  # production audio denoise). Seed mirrors the audio Pass 2c pool (denoise is
+  # cheaper than Pass 2a mapping — bounded output, editorial not generative):
+  #   1. gemini/gemini-3.1-flash-lite — cost-first primary (audio Pass 2c rung).
+  #   2. gemini/gemini-2.5-flash — second tier.
+  #   3. anthropic/claude-haiku-4-5-20251001 — provider-diverse deep fallback.
+  # Per-rung ``max_output_tokens: 8192`` pins the output budget rung-uniform
+  # (mirrors Pass 1 / Pass 2a). Probe (2026-05-23): the StageRouter calls
+  # providers directly (NOT the legacy ModelRouter chain), so an unpinned rung
+  # sends ``max_tokens=None`` — gemini then uses its implicit model default and
+  # anthropic falls back to its own provider default (8192). Those diverge per
+  # provider; the explicit pin makes the output budget identical and explicit on
+  # every rung, so a truncated denoise can't hide behind a silent per-provider
+  # default (the Pass 1 / 2a rationale). 8192 comfortably covers a single
+  # segment's cleaned transcript (~15 min ≈ 3.5k tokens). NB: there is no 4096
+  # cap on these rungs — 4096 is the DashScope default and Pass 2c has no
+  # DashScope rung. All three are registered in external_services.yaml.
+  video_pass_2c_denoise:
+    prompt_ref: "prompts/video_pass_2c_denoise/v1.md"
+    ladder:
+      - provider: gemini
+        model: gemini-3.1-flash-lite
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-flash
+        max_output_tokens: 8192
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001
+        max_output_tokens: 8192

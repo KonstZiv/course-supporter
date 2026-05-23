@@ -246,12 +246,20 @@ class VideoProcessor(MaterialProcessor):
         *,
         router: StageRouter | None = None,
     ) -> list[DocumentSegmentDraft]:
-        """Krok 6-7 — Pass 2b slice + Pass 2c cleanup (stubs).
+        """Krok 6-7 — Pass 2b slice + Pass 2c selective denoise (task 2.4.7).
 
-        Extends the ABC ``process_detail`` signature with the keyword-only
-        ``router`` (symmetric with AudioProcessor). The orchestrator calls
-        this without a router; the skeleton's Pass 2c stub needs none (real
-        cleanup wires the cheap text ladder in task 2.4.7).
+        Pass 2b (``step_6``) is zero-LLM. Pass 2c (``step_7``) routes the
+        transcript ``content`` of ``noisy`` segments through the
+        ``video_pass_2c_denoise`` ladder. The router is the ctor-injected
+        ``self._stage_router`` — **not** the keyword-only ``router`` arg: the
+        orchestrator passes a router only to ``process_macro`` (``api/tasks.py``),
+        never to ``process_detail``, so Pass 2c sources the same StageRouter
+        that Krok 4 Pass 1 already uses (``self._stage_router``). VideoProcessor
+        has it from the ctor (task 2.4.4), so Pass 2c runs without any
+        orchestrator/ABC change. The ``router`` kwarg is kept for ABC symmetry
+        with AudioProcessor and is otherwise unused here.
         """
         sliced = await steps.step_6_pass2b_slice(doc, summary_draft)
-        return await steps.step_7_pass2c_cleanup(sliced)
+        return await steps.step_7_pass2c_cleanup(
+            sliced, stage_router=self._stage_router
+        )

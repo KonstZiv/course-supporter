@@ -45,6 +45,8 @@ _EXTRACT = f"{_PKG}.media.extract_audio"
 _STEP3 = f"{_PKG}.steps.step_3_detection"
 _STEP4 = f"{_PKG}.steps.step_4_pass1_vision"
 _STEP5 = f"{_PKG}.steps.step_5_pass2a_mapping"
+_STEP6 = f"{_PKG}.steps.step_6_pass2b_slice"
+_STEP7 = f"{_PKG}.steps.step_7_pass2c_cleanup"
 _GET_JOB_ID = f"{_PKG}.processor.get_current_job_id"
 
 _JOB_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
@@ -375,7 +377,7 @@ def _draft_over(doc: SourceDocument) -> DocumentSummaryDraft:
 
 
 class TestMacroAndDetail:
-    """process_macro delegates to the real step_5 (Krok 5); step_6/7 stubs run."""
+    """process_macro delegates to real step_5; process_detail wires step_6→7."""
 
     async def test_macro_delegates_to_step5(self) -> None:
         """process_macro threads doc + redis + router into step_5 and returns it."""
@@ -391,19 +393,29 @@ class TestMacroAndDetail:
         assert kwargs["redis"] is proc._redis
         assert "stage_router" in kwargs
 
-    async def test_detail_fills_and_cleans(self) -> None:
-        """Krok 6-7 stubs slice content + prefix noisy segments (unchanged)."""
+    async def test_detail_wires_pass2b_into_pass2c_with_injected_router(self) -> None:
+        """Krok 6 (slice) runs, then Krok 7 (denoise) receives the *injected*
+        ``self._stage_router`` (task 2.4.7 #1) — not the unused ABC ``router``
+        kwarg, which the orchestrator never passes to ``process_detail``.
+        """
         proc = _make_processor()
         doc = _doc_with_text("some reasonably long mock transcript text here")
         summary = _draft_over(doc)
 
-        detail = await proc.process_detail(doc, summary)
+        async def _passthrough(
+            segments: list[DocumentSegmentDraft], *, stage_router: object
+        ) -> list[DocumentSegmentDraft]:
+            return segments
 
+        with patch(_STEP7, new=AsyncMock(side_effect=_passthrough)) as step7:
+            detail = await proc.process_detail(doc, summary)
+
+        # step_6 ran for real (content sliced from the transcript).
         assert all(isinstance(s, DocumentSegmentDraft) for s in detail)
         assert all(s.content for s in detail)
-        assert any(
-            (s.content or "").startswith("[cleaned] ") for s in detail if s.noisy
-        )
+        # step_7 received the ctor-injected stage_router, not the ABC kwarg.
+        step7.assert_awaited_once()
+        assert step7.await_args.kwargs["stage_router"] is proc._stage_router
 
 
 _TRANSCRIPT = "alpha beta gamma delta epsilon zeta eta theta words here"
@@ -533,28 +545,6 @@ class TestStep6VisualPartition:
 
         assert all(s.visual_content == [] for s in sliced)
         assert all(s.content for s in sliced)
-
-    async def test_step7_cleans_only_content_leaving_visual_untouched(self) -> None:
-        """2.4.7-readiness: the Pass 2c stub touches only ``content``; the
-        visual stream passes through unchanged (clean by construction, KD2d).
-        """
-        from course_supporter.ingestion.schemas import VisualSceneRef
-
-        visual = [VisualSceneRef(position_ms=0, description="slide", kind="anchor")]
-        draft = DocumentSegmentDraft(
-            order=0,
-            start_pos=0,
-            end_pos=5,
-            description="d",
-            content="raw transcript",
-            noisy=True,
-            visual_content=visual,
-        )
-
-        cleaned = await steps.step_7_pass2c_cleanup([draft])
-
-        assert cleaned[0].content == "[cleaned] raw transcript"
-        assert cleaned[0].visual_content == visual
 
 
 class TestVideoPipelineIsolation:

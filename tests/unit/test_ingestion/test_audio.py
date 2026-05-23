@@ -579,8 +579,61 @@ class TestProcessDetail:
         assert result[0].content == "hello"
         stage_router.execute_for_stage.assert_not_called()
 
-    async def test_router_none_skips_pass2c_with_warning(self) -> None:
-        """Activation deferral fallback — router=None skips Pass 2c."""
+    async def test_injected_stage_router_runs_pass2c_without_method_arg(self) -> None:
+        """Activation (task 2.4.7 #2): the ctor-injected ``stage_router`` runs
+        Pass 2c even when the orchestrator calls process_detail WITHOUT a
+        method-arg router (which it always does). This is what makes audio
+        Pass 2c functional in production — previously inert (skip-on-None).
+        """
+        stage_router = _mock_stage_router_for_pass2c("cleaned noisy")
+        proc = AudioProcessor(
+            stt_router=AsyncMock(), redis=_mock_redis(), stage_router=stage_router
+        )
+        doc = SourceDocument(
+            source_type=SourceType.AUDIO,
+            source_url="/tmp/x.mp3",
+            chunks=[ContentChunk(chunk_type=ChunkType.TRANSCRIPT, text="raw noisy")],
+        )
+        summary = DocumentSummaryDraft(
+            title="t",
+            description="d",
+            segments=[self._draft(0, 0, 9, noisy=True)],
+        )
+
+        # No method-arg router — mirrors api/tasks.py process_detail call.
+        result = await proc.process_detail(doc, summary)
+
+        assert result[0].content == "cleaned noisy"
+        stage_router.execute_for_stage.assert_awaited_once()
+
+    async def test_injected_router_takes_precedence_over_method_arg(self) -> None:
+        """``self._stage_router or router`` — the injected one wins (#1 contract)."""
+        injected = _mock_stage_router_for_pass2c("from injected")
+        method_arg = _mock_stage_router_for_pass2c("from method-arg")
+        proc = AudioProcessor(
+            stt_router=AsyncMock(), redis=_mock_redis(), stage_router=injected
+        )
+        doc = SourceDocument(
+            source_type=SourceType.AUDIO,
+            source_url="/tmp/x.mp3",
+            chunks=[ContentChunk(chunk_type=ChunkType.TRANSCRIPT, text="raw noisy")],
+        )
+        summary = DocumentSummaryDraft(
+            title="t",
+            description="d",
+            segments=[self._draft(0, 0, 9, noisy=True)],
+        )
+
+        result = await proc.process_detail(doc, summary, router=method_arg)
+
+        assert result[0].content == "from injected"
+        injected.execute_for_stage.assert_awaited_once()
+        method_arg.execute_for_stage.assert_not_called()
+
+    async def test_no_router_at_all_skips_pass2c(self) -> None:
+        """Defensive guard: neither injected nor method-arg router → raw slice
+        kept (reachable only in router-less direct construction, not prod).
+        """
         proc = AudioProcessor(stt_router=AsyncMock(), redis=_mock_redis())
         doc = SourceDocument(
             source_type=SourceType.AUDIO,
@@ -595,7 +648,7 @@ class TestProcessDetail:
 
         result = await proc.process_detail(doc, summary)
 
-        # noisy=True but no router → raw slice kept
+        # noisy=True but no router available → raw slice kept
         assert result[0].content == "raw noisy"
 
     async def test_pass_2c_routes_only_noisy_segments(self) -> None:

@@ -87,10 +87,11 @@ class TestCreateProcessors:
         """VIDEO maps to the ``ingestion.video_pipeline`` VideoProcessor.
 
         Task 2.4.4 added a third VIDEO dep — ``stage_router`` for the Krok 4
-        Pass 1 vision ladder. The dispatch guard is asymmetric: VIDEO needs
-        STT + Redis **and** stage_router; AUDIO needs only STT + Redis (its
-        Pass 2a/2c route via the method argument). VIDEO is absent if any of
-        its three deps is missing.
+        Pass 1 vision ladder. The dispatch guard is asymmetric: VIDEO *requires*
+        STT + Redis **and** stage_router; AUDIO requires only STT + Redis but
+        also *takes* stage_router for Pass 2c denoise when present (task 2.4.7).
+        VIDEO is absent if any of its three deps is missing; AUDIO remains
+        (with a ``None`` Pass 2c router) when only stage_router is missing.
         """
         heavy = create_heavy_steps()
         mock_router = AsyncMock(spec=STTRouter)
@@ -169,7 +170,11 @@ class TestCreateProcessorsAudio:
     """KD-2.2-K AUDIO factory dispatch — combined-guard activation."""
 
     def test_audio_registered_when_both_deps_present(self) -> None:
-        """AUDIO entry present + AudioProcessor wired with stt_router + redis."""
+        """AUDIO entry present + AudioProcessor wired with stt_router + redis.
+
+        Without a stage_router the Pass 2c denoise router defaults to ``None``
+        (audio still registers — stage_router is optional for audio).
+        """
         heavy = create_heavy_steps()
         mock_stt = AsyncMock(spec=STTRouter)
         mock_redis = AsyncMock()
@@ -180,6 +185,24 @@ class TestCreateProcessorsAudio:
         assert isinstance(audio, AudioProcessor)
         assert audio._stt_router is mock_stt
         assert audio._redis is mock_redis
+        assert audio._stage_router is None
+
+    def test_audio_receives_injected_stage_router(self) -> None:
+        """Task 2.4.7 #2 — the factory injects stage_router into AudioProcessor
+        so Pass 2c selective denoise is functional (orchestrator never passes a
+        router to process_detail). Same instance the VideoProcessor receives.
+        """
+        heavy = create_heavy_steps()
+        mock_stt = AsyncMock(spec=STTRouter)
+        mock_redis = AsyncMock()
+        mock_stage = AsyncMock(spec=StageRouter)
+        processors = create_processors(
+            heavy, stt_router=mock_stt, redis=mock_redis, stage_router=mock_stage
+        )
+
+        audio = processors[SourceType.AUDIO]
+        assert isinstance(audio, AudioProcessor)
+        assert audio._stage_router is mock_stage
 
     def test_audio_absent_when_redis_missing(self) -> None:
         """Combined guard rejects: stt_router present, redis None."""

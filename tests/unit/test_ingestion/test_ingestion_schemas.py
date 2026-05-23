@@ -31,7 +31,37 @@ from pydantic import ValidationError
 from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
+    VisualSceneRef,
 )
+
+
+class TestVisualSceneRef:
+    """Validation contract for the visual-stream draft carrier (task 2.4.6)."""
+
+    def test_minimal_required_fields_with_defaults(self) -> None:
+        ref = VisualSceneRef(position_ms=4200, description="slide with for-loop")
+        assert ref.position_ms == 4200
+        assert ref.description == "slide with for-loop"
+        assert ref.kind == ""
+        assert ref.scene_id == 0
+
+    def test_all_fields_roundtrip(self) -> None:
+        ref = VisualSceneRef(
+            position_ms=0,
+            description="title slide",
+            kind="anchor",
+            scene_id=3,
+        )
+        assert ref.model_dump() == {
+            "position_ms": 0,
+            "description": "title slide",
+            "kind": "anchor",
+            "scene_id": 3,
+        }
+
+    def test_missing_position_ms_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VisualSceneRef(description="no timestamp")  # type: ignore[call-arg]
 
 
 class TestDocumentSegmentDraft:
@@ -52,6 +82,21 @@ class TestDocumentSegmentDraft:
         assert draft.content is None
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
+        assert draft.visual_content is None
+
+    def test_visual_content_accepts_refs(self) -> None:
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=42,
+            description="Walks through the slide.",
+            visual_content=[
+                VisualSceneRef(position_ms=0, description="slide A", kind="anchor"),
+                VisualSceneRef(position_ms=9000, description="slide B", kind="diff"),
+            ],
+        )
+        assert draft.visual_content is not None
+        assert [r.position_ms for r in draft.visual_content] == [0, 9000]
 
     def test_concept_lists_preserved(self) -> None:
         draft = DocumentSegmentDraft(

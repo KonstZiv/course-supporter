@@ -36,11 +36,17 @@ _HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 def _build_ctx(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> dict[str, Any]:
-    """Build a minimal ARQ worker context dict."""
+    """Build a minimal ARQ worker context dict.
+
+    ``redis`` is the ArqRedis pool that arq injects into every job ctx
+    (the shared task unpacks it for the audio/video processor factory,
+    task 2.4.2); mocked here since this factory is patched out.
+    """
     return {
         "session_factory": session_factory,
         "model_router": MagicMock(),
         "stage_router": MagicMock(),
+        "redis": MagicMock(),
     }
 
 

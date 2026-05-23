@@ -480,6 +480,7 @@ async def _denoise_segment(
     here. Returns the cleaned content as a plain string.
     """
     raw_content = draft.content or ""
+    job_id = get_current_job_id()
     parsed: dict[str, AudioPass2cResult] = {}
 
     def _video_pass_2c_validator(content: str) -> None:
@@ -490,6 +491,7 @@ async def _denoise_segment(
             first_loc = ".".join(str(x) for x in first.get("loc", []))
             logger.warning(
                 "video_pass2c.validation.failed",
+                job_id=str(job_id),
                 segment_order=draft.order,
                 first_error_msg=first.get("msg", ""),
                 first_error_loc=first_loc,

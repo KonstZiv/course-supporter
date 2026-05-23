@@ -127,15 +127,26 @@ stages:
   #   1. gemini/gemini-3.1-flash-lite — cost-first primary (audio Pass 2c rung).
   #   2. gemini/gemini-2.5-flash — second tier.
   #   3. anthropic/claude-haiku-4-5-20251001 — provider-diverse deep fallback.
-  # No ``max_output_tokens`` override (mirrors audio Pass 2c): denoise output is
-  # bounded by the input segment length, so the provider default suffices.
-  # All three are registered in external_services.yaml (cost-tracked).
+  # Per-rung ``max_output_tokens: 8192`` pins the output budget rung-uniform
+  # (mirrors Pass 1 / Pass 2a). Probe (2026-05-23): the StageRouter calls
+  # providers directly (NOT the legacy ModelRouter chain), so an unpinned rung
+  # sends ``max_tokens=None`` — gemini then uses its implicit model default and
+  # anthropic falls back to its own provider default (8192). Those diverge per
+  # provider; the explicit pin makes the output budget identical and explicit on
+  # every rung, so a truncated denoise can't hide behind a silent per-provider
+  # default (the Pass 1 / 2a rationale). 8192 comfortably covers a single
+  # segment's cleaned transcript (~15 min ≈ 3.5k tokens). NB: there is no 4096
+  # cap on these rungs — 4096 is the DashScope default and Pass 2c has no
+  # DashScope rung. All three are registered in external_services.yaml.
   video_pass_2c_denoise:
     prompt_ref: "prompts/video_pass_2c_denoise/v1.md"
     ladder:
       - provider: gemini
         model: gemini-3.1-flash-lite
+        max_output_tokens: 8192
       - provider: gemini
         model: gemini-2.5-flash
+        max_output_tokens: 8192
       - provider: anthropic
         model: claude-haiku-4-5-20251001
+        max_output_tokens: 8192

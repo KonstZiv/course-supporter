@@ -84,12 +84,26 @@ stages:
   # characteristics are expected to track Pass 2a closely on this
   # rung selection — both stages emit short, structured outputs
   # over short, focused inputs.
+  #
+  # Per-rung ``max_output_tokens: 8192`` (task 2.4.7): audio Pass 2c was inert
+  # in production until 2.4.7 wired the injected stage_router, so this stage's
+  # output budget was never actually exercised. Probe (2026-05-23): the
+  # StageRouter calls providers directly, so an unpinned rung sends
+  # ``max_tokens=None`` — gemini uses its implicit model default, anthropic its
+  # provider default (8192) — divergent per provider. The explicit 8192 pin
+  # makes the budget identical and explicit on every rung (mirrors Pass 1 / 2a)
+  # so a truncated denoise can't hide behind a silent per-provider default. It
+  # comfortably covers one segment's cleaned transcript (~15 min ≈ 3.5k tokens);
+  # there is no 4096 cap here (that is the DashScope default; no DashScope rung).
   audio_pass_2c_denoise:
     prompt_ref: "prompts/audio_pass_2c_denoise/v1.md"
     ladder:
       - provider: gemini
         model: gemini-3.1-flash-lite
+        max_output_tokens: 8192
       - provider: gemini
         model: gemini-2.5-flash
+        max_output_tokens: 8192
       - provider: anthropic
         model: claude-haiku-4-5-20251001
+        max_output_tokens: 8192

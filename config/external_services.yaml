@@ -130,8 +130,36 @@ providers:
 
   deepseek:
     type: llm
+    # Live IDs verified 2026-05-23 (api.deepseek.com/models): the lineup is now
+    # deepseek-v4-flash + deepseek-v4-pro. deepseek-chat / deepseek-reasoner are
+    # being deprecated by DeepSeek (they map to the non-thinking / thinking
+    # modes of deepseek-v4-flash). Pricing per api-docs.deepseek.com/pricing.
     models:
+      - id: deepseek-v4-flash
+        # Current flash tier (replaces deepseek-chat). Referenced by the
+        # safety_check / safety_check_authored / pass_2a_mapping ladders —
+        # registered 2026-05-23 to close their cost-tracking gap. $0.14/$0.28
+        # per 1M. Same 8192 output hard-cap as deepseek-chat (see below).
+        capabilities: [structured_output]
+        max_context: 131072
+        max_output_tokens: 8192
+        unit_type: tokens
+        cost_per_1k_in: 0.00014
+        cost_per_1k_out: 0.00028
+      - id: deepseek-v4-pro
+        # "Smart" / deep-reasoning tier. Regular $1.74/$3.48 per 1M; a 75%
+        # promo runs to 2026-05-31 (~$0.435/$0.87). Registry uses the durable
+        # regular rate to avoid a silent post-promo jump. Reasoning output may
+        # warrant a per-rung max_output_tokens override above 8192.
+        capabilities: [structured_output, long_context]
+        max_context: 131072
+        max_output_tokens: 8192
+        unit_type: tokens
+        cost_per_1k_in: 0.00174
+        cost_per_1k_out: 0.00348
       - id: deepseek-chat
+        # DEPRECATED by DeepSeek (maps to deepseek-v4-flash non-thinking).
+        # Retained for legacy ModelRouter action references.
         capabilities: [structured_output]
         max_context: 131072
         # DeepSeek-chat hard-caps max_tokens at 8192 (HTTP 400 otherwise —
@@ -171,7 +199,33 @@ providers:
 
   dashscope:
     type: llm
+    # Qwen text-reasoning flagships available in the eu-central-1 MaaS workspace
+    # (verified 2026-05-23 against the workspace /models list). Date-pinned per
+    # the snapshot convention. Pricing PROVISIONAL — see per-model notes; MaaS
+    # eu-central rates may differ from the public International list and must be
+    # reconciled after the first production billing cycle (same caveat as
+    # qwen3-vl). Reasoning/"thinking" variants (qwen3-235b-a22b-thinking-2507,
+    # qwen3-next-80b-a3b-thinking) are also workspace-available — add on demand.
     models:
+      - id: qwen3.7-max-2026-05-20
+        # Latest Qwen flagship "Max" (text reasoning; released 2026-05-20).
+        # PROVISIONAL: 3.7-max rates not yet on the public price list — proxied
+        # from qwen3-max (International ≤32k-prompt tier) pending publication.
+        capabilities: [structured_output, long_context]
+        max_context: 262144
+        max_output_tokens: 32768
+        unit_type: tokens
+        cost_per_1k_in: 0.0012
+        cost_per_1k_out: 0.006
+      - id: qwen3-max-2026-01-23
+        # Stable Qwen flagship "Max" (text). PROVISIONAL: public International
+        # ≤32k-prompt tier ($1.2/$6 per 1M); higher tiers apply above 32k input.
+        capabilities: [structured_output, long_context]
+        max_context: 262144
+        max_output_tokens: 32768
+        unit_type: tokens
+        cost_per_1k_in: 0.0012
+        cost_per_1k_out: 0.006
       - id: qwen3-vl-32b-instruct
         # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
         # PROVISIONAL pricing — values reflect DashScope International

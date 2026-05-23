@@ -8,39 +8,84 @@ providers:
   gemini:
     type: llm
     models:
-      - id: gemini-3-flash-preview
-        # Preview model — added as relief when gemini-2.5-flash is
-        # throttled (503 UNAVAILABLE).
-        # TODO: Update pricing when official rates for
-        # gemini-3-flash-preview are published. The two cost_per_1k_*
-        # values below are PROVISIONAL — copied from gemini-2.5-flash
-        # as a conservative proxy so the cost report is not wildly
-        # misleading while the preview is in use.
+      # Pricing verified 2026-05-23 against ai.google.dev/gemini-api/docs/pricing
+      # (paid tier, text input). Registry uses per-1k = per-1M / 1000.
+      - id: gemini-3.5-flash
+        # Latest Gemini flash (registered 2026-05-23). $1.50 / $9.00 per 1M.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.00015   # PROVISIONAL: 2.5-flash rate (pending official)
-        cost_per_1k_out: 0.0006   # PROVISIONAL: 2.5-flash rate (pending official)
+        cost_per_1k_in: 0.0015
+        cost_per_1k_out: 0.009
+      - id: gemini-3.1-flash-lite
+        # Cost-tier flash — audio Pass 2a/2c primary rung (registered
+        # 2026-05-23; was callable but unregistered → no cost-tracking).
+        # $0.25 / $1.50 per 1M.
+        capabilities: [vision, structured_output, long_context]
+        max_context: 1048576
+        max_output_tokens: 65536
+        unit_type: tokens
+        cost_per_1k_in: 0.00025
+        cost_per_1k_out: 0.0015
+      - id: gemini-3-flash-preview
+        # Preview model — relief when gemini-2.5-flash is throttled (503).
+        capabilities: [vision, structured_output, long_context]
+        max_context: 1048576
+        max_output_tokens: 65536
+        unit_type: tokens
+        # Official rate (was PROVISIONAL 2.5-flash proxy): $0.50 / $3.00 per 1M.
+        cost_per_1k_in: 0.0005
+        cost_per_1k_out: 0.003
       - id: gemini-2.5-flash
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.00015
-        cost_per_1k_out: 0.0006
+        # Corrected 2026-05-23 (was 0.00015 / 0.0006 — a gpt-4o-mini rate that
+        # understated output ~4×): official $0.30 / $2.50 per 1M.
+        cost_per_1k_in: 0.0003
+        cost_per_1k_out: 0.0025
       - id: gemini-2.5-pro
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
+        # Corrected 2026-05-23 (out was 0.005, understated 2×): official
+        # $1.25 / $10.00 per 1M (≤200k-prompt tier).
         cost_per_1k_in: 0.00125
-        cost_per_1k_out: 0.005
+        cost_per_1k_out: 0.010
 
   anthropic:
     type: llm
+    # Date-pinned snapshot IDs (reproducibility). Pricing verified 2026-05-23
+    # against platform.claude.com/docs (.../about-claude/pricing).
     models:
+      - id: claude-sonnet-4-5-20250929
+        # Sonnet 4.5 — current Sonnet snapshot (registered 2026-05-23;
+        # replaces deprecated claude-sonnet-4-20250514). $3 / $15 per 1M.
+        # (claude-sonnet-4-6 is newer + same price but ships only as a
+        # non-date-pinned alias, against the snapshot convention.)
+        capabilities: [structured_output, long_context]
+        max_context: 200000
+        max_output_tokens: 16384
+        unit_type: tokens
+        cost_per_1k_in: 0.003
+        cost_per_1k_out: 0.015
+      - id: claude-haiku-4-5-20251001
+        # Haiku 4.5 — cost tier; audio Pass 2a/2c rung 3 (registered
+        # 2026-05-23 → closes DD-2.3-Z; was callable but unregistered).
+        # $1 / $5 per 1M.
+        capabilities: [structured_output, long_context]
+        max_context: 200000
+        max_output_tokens: 16384
+        unit_type: tokens
+        cost_per_1k_in: 0.001
+        cost_per_1k_out: 0.005
       - id: claude-opus-4-20250514
+        # DEPRECATED (Anthropic pricing page 2026-05-23). Retained only for
+        # legacy ModelRouter action references; migrate to a current Opus
+        # (e.g. claude-opus-4-5) when next touched. $15 / $75 per 1M.
         capabilities: [structured_output, long_context]
         max_context: 200000
         max_output_tokens: 32768
@@ -48,6 +93,9 @@ providers:
         cost_per_1k_in: 0.015
         cost_per_1k_out: 0.075
       - id: claude-sonnet-4-20250514
+        # DEPRECATED (Anthropic pricing page 2026-05-23). Superseded by
+        # claude-sonnet-4-5-20250929 above; retained only for legacy
+        # ModelRouter action references. $3 / $15 per 1M.
         capabilities: [structured_output, long_context]
         max_context: 200000
         max_output_tokens: 16384

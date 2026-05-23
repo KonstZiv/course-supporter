@@ -58,6 +58,42 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
+class VisualSceneRef(BaseModel):
+    """One time-anchored visual description attached to a video segment.
+
+    Minimal draft carrier for the visual stream of a video segment
+    (task 2.4.6): each ref is a Pass 1 frame description (the ``text``
+    of a ``VISUAL_SCENE`` chunk) plus the temporal/scene metadata that
+    chunk carried (B', task 2.4.5). It is intentionally *not* a
+    ``ContentChunk`` — that is the heavyweight assembled-document type;
+    this is a per-segment draft field materialised into the
+    ``DocumentSegment.visual_content`` JSONB column at Pass 2b.
+
+    Refs are kept in temporal (frame) order within a segment — that
+    order is meaningful and is preserved through the ORM and the
+    ``content_hash`` formula (it is NOT sorted, unlike concept sets).
+    """
+
+    position_ms: int = Field(
+        description="Frame timestamp in ms from the start of the video "
+        "(``VISUAL_SCENE`` chunk ``metadata.frame_position_ms``).",
+    )
+    description: str = Field(
+        description="Pass 1 visual description of the frame (the chunk text).",
+    )
+    kind: str = Field(
+        default="",
+        description="Frame role (e.g. ``anchor`` / ``diff``) from the chunk "
+        "``metadata.kind``; empty string when unknown.",
+    )
+    scene_id: int = Field(
+        default=0,
+        description="Scene grouping id (``VISUAL_SCENE`` chunk "
+        "``metadata.scene_id``) so consecutive frames of one scene can be "
+        "grouped downstream.",
+    )
+
+
 class DocumentSegmentDraft(BaseModel):
     """In-flight segment draft (Pass 2a metadata + Pass 2b content, pre-ORM).
 
@@ -153,6 +189,18 @@ class DocumentSegmentDraft(BaseModel):
             "noisy-badge per KD-2.2-J item 5. Default ``False`` for "
             "text / web / video — non-audio source_types preserve "
             "backward-compat without caller changes."
+        ),
+    )
+    visual_content: list[VisualSceneRef] | None = Field(
+        default=None,
+        description=(
+            "Time-anchored visual descriptions for this segment (task "
+            "2.4.6, video source_type only). Populated at Pass 2b by the "
+            "start-time partition of ``VISUAL_SCENE`` chunks over the "
+            "segment timeline; ``None`` for audio / text / web / "
+            "presentation (the second authored stream exists only for "
+            "video). Refs are kept in temporal order; materialised into "
+            "the ``DocumentSegment.visual_content`` JSONB column."
         ),
     )
 

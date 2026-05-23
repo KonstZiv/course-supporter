@@ -329,14 +329,31 @@ class ContentHashService:
         they actually have ``deleted_at`` set.
         """
         if isinstance(entity, DocumentSegment):
-            local = _encode_local_fields(
-                {
-                    "content": entity.content or "",
-                    "main_concepts": sorted(entity.main_concepts or []),
-                    "secondary_concepts": sorted(entity.secondary_concepts or []),
-                }
-            )
-            return compute_content_hash(local, [])
+            payload: dict[str, object] = {
+                "content": entity.content or "",
+                "main_concepts": sorted(entity.main_concepts or []),
+                "secondary_concepts": sorted(entity.secondary_concepts or []),
+            }
+            # visual_content (task 2.4.6): a video segment's visual stream is
+            # genuine authored content (like concepts), so a Pass 1
+            # re-description must invalidate the Merkle chain. It joins the
+            # formula CONDITIONALLY — only when non-empty (truthy, NOT
+            # ``is not None``: the column is not-null and defaults to ``[]``,
+            # which is falsy).
+            #
+            # The asymmetry vs concepts is deliberate, NOT an oversight: main_/
+            # secondary_concepts are baked into every historical segment hash
+            # since Phase 1, so they are always included; visual_content is new
+            # in 2.4.6 and historical payloads never carried it. Including it
+            # only when non-empty keeps every pre-2.4.6 row — and every
+            # non-video / visual-less segment, where it is ``[]`` — byte-
+            # identical (zero hash perturbation). Do NOT "normalise" this to an
+            # unconditional include: that would re-hash every existing segment
+            # in production. Order is NOT sorted — frame order is temporally
+            # meaningful, unlike the order-free concept sets.
+            if entity.visual_content:
+                payload["visual_content"] = entity.visual_content
+            return compute_content_hash(_encode_local_fields(payload), [])
 
         if isinstance(entity, DocumentSummary):
             local = _encode_local_fields(

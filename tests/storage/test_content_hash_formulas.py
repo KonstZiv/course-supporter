@@ -31,7 +31,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from course_supporter.storage.content_hash import ContentHashService
+from course_supporter.storage.content_hash import (
+    ContentHashService,
+    _encode_local_fields,
+    compute_content_hash,
+)
 from course_supporter.storage.orm import DocumentSegment, DocumentSummary
 
 
@@ -193,6 +197,94 @@ class TestDocumentSegmentFormula:
         assert await svc._compute_hash_for(
             a, exclude_ids=None
         ) == await svc._compute_hash_for(b, exclude_ids=None)
+
+    async def test_empty_visual_content_byte_identical_to_pre_2_4_6(self) -> None:
+        """D1 hard-gate (task 2.4.6): visual_content empty (``[]``) or absent
+        (``None``, in-memory) must NOT perturb the hash of any existing
+        segment. The hash must equal the pre-2.4.6 formula
+        ``compute_content_hash(content + sorted(concepts))`` byte-for-byte,
+        so every non-video / visual-less row keeps its stored content_hash.
+        """
+        seg_none = _make_segment(
+            content="body",
+            main_concepts=["b", "a"],
+            secondary_concepts=["c"],
+        )
+        seg_empty = _make_segment(
+            content="body",
+            main_concepts=["b", "a"],
+            secondary_concepts=["c"],
+        )
+        seg_empty.visual_content = []  # flushed not-null default shape
+
+        expected_pre_2_4_6 = compute_content_hash(
+            _encode_local_fields(
+                {
+                    "content": "body",
+                    "main_concepts": sorted(["b", "a"]),
+                    "secondary_concepts": ["c"],
+                }
+            ),
+            [],
+        )
+        svc = ContentHashService(AsyncMock())
+        assert seg_none.visual_content is None  # _make_segment leaves it unset
+        assert (
+            await svc._compute_hash_for(seg_none, exclude_ids=None)
+            == expected_pre_2_4_6
+        )
+        assert (
+            await svc._compute_hash_for(seg_empty, exclude_ids=None)
+            == expected_pre_2_4_6
+        )
+
+    async def test_non_empty_visual_content_changes_hash(self) -> None:
+        """A populated visual stream (video) joins the formula, so a segment
+        with visuals hashes differently from the same transcript without.
+        """
+        without = _make_segment(content="body")
+        with_visual = _make_segment(content="body")
+        with_visual.main_concepts = list(without.main_concepts or [])
+        with_visual.secondary_concepts = list(without.secondary_concepts or [])
+        with_visual.visual_content = [
+            {
+                "position_ms": 0,
+                "description": "slide A",
+                "kind": "anchor",
+                "scene_id": 0,
+            }
+        ]
+        svc = ContentHashService(AsyncMock())
+        assert await svc._compute_hash_for(
+            without, exclude_ids=None
+        ) != await svc._compute_hash_for(with_visual, exclude_ids=None)
+
+    async def test_visual_content_order_sensitive(self) -> None:
+        """Frame order is temporally meaningful (NOT sorted, unlike concept
+        sets): reordering the visual refs must flip the hash.
+        """
+        ref_a = {
+            "position_ms": 0,
+            "description": "slide A",
+            "kind": "anchor",
+            "scene_id": 0,
+        }
+        ref_b = {
+            "position_ms": 5000,
+            "description": "slide B",
+            "kind": "diff",
+            "scene_id": 1,
+        }
+        forward = _make_segment(content="body")
+        reversed_ = _make_segment(content="body")
+        reversed_.main_concepts = list(forward.main_concepts or [])
+        reversed_.secondary_concepts = list(forward.secondary_concepts or [])
+        forward.visual_content = [ref_a, ref_b]
+        reversed_.visual_content = [ref_b, ref_a]
+        svc = ContentHashService(AsyncMock())
+        assert await svc._compute_hash_for(
+            forward, exclude_ids=None
+        ) != await svc._compute_hash_for(reversed_, exclude_ids=None)
 
 
 # ── DocumentSummary formula ───────────────────────────────────────

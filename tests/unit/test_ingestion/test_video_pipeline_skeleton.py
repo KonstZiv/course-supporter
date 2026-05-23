@@ -406,6 +406,157 @@ class TestMacroAndDetail:
         )
 
 
+_TRANSCRIPT = "alpha beta gamma delta epsilon zeta eta theta words here"
+
+
+def _video_doc_with_visuals(frames_ms: list[int]) -> SourceDocument:
+    """A video SourceDocument: one TRANSCRIPT chunk + N VISUAL_SCENE chunks.
+
+    Each visual chunk carries the B' metadata (``frame_position_ms`` /
+    ``kind`` / ``scene_id``) that Pass 2b reads to build the visual stream.
+    """
+    from course_supporter.models.source import ContentChunk
+
+    chunks = [ContentChunk(chunk_type=ChunkType.TRANSCRIPT, text=_TRANSCRIPT, index=0)]
+    for i, fp in enumerate(frames_ms):
+        chunks.append(
+            ContentChunk(
+                chunk_type=ChunkType.VISUAL_SCENE,
+                text=f"frame@{fp}ms",
+                index=i + 1,
+                metadata={"frame_position_ms": fp, "kind": "anchor", "scene_id": i},
+            )
+        )
+    return SourceDocument(
+        source_type=SourceType.VIDEO,
+        source_url="s3://bucket/lecture.mp4",
+        title="lecture.mp4",
+        chunks=chunks,
+    )
+
+
+def _summary_two_segments() -> DocumentSummaryDraft:
+    """Two contiguous segments with a temporal gap between them.
+
+    seg0 time-range [1.0s, 2.0s], seg1 [5.0s, 8.0s] -> the inter-segment
+    pause [2.0s, 5.0s] is exactly where a slide change tends to land.
+    Start-times for the partition: [1.0, 5.0].
+    """
+    half = len(_TRANSCRIPT) // 2
+    return DocumentSummaryDraft(
+        title="t",
+        description="d",
+        main_concepts=[],
+        secondary_concepts=[],
+        segments=[
+            DocumentSegmentDraft(
+                order=0,
+                start_pos=0,
+                end_pos=half,
+                description="d0",
+                start_time_sec=1.0,
+                end_time_sec=2.0,
+            ),
+            DocumentSegmentDraft(
+                order=1,
+                start_pos=half,
+                end_pos=len(_TRANSCRIPT),
+                description="d1",
+                start_time_sec=5.0,
+                end_time_sec=8.0,
+            ),
+        ],
+    )
+
+
+class TestStep6VisualPartition:
+    """Krok 6 start-time partition of VISUAL_SCENE chunks (task 2.4.6 §3)."""
+
+    async def test_partitions_frames_and_keeps_content_slice(self) -> None:
+        # 0ms: before seg0.start (1.0s) -> head clamp to seg0.
+        # 3000ms: in the inter-segment pause [2.0s, 5.0s] -> seg0 (PREVIOUS).
+        # 5000ms: exactly seg1.start -> seg1 (half-open).
+        # 9000ms: after the last word end (8.0s) -> seg1 (tail).
+        doc = _video_doc_with_visuals([0, 3000, 5000, 9000])
+        summary = _summary_two_segments()
+
+        sliced = await steps.step_6_pass2b_slice(doc, summary)
+
+        seg0, seg1 = sliced
+        # Content slice (unchanged transcript-only contract).
+        ref = doc.assemble_text()
+        assert seg0.content == ref[seg0.start_pos : seg0.end_pos]
+        assert seg1.content == ref[seg1.start_pos : seg1.end_pos]
+        # Visual partition.
+        assert seg0.visual_content is not None and seg1.visual_content is not None
+        assert [v.position_ms for v in seg0.visual_content] == [0, 3000]
+        assert [v.position_ms for v in seg1.visual_content] == [5000, 9000]
+
+    async def test_gap_frame_goes_to_previous_segment_not_dropped(self) -> None:
+        """The distinguishing test vs interval-membership: a frame in the
+        inter-segment pause (3.0s, outside both [1,2] and [5,8]) must be
+        ASSIGNED to the preceding segment, never dropped. A naive
+        ``start <= fp <= end`` filter would lose this slide-transition frame.
+        """
+        doc = _video_doc_with_visuals([3000])
+        summary = _summary_two_segments()
+
+        seg0, seg1 = await steps.step_6_pass2b_slice(doc, summary)
+
+        all_positions = [
+            v.position_ms for seg in (seg0, seg1) for v in (seg.visual_content or [])
+        ]
+        assert all_positions == [3000]  # not lost
+        assert seg0.visual_content and seg0.visual_content[0].position_ms == 3000
+        assert seg1.visual_content == []
+
+    async def test_ref_carries_metadata_and_temporal_order(self) -> None:
+        # Both frames land in seg0 (time-range catches < 5.0s); 3000 and 1500
+        # are given out of order on input to prove the partition sorts them.
+        doc = _video_doc_with_visuals([3000, 1500])
+        summary = _summary_two_segments()
+
+        seg0, _seg1 = await steps.step_6_pass2b_slice(doc, summary)
+
+        assert seg0.visual_content is not None
+        # Sorted into temporal order regardless of chunk input order.
+        assert [v.position_ms for v in seg0.visual_content] == [1500, 3000]
+        first = seg0.visual_content[0]
+        assert first.description == "frame@1500ms"
+        assert first.kind == "anchor"
+
+    async def test_no_visual_chunks_yields_empty_lists(self) -> None:
+        doc = _video_doc_with_visuals([])
+        summary = _summary_two_segments()
+
+        sliced = await steps.step_6_pass2b_slice(doc, summary)
+
+        assert all(s.visual_content == [] for s in sliced)
+        assert all(s.content for s in sliced)
+
+    async def test_step7_cleans_only_content_leaving_visual_untouched(self) -> None:
+        """2.4.7-readiness: the Pass 2c stub touches only ``content``; the
+        visual stream passes through unchanged (clean by construction, KD2d).
+        """
+        from course_supporter.ingestion.schemas import VisualSceneRef
+
+        visual = [VisualSceneRef(position_ms=0, description="slide", kind="anchor")]
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=5,
+            description="d",
+            content="raw transcript",
+            noisy=True,
+            visual_content=visual,
+        )
+
+        cleaned = await steps.step_7_pass2c_cleanup([draft])
+
+        assert cleaned[0].content == "[cleaned] raw transcript"
+        assert cleaned[0].visual_content == visual
+
+
 class TestVideoPipelineIsolation:
     """Acceptance #3/#8 — namespace has zero ``course_supporter.vd`` imports."""
 

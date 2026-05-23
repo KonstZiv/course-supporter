@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from course_supporter.ingestion_callback import IngestionCallback
 
@@ -12,6 +13,9 @@ _ENTRY_REPO = (
     "course_supporter.storage.authored_document_repository.AuthoredDocumentRepository"
 )
 _JOB_REPO = "course_supporter.ingestion_callback.JobRepository"
+_SUMMARY_REPO = (
+    "course_supporter.storage.document_summary_repository.DocumentSummaryRepository"
+)
 
 
 def _mock_session_factory() -> MagicMock:
@@ -19,6 +23,12 @@ def _mock_session_factory() -> MagicMock:
     session = AsyncMock()
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
+    # Orphan-Summary observer (task 2.4.6) runs the real
+    # DocumentSummaryRepository over this session: default to "no orphan
+    # summary" so failure-path tests that do not patch it stay clean.
+    _no_orphan_result = MagicMock()
+    _no_orphan_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=_no_orphan_result)
 
     ctx_manager = AsyncMock()
     ctx_manager.__aenter__ = AsyncMock(return_value=session)
@@ -307,6 +317,71 @@ class TestOnFailureStage2Discrimination:
 
         mock_soft_delete.assert_not_awaited()
         entry_cls.return_value.fail_processing.assert_awaited_once()
+
+
+class TestOnFailureOrphanSummaryObserver:
+    """on_failure orphan-Summary observer (task 2.4.6, Q4 / DD-2.4-G).
+
+    Read-only: warns when a DocumentSummary was committed by Pass 2a and
+    survives a later process_detail failure. No commit-sequence change.
+    """
+
+    async def test_warns_when_committed_summary_exists(self) -> None:
+        callback, _ = _make_callback()
+        jid, mid, sid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        summary = MagicMock()
+        summary.id = sid
+
+        with (
+            patch(_JOB_REPO) as job_cls,
+            patch(_ENTRY_REPO) as entry_cls,
+            patch(_SUMMARY_REPO) as summary_cls,
+            capture_logs() as logs,
+        ):
+            _setup_job_mock(job_cls)
+            entry_cls.return_value.fail_processing = AsyncMock()
+            summary_cls.return_value.get_by_authored_document_id = AsyncMock(
+                return_value=summary
+            )
+            await callback.on_failure(
+                job_id=jid, material_id=mid, error_message="pass 2b blew up"
+            )
+
+        summary_cls.return_value.get_by_authored_document_id.assert_awaited_once_with(
+            mid
+        )
+        orphan_events = [
+            e for e in logs if e["event"] == "ingestion_orphan_summary_detected"
+        ]
+        assert len(orphan_events) == 1
+        assert orphan_events[0]["summary_id"] == str(sid)
+        assert orphan_events[0]["material_id"] == str(mid)
+        assert orphan_events[0]["error"] == "pass 2b blew up"
+
+    async def test_silent_when_no_committed_summary(self) -> None:
+        """Pre-Pass-2a failure (Stage 1/2, infra): no summary yet -> no warning."""
+        callback, _ = _make_callback()
+
+        with (
+            patch(_JOB_REPO) as job_cls,
+            patch(_ENTRY_REPO) as entry_cls,
+            patch(_SUMMARY_REPO) as summary_cls,
+            capture_logs() as logs,
+        ):
+            _setup_job_mock(job_cls)
+            entry_cls.return_value.fail_processing = AsyncMock()
+            summary_cls.return_value.get_by_authored_document_id = AsyncMock(
+                return_value=None
+            )
+            await callback.on_failure(
+                job_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                error_message="stage 1 rejected",
+            )
+
+        assert not [
+            e for e in logs if e["event"] == "ingestion_orphan_summary_detected"
+        ]
 
 
 class TestOnSuccessErrors:

@@ -696,6 +696,17 @@ class DocumentSegment(SoftDeleteMixin, Base):
         server_default=text("'[]'::jsonb"),
         comment="List of concept strings mentioned but not taught (KD-gamma).",
     )
+    visual_content: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="Time-anchored visual descriptions for video segments (task "
+        "2.4.6): JSONB array of VisualSceneRef dicts "
+        "(position_ms / description / kind / scene_id), kept in temporal "
+        "(frame) order. Empty [] for non-video and visual-less segments. "
+        "Mirrors the main_concepts JSONB+server_default mechanics; included "
+        "in content_hash (KD-2.1-F) only when non-empty (task 2.4.6 D1).",
+    )
     content_char_count: Mapped[int | None] = mapped_column(
         Integer,
         comment="Char count of content (size-metric for weighting per vision "

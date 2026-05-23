@@ -39,6 +39,7 @@ from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
     DocumentSegmentDraft,
     DocumentSummaryDraft,
+    VisualSceneRef,
 )
 from course_supporter.ingestion.video_pipeline import detection, media, vision
 from course_supporter.ingestion.video_pipeline.schemas import (
@@ -371,25 +372,86 @@ async def step_5_pass2a_mapping(
 # ── Krok 6-7 — invoked from process_detail ─────────────────────────
 
 
+def _partition_visuals(
+    doc: SourceDocument,
+    segments: list[DocumentSegmentDraft],
+) -> dict[int, list[VisualSceneRef]]:
+    """Assign each ``VISUAL_SCENE`` chunk to exactly one segment (task 2.4.6).
+
+    Partition (NOT interval membership) over the segment timeline by
+    **segment start times**, half-open ``[start_i, start_{i+1})``:
+
+    * a frame at ``fp`` belongs to segment ``i`` where
+      ``start_i <= fp < start_{i+1}``;
+    * frames before the first segment's start clamp to segment 0;
+    * frames after the last start fall into the last segment.
+
+    Why a partition and not ``start_time_sec <= fp <= end_time_sec``: Pass 2a
+    sets ``end_time_sec = words[end_word_idx-1].end_ms/1000`` (exclusive word
+    index), so adjacent segments are time-*disjoint* — an inter-word pause
+    gapes between them. A slide change typically happens *during* that pause
+    (the lecturer stops, clicks, then resumes), so an interval-membership
+    filter would systematically drop the most synchronisation-relevant frames.
+    A partition covers the whole axis with no gaps or overlaps, so every frame
+    lands in exactly one segment. The bisect mirrors the word-anchor bisect in
+    :func:`_build_visual_overlay`. Refs are kept in temporal (frame) order.
+
+    Returns a ``{segment_index: [VisualSceneRef, ...]}`` map (every segment
+    index present, possibly with an empty list).
+    """
+    result: dict[int, list[VisualSceneRef]] = {i: [] for i in range(len(segments))}
+    visual_chunks = [c for c in doc.chunks if c.chunk_type == ChunkType.VISUAL_SCENE]
+    starts = [seg.start_time_sec for seg in segments]
+    if not visual_chunks or not segments or any(s is None for s in starts):
+        # No visuals, no segments, or no timeline (non-video draft) — nothing
+        # to partition; every segment keeps its empty list.
+        return result
+    start_secs: list[float] = [s for s in starts if s is not None]
+    for chunk in sorted(
+        visual_chunks,
+        key=lambda c: int(c.metadata.get("frame_position_ms", 0)),
+    ):
+        fp_ms = int(chunk.metadata.get("frame_position_ms", 0))
+        idx = max(0, bisect.bisect_right(start_secs, fp_ms / 1000.0) - 1)
+        result[idx].append(
+            VisualSceneRef(
+                position_ms=fp_ms,
+                description=chunk.text,
+                kind=str(chunk.metadata.get("kind", "")),
+                scene_id=int(chunk.metadata.get("scene_id", 0)),
+            )
+        )
+    return result
+
+
 async def step_6_pass2b_slice(
     doc: SourceDocument,
     summary_draft: DocumentSummaryDraft,
 ) -> list[DocumentSegmentDraft]:
-    """Krok 6 — Pass 2b algorithmic slice (§1).
+    """Krok 6 — Pass 2b algorithmic slice + visual merge (§1).
 
-    Zero-LLM by design (task 2.4.6 finalises the transcript/visual merge
-    format). Skeleton mirrors the audio Pass 2b slice: fill ``content``
-    for each draft from ``doc.assemble_text()[start_pos:end_pos]`` when
-    not already populated.
+    Zero-LLM, deterministic. Materialises the two time-aligned streams of a
+    video segment (architectural direction (c), task 2.4.6):
+
+    * ``content`` — transcript slice ``doc.assemble_text()[start_pos:end_pos]``
+      (the audio/text Pass 2b precedent), filled when Pass 2a left it ``None``;
+    * ``visual_content`` — the ``VISUAL_SCENE`` chunks whose frame timestamps
+      partition into this segment's time range (see :func:`_partition_visuals`).
+
+    Since this step runs only for video, every segment receives a
+    ``visual_content`` list (possibly empty when no frame falls in its range).
+    The two streams stay structurally separate so Pass 2c (task 2.4.7) cleans
+    only the transcript ``content`` — the visual stream is clean by
+    construction (KD2d).
     """
     reference = doc.assemble_text()
+    visuals_by_idx = _partition_visuals(doc, summary_draft.segments)
     sliced: list[DocumentSegmentDraft] = []
-    for draft in summary_draft.segments:
-        if draft.content is not None:
-            sliced.append(draft)
-            continue
-        raw_content = reference[draft.start_pos : draft.end_pos]
-        sliced.append(draft.model_copy(update={"content": raw_content}))
+    for idx, draft in enumerate(summary_draft.segments):
+        update: dict[str, object] = {"visual_content": visuals_by_idx[idx]}
+        if draft.content is None:
+            update["content"] = reference[draft.start_pos : draft.end_pos]
+        sliced.append(draft.model_copy(update=update))
     return sliced
 
 

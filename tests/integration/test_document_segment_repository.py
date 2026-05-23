@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
-from course_supporter.ingestion.schemas import DocumentSegmentDraft
+from course_supporter.ingestion.schemas import DocumentSegmentDraft, VisualSceneRef
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -80,6 +80,7 @@ def _draft(
     main: list[str] | None = None,
     secondary: list[str] | None = None,
     content: str | None = None,
+    visual: list[VisualSceneRef] | None = None,
 ) -> DocumentSegmentDraft:
     return DocumentSegmentDraft(
         order=order,
@@ -90,6 +91,7 @@ def _draft(
         main_concepts=main or [],
         secondary_concepts=secondary or [],
         content=content,
+        visual_content=visual,
     )
 
 
@@ -190,6 +192,56 @@ class TestCreateBatch:
 
         assert segments[0].content == "pre-filled"
         assert segments[0].content_char_count == len("pre-filled")
+
+    async def test_persists_visual_content_round_trip(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """Task 2.4.6: a video draft's visual stream round-trips through the
+        JSONB column as ordered dicts; a draft without it persists ``[]``
+        (not-null server_default)."""
+        summary = await _make_summary(db_session, seed_material_entry)
+        text = "video transcript alpha beta"
+        doc = _source_doc(text)
+        drafts = [
+            _draft(
+                order=0,
+                start_pos=0,
+                end_pos=10,
+                content="alpha",
+                visual=[
+                    VisualSceneRef(position_ms=0, description="slide A", kind="anchor"),
+                    VisualSceneRef(position_ms=9000, description="slide B", scene_id=1),
+                ],
+            ),
+            _draft(order=1, start_pos=10, end_pos=len(text), content="beta"),
+        ]
+
+        repo = DocumentSegmentRepository(db_session)
+        segments = await repo.create_batch(summary.id, drafts, source_doc=doc)
+
+        assert segments[0].visual_content == [
+            {
+                "position_ms": 0,
+                "description": "slide A",
+                "kind": "anchor",
+                "scene_id": 0,
+            },
+            {"position_ms": 9000, "description": "slide B", "kind": "", "scene_id": 1},
+        ]
+        # Non-video / visual-less draft -> empty array, never NULL.
+        assert segments[1].visual_content == []
+
+        # Re-read from a fresh query to confirm JSONB persistence (not just
+        # the in-session instance).
+        reloaded = (
+            await db_session.execute(
+                select(DocumentSegment).where(DocumentSegment.id == segments[0].id)
+            )
+        ).scalar_one()
+        assert reloaded.visual_content[0]["description"] == "slide A"
 
     async def test_cascade_propagates_content_hash_to_root(
         self,

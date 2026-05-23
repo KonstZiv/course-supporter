@@ -125,6 +125,30 @@ class IngestionCallback:
             entry_repo = AuthoredDocumentRepository(session)
             await entry_repo.fail_processing(material_id, error_message=error_message)
 
+            # Orphan-Summary observer (task 2.4.6, Q4 / DD-2.4-G). Pass 2a
+            # commits the DocumentSummary before process_detail runs
+            # (api/tasks.py), so a later Pass 2b/2c failure leaves that
+            # summary committed under a now-ERROR document. This is a
+            # pre-existing cross-source_type window (Phase 2.1+); here we
+            # only OBSERVE it (read-only warning in this already-open failure
+            # session) so the condition is visible before task 2.4.7's Pass 2c
+            # introduces a real process_detail failure surface. Resolution
+            # (single-commit / rollback / accept) is deferred to DD-2.4-G; the
+            # orchestrator commit sequence is NOT touched.
+            from course_supporter.storage.document_summary_repository import (
+                DocumentSummaryRepository,
+            )
+
+            orphan = await DocumentSummaryRepository(
+                session
+            ).get_by_authored_document_id(material_id)
+            if orphan is not None:
+                log.warning(
+                    "ingestion_orphan_summary_detected",
+                    summary_id=str(orphan.id),
+                    error=error_message,
+                )
+
             from course_supporter.security.exceptions import ErrorCategory
 
             if error_category == ErrorCategory.STAGE2_REJECTED:

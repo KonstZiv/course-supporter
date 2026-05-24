@@ -367,6 +367,15 @@ async def step_5_pass2a_mapping(
         all_secondary.update(seg.secondary_concepts)
     all_secondary -= all_main
 
+    logger.debug(
+        "video.pass2a.done",
+        job_id=str(job_id),
+        segments=len(segment_drafts),
+        main_concepts=len(all_main),
+        secondary_concepts=len(all_secondary),
+        words=total_word_count,
+        noisy=sum(1 for seg in result.segments if seg.noisy),
+    )
     return DocumentSummaryDraft(
         title=result.title or "",
         description=result.description,
@@ -459,6 +468,13 @@ async def step_6_pass2b_slice(
         if draft.content is None:
             update["content"] = reference[draft.start_pos : draft.end_pos]
         sliced.append(draft.model_copy(update=update))
+
+    logger.debug(
+        "video.pass2b.done",
+        segments=len(sliced),
+        visual_refs=sum(len(s.visual_content or []) for s in sliced),
+        segments_with_visuals=sum(bool(s.visual_content) for s in sliced),
+    )
     return sliced
 
 
@@ -539,6 +555,12 @@ async def step_7_pass2c_cleanup(
     (R1) up through ``process_detail``.
     """
     noisy_indices = [i for i, d in enumerate(segments) if d.noisy and d.content]
+    logger.debug(
+        "video.pass2c.selected",
+        noisy_orders=[segments[i].order for i in noisy_indices],
+        count=len(noisy_indices),
+        total_segments=len(segments),
+    )
     if not noisy_indices:
         return segments
 
@@ -548,4 +570,5 @@ async def step_7_pass2c_cleanup(
     result = list(segments)
     for i, cleaned in zip(noisy_indices, cleaned_contents, strict=True):
         result[i] = result[i].model_copy(update={"content": cleaned})
+    logger.debug("video.pass2c.done", denoised=len(noisy_indices))
     return result

@@ -37,8 +37,11 @@ the frame descriptions), so the vision ladder cannot arrive via the
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import structlog
 
 from course_supporter.ingestion.base import MaterialProcessor, ProcessingError
 from course_supporter.ingestion.video_pipeline import steps
@@ -70,6 +73,8 @@ if TYPE_CHECKING:
     from course_supporter.stt.router import STTRouter
 
 _STT_RESULT_TTL_SEC = 3600
+
+logger = structlog.get_logger()
 
 
 class VideoProcessor(MaterialProcessor):
@@ -115,26 +120,69 @@ class VideoProcessor(MaterialProcessor):
                 "the ARQ task entry must set it before invocation."
             )
 
+        raw_start = time.perf_counter()
         with tempfile.TemporaryDirectory(prefix="video_ingest_") as tmp_dir:
             tmp = Path(tmp_dir)
+
+            step_start = time.perf_counter()
             video_path, file_metadata = await steps.step_1_ingest(source, tmp=tmp)
+            logger.debug(
+                "video.step_1_ingest.done",
+                elapsed_ms=int((time.perf_counter() - step_start) * 1000),
+                duration_ms=file_metadata.duration_ms,
+            )
+
+            step_start = time.perf_counter()
             stt = await steps.step_2_stt(
                 video_path,
                 file_metadata,
                 stt_router=self._stt_router,
                 tmp=tmp,
             )
+            logger.debug(
+                "video.step_2_stt.done",
+                elapsed_ms=int((time.perf_counter() - step_start) * 1000),
+                words=len(stt.words),
+                pauses=len(stt.pauses),
+                language=stt.language,
+                detected_language=stt.detected_language,
+            )
+
             await self._store_stt_result(job_id, stt)
+
+            step_start = time.perf_counter()
             detection_result = await steps.step_3_detection(
                 video_path, file_metadata, tmp=tmp
             )
+            logger.debug(
+                "video.step_3_detection.done",
+                elapsed_ms=int((time.perf_counter() - step_start) * 1000),
+                scenes=len(detection_result.scenes),
+                pip=detection_result.pip_mask is not None,
+            )
+
+            step_start = time.perf_counter()
             frame_descriptions = await steps.step_4_pass1_vision(
                 detection_result, file_metadata, stage_router=self._stage_router
             )
+            logger.debug(
+                "video.step_4_pass1_vision.done",
+                elapsed_ms=int((time.perf_counter() - step_start) * 1000),
+                frame_descriptions=len(frame_descriptions),
+            )
+
             doc = self._assemble_source_document(source, stt, frame_descriptions)
 
         if stt.detected_language:
             doc.metadata["detected_language"] = stt.detected_language
+
+        logger.debug(
+            "video.process_raw.done",
+            elapsed_ms=int((time.perf_counter() - raw_start) * 1000),
+            transcript_words=len(stt.words),
+            visual_scenes=len(frame_descriptions),
+            detected_language=stt.detected_language,
+        )
         return doc
 
     async def _store_stt_result(self, job_id: uuid.UUID, stt: SttResult) -> None:
@@ -235,9 +283,16 @@ class VideoProcessor(MaterialProcessor):
         orchestrator (method-arg, as audio / presentation), distinct from the
         ``self._stage_router`` the Krok 4 vision Pass 1 uses.
         """
-        return await steps.step_5_pass2a_mapping(
+        macro_start = time.perf_counter()
+        summary_draft = await steps.step_5_pass2a_mapping(
             doc, redis=self._redis, stage_router=router
         )
+        logger.debug(
+            "video.process_macro.done",
+            elapsed_ms=int((time.perf_counter() - macro_start) * 1000),
+            segments=len(summary_draft.segments),
+        )
+        return summary_draft
 
     async def process_detail(
         self,
@@ -259,7 +314,14 @@ class VideoProcessor(MaterialProcessor):
         orchestrator/ABC change. The ``router`` kwarg is kept for ABC symmetry
         with AudioProcessor and is otherwise unused here.
         """
+        detail_start = time.perf_counter()
         sliced = await steps.step_6_pass2b_slice(doc, summary_draft)
-        return await steps.step_7_pass2c_cleanup(
+        result = await steps.step_7_pass2c_cleanup(
             sliced, stage_router=self._stage_router
         )
+        logger.debug(
+            "video.process_detail.done",
+            elapsed_ms=int((time.perf_counter() - detail_start) * 1000),
+            segments=len(result),
+        )
+        return result

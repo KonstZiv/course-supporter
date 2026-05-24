@@ -67,6 +67,7 @@ _EXTENSION_TO_MIME_FAMILIES: dict[str, tuple[str, ...]] = {
     "pdf": ("application/pdf",),
     "txt": ("text/",),
     "md": ("text/",),
+    "markdown": ("text/",),
     "html": ("text/",),
     "htm": ("text/",),
     "csv": ("text/", "application/csv"),

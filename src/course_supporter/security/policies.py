@@ -119,7 +119,7 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
             "m4a",
             "ogg",
             "flac",
-            # documents (7)
+            # documents (9)
             "pdf",
             "pptx",
             "ppt",
@@ -127,6 +127,17 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
             "docx",
             "txt",
             "html",
+            # htm == html, markdown == md — identical MIME (text/) and the same
+            # alias-aware TextProcessor handler (text.py {.md,.markdown} /
+            # {.html,.htm}). Re-added in task 2.4.8 B1, deliberately reversing
+            # the Phase 0.6 "one canonical extension per MIME" contraction
+            # (Phase 1.2 dropped both as legacy aliases, see
+            # phase-1-2/POST-MERGE-NOTES.md §1): the service ingests legacy
+            # course material too, so fewer upload rejections is preferred over
+            # the canonical-alias hygiene. _EXTENSION_TO_MIME_FAMILIES carries
+            # both so the policy/MIME consistency gate stays green.
+            "htm",
+            "markdown",
         }
     ),
     max_file_size_bytes=100 * 1024 * 1024,

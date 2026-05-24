@@ -31,7 +31,6 @@ from course_supporter.llm.providers.dashscope import (
     DashScopeProvider,
     DashScopeResponseError,
     _detect_image_mime,
-    _strip_markdown_json,
 )
 from course_supporter.llm.schemas import LLMRequest
 
@@ -99,18 +98,6 @@ class TestPureHelpers:
         # ``application/octet-stream`` so the SDK surfaces a clear error
         # rather than silently mislabeling bytes.
         assert _detect_image_mime(b"\x00garbage bytes") == "application/octet-stream"
-
-    def test_strip_markdown_json_fenced(self) -> None:
-        text = '```json\n{"status": "ok"}\n```'
-        assert _strip_markdown_json(text) == '{"status": "ok"}'
-
-    def test_strip_markdown_json_no_fence(self) -> None:
-        text = '{"status": "ok"}'
-        assert _strip_markdown_json(text) == '{"status": "ok"}'
-
-    def test_strip_markdown_json_fence_without_lang_tag(self) -> None:
-        text = '```\n{"status": "ok"}\n```'
-        assert _strip_markdown_json(text) == '{"status": "ok"}'
 
 
 # ── __init__ side effects ───────────────────────────────────────
@@ -381,6 +368,32 @@ class TestCompleteAsync:
         assert response.tokens_out == 3
         assert response.provider == "dashscope"
         assert response.model_id == "qwen3-vl-32b-instruct"
+
+    @pytest.mark.asyncio
+    async def test_expects_json_strips_fence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fenced = '```json\n{"status": "ok"}\n```'
+        monkeypatch.setattr(
+            ds_module.AioMultiModalConversation,
+            "call",
+            AsyncMock(return_value=_success_response(text=fenced)),
+        )
+
+        # expects_json -> fence stripped to bare JSON
+        stripped = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", expects_json=True)
+        )
+        assert stripped.content == '{"status": "ok"}'
+
+        # default (plain text) -> raw passthrough
+        raw = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+        )
+        assert raw.content == fenced
 
     @pytest.mark.asyncio
     async def test_non_200_raises_response_error(

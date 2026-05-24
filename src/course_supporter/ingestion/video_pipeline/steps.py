@@ -337,6 +337,7 @@ async def step_5_pass2a_mapping(
     await stage_router.execute_for_stage(
         _PASS_2A_STAGE_NAME,
         response_validator=_validator,
+        expects_json=True,
         words_count=total_word_count,
         words_json=words_json,
         visuals=visuals,

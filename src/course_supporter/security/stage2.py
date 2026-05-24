@@ -166,6 +166,7 @@ async def run_stage2_safety_check(
     )
     result = await router.execute_for_stage(
         stage_name,
+        expects_json=True,
         **render_context,
     )
 

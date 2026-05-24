@@ -475,6 +475,7 @@ class PresentationProcessor(MaterialProcessor):
         router_result = await router.execute_for_stage(
             _PASS_2A_STAGE_NAME,
             response_validator=_validator,
+            expects_json=True,
             file_title=doc.title,
             n_slides=n_slides,
             slides_json=slides_json,

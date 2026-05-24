@@ -129,6 +129,7 @@ class StageRouter:
         *,
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
+        expects_json: bool = False,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a named stage.
@@ -153,6 +154,11 @@ class StageRouter:
                 multimodal input (e.g. DashScope, Gemini) encode each
                 ``bytes`` element as an inline image; text-only
                 providers ignore the field.
+            expects_json: Declare that the stage output must be JSON.
+                Propagated to :class:`LLMRequest.expects_json` so each
+                provider returns bare JSON (native JSON mode and/or
+                markdown-fence stripping). Leave ``False`` for
+                plain-text stages (e.g. Pass 2c denoise).
             **render_context: Variables for the prompt template's
                 Jinja2 placeholders.
 
@@ -205,7 +211,9 @@ class StageRouter:
                 attempts.append((entry.provider, entry.model, "provider disabled"))
                 continue
 
-            request = self._build_request(prompt, entry, stage_name, contents=contents)
+            request = self._build_request(
+                prompt, entry, stage_name, contents=contents, expects_json=expects_json
+            )
             response, used_count, reason = await self._attempt_entry(
                 provider, entry, request, stage_name, response_validator
             )
@@ -232,6 +240,7 @@ class StageRouter:
         stage_name: str,
         *,
         contents: list[bytes] | None = None,
+        expects_json: bool = False,
     ) -> LLMRequest:
         """Map StagePrompt + LadderEntry to the legacy LLMRequest.
 
@@ -250,6 +259,7 @@ class StageRouter:
             contents=contents,
             reasoning=entry.reasoning,
             max_tokens=entry.max_output_tokens,
+            expects_json=expects_json,
         )
 
     async def _attempt_entry(

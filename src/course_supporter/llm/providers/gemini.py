@@ -11,6 +11,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
@@ -158,13 +159,22 @@ class GeminiProvider(LLMProvider):
         return super().classify_error(exc)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        """Generate text completion via Gemini."""
+        """Generate text completion via Gemini.
+
+        When ``request.expects_json`` is set, native JSON mode
+        (``response_mime_type="application/json"``) is requested so the
+        model returns bare JSON instead of a markdown-fenced block; the
+        output is also fence-stripped defensively.
+        """
         model = request.model or self._default_model
-        config = types.GenerateContentConfig(
-            temperature=request.temperature,
-            max_output_tokens=request.max_tokens,
-            system_instruction=request.system_prompt,
-        )
+        config_kwargs: dict[str, Any] = {
+            "temperature": request.temperature,
+            "max_output_tokens": request.max_tokens,
+            "system_instruction": request.system_prompt,
+        }
+        if request.expects_json:
+            config_kwargs["response_mime_type"] = "application/json"
+        config = types.GenerateContentConfig(**config_kwargs)
 
         contents = _build_contents(request)
 
@@ -176,9 +186,12 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
 
+        content = response.text or ""
+        if request.expects_json:
+            content = strip_markdown_json(content)
         usage = response.usage_metadata
         return LLMResponse(
-            content=response.text or "",
+            content=content,
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,

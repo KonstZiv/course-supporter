@@ -10,6 +10,7 @@ import anthropic
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
@@ -92,8 +93,11 @@ class AnthropicProvider(LLMProvider):
         with self._measure_latency() as timer:
             response = await client.messages.create(**kwargs)
 
+        content = response.content[0].text if response.content else ""
+        if request.expects_json:
+            content = strip_markdown_json(content)
         return LLMResponse(
-            content=response.content[0].text if response.content else "",
+            content=content,
             provider=self.provider_name,
             model_id=model,
             tokens_in=response.usage.input_tokens,
@@ -119,15 +123,6 @@ class AnthropicProvider(LLMProvider):
             update={"system_prompt": structured_system}
         )
         llm_response = await self.complete(modified_request)
-        raw = _strip_markdown_json(llm_response.content)
+        raw = strip_markdown_json(llm_response.content)
         parsed = self._parse_structured(raw, response_schema)
         return parsed, llm_response
-
-
-_MD_JSON_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
-
-
-def _strip_markdown_json(text: str) -> str:
-    """Strip markdown code fences from JSON response if present."""
-    match = _MD_JSON_RE.search(text)
-    return match.group(1).strip() if match else text.strip()

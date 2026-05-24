@@ -21,6 +21,11 @@ class LLMRequest(BaseModel):
     # Qwen3-VL via DashScope). Providers that recognise the field propagate
     # it verbatim; others ignore it.
     reasoning: dict[str, Any] | None = None
+    # Caller declares the response must be JSON. Providers honour it by
+    # returning bare JSON: native JSON mode where available (Gemini
+    # ``response_mime_type``), and/or stripping markdown fences. Default
+    # ``False`` leaves plain-text stages (e.g. Pass 2c denoise) untouched.
+    expects_json: bool = False
 
 
 class LLMResponse(BaseModel):

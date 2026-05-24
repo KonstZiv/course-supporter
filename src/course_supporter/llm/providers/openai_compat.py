@@ -21,6 +21,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
@@ -196,8 +197,11 @@ class OpenAICompatProvider(LLMProvider):
 
         choice = response.choices[0]
         usage = response.usage
+        content = choice.message.content or ""
+        if request.expects_json:
+            content = strip_markdown_json(content)
         return LLMResponse(
-            content=choice.message.content or "",
+            content=content,
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,

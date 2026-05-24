@@ -44,6 +44,7 @@ from dashscope.common.error import (
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
@@ -78,8 +79,6 @@ _IMAGE_MIME_SIGNATURES: tuple[tuple[bytes, str], ...] = (
     (b"GIF89a", "image/gif"),
 )
 
-_MD_JSON_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
-
 
 def _detect_image_mime(data: bytes) -> str:
     """Detect image MIME type from magic bytes.
@@ -100,12 +99,6 @@ def _detect_image_mime(data: bytes) -> str:
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return "application/octet-stream"
-
-
-def _strip_markdown_json(text: str) -> str:
-    """Strip markdown code fences from JSON response if present."""
-    match = _MD_JSON_RE.search(text)
-    return match.group(1).strip() if match else text.strip()
 
 
 class DashScopeResponseError(Exception):
@@ -301,6 +294,8 @@ class DashScopeProvider(LLMProvider):
             )
 
         content_text = self._extract_text(response)
+        if request.expects_json:
+            content_text = strip_markdown_json(content_text)
         usage = response.usage
         tokens_in = usage.get("input_tokens") if usage else None
         tokens_out = usage.get("output_tokens") if usage else None
@@ -339,6 +334,6 @@ class DashScopeProvider(LLMProvider):
             update={"system_prompt": structured_system}
         )
         llm_response = await self.complete(modified_request)
-        raw = _strip_markdown_json(llm_response.content)
+        raw = strip_markdown_json(llm_response.content)
         parsed = self._parse_structured(raw, response_schema)
         return parsed, llm_response

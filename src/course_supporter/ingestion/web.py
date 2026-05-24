@@ -190,6 +190,7 @@ class WebProcessor(MaterialProcessor):
         result = await router.execute_for_stage(
             "pass_2a_mapping",
             response_validator=_coverage_validator,
+            expects_json=True,
             text=text,
         )
         draft = parsed["draft"]

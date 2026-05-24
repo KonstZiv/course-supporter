@@ -18,8 +18,8 @@ carrier is *additionally* written to Redis (``video_stt_result:{job_id}``,
 TTL 3600 s) as the producer side of the inter-stage transport for the
 future Pass 2a consumer (Krok 5, task 2.4.5) — mirroring the audio
 word-cache, NOT the deadlocking ``jobs`` row (rule #12). The namespace
-has zero imports from the legacy ``course_supporter.vd`` module (isolation
-per task 2.4.1 acceptance #3).
+never imported the ``course_supporter.vd`` module (isolation per task 2.4.1
+acceptance #3; ``vd/`` itself was removed in task 2.4.9A).
 
 Factory dispatch invariant: ``create_processors`` routes by
 ``source_type`` so this processor only receives ``SourceType.VIDEO``

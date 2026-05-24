@@ -27,22 +27,13 @@ class TestCreateHeavySteps:
         heavy = create_heavy_steps()
 
         assert isinstance(heavy, HeavySteps)
-        assert heavy.transcribe is not None
         assert heavy.scrape_web is not None
 
     def test_takes_no_args(self) -> None:
         """create_heavy_steps takes no args post CA-1 (router param dropped)."""
         heavy = create_heavy_steps()
 
-        assert heavy.transcribe is not None
         assert heavy.scrape_web is not None
-
-    def test_transcribe_is_local_transcribe(self) -> None:
-        """transcribe points to local_transcribe."""
-        from course_supporter.ingestion.transcribe import local_transcribe
-
-        heavy = create_heavy_steps()
-        assert heavy.transcribe is local_transcribe
 
     def test_scrape_web_is_local_scrape_web(self) -> None:
         """scrape_web points to local_scrape_web."""
@@ -51,7 +42,7 @@ class TestCreateHeavySteps:
         heavy = create_heavy_steps()
         assert heavy.scrape_web is local_scrape_web
 
-    @pytest.mark.parametrize("field", ["transcribe", "scrape_web"])
+    @pytest.mark.parametrize("field", ["scrape_web"])
     def test_heavy_steps_is_frozen(self, field: str) -> None:
         """HeavySteps is immutable — all fields reject assignment."""
         heavy = create_heavy_steps()

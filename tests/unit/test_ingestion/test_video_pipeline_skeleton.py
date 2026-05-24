@@ -548,7 +548,11 @@ class TestStep6VisualPartition:
 
 
 class TestVideoPipelineIsolation:
-    """Acceptance #3/#8 — namespace has zero ``course_supporter.vd`` imports."""
+    """Acceptance #3/#8 — namespace has zero ``course_supporter.vd`` imports.
+
+    ``vd/`` itself was removed in task 2.4.9A; this guard now also prevents a
+    future re-introduction of any ``course_supporter.vd`` coupling.
+    """
 
     def test_no_vd_imports_in_namespace(self) -> None:
         import course_supporter.ingestion.video_pipeline as pkg

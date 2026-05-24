@@ -1,6 +1,6 @@
 """Job priority system with work window enforcement.
 
-Heavy tasks (whisper, vision, OCR) use NORMAL priority and respect the
+Heavy tasks (transcription, vision, OCR) use NORMAL priority and respect the
 work window. Light tasks (fingerprint, LLM calls) use IMMEDIATE priority
 and run at any time.
 """

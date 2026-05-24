@@ -39,9 +39,17 @@ class TestAuthoredPolicy:
         )
 
     def test_extensions_include_documents(self) -> None:
-        assert {"pdf", "pptx", "ppt", "md", "docx", "txt", "html"} <= (
-            AUTHORED_POLICY.allowed_extensions
-        )
+        assert {
+            "pdf",
+            "pptx",
+            "ppt",
+            "md",
+            "markdown",
+            "docx",
+            "txt",
+            "html",
+            "htm",
+        } <= AUTHORED_POLICY.allowed_extensions
 
     def test_no_archive_extensions(self) -> None:
         # Authored context does not accept archive uploads.

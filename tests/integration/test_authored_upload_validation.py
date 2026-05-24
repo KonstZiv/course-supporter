@@ -6,7 +6,10 @@ with canonical ``security/run_stage1`` invocation against
 authored uploads, with 8 net behavioral changes (the "ratified whitelist
 drift" — see ``phases/phase-1-2/POST-MERGE-NOTES.md``):
 
-* 2 contraction (was accepted, now rejected): ``htm``, ``markdown``.
+* 2 contraction (was accepted, now rejected) — **reversed in task 2.4.8 B1**,
+  re-accepted as legacy aliases (same MIME / TextProcessor handler as
+  ``html`` / ``md``; the service ingests legacy course material): ``htm``,
+  ``markdown``.
 * 6 expansion (was rejected, now accepted): ``flac``, ``m4a``, ``mov``,
   ``mp3``, ``ogg``, ``wav``.
 
@@ -63,9 +66,12 @@ _STUB_TENANT = TenantContext(
 #   schema body.
 # * ``accepted`` — endpoint returns 200 with ``PresignedUrlResponse``.
 _DRIFT_CASES: list[tuple[str, str, str]] = [
-    # 2 contraction — was accepted (hand-rolled), now rejected (policy):
-    ("htm", "rejected", "drift-rejection-htm"),
-    ("markdown", "rejected", "drift-rejection-markdown"),
+    # Phase 1.2 contracted htm / markdown as legacy aliases ("one canonical
+    # extension per MIME"); task 2.4.8 B1 reversed that — both are accepted
+    # again (identical MIME / alias-aware TextProcessor handler as html / md;
+    # the service ingests legacy course material → fewer upload rejections).
+    ("htm", "accepted", "reaccept-2-4-8-htm"),
+    ("markdown", "accepted", "reaccept-2-4-8-markdown"),
     # 6 expansion — was rejected (hand-rolled), now accepted (policy):
     ("flac", "accepted", "drift-acceptance-flac"),
     ("m4a", "accepted", "drift-acceptance-m4a"),

@@ -1,9 +1,9 @@
-"""Video ingestion pipeline (Phase 2.4) — new namespace, isolated from ``vd/``.
+"""Video ingestion pipeline (Phase 2.4) — namespace isolated from the former ``vd/``.
 
-Skeleton (task 2.4.1) wires a 7-step video pipeline on offline stubs.
-Real per-step logic lands in tasks 2.4.2-2.4.7; the legacy
-``course_supporter.ingestion.video`` + ``course_supporter.vd`` modules are
-removed in task 2.4.9. This package has zero import dependencies on
+Skeleton (task 2.4.1) wired a 7-step video pipeline on offline stubs;
+real per-step logic landed in tasks 2.4.2-2.4.7. The legacy
+``course_supporter.ingestion.video`` + ``course_supporter.vd`` modules were
+removed in task 2.4.9A. This package never depended on
 ``course_supporter.vd``.
 """
 

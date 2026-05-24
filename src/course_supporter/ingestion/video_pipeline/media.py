@@ -15,8 +15,9 @@ function shells out and maps failure onto the task 2.4.2 taxonomy (D3):
 No ``SourceDocument`` / ORM / Redis knowledge lives here — pure value
 in, value out. The pure parsing helper :func:`_parse_probe` is
 unit-tested directly; the subprocess orchestration runs for real only
-in the ``requires_ffmpeg`` integration test. Isolated from the legacy
-``course_supporter.vd`` module (task 2.4.1 acceptance #3).
+in the ``requires_ffmpeg`` integration test. Isolated from the
+``course_supporter.vd`` module (task 2.4.1 acceptance #3; ``vd/`` removed in
+task 2.4.9A).
 """
 
 from __future__ import annotations

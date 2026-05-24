@@ -237,16 +237,6 @@ class Settings(BaseSettings):
     # (eu-central-1, etc.) override DASHSCOPE_BASE_URL in their env.
     dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
 
-    # --- Visual Description (VD) Pipeline ---
-    # Primary Vision LLM for per-frame analysis (VisualAnalyzer Eyes step).
-    vd_model: str = "gemini-2.5-flash"
-    # Fallback model on 429 rate-limit (VisualAnalyzer + MemoryPipeline).
-    vd_fallback_model: str = "gemini-3.1-flash-lite-preview"
-    # Max requests/min per Gemini key (rate limiter in VisualAnalyzer).
-    vd_rpm_per_key: int = 5
-    # Enable VD pipeline in VideoProcessor (False = STT-only processing).
-    vd_enabled: bool = True
-
     # --- Registries ---
     external_services_path: Path = Path("config/external_services.yaml")
     auth_registry_path: Path = Path("config/auth.yaml")

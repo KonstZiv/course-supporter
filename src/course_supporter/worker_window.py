@@ -1,6 +1,6 @@
 """Work window service for heavy task scheduling.
 
-Determines whether heavy tasks (whisper, vision, OCR) are allowed to run
+Determines whether heavy tasks (transcription, vision, OCR) are allowed to run
 based on a configurable time window with timezone support.
 """
 

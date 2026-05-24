@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
-    create_vd_pipeline,
 )
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
@@ -154,7 +153,6 @@ async def arq_ingest_material(
     log.info("ingestion_started")
 
     heavy = create_heavy_steps()
-    vd = create_vd_pipeline(router=router)
 
     from course_supporter.config import get_settings
     from course_supporter.stt.setup import create_stt_router
@@ -162,7 +160,6 @@ async def arq_ingest_material(
     stt_router = create_stt_router(get_settings(), session_factory)
     processors = create_processors(
         heavy,
-        vd_pipeline=vd,
         stt_router=stt_router,
         redis=redis,
         stage_router=stage_router,

@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter.api.middleware import RequestLoggingMiddleware
+from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.documents import router as documents_router
 from course_supporter.api.routes.homework import router as homework_router
@@ -246,3 +247,4 @@ app.include_router(homework_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(cost_router, prefix="/api/v1")
 app.include_router(storage_router, prefix="/api/v1")
+app.include_router(config_router, prefix="/api/v1")

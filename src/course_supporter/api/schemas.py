@@ -6,25 +6,89 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from course_supporter.language import (
+    InvalidLanguageError,
+    LanguageEntry,
+    LanguageNotAllowedError,
+    normalize_and_validate,
+)
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 
 # --- Material Tree Nodes ---
 
 
-class NodeCreateRequest(BaseModel):
-    """Request body for creating a material tree node.
+def _validate_language(raw: str) -> str:
+    """Pydantic-compatible wrapper around ``normalize_and_validate``.
 
-    Used by both root node creation (``POST /nodes``)
-    and child node creation (``POST /nodes/{node_id}/children``).
+    Turns the helper's typed exceptions into ``ValueError`` so FastAPI
+    renders them as 422 with the helper's message.
+    """
+    try:
+        return normalize_and_validate(raw)
+    except (InvalidLanguageError, LanguageNotAllowedError) as exc:
+        raise ValueError(str(exc)) from exc
+
+
+class RootNodeCreateRequest(BaseModel):
+    """Request body for creating a root node (= course).
+
+    ``default_language`` is **required** for root nodes (Task 2.4.13:
+    course language is the entry-gate for Pass 2a language pinning).
+    Accepts any standard language description — 639-1 (``"uk"``), 639-3
+    (``"ukr"``), or English name (``"Ukrainian"``) — and stores it as
+    canonical 639-3 after validation against ``config/languages.yaml``.
 
     Example::
 
         {
-            "title": "Module 1: Introduction",
-            "description": "Overview of core concepts"
+            "title": "Python for Beginners",
+            "description": "Foundational Python course",
+            "default_language": "uk"
         }
+    """
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Node title displayed in the material tree.",
+        examples=["Python for Beginners"],
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=5000,
+        description="Optional detailed description of the node's purpose.",
+        examples=["Foundational Python course."],
+    )
+    default_language: str = Field(
+        ...,
+        description=(
+            "Required language of instruction. Accepts ISO 639-1 / 639-3 / "
+            "English name; stored as canonical ISO 639-3. Must be in the "
+            "whitelist served by ``GET /api/v1/config/languages``."
+        ),
+        examples=["uk", "ukr", "Ukrainian"],
+    )
+
+    @field_validator("default_language")
+    @classmethod
+    def _check_language(cls, raw: str) -> str:
+        return _validate_language(raw)
+
+
+class ChildNodeCreateRequest(BaseModel):
+    """Request body for creating a non-root (child) node.
+
+    ``default_language`` is optional on children — language inheritance
+    is resolved at ingestion time against the root, and any value set on
+    a child is currently unused by the pipeline (KD-2.4-13 §1). Kept
+    here for forward-compat in case cascade overrides land later.
+
+    Example::
+
+        {"title": "Module 1: Intro"}
     """
 
     title: str = Field(
@@ -42,14 +106,20 @@ class NodeCreateRequest(BaseModel):
     )
     default_language: str | None = Field(
         default=None,
-        pattern=r"^[a-z]{2}$",
         description=(
-            "Optional ISO 639-1 language for materials under this node. "
-            "Usually set on the root/course node; inherited by materials "
-            "unless overridden. Leave empty to rely on STT auto-detection."
+            "Optional language override for this subtree. Stored as canonical "
+            "ISO 639-3 when set. Pipeline currently reads only the root "
+            "language; child overrides are forward-compat metadata."
         ),
-        examples=["uk", "en"],
+        examples=["uk", "ukr"],
     )
+
+    @field_validator("default_language")
+    @classmethod
+    def _check_language(cls, raw: str | None) -> str | None:
+        if raw is None:
+            return None
+        return _validate_language(raw)
 
 
 class NodeUpdateRequest(BaseModel):
@@ -57,6 +127,11 @@ class NodeUpdateRequest(BaseModel):
 
     All fields are optional — only provided fields are updated.
     To clear the description, send ``"description": null`` explicitly.
+
+    ``default_language`` membership against ``config/languages.yaml`` is
+    enforced here when present; the route additionally rejects
+    set-to-null on a *root* node (HTTP 422) so the CHECK constraint
+    ``course_nodes_root_language_required`` never has to fire as a 500.
 
     Example::
 
@@ -81,14 +156,37 @@ class NodeUpdateRequest(BaseModel):
     )
     default_language: str | None = Field(
         default=None,
-        pattern=r"^[a-z]{2}$",
         description=(
-            "New default ISO 639-1 language for this subtree. "
-            "Send ``null`` to clear, omit to keep unchanged. "
-            "Setting it is a pure DB write; does NOT trigger re-ingestion of "
-            "existing materials. New uploads and explicit retries will pick it up."
+            "New default language for this subtree (any standard form; stored "
+            "as canonical ISO 639-3). Send ``null`` to clear (children only — "
+            "root rejects null with 422). Setting it is a pure DB write; does "
+            "NOT trigger re-ingestion of existing materials."
         ),
-        examples=["uk", "en"],
+        examples=["uk", "ukr"],
+    )
+
+    @field_validator("default_language")
+    @classmethod
+    def _check_language(cls, raw: str | None) -> str | None:
+        if raw is None:
+            return None
+        return _validate_language(raw)
+
+
+class AllowedLanguagesResponse(BaseModel):
+    """Response shape for ``GET /api/v1/config/languages``.
+
+    Returns the project-wide course-language whitelist (canonical ISO 639-3
+    codes enriched with English names; native names when ``iso639`` carries
+    them). UI consumes this as the single source of truth for the language
+    selector — no hardcoded list on the client.
+    """
+
+    items: list[LanguageEntry] = Field(
+        description="Allowed languages — canonical 639-3 + display names."
+    )
+    total: int = Field(
+        description="Convenience count of ``items`` (always equals ``len(items)``)."
     )
 
 
@@ -153,7 +251,13 @@ class NodeResponse(BaseModel):
     description: str | None = Field(description="Optional node description.")
     default_language: str | None = Field(
         default=None,
-        description=("Default ISO 639-1 language for materials under this subtree."),
+        description=(
+            "Canonical ISO 639-3 language for materials under this subtree. "
+            "Root nodes (``parent_id`` is null) are guaranteed non-null by "
+            "the ``course_nodes_root_language_required`` CHECK constraint; "
+            "child nodes may be null (inheritance is resolved at ingestion "
+            "from the root, not stored)."
+        ),
     )
     order: int = Field(description="0-based position among siblings.")
     content_hash: str | None = Field(
@@ -279,58 +383,6 @@ class NodeWithDocumentsResponse(BaseModel):
     updated_at: datetime = Field(description="When this node was last modified.")
 
 
-class AuthoredDocumentCreateRequest(BaseModel):
-    """Request body for adding a material to a tree node."""
-
-    source_type: SourceType = Field(
-        ...,
-        description=(
-            "Type of the source material. "
-            "Must be one of: ``video``, ``presentation``, ``text``, ``web``."
-        ),
-        examples=["video", "presentation", "text", "web"],
-    )
-    material_role: MaterialRole = Field(
-        default=MaterialRole.EDUCATIONAL,
-        description=(
-            "Role of the material: ``educational`` (delivers content to students) "
-            "or ``methodological`` (declares course intent/goals)."
-        ),
-        examples=["educational", "methodological"],
-    )
-    task_type: AssignmentType | None = Field(
-        default=None,
-        description=(
-            "Mark the material as a concrete assignment of the given taxonomy "
-            "tier (``test``, ``short_task``, ``task``, ``project``). When set, "
-            "the Methodist agent preserves this material as a "
-            "recommended_assignment verbatim. ``null`` for regular materials."
-        ),
-        examples=[None, "test", "task"],
-    )
-    source_url: str = Field(
-        ...,
-        max_length=2000,
-        description="URL or S3 path to the raw material.",
-        examples=["https://example.com/slides.pdf", "s3://bucket/key"],
-    )
-    filename: str | None = Field(
-        default=None,
-        max_length=500,
-        description="Original filename for display purposes.",
-        examples=["slides.pdf", "lecture-01.mp4"],
-    )
-    language: str | None = Field(
-        default=None,
-        pattern=r"^[a-z]{2}$",
-        description=(
-            "Optional ISO 639-1 language override. When absent, the course "
-            "default is used, and STT auto-detection is the final fallback."
-        ),
-        examples=["uk", "en"],
-    )
-
-
 class AuthoredDocumentUpdateRequest(BaseModel):
     """Request body for PATCH /documents/{document_id}.
 
@@ -378,7 +430,8 @@ class AuthoredDocumentResponse(BaseModel):
     language: str | None = Field(
         default=None,
         description=(
-            "ISO 639-1 language. ``null`` when unset and not yet auto-detected."
+            "Canonical ISO 639-3 language. ``null`` when unset and not yet "
+            "auto-detected."
         ),
     )
     order: int = Field(description="0-based position among sibling materials.")
@@ -425,7 +478,8 @@ class AuthoredDocumentCreateResponse(BaseModel):
     language: str | None = Field(
         default=None,
         description=(
-            "ISO 639-1 language. ``null`` when unset and not yet auto-detected."
+            "Canonical ISO 639-3 language. ``null`` when unset and not yet "
+            "auto-detected."
         ),
     )
     order: int = Field(description="0-based position among sibling materials.")
@@ -564,13 +618,20 @@ class ConfirmUploadRequest(BaseModel):
     )
     language: str | None = Field(
         default=None,
-        pattern=r"^[a-z]{2}$",
         description=(
-            "Optional ISO 639-1 language override. When absent, the course "
+            "Optional language override. Accepts ISO 639-1 / 639-3 / English "
+            "name; stored as canonical ISO 639-3. When absent, the course "
             "default is used, and STT auto-detection is the final fallback."
         ),
-        examples=["uk", "en"],
+        examples=["uk", "ukr"],
     )
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, raw: str | None) -> str | None:
+        if raw is None:
+            return None
+        return _validate_language(raw)
 
 
 # --- Storage Management ---

@@ -98,20 +98,26 @@ async def client(
 
 
 class TestCreateRootNode:
-    """POST /api/v1/nodes"""
+    """POST /api/v1/nodes — Task 2.4.13 makes ``default_language`` required."""
 
     async def test_returns_201(self, client: AsyncClient) -> None:
         """Successful root node creation returns 201."""
         node = _mock_node()
         with patch.object(CourseNodeRepository, "create", return_value=node):
-            resp = await client.post("/api/v1/nodes", json={"title": "Module 1"})
+            resp = await client.post(
+                "/api/v1/nodes",
+                json={"title": "Module 1", "default_language": "uk"},
+            )
         assert resp.status_code == 201
 
     async def test_returns_node_fields(self, client: AsyncClient) -> None:
         """Response contains all expected node fields."""
         node = _mock_node(title="Module 1")
         with patch.object(CourseNodeRepository, "create", return_value=node):
-            resp = await client.post("/api/v1/nodes", json={"title": "Module 1"})
+            resp = await client.post(
+                "/api/v1/nodes",
+                json={"title": "Module 1", "default_language": "uk"},
+            )
         data = resp.json()
         assert data["id"] == str(node.id)
         assert data["title"] == "Module 1"
@@ -125,20 +131,78 @@ class TestCreateRootNode:
         node = _mock_node(description="Details")
         with patch.object(CourseNodeRepository, "create", return_value=node):
             resp = await client.post(
-                "/api/v1/nodes", json={"title": "Mod", "description": "Details"}
+                "/api/v1/nodes",
+                json={
+                    "title": "Mod",
+                    "description": "Details",
+                    "default_language": "uk",
+                },
             )
         assert resp.status_code == 201
         assert resp.json()["description"] == "Details"
 
     async def test_empty_title_returns_422(self, client: AsyncClient) -> None:
         """Empty title is rejected with 422."""
-        resp = await client.post("/api/v1/nodes", json={"title": ""})
+        resp = await client.post(
+            "/api/v1/nodes", json={"title": "", "default_language": "uk"}
+        )
         assert resp.status_code == 422
 
     async def test_missing_title_returns_422(self, client: AsyncClient) -> None:
         """Missing title is rejected with 422."""
-        resp = await client.post("/api/v1/nodes", json={})
+        resp = await client.post("/api/v1/nodes", json={"default_language": "uk"})
         assert resp.status_code == 422
+
+    async def test_missing_default_language_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """Root creation without ``default_language`` is rejected (Task 2.4.13)."""
+        resp = await client.post("/api/v1/nodes", json={"title": "Module 1"})
+        assert resp.status_code == 422
+        # Field-error must mention default_language somewhere.
+        body = resp.json()
+        assert any(
+            "default_language" in str(loc)
+            for err in body.get("detail", [])
+            for loc in err.get("loc", [])
+        )
+
+    async def test_invalid_default_language_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """Unknown ISO code is rejected with 422."""
+        resp = await client.post(
+            "/api/v1/nodes",
+            json={"title": "Module 1", "default_language": "xyz"},
+        )
+        assert resp.status_code == 422
+
+    async def test_valid_iso_not_in_whitelist_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """Valid ISO but not whitelisted (e.g. Latin ``lat``) returns 422."""
+        resp = await client.post(
+            "/api/v1/nodes",
+            json={"title": "Module 1", "default_language": "lat"},
+        )
+        assert resp.status_code == 422
+
+    async def test_normalizes_language_to_iso_639_3(self, client: AsyncClient) -> None:
+        """Helper converts 639-1 / English-name input to canonical 639-3."""
+        node = _mock_node()
+        captured: dict[str, str] = {}
+
+        async def fake_create(self: object, **kwargs: object) -> MagicMock:
+            captured.update({k: str(v) for k, v in kwargs.items()})
+            return node
+
+        with patch.object(CourseNodeRepository, "create", new=fake_create):
+            resp = await client.post(
+                "/api/v1/nodes",
+                json={"title": "Module 1", "default_language": "Ukrainian"},
+            )
+        assert resp.status_code == 201
+        assert captured["default_language"] == "ukr"
 
 
 class TestCreateChildNode:
@@ -281,6 +345,66 @@ class TestUpdateNode:
                 f"/api/v1/nodes/{uuid.uuid4()}", json={"title": "New"}
             )
         assert resp.status_code == 404
+
+    async def test_root_set_language_null_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """Clearing ``default_language`` on a root node is rejected (Task 2.4.13)."""
+        root = _mock_node(parent_id=None)
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=root):
+            resp = await client.patch(
+                f"/api/v1/nodes/{root.id}", json={"default_language": None}
+            )
+        assert resp.status_code == 422
+        assert "root" in resp.json()["detail"].lower()
+
+    async def test_child_set_language_null_returns_200(
+        self, client: AsyncClient
+    ) -> None:
+        """Clearing ``default_language`` on a child node is allowed."""
+        child = _mock_node(parent_id=uuid.uuid4())
+        updated = _mock_node(parent_id=child.parent_id)
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=child),
+            patch.object(CourseNodeRepository, "update", return_value=updated),
+        ):
+            resp = await client.patch(
+                f"/api/v1/nodes/{child.id}", json={"default_language": None}
+            )
+        assert resp.status_code == 200
+
+    async def test_update_language_invalid_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """Membership validator rejects unknown codes on update."""
+        node = _mock_node()
+        with patch.object(CourseNodeRepository, "get_by_id", return_value=node):
+            resp = await client.patch(
+                f"/api/v1/nodes/{node.id}", json={"default_language": "xyz"}
+            )
+        assert resp.status_code == 422
+
+    async def test_update_language_normalized(self, client: AsyncClient) -> None:
+        """Updating with a 639-1 code persists the 639-3 form."""
+        node = _mock_node(parent_id=uuid.uuid4())  # child — null allowed/needed-no
+        updated = _mock_node()
+        captured: dict[str, object] = {}
+
+        async def fake_update(
+            self: object, _nid: uuid.UUID, **kwargs: object
+        ) -> MagicMock:
+            captured.update(kwargs)
+            return updated
+
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(CourseNodeRepository, "update", new=fake_update),
+        ):
+            resp = await client.patch(
+                f"/api/v1/nodes/{node.id}", json={"default_language": "en"}
+            )
+        assert resp.status_code == 200
+        assert captured["default_language"] == "eng"
 
 
 class TestMoveNode:

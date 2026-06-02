@@ -71,7 +71,7 @@ class TestScopeEnforcement:
                 ):
                     response = await client.post(
                         "/api/v1/nodes",
-                        json={"title": "Test Node"},
+                        json={"title": "Test Node", "default_language": "uk"},
                     )
             assert response.status_code == 201
         finally:
@@ -92,7 +92,7 @@ class TestScopeEnforcement:
             ) as client:
                 response = await client.post(
                     "/api/v1/nodes",
-                    json={"title": "Test Node"},
+                    json={"title": "Test Node", "default_language": "uk"},
                 )
             assert response.status_code == 403
             assert "Requires scope: prep" in response.json()["detail"]
@@ -183,7 +183,7 @@ class TestScopeEnforcement:
                 ):
                     resp_prep = await client.post(
                         "/api/v1/nodes",
-                        json={"title": "Test"},
+                        json={"title": "Test", "default_language": "uk"},
                     )
                 assert resp_prep.status_code == 201
 

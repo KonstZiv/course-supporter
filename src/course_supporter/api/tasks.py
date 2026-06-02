@@ -16,6 +16,11 @@ from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
 )
+from course_supporter.language import (
+    InvalidLanguageError,
+    LanguageNotAllowedError,
+    normalize_and_validate,
+)
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
     set_job_from_arq,
@@ -367,16 +372,31 @@ async def arq_ingest_material(
     # Cache auto-detected language back to the entry for future STT calls.
     # Uses an atomic UPDATE ... WHERE language IS NULL to avoid a race
     # where a concurrent PATCH may set language between our check and write.
+    #
+    # STT output is a black-box external signal — a provider may return a
+    # code outside the project whitelist (Task 2.4.13). Normalize through
+    # the helper; if it cannot be resolved or is not allowed, warn-log and
+    # skip the cache write (do NOT fail ingestion — language authority is
+    # the course root, not STT auto-detect).
     if detected_language:
-        async with session_factory() as session:
-            entry_repo = AuthoredDocumentRepository(session)
-            updated = await entry_repo.set_language_if_unset(mid, detected_language)
-            await session.commit()
-            if updated:
-                log.info(
-                    "language_auto_detected_cached",
-                    language=detected_language,
-                )
+        try:
+            normalized = normalize_and_validate(detected_language)
+        except (InvalidLanguageError, LanguageNotAllowedError) as exc:
+            log.warning(
+                "language_auto_detect_skipped",
+                raw=detected_language,
+                reason=str(exc),
+            )
+        else:
+            async with session_factory() as session:
+                entry_repo = AuthoredDocumentRepository(session)
+                updated = await entry_repo.set_language_if_unset(mid, normalized)
+                await session.commit()
+                if updated:
+                    log.info(
+                        "language_auto_detected_cached",
+                        language=normalized,
+                    )
 
     await callback.on_success(
         job_id=jid,

@@ -108,7 +108,7 @@ async def test_create_root_node_returns_serializable_response(
     """
     response = await node_client.post(
         "/api/v1/nodes",
-        json={"title": "Regression serialization probe"},
+        json={"title": "Regression serialization probe", "default_language": "uk"},
     )
     assert response.status_code == 201, response.text
 

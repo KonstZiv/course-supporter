@@ -164,20 +164,20 @@ class TestRateLimitAPI:
                         # First 2 requests should pass (limit=2)
                         r1 = await client.post(
                             "/api/v1/nodes",
-                            json={"title": "Node 1"},
+                            json={"title": "Node 1", "default_language": "uk"},
                         )
                         assert r1.status_code == 201
 
                         r2 = await client.post(
                             "/api/v1/nodes",
-                            json={"title": "Node 2"},
+                            json={"title": "Node 2", "default_language": "uk"},
                         )
                         assert r2.status_code == 201
 
                         # Third request should be rate limited
                         r3 = await client.post(
                             "/api/v1/nodes",
-                            json={"title": "Node 3"},
+                            json={"title": "Node 3", "default_language": "uk"},
                         )
                         assert r3.status_code == 429
                         assert r3.json()["detail"] == "Rate limit exceeded"

@@ -67,7 +67,11 @@ stages:
         model: gemini-2.5-flash
         max_output_tokens: 8192
 
-  # Pass 2a semantic mapping (KD-2.2-A/F/H word-idx contract; task 2.4.5).
+  # Pass 2a semantic mapping (KD-2.2-A/F/H word-idx contract; landed in task
+  # 2.4.5, retuned for RUN_SMOKE #2 in task 2.4.12 after RUN_SMOKE #1 exposed
+  # the prior ladder as both ceiling- and reasoning-constrained on long video:
+  # the 8K output pin truncated 23-min transcripts and gemini-2.5-flash as R1
+  # was weak for single-shot structural segmentation at 265K input).
   # Input: transcript word-stream (``words_json`` + ``words_count``) + a
   #   deterministic visual-overlay block (``visuals``) via Jinja render
   #   context; image bytes do NOT flow here (text-reasoning, not vision).
@@ -75,36 +79,56 @@ stages:
   #   word-idx schema) by the ``step_5_pass2a_mapping`` response_validator;
   #   a ``ValidationError`` → ``StructuralRetryError`` (Path 3, as audio).
   #
-  # Ladder rationale (text-reasoning; mechanism CI-landed, ranking is the
-  # operator-run RUN_SMOKE spike per KD8/KD-2.3-X — calibrated *within* the
-  # registered text pool, NOT a unique per-source model):
-  #   1. gemini/gemini-2.5-flash — cost-first primary. Proven Pass-2a-capable
-  #      (audio Pass 2a rung). Clean JSON via the prompt directive (no
-  #      markdown-fence strip needed — the validator mirrors audio's).
-  #   2. gemini/gemini-2.5-pro — premium fallback (deeper reasoning for long
-  #      transcripts; presentation Pass 2a fallback precedent).
-  #   3. anthropic/claude-sonnet-4-5-20250929 — provider-diverse deep fallback
-  #      (rare; only if both gemini rungs exhaust). Current Sonnet snapshot —
-  #      NOT the deprecated claude-sonnet-4-20250514.
-  # Per-rung ``max_output_tokens: 8192`` guards a long segment+subsegment JSON
-  # against mid-object truncation (which would otherwise surface as a spurious
-  # validation failure). All three are registered in external_services.yaml
-  # (cost-tracked) — deliberately NOT a literal copy of the audio pool, two of
-  # whose rungs (gemini-3.1-flash-lite, claude-haiku-4-5) lack registry
-  # entries; the spike re-ranks and may diversify (a Mistral rung would need
-  # the markdown-fence strip, KD-2.3-T).
+  # Ladder rationale (text-reasoning; per-source_type calibration per
+  # KD-2.3-X — calibrated *within* the registered text pool, NOT a unique
+  # per-source model; ranking observed in RUN_SMOKE #2):
+  #   1. gemini/gemini-3.1-flash-lite — cost-first preview-tier primary.
+  #      Single-shot reasoning is sharper than gemini-2.5-flash on long
+  #      context, at comparable cost ($0.25/$1.50 vs $0.30/$2.50 per 1M).
+  #      Preview-tier status is an accepted trade-off.
+  #   2. dashscope/qwen3.7-max-2026-05-20 — diverse-provider rescue (NOT
+  #      Gemini, guards against a Gemini-API common issue). Reasoning-tier
+  #      flagship with 1M context and 65536 output (92.4% GPQA Diamond,
+  #      80.4% SWE-Verified). 1M context covers the longest video
+  #      transcripts (RUN_SMOKE #1 hit ~265K input). NOT calibrated on
+  #      video Pass 2a yet — performance observed in RUN_SMOKE #2.
+  #   3. gemini/gemini-2.5-flash — stable Gemini fallback (the proven
+  #      baseline; passed text / presentation Pass 2a in RUN_SMOKE #1).
+  #   4. gemini/gemini-2.5-pro — reasoning escalation on the hardest
+  #      materials ($1.25/$10 per 1M; the priciest rung, last resort).
+  #
+  # Anthropic/Sonnet R3 rung removed — no Anthropic credits make the rung a
+  # dead tier (separate operator concern). Promote back as a fifth tier
+  # once credits are restored.
+  # DeepSeek V4 Pro intentionally NOT added here — its reasoning mode needs
+  # a dedicated ``DeepSeekThinkingProvider`` (future work, separate task).
+  #
+  # Output-pin policy (DD-2.4-H): per-rung ``max_output_tokens: 65536``
+  # lifts the budget from the sprint-wide 8192 baseline to the per-rung
+  # model ceiling — the 8K pin actively truncated long-video transcripts
+  # in RUN_SMOKE #1 (the Gemini 65K model ceiling was artificially
+  # constrained by the pin). All four rungs share the same 65536 cap
+  # (Gemini 3.1-flash-lite / 2.5-flash / 2.5-pro registry-confirmed 65536;
+  # Qwen 3.7-Max confirmed 65536 from OpenRouter listing 2026-06-02), so
+  # intra-ladder rung-uniformity still holds at the new, higher pin. Other
+  # Pass 2a stages (audio / presentation / text) keep the 8192 pin →
+  # DD-2.4-H stays live sprint-wide; for video Pass 2a it is lifted "as a
+  # class" per the ratified optional clause in task 2.4.12.
   video_pass_2a_mapping:
     prompt_ref: "prompts/video_pass_2a_mapping/v1.md"
     ladder:
       - provider: gemini
+        model: gemini-3.1-flash-lite
+        max_output_tokens: 65536
+      - provider: dashscope
+        model: qwen3.7-max-2026-05-20
+        max_output_tokens: 65536
+      - provider: gemini
         model: gemini-2.5-flash
-        max_output_tokens: 8192
+        max_output_tokens: 65536
       - provider: gemini
         model: gemini-2.5-pro
-        max_output_tokens: 8192
-      - provider: anthropic
-        model: claude-sonnet-4-5-20250929
-        max_output_tokens: 8192
+        max_output_tokens: 65536
 
   # Pass 2c selective denoise (KD2d + KD8/KD-2.3-X; task 2.4.7).
   # Input: one noisy transcript segment per call — ``content`` (raw slice) +

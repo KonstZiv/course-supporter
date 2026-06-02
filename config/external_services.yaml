@@ -209,14 +209,21 @@ providers:
     models:
       - id: qwen3.7-max-2026-05-20
         # Latest Qwen flagship "Max" (text reasoning; released 2026-05-20).
-        # PROVISIONAL: 3.7-max rates not yet on the public price list — proxied
-        # from qwen3-max (International ≤32k-prompt tier) pending publication.
+        # Context 1M / output 65536 confirmed from OpenRouter listing
+        # 2026-06-02. Pricing $2.50/$7.50 per 1M is the Alibaba direct
+        # durable regular rate (cross-checked via artificialanalysis.ai).
+        # OpenRouter / pricepertoken list $1.25/$3.75 — an exact 2× delta
+        # against the Alibaba direct rate (a 50% promo signature); registry
+        # convention prefers the durable regular rate to avoid a silent
+        # post-promo jump (precedent: deepseek-v4-pro). The Alibaba Model
+        # Studio public pricing page did not yet list qwen3.7-max as of
+        # 2026-06-02 — refresh this entry once it does and reconcile.
         capabilities: [structured_output, long_context]
-        max_context: 262144
-        max_output_tokens: 32768
+        max_context: 1048576
+        max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.0012
-        cost_per_1k_out: 0.006
+        cost_per_1k_in: 0.0025
+        cost_per_1k_out: 0.0075
       - id: qwen3-max-2026-01-23
         # Stable Qwen flagship "Max" (text). PROVISIONAL: public International
         # ≤32k-prompt tier ($1.2/$6 per 1M); higher tiers apply above 32k input.

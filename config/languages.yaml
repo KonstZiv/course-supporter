@@ -1,0 +1,93 @@
+# ============================================================
+# Allowed course languages — single source of truth (Task 2.4.13).
+# ============================================================
+#
+# Storage format: ISO 639-3 (three-letter). Accepting 639-3 across the
+# board lets us represent languages that have no 639-1 (two-letter) code
+# (e.g. Cantonese ``yue``). All API input — 639-1, 639-3, or English name
+# — flows through ``course_supporter.language.normalize_and_validate``
+# before it reaches the DB; storage and API responses are always 639-3.
+#
+# Set composition: ElevenLabs Scribe WER-tier "Excellent + High"
+# (≤10% WER per the official model card, verified 2026-06-02). The list
+# is grouped only for human readability — the loader treats it as a
+# flat 57-entry whitelist. Tier metadata (Excellent vs High) lives in
+# the comments below; if a downstream consumer ever needs it, lift the
+# split into structured YAML at that point (reactive trigger).
+#
+# Product framing: oriented at Europe / North America / the Balkans /
+# Turkey; Russian is mandatory because many Ukrainian-authored courses
+# are recorded in Russian. The set bounds the STT branch (audio/video)
+# precisely; text/web/presentation paths use Gemini/Qwen with far
+# wider language coverage but share this whitelist for symmetry —
+# accepted simplification.
+#
+# Caveats:
+#   * Albanian is absent from ElevenLabs Scribe entirely (no tier).
+#   * The set is shared across all source_types deliberately, even
+#     though only STT is genuinely constrained by it.
+#
+# When this file changes, the in-process registry is cached (per
+# ``course_supporter.language.get_language_registry``) — restart the
+# API / worker to pick up edits.
+
+languages:
+  # Excellent tier (≤5% WER), 36 codes:
+  - bel  # Belarusian
+  - bos  # Bosnian
+  - bul  # Bulgarian
+  - cat  # Catalan
+  - hrv  # Croatian
+  - ces  # Czech
+  - dan  # Danish
+  - nld  # Dutch
+  - eng  # English
+  - est  # Estonian
+  - fin  # Finnish
+  - fra  # French
+  - glg  # Galician
+  - deu  # German
+  - ell  # Greek
+  - hun  # Hungarian
+  - isl  # Icelandic
+  - ind  # Indonesian
+  - ita  # Italian
+  - jpn  # Japanese
+  - kan  # Kannada
+  - lav  # Latvian
+  - mkd  # Macedonian
+  - msa  # Malay
+  - mal  # Malayalam
+  - nor  # Norwegian
+  - pol  # Polish
+  - por  # Portuguese
+  - ron  # Romanian
+  - rus  # Russian
+  - slk  # Slovak
+  - spa  # Spanish
+  - swe  # Swedish
+  - tur  # Turkish
+  - ukr  # Ukrainian
+  - vie  # Vietnamese
+  # High tier (>5–≤10% WER), 21 codes:
+  - hye  # Armenian
+  - aze  # Azerbaijani
+  - ben  # Bengali
+  - yue  # Cantonese (no 639-1 code — example of why we store 639-3)
+  - fil  # Filipino
+  - kat  # Georgian
+  - guj  # Gujarati
+  - hin  # Hindi
+  - kaz  # Kazakh
+  - lit  # Lithuanian
+  - mlt  # Maltese
+  - cmn  # Mandarin Chinese
+  - mar  # Marathi
+  - nep  # Nepali
+  - ori  # Odia (Oriya)
+  - fas  # Persian (Farsi)
+  - srp  # Serbian
+  - slv  # Slovenian
+  - swa  # Swahili
+  - tam  # Tamil
+  - tel  # Telugu

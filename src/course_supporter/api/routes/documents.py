@@ -45,6 +45,11 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_ingestion
 from course_supporter.jobs.cancellation_service import JobCancellationService
+from course_supporter.language import (
+    InvalidLanguageError,
+    LanguageNotAllowedError,
+    normalize_and_validate,
+)
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.security import AUTHORED_POLICY, run_stage1
 from course_supporter.security.exceptions import (
@@ -240,10 +245,11 @@ async def create_document(
         str | None,
         Form(
             description=(
-                "Optional ISO 639-1 language override. When empty, the course "
-                "default is used and STT falls back to auto-detection."
+                "Optional language override. Accepts ISO 639-1 / 639-3 / "
+                "English name; stored as canonical ISO 639-3. When empty, "
+                "the course default is used and STT falls back to "
+                "auto-detection."
             ),
-            pattern=r"^[a-z]{2}$",
         ),
     ] = None,
 ) -> AuthoredDocumentCreateResponse:
@@ -261,6 +267,16 @@ async def create_document(
             status_code=422,
             detail="Either source_url or file must be provided",
         )
+
+    # FastAPI ``Form()`` does not run Pydantic field validators, so the
+    # language helper is invoked explicitly here. Without the explicit
+    # ``HTTPException``, the helper's ``ValueError`` subclasses would
+    # bubble as a 500 instead of a 422 (Task 2.4.13 fix-1 ratify).
+    if language is not None:
+        try:
+            language = normalize_and_validate(language)
+        except (InvalidLanguageError, LanguageNotAllowedError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if file is not None:
         if source_type == SourceType.WEB:

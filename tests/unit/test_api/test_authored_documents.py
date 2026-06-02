@@ -370,6 +370,83 @@ class TestCreateDocument:
         assert resp.status_code == 201
         assert resp.json()["filename"] == "notes.md"
 
+    async def test_language_639_1_normalized_to_639_3(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Form-input 639-1 ``uk`` → canonical 639-3 ``ukr`` (Task 2.4.13)."""
+        captured: dict[str, object] = {}
+
+        async def fake_create(self: object, **kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            entry = _mock_entry(node_id=node_id)
+            entry.language = kwargs.get("language")
+            return entry
+
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", new=fake_create),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/doc.md",
+                    "language": "uk",
+                },
+            )
+        assert resp.status_code == 201
+        assert captured["language"] == "ukr"
+        assert resp.json()["language"] == "ukr"
+
+    async def test_language_invalid_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Form-input language not in the whitelist returns 422, not 500."""
+        with patch.object(
+            CourseNodeRepository,
+            "get_by_id",
+            return_value=_mock_node(node_id=node_id),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/doc.md",
+                    "language": "xyz",
+                },
+            )
+        assert resp.status_code == 422
+
+    async def test_language_absent_succeeds(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """Optional ``language`` field — absence is accepted."""
+        entry = _mock_entry(node_id=node_id)
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/doc.md",
+                },
+            )
+        assert resp.status_code == 201
+
 
 class TestPresentationSlideCountInspection:
     """KD-2.3-M -- _presentation_slide_count helper (HTTP-side, <=200 ms)."""

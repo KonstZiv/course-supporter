@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
-    NodeCreateRequest,
+    ChildNodeCreateRequest,
     NodeListResponse,
     NodeMoveRequest,
     NodeReorderRequest,
@@ -39,6 +39,7 @@ from course_supporter.api.schemas import (
     NodeTreeResponse,
     NodeUpdateRequest,
     NodeWithDocumentsResponse,
+    RootNodeCreateRequest,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
@@ -113,7 +114,7 @@ async def _require_child_node(
 
 @router.post("/nodes", status_code=201)
 async def create_root_node(
-    body: NodeCreateRequest,
+    body: RootNodeCreateRequest,
     tenant: PrepDep,
     session: SessionDep,
 ) -> NodeResponse:
@@ -121,6 +122,10 @@ async def create_root_node(
 
     Root nodes have no parent and appear at the top level.
     The ``order`` is auto-assigned as the next available position.
+
+    ``default_language`` is required — see ``RootNodeCreateRequest``.
+    The validator normalizes any standard input form to canonical ISO 639-3
+    before the DB write.
     """
     repo = CourseNodeRepository(session)
     node = await repo.create(
@@ -176,7 +181,7 @@ async def list_root_nodes(
 @router.post("/nodes/{node_id}/children", status_code=201)
 async def create_child_node(
     node_id: uuid.UUID,
-    body: NodeCreateRequest,
+    body: ChildNodeCreateRequest,
     tenant: PrepDep,
     session: SessionDep,
 ) -> NodeResponse:
@@ -279,9 +284,11 @@ async def update_node(
     Only fields present in the request body are updated.
     To clear a field, send it as ``null``. Updating
     ``default_language`` is a pure DB write — it does not trigger
-    re-ingestion of existing materials.
+    re-ingestion of existing materials. **Root nodes** cannot have
+    ``default_language`` cleared — the request is rejected with 422
+    so the CHECK constraint never fires as a 500.
     """
-    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+    node = await _require_node_for_tenant(session, tenant.tenant_id, node_id)
     repo = CourseNodeRepository(session)
 
     # Distinguish "field omitted" from "field set to null"
@@ -291,6 +298,17 @@ async def update_node(
     if "description" in body.model_fields_set:
         update_kwargs["description"] = body.description
     if "default_language" in body.model_fields_set:
+        # Root nodes carry the course language; clearing it would violate
+        # ``course_nodes_root_language_required`` (a 500 from the DB).
+        # Reject at the route boundary with a clear 422 instead.
+        if body.default_language is None and getattr(node, "parent_id", None) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "default_language cannot be cleared on a root node "
+                    "(course language is required)."
+                ),
+            )
         update_kwargs["default_language"] = body.default_language
 
     node = await repo.update(node_id, **update_kwargs)

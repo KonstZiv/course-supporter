@@ -119,20 +119,37 @@ def _make_router(
     return router
 
 
-def _pass2a_json(segments: list[tuple[int, int]], *, title: str = "Deck") -> str:
+def _pass2a_json(
+    segments: list[tuple[int, int]],
+    *,
+    title: str = "Deck",
+    concepts: list[tuple[list[str], list[str]]] | None = None,
+) -> str:
+    """Build a Pass 2a payload with optional per-segment concept lists.
+
+    ``concepts`` is a parallel list to ``segments`` carrying
+    ``(main_concepts, secondary_concepts)`` per index; ``None`` omits
+    the concept keys (legacy callsites) and relies on the schema
+    defaults (``[]`` from ``default_factory=list``).
+    """
+    payload_segments: list[dict[str, object]] = []
+    for idx, (s, e) in enumerate(segments):
+        seg: dict[str, object] = {
+            "start_slide": s,
+            "end_slide": e,
+            "title": f"Seg {s}-{e}",
+            "description": f"Covers slides {s}-{e}.",
+        }
+        if concepts is not None:
+            main_c, sec_c = concepts[idx]
+            seg["main_concepts"] = main_c
+            seg["secondary_concepts"] = sec_c
+        payload_segments.append(seg)
     return json.dumps(
         {
             "title": title,
             "description": "A presentation.",
-            "segments": [
-                {
-                    "start_slide": s,
-                    "end_slide": e,
-                    "title": f"Seg {s}-{e}",
-                    "description": f"Covers slides {s}-{e}.",
-                }
-                for s, e in segments
-            ],
+            "segments": payload_segments,
         }
     )
 
@@ -543,6 +560,106 @@ class TestProcessMacro:
         router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2), (3, 3)]))
         with pytest.raises(ProcessingError, match="PRESENTATION_EMPTY_SEGMENT"):
             await proc.process_macro(doc, router)
+
+
+# ── Pass 2a concept aggregation + passthrough (task 2.4.15) ─────────
+
+
+class TestPass2aConceptAggregation:
+    """Pass 2a now emits per-segment concepts; doc-level is union+dedup.
+
+    Task 2.4.15 lifts KD2d (a): the Pass 2a output carries
+    ``main_concepts`` / ``secondary_concepts`` per segment.
+    ``process_macro`` aggregates them to document level using the
+    ``sorted(set-union)`` pattern shared with text/audio (KD-2.1-O),
+    applying the conflict rule ``all_secondary -= all_main``.
+    """
+
+    async def test_doc_level_concepts_aggregate_via_union_with_conflict_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "A"), (2, "B"), (3, "C"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+
+        # Segment 0: main=["variable", "змінна"], secondary=["modulo"]
+        # Segment 1: main=["modulo"], secondary=["operator"]
+        # Conflict: "modulo" is main in seg1 and secondary in seg0 →
+        # the union+dedup rule keeps it in main_concepts and removes
+        # it from secondary_concepts.
+        payload = _pass2a_json(
+            [(1, 2), (3, 3)],
+            concepts=[
+                (["variable", "змінна"], ["modulo"]),
+                (["modulo"], ["operator"]),
+            ],
+        )
+        router = _make_router(pass2a_payload=payload)
+        summary = await proc.process_macro(doc, router)
+
+        # Doc-level main = sorted union of all segment mains.
+        assert summary.main_concepts == sorted({"variable", "змінна", "modulo"})
+        # Doc-level secondary = (union of seg seconds) - (union of seg mains);
+        # "modulo" was promoted to main by seg1, so it leaves secondary.
+        assert summary.secondary_concepts == ["operator"]
+
+    async def test_segment_drafts_carry_concept_lists_from_pass2a(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "Intro"), (2, "Body"), (3, "End"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+
+        payload = _pass2a_json(
+            [(1, 2), (3, 3)],
+            concepts=[
+                (["variable"], ["assignment"]),
+                (["arithmetic operator"], ["modulo"]),
+            ],
+        )
+        router = _make_router(pass2a_payload=payload)
+        summary = await proc.process_macro(doc, router)
+
+        assert [seg.main_concepts for seg in summary.segments] == [
+            ["variable"],
+            ["arithmetic operator"],
+        ]
+        assert [seg.secondary_concepts for seg in summary.segments] == [
+            ["assignment"],
+            ["modulo"],
+        ]
+
+    async def test_legacy_payload_without_concept_keys_defaults_to_empty_lists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Defence-in-depth: a Pass 2a payload that omits the new
+        # concept keys (e.g. a model that did not pick up the prompt
+        # update yet) must still parse — the schema defaults populate
+        # empty lists at both segment and doc level.
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "A"), (2, "B"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2)]))
+
+        summary = await proc.process_macro(doc, router)
+
+        assert summary.main_concepts == []
+        assert summary.secondary_concepts == []
+        for seg in summary.segments:
+            assert seg.main_concepts == []
+            assert seg.secondary_concepts == []
 
 
 # ── process_detail ──────────────────────────────────────────────────

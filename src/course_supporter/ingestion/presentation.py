@@ -22,9 +22,13 @@ the three-stage pipeline shared with ``AudioProcessor`` / text / web:
   Pass 2a output is JSON validated against ``PresentationPass2aResult``
   through the StageRouter ``response_validator`` (markdown-fence strip
   per KD-2.3-T Path 3 carry-forward; Mistral may wrap JSON in fences).
+  Per task 2.4.15, Pass 2a also emits per-segment concepts; document-
+  level ``main_concepts`` / ``secondary_concepts`` are aggregated
+  algorithmically via the KD-2.1-O union+dedup pattern shared with
+  text/audio.
 * :meth:`process_detail` — Pass 2b algorithmic slice via the
   ``chars_per_slide_cumsum`` bridge (KD-2.3-Q). Pass 2c is SKIPPED per
-  KD2d (per-slide VD output is clean by construction).
+  KD2d (b) (per-slide VD output is clean by construction).
 
 Single-dependency design (Design 2, ratified): no constructor args.
 The ``StageRouter`` arrives via the ``process_macro`` method argument
@@ -60,6 +64,7 @@ from course_supporter.ingestion.schemas import (
     DocumentSummaryDraft,
     PresentationPass2aResult,
 )
+from course_supporter.language import display_name
 from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.source import (
     ChunkType,
@@ -355,9 +360,11 @@ class PresentationProcessor(MaterialProcessor):
         validated and mapped onto ``DocumentSegmentDraft`` offsets via
         the ``chars_per_slide_cumsum`` bridge.
 
-        Presentation Pass 2a carries no concepts (KD2d); the resulting
-        ``DocumentSummaryDraft`` has empty ``main_concepts`` /
-        ``secondary_concepts``.
+        Per task 2.4.15, Pass 2a emits per-segment ``main_concepts`` /
+        ``secondary_concepts``; document-level concepts are aggregated
+        as ``sorted(set-union)`` over segments with the conflict rule
+        ``all_secondary -= all_main`` (KD-2.1-O — same pattern as
+        text/audio). KD2d (b) — Pass 2c skip — remains in effect.
         """
         slide_raw = self._slide_raw
         if slide_raw is None:
@@ -373,11 +380,18 @@ class PresentationProcessor(MaterialProcessor):
 
         segment_drafts = self._build_segment_drafts(doc, pass2a)
 
+        all_main: set[str] = set()
+        all_secondary: set[str] = set()
+        for seg in pass2a.segments:
+            all_main.update(seg.main_concepts)
+            all_secondary.update(seg.secondary_concepts)
+        all_secondary -= all_main
+
         return DocumentSummaryDraft(
             title=pass2a.title or "",
             description=pass2a.description,
-            main_concepts=[],
-            secondary_concepts=[],
+            main_concepts=sorted(all_main),
+            secondary_concepts=sorted(all_secondary),
             segments=segment_drafts,
         )
 
@@ -479,6 +493,7 @@ class PresentationProcessor(MaterialProcessor):
             file_title=doc.title,
             n_slides=n_slides,
             slides_json=slides_json,
+            language=display_name(doc.language) if doc.language else None,
         )
         result = parsed["result"]
         logger.debug(
@@ -540,6 +555,8 @@ class PresentationProcessor(MaterialProcessor):
                     end_pos=cumsum[max(idxs) + 1],
                     title=seg.title,
                     description=seg.description,
+                    main_concepts=list(seg.main_concepts),
+                    secondary_concepts=list(seg.secondary_concepts),
                     start_slide=seg.start_slide,
                     end_slide=seg.end_slide,
                 )

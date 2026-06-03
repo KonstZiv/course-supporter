@@ -732,17 +732,20 @@ class AudioPass2cResult(BaseModel):
     )
 
 
-# Presentation source-type schemas (Phase 2.3, KD-2.3-F + KD-2.3-H).
+# Presentation source-type schemas (Phase 2.3 + task 2.4.15).
 #
-# Pass 2a maps a slide-list into contiguous segments. Unlike the audio
-# pipeline, the presentation Pass 2a output carries NO concepts
-# (per spike v2 calibration + KD2d: per-slide VD output is clean by
-# construction; concept extraction is not part of the presentation
-# Pass 2a contract). The segment shape is intentionally minimal —
-# ``{start_slide, end_slide, title, description}`` — matching the
-# sealed ``prompts/presentation_pass_2a_mapping/v1.md`` JSON contract.
-# ``DocumentSummary.main_concepts`` / ``secondary_concepts`` are empty
-# lists for the presentation source_type; the UI handles empty arrays.
+# Pass 2a maps a slide-list into contiguous segments and — per task
+# 2.4.15 — also emits per-segment concepts (``main_concepts`` /
+# ``secondary_concepts``) symmetric with the text/web/audio/video
+# Pass 2a contract. Doc-level ``main_concepts`` / ``secondary_concepts``
+# are NOT emitted by the LLM: ``PresentationProcessor.process_macro``
+# computes them algorithmically as ``sorted(set-union)`` over segments
+# (KD-2.1-O), mirroring the text/audio aggregation pattern.
+#
+# KD2d split (task 2.4.15): (a) "presentation Pass 2a carries no
+# concepts" — LIFTED; Pass 2a now emits concepts per segment. (b)
+# "presentation has no Pass 2c selective denoise" — STILL HOLDS;
+# per-slide VD output is clean by construction, so no denoise step.
 
 
 class PresentationSegment(BaseModel):
@@ -755,8 +758,9 @@ class PresentationSegment(BaseModel):
     ``end_pos`` via the ``chars_per_slide_cumsum`` helper.
 
     No ``order`` field — position is implicit through array order
-    (parallel to the audio segment classes). No concept fields —
-    presentation Pass 2a is segmentation-only per KD2d.
+    (parallel to the audio segment classes). Concept fields landed in
+    task 2.4.15 (KD2d (a) lifted); aggregated to doc-level via the
+    union+dedup pattern shared with text/audio (KD-2.1-O).
     """
 
     start_slide: int = Field(
@@ -774,6 +778,14 @@ class PresentationSegment(BaseModel):
     )
     description: str = Field(
         description="One-sentence description of what this segment covers.",
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings taught in this segment (task 2.4.15).",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings mentioned but not taught in this segment.",
     )
 
 

@@ -89,6 +89,20 @@ class TestPresentationPass2aMappingPrompt:
         # Calibration example must be present (note 2 ratify: one
         # mini example to anchor the JSON output shape).
         assert "Calibration example" in prompt.system
+        # Task 2.4.15 — concept fields landed on segment level. The
+        # JSON-shape preamble names them and a dedicated guidance
+        # section distinguishes main vs secondary tiers; the
+        # document-level fields stay concept-free (aggregated
+        # algorithmically downstream).
+        assert '"main_concepts"' in prompt.system
+        assert '"secondary_concepts"' in prompt.system
+        assert "Concept extraction guidance" in prompt.system
+        assert "only at the per-segment level" in prompt.system
+        # Task 2.4.15 — language-pin Jinja variable is referenced in
+        # the source (the {% if language %} gate + interpolation). The
+        # branch-coverage tests live in
+        # ``tests/unit/test_prompts/test_pass_2a_language_pin.py``.
+        assert "{{ language }}" in prompt.system
 
     def test_renders_with_sample_context(self) -> None:
         prompt = load_prompt(_PASS_2A_REF, base_path=_PROMPTS_DIR)
@@ -100,6 +114,10 @@ class TestPresentationPass2aMappingPrompt:
             file_title="Intro to Python",
             n_slides=3,
             slides_json=slides_block,
+            # Task 2.4.15 — every production call site forwards
+            # ``language`` (possibly ``None``). Pass an explicit value
+            # so StrictUndefined does not raise during this smoke test.
+            language="Ukrainian",
         )
 
         assert rendered.user is not None
@@ -112,4 +130,6 @@ class TestPresentationPass2aMappingPrompt:
         prompt = load_prompt(_PASS_2A_REF, base_path=_PROMPTS_DIR)
 
         with pytest.raises(UndefinedError):
+            # Missing ``slides_json`` AND ``language`` (task 2.4.15);
+            # either one is enough to trip StrictUndefined.
             prompt.render(file_title="x", n_slides=1)

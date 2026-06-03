@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.ingestion.audio import AudioProcessor
+from course_supporter.ingestion.presentation import PresentationProcessor, SlideRaw
 from course_supporter.ingestion.text import TextProcessor
 from course_supporter.ingestion.video_pipeline import steps
 from course_supporter.ingestion.video_pipeline.schemas import SttResult, SttWord
@@ -357,3 +358,154 @@ class TestVideoStep5LanguageKwarg:
 
         assert router.calls
         assert router.calls[0]["render_context"]["language"] is None
+
+
+# ── presentation ───────────────────────────────────────────────────────
+
+
+def _presentation_pass_2a_json() -> str:
+    """Two-segment Pass 2a payload covering a three-slide deck."""
+    return json.dumps(
+        {
+            "title": "Deck",
+            "description": "A presentation.",
+            "segments": [
+                {
+                    "start_slide": 1,
+                    "end_slide": 2,
+                    "title": "Seg A",
+                    "description": "Covers slides 1-2.",
+                    "main_concepts": [],
+                    "secondary_concepts": [],
+                },
+                {
+                    "start_slide": 3,
+                    "end_slide": 3,
+                    "title": "Seg B",
+                    "description": "Covers slide 3.",
+                    "main_concepts": [],
+                    "secondary_concepts": [],
+                },
+            ],
+        }
+    )
+
+
+def _presentation_router(payload: str) -> AsyncMock:
+    """StageRouter mock that handles both Pass 1 and Pass 2a stages.
+
+    Pass 1 is invoked once per slide and returns a per-slide string;
+    Pass 2a is invoked once and feeds ``payload`` through the
+    ``response_validator`` closure that ``_run_pass_2a`` registers.
+    Only the Pass 2a call is asserted on — the per-slide Pass 1 calls
+    do not carry a ``language`` kwarg by contract (Pass 1 prompt has
+    no language pin in task 2.4.15).
+    """
+    router = AsyncMock()
+
+    async def _execute(
+        stage_name: str,
+        *,
+        response_validator: Any | None = None,
+        contents: Any | None = None,
+        **render_context: Any,
+    ) -> StageResult:
+        if stage_name == "presentation_pass_1_vision":
+            slide_number = render_context["slide_number"]
+            return StageResult(
+                content=f"vd-{slide_number}",
+                provider_used="mock",
+                model_used="mock-model",
+                attempt_count=1,
+            )
+        if stage_name == "presentation_pass_2a_mapping":
+            if response_validator is not None:
+                response_validator(payload)
+            return StageResult(
+                content=payload,
+                provider_used="mock",
+                model_used="mock-model",
+                attempt_count=1,
+            )
+        raise AssertionError(f"unexpected stage {stage_name}")
+
+    router.execute_for_stage.side_effect = _execute
+    return router
+
+
+def _presentation_doc(*, language: str | None) -> SourceDocument:
+    """Three-slide SourceDocument shaped like a real process_raw output."""
+    return SourceDocument(
+        source_type=SourceType.PRESENTATION,
+        source_url="file:///deck.pdf",
+        chunks=[
+            ContentChunk(
+                chunk_type=ChunkType.SLIDE_TEXT,
+                text="Slide one body",
+                metadata={"slide_number": 1},
+            ),
+            ContentChunk(
+                chunk_type=ChunkType.SLIDE_TEXT,
+                text="Slide two body",
+                metadata={"slide_number": 2},
+            ),
+            ContentChunk(
+                chunk_type=ChunkType.SLIDE_TEXT,
+                text="Slide three body",
+                metadata={"slide_number": 3},
+            ),
+        ],
+        language=language,
+    )
+
+
+def _seed_slide_raw(processor: PresentationProcessor) -> None:
+    """Directly populate ``_slide_raw`` to bypass PDF extraction.
+
+    ``process_raw`` populates this from PyMuPDF; the language-kwarg
+    contract lives in ``_run_pass_2a`` so we skip the extraction path
+    by injecting a synthetic three-slide sequence.
+    """
+    processor._slide_raw = [
+        SlideRaw(slide_number=i, raw_text=f"Slide {i}", image_bytes=b"\x89PNG")
+        for i in (1, 2, 3)
+    ]
+
+
+class TestPresentationProcessorLanguageKwarg:
+    """``PresentationProcessor._run_pass_2a`` forwards the resolved language."""
+
+    @pytest.mark.asyncio
+    async def test_pinned_language_resolves_to_english_display_name(self) -> None:
+        processor = PresentationProcessor()
+        _seed_slide_raw(processor)
+        doc = _presentation_doc(language="ukr")
+        router = _presentation_router(_presentation_pass_2a_json())
+
+        await processor.process_macro(doc, router)
+
+        # The Pass 2a call is the one the language kwarg flows into.
+        pass2a_calls = [
+            call
+            for call in router.execute_for_stage.await_args_list
+            if call.args and call.args[0] == "presentation_pass_2a_mapping"
+        ]
+        assert len(pass2a_calls) == 1
+        assert pass2a_calls[0].kwargs["language"] == "Ukrainian"
+
+    @pytest.mark.asyncio
+    async def test_unset_language_forwards_none(self) -> None:
+        processor = PresentationProcessor()
+        _seed_slide_raw(processor)
+        doc = _presentation_doc(language=None)
+        router = _presentation_router(_presentation_pass_2a_json())
+
+        await processor.process_macro(doc, router)
+
+        pass2a_calls = [
+            call
+            for call in router.execute_for_stage.await_args_list
+            if call.args and call.args[0] == "presentation_pass_2a_mapping"
+        ]
+        assert len(pass2a_calls) == 1
+        assert pass2a_calls[0].kwargs["language"] is None

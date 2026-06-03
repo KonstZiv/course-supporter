@@ -29,13 +29,16 @@ from course_supporter.llm.prompt_loader_md import load_prompt
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PROMPTS_DIR = _REPO_ROOT / "prompts"
 
-# The three Pass 2a prompt refs touched by task 2.4.14. ``presentation_*``
-# is intentionally out of scope (rule #8 / task-doc decision 8 — it is
-# handled together with presentation concepts in task-15).
+# The four Pass 2a prompt refs touched by tasks 2.4.14 + 2.4.15.
+# ``presentation_pass_2a_mapping/v1.md`` joins the parametrisation in
+# task 2.4.15: it carries the same ``{% if language %}…{% else %}…``
+# defensive gate as the three task-14 prompts, so every branch test
+# in this module applies to it identically.
 _PASS_2A_REFS = [
     "pass_2a_mapping/v1.md",
     "audio_pass_2a_mapping/v1.md",
     "video_pass_2a_mapping/v1.md",
+    "presentation_pass_2a_mapping/v1.md",
 ]
 
 
@@ -54,6 +57,14 @@ def _render_kwargs_for(prompt_ref: str, *, language: str | None) -> dict[str, ob
             "words_count": 5,
             "words_json": '[{"text":"hello","start":0.0,"end":1.0}]',
             "visuals": "[word ~0, 00:00] sample slide",
+            "language": language,
+        }
+    if prompt_ref == "presentation_pass_2a_mapping/v1.md":
+        slides_json = "\n".join(f"[Slide {i}] sample slide {i}" for i in (1, 2, 3))
+        return {
+            "file_title": "Sample Deck",
+            "n_slides": 3,
+            "slides_json": slides_json,
             "language": language,
         }
     raise AssertionError(f"unexpected prompt_ref: {prompt_ref}")

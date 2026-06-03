@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.orm import CourseNode, Job, Tenant
+from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
 
@@ -34,8 +35,8 @@ async def _seed_two_tenants_two_nodes(
     t2 = Tenant(name=f"jcs-t2-{uuid.uuid4().hex[:6]}")
     session.add_all([t1, t2])
     await session.flush()
-    n1 = CourseNode(tenant_id=t1.id, title="n1", order=0)
-    n2 = CourseNode(tenant_id=t2.id, title="n2", order=0)
+    n1 = make_root_course_node(tenant_id=t1.id, title="n1", order=0)
+    n2 = make_root_course_node(tenant_id=t2.id, title="n2", order=0)
     session.add_all([n1, n2])
     await session.flush()
     return t1, t2, n1, n2

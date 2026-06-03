@@ -56,6 +56,7 @@ from course_supporter.storage.orm import (
     Student,
     Tenant,
 )
+from tests._helpers.course_node_factory import make_root_course_node
 
 # ── Invariant 1: Survival (mapper inspection — no DB) ─────────────
 
@@ -167,10 +168,9 @@ class TestGetSubtreeDecoupling:
             session.add(tenant)
             await session.flush()
 
-            root = CourseNode(
+            root = make_root_course_node(
                 id=uuid.uuid4(),
                 tenant_id=tenant.id,
-                parent_id=None,
                 title="root",
                 order=0,
             )

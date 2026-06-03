@@ -19,11 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import (
-    CourseNode,
     ExternalServiceCall,
     Job,
     Tenant,
 )
+from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
 
@@ -101,7 +101,7 @@ class TestForeignKeyEnforcement:
         tenant = Tenant(name=f"esc-{uuid.uuid4().hex[:6]}")
         db_session.add(tenant)
         await db_session.flush()
-        node = CourseNode(tenant_id=tenant.id, title="course", order=0)
+        node = make_root_course_node(tenant_id=tenant.id, title="course", order=0)
         db_session.add(node)
         await db_session.flush()
         job = Job(tenant_id=tenant.id, course_node_id=node.id, job_type="ingest")

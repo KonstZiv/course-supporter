@@ -40,6 +40,7 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 from course_supporter.storage.repositories import ExternalServiceCallRepository
+from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
@@ -94,7 +95,9 @@ async def cost_seed(
         session.add(tenant)
         await session.flush()
 
-        root = CourseNode(tenant_id=tenant.id, title="Python Basics", order=0)
+        root = make_root_course_node(
+            tenant_id=tenant.id, title="Python Basics", order=0
+        )
         session.add(root)
         await session.flush()
         lesson = CourseNode(
@@ -447,7 +450,9 @@ class TestCostCourseE2E:
             other = Tenant(name=f"other-{uuid.uuid4().hex[:6]}")
             session.add(other)
             await session.flush()
-            other_node = CourseNode(tenant_id=other.id, title="Other Course", order=0)
+            other_node = make_root_course_node(
+                tenant_id=other.id, title="Other Course", order=0
+            )
             session.add(other_node)
             await session.commit()
             other_node_id = other_node.id

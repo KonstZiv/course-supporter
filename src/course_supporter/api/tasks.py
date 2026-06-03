@@ -210,6 +210,14 @@ async def arq_ingest_material(
 
             async with _resolve_s3_url(entry, s3) as resolved:
                 doc = await processor.process_raw(resolved, router=router)
+                # Task 2.4.14 — propagate the resolved course language into
+                # the SourceDocument so Pass 2a can pin its output language
+                # to the course (NOT to the input). ``entry.language`` is
+                # the canonical 639-3 code already resolved above (entry
+                # override → root.default_language). Post task-2.4.13
+                # rooted courses always have it; ``None`` remains a
+                # defensive sentinel handled by the prompt fallback gate.
+                doc.language = entry.language
 
             # ── Stage 2 — LLM safety check (Phase 2.1 C6, KD-2.1-P) ──
             # Defense-in-depth: authored raw text may carry prompt

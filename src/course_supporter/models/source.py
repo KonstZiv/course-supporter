@@ -116,6 +116,20 @@ class SourceDocument(BaseModel):
     chunks: list[ContentChunk] = Field(default_factory=list)
     processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)
+    language: str | None = Field(
+        default=None,
+        description=(
+            "Canonical ISO 639-3 code of the course language (NOT the "
+            "detected language of the input). Set by the orchestrator "
+            "after ``process_raw`` and before ``process_macro`` so the "
+            "Pass 2a render-context can pin the output language (task "
+            "2.4.14). ``None`` is a defensive unrooted-case sentinel — "
+            "post task-2.4.13 (course default_language mandatory at "
+            "root) no rooted course should reach Pass 2a with "
+            "``language=None``; the Pass 2a prompts treat ``None`` as a "
+            "fallback to legacy «detect from input» behaviour."
+        ),
+    )
 
     def assemble_text(self) -> str:
         """Mapping/slice reference text for LLM offset semantics.

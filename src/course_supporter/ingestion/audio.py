@@ -101,6 +101,7 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
+from course_supporter.language import display_name
 from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.source import (
     ChunkType,
@@ -425,6 +426,7 @@ class AudioProcessor(MaterialProcessor):
             expects_json=True,
             words_count=total_word_count,
             words_json=words_json,
+            language=display_name(doc.language) if doc.language else None,
         )
         audio_result = parsed["result"]
         logger.debug(

@@ -57,6 +57,7 @@ sites pick up the new shape atomically.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from course_supporter.storage.orm import CourseNode
@@ -64,7 +65,7 @@ from course_supporter.storage.orm import CourseNode
 
 def make_root_course_node(
     *,
-    tenant_id: Any,
+    tenant_id: uuid.UUID,
     default_language: str = "ukr",
     **overrides: Any,
 ) -> CourseNode:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +44,13 @@ class TestSortOrder:
         """
         base = datetime.now(UTC) - timedelta(hours=1)
 
-        def _make(**kwargs: object) -> CourseNode:
+        def _make(**kwargs: Any) -> CourseNode:
             # Task 2.4.13B — route root siblings through the factory
             # (CHECK ``default_language`` lands here); children stay raw
             # (task 2.4.13 рішення 1 — child language is dead data).
             if parent_id is None:
-                return make_root_course_node(tenant_id=tenant_id, **kwargs)  # type: ignore[arg-type]
-            return CourseNode(tenant_id=tenant_id, parent_id=parent_id, **kwargs)  # type: ignore[arg-type]
+                return make_root_course_node(tenant_id=tenant_id, **kwargs)
+            return CourseNode(tenant_id=tenant_id, parent_id=parent_id, **kwargs)
 
         siblings = {
             "ordered_first": _make(

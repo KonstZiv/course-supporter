@@ -7,6 +7,7 @@ import pytest
 from course_supporter.language import (
     InvalidLanguageError,
     LanguageNotAllowedError,
+    display_name,
     list_allowed,
     normalize_and_validate,
 )
@@ -83,3 +84,22 @@ def test_list_allowed_is_cached_across_calls() -> None:
     second = list_allowed()
     # Same Python object → cache hit.
     assert first is second
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("ukr", "Ukrainian"),
+        ("eng", "English"),
+        ("deu", "German"),
+        ("fra", "French"),
+        ("yue", "Yue Chinese"),
+    ],
+)
+def test_display_name_resolves_canonical_code_to_english_name(
+    code: str, expected: str
+) -> None:
+    # Task 2.4.14 — Pass 2a renders the language pin into the prompt
+    # using the SIL English name (LLMs do not reliably recognise the
+    # 639-3 three-letter code).
+    assert display_name(code) == expected

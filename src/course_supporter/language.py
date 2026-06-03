@@ -172,6 +172,30 @@ def normalize_and_validate(raw: str) -> str:
     return canonical
 
 
+def display_name(code: str) -> str:
+    """Resolve a canonical ISO 639-3 code to its English display name.
+
+    Thin wrapper over :func:`iso639.Language.from_part3`; the returned
+    string is the SIL English name (e.g. ``"ukr"`` → ``"Ukrainian"``).
+
+    Used by the Pass 2a render-context (task 2.4.14): the language pin
+    inside the prompt is the human-readable English name, not the ISO
+    code, because LLMs recognise ``"Ukrainian"`` reliably and the SIL
+    639-3 three-letter codes much less so. Distinct from
+    :func:`normalize_and_validate` (input → canonical code) and
+    :func:`list_allowed` (whitelist enumeration for the UI).
+
+    Precondition: ``code`` MUST be a valid 639-3 code from the project
+    whitelist (guaranteed by task 2.4.13 — every rooted course persists
+    its ``default_language`` through ``normalize_and_validate``).
+    Passing an unknown code raises ``iso639.LanguageNotFoundError``;
+    we deliberately do not catch it — feeding an invalid code here
+    means the upstream invariant is broken and must be fixed there.
+    """
+    lang = iso639.Language.from_part3(code)
+    return str(lang.name)
+
+
 def list_allowed() -> list[LanguageEntry]:
     """Return the allowed languages enriched with English (and native) names.
 

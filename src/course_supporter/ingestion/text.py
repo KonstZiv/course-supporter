@@ -18,6 +18,7 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
+from course_supporter.language import display_name
 from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.source import (
     ChunkType,
@@ -317,6 +318,7 @@ class TextProcessor(MaterialProcessor):
             response_validator=_coverage_validator,
             expects_json=True,
             text=text,
+            language=display_name(doc.language) if doc.language else None,
         )
         # Validator stored the parsed draft on the winning attempt;
         # if execute_for_stage returned, validator succeeded at least

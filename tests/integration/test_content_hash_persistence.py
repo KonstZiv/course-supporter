@@ -30,6 +30,7 @@ from course_supporter.storage.orm import (
     DocumentSummary,
     Tenant,
 )
+from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
 
@@ -51,11 +52,18 @@ async def _make_node(
     parent_id: uuid.UUID | None = None,
     title: str = "node",
 ) -> CourseNode:
-    node = CourseNode(
-        tenant_id=tenant_id,
-        parent_id=parent_id,
-        title=title,
-    )
+    # Task 2.4.13B — route the root branch through ``make_root_course_node``
+    # so its CHECK-satisfying ``default_language`` default lands here too.
+    # Child branch stays raw (CHECK does not apply when parent_id is set;
+    # child language is dead data per task 2.4.13 рішення 1).
+    if parent_id is None:
+        node = make_root_course_node(tenant_id=tenant_id, title=title)
+    else:
+        node = CourseNode(
+            tenant_id=tenant_id,
+            parent_id=parent_id,
+            title=title,
+        )
     session.add(node)
     await session.flush()
     return node
@@ -371,7 +379,9 @@ class TestCreateMaterializesContentHash:
         """Brand-new CourseNode has empty-Merkle hash, not NULL."""
         tenant = await _make_tenant(db_session)
         repo = CourseNodeRepository(db_session)
-        node = await repo.create(tenant_id=tenant.id, title="freshly-created")
+        node = await repo.create(
+            tenant_id=tenant.id, title="freshly-created", default_language="ukr"
+        )
         await db_session.refresh(node)
 
         # New empty node = no AuthoredDocs + no child CourseNodes →
@@ -389,7 +399,9 @@ class TestCreateMaterializesContentHash:
         """Brand-new AuthoredDocument has materialised hash + parent hash recomputed."""
         tenant = await _make_tenant(db_session)
         node_repo = CourseNodeRepository(db_session)
-        node = await node_repo.create(tenant_id=tenant.id, title="parent")
+        node = await node_repo.create(
+            tenant_id=tenant.id, title="parent", default_language="ukr"
+        )
         await db_session.refresh(node)
         node_hash_before_doc = node.content_hash
 

@@ -41,6 +41,7 @@ from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
+from tests._helpers.course_node_factory import make_root_course_node
 
 
 @pytest.fixture(scope="module")
@@ -89,13 +90,24 @@ async def _make_node(
     parent_id: uuid.UUID | None,
     title: str,
 ) -> CourseNode:
-    node = CourseNode(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        parent_id=parent_id,
-        title=title,
-        order=0,
-    )
+    # Task 2.4.13B — root branch routes through the factory so the
+    # CHECK-satisfying ``default_language`` lands here. Child branch
+    # stays raw (task 2.4.13 рішення 1 — child language is dead data).
+    if parent_id is None:
+        node = make_root_course_node(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            title=title,
+            order=0,
+        )
+    else:
+        node = CourseNode(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            parent_id=parent_id,
+            title=title,
+            order=0,
+        )
     session.add(node)
     await session.flush()
     return node

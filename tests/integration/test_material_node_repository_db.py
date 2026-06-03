@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import CourseNode, Tenant
+from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
 
@@ -41,31 +43,32 @@ class TestSortOrder:
             4. NULL order, created latest
         """
         base = datetime.now(UTC) - timedelta(hours=1)
+
+        def _make(**kwargs: Any) -> CourseNode:
+            # Task 2.4.13B — route root siblings through the factory
+            # (CHECK ``default_language`` lands here); children stay raw
+            # (task 2.4.13 рішення 1 — child language is dead data).
+            if parent_id is None:
+                return make_root_course_node(tenant_id=tenant_id, **kwargs)
+            return CourseNode(tenant_id=tenant_id, parent_id=parent_id, **kwargs)
+
         siblings = {
-            "ordered_first": CourseNode(
-                tenant_id=tenant_id,
-                parent_id=parent_id,
+            "ordered_first": _make(
                 title="ordered_first",
                 order=0,
                 created_at=base,
             ),
-            "ordered_second": CourseNode(
-                tenant_id=tenant_id,
-                parent_id=parent_id,
+            "ordered_second": _make(
                 title="ordered_second",
                 order=2,
                 created_at=base + timedelta(minutes=20),
             ),
-            "null_old": CourseNode(
-                tenant_id=tenant_id,
-                parent_id=parent_id,
+            "null_old": _make(
                 title="null_old",
                 order=None,
                 created_at=base + timedelta(minutes=5),
             ),
-            "null_new": CourseNode(
-                tenant_id=tenant_id,
-                parent_id=parent_id,
+            "null_new": _make(
                 title="null_new",
                 order=None,
                 created_at=base + timedelta(minutes=40),

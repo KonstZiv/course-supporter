@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
 
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
+from tests._helpers.course_node_factory import make_root_course_node
 
 # ── Engine (module-scoped, shared across test module) ──────────────
 
@@ -88,7 +89,7 @@ async def seed_tenant(db_session: AsyncSession) -> Tenant:
 @pytest.fixture()
 async def seed_root_node(db_session: AsyncSession, seed_tenant: Tenant) -> CourseNode:
     """Create a root CourseNode linked to seed_tenant."""
-    node = CourseNode(
+    node = make_root_course_node(
         tenant_id=seed_tenant.id,
         title="Integration Test Course",
         order=0,
@@ -134,7 +135,7 @@ async def committed_seeds(
         session.add(tenant)
         await session.flush()
 
-        node = CourseNode(
+        node = make_root_course_node(
             tenant_id=tenant.id,
             title="E2E Test Course",
             order=0,

@@ -173,22 +173,45 @@ class TestArqIngestMaterialE2E:
     @pytest.mark.parametrize(
         ("detected_language", "expected_language"),
         [
-            pytest.param(None, None, id="no_detection"),
-            pytest.param("uk", "uk", id="with_detection_cached"),
+            pytest.param(None, "ukr", id="no_detection"),
+            pytest.param("uk", "ukr", id="with_detection_cached"),
         ],
     )
-    async def test_success_full_lifecycle(
+    async def test_inheritance_dominates_over_stt_detection(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         committed_seeds: dict[str, uuid.UUID],
         detected_language: str | None,
         expected_language: str | None,
     ) -> None:
-        """Full success: queued->complete, pending->done, content set.
+        """In a rooted course STT-detected language does NOT override
+        the course language — the root is the authority (task 2.4.13).
 
-        Also covers the STT auto-detect language cache: when the
-        processor reports ``detected_language``, it is persisted to
-        ``AuthoredDocument.language`` (entries seeded with language=NULL).
+        Pre-task-2.4.13 this test exercised the STT auto-detect
+        cache-back path: an entry seeded with ``language=NULL`` would
+        inherit nothing from the root (root could have NULL language),
+        the STT call would surface a detection, and
+        ``set_language_if_unset`` would persist it. After task 2.4.13
+        landed the CHECK ``course_nodes_root_language_required`` and
+        the entry/root inheritance block in ``api/tasks.py``, the
+        cache-back path is unreachable on a rooted course:
+
+        * the root **always** has a ``default_language`` (CHECK
+          guaranteed), so inheritance fires before STT runs and the
+          entry is persisted with the root's language;
+        * ``set_language_if_unset`` then sees a non-NULL language and
+          is a no-op regardless of whether STT detected anything.
+
+        Both parametrisations therefore converge on the root's
+        language (``"ukr"`` per the ``committed_seeds`` fixture
+        default, mirroring the production CHECK-required value). The
+        test now locks the inheritance-dominates invariant from task
+        2.4.13 рішення 1.
+
+        The orchestrator still calls ``set_language_if_unset`` and
+        still reads ``detected_language`` — that code path is
+        vestigial post-2.4.13 (DD-2.4-N) and is left for a separate
+        cleanup task; this hotfix is tests-only.
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]

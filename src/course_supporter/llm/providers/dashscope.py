@@ -1,10 +1,10 @@
-"""Alibaba DashScope provider for Qwen multimodal models.
+"""Alibaba DashScope provider for Qwen multimodal AND text models.
 
 Supports standard regions (Singapore via dashscope-intl, US, Beijing)
 and MaaS workspace endpoints (eu-central-1, etc.) via module-level
 ``dashscope.base_http_api_url`` configured at provider init time.
 
-KD-2.3-A: native client per multimodal provider — does NOT reuse
+KD-2.3-A: native client per provider — does NOT reuse
 ``openai_compat.py`` compatible-mode shim. Reasons:
 
 1. Silent reasoning-mode override drop risk. Compatible-mode strips
@@ -17,10 +17,29 @@ KD-2.3-A: native client per multimodal provider — does NOT reuse
    ``usage.image`` / ``usage.video`` fields for VL); compatible mode
    masks these.
 
+DD-2.4-O: ``complete`` routes between two distinct SDK endpoints by
+the presence of image bytes in ``request.contents``:
+
+* image bytes present → ``AioMultiModalConversation.call``
+  (``multimodal-generation`` task-group; VL models like
+  ``qwen3-vl-32b-instruct``).
+* no image bytes → ``AioGeneration.call`` (``text-generation``
+  task-group; text reasoning flagships like
+  ``qwen3.7-max-2026-05-20``).
+
+The split is required because the SDK 1.25.18 cannot serve a text
+model through the multimodal endpoint — the server returns a non-JSON
+4xx and the SDK's aiohttp branch fails to decode it
+(``StreamReader`` vs ``bytes`` mismatch in
+``dashscope/common/utils.py``), surfacing as
+``'StreamReader' object has no attribute 'decode'`` ~289 ms before
+inference.
+
 DashScope surfaces most errors as non-200 ``DashScopeAPIResponse``
 objects rather than exceptions. ``DashScopeResponseError`` wraps the
 status_code + code + message tuple so ``classify_error`` can map to
-``ErrorCategory`` consistently with other providers.
+``ErrorCategory`` consistently with other providers; the shape is
+identical across both endpoints.
 """
 
 from __future__ import annotations
@@ -33,6 +52,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 
 import dashscope
+from dashscope.aigc.generation import AioGeneration
 from dashscope.aigc.multimodal_conversation import AioMultiModalConversation
 from dashscope.common.error import (
     AuthenticationError,
@@ -118,13 +138,15 @@ class DashScopeResponseError(Exception):
 
 
 class DashScopeProvider(LLMProvider):
-    """Alibaba DashScope provider for Qwen3-VL multimodal models.
+    """Alibaba DashScope provider for Qwen VL and text-reasoning models.
 
     The DashScope Python SDK uses module-level globals for
     ``api_key`` and ``base_http_api_url``. We set ``base_http_api_url``
     once at init time (binds all DashScope calls to one endpoint —
-    standard region or MaaS workspace), and pass ``api_key=`` per
-    call to support multi-key round-robin rotation across quotas.
+    standard region or MaaS workspace; applies uniformly to the
+    multimodal and text-generation task-groups), and pass
+    ``api_key=`` per call to support multi-key round-robin rotation
+    across quotas.
     """
 
     provider_name = "dashscope"
@@ -262,14 +284,94 @@ class DashScopeProvider(LLMProvider):
                 texts.append(elem["text"])
         return "".join(texts)
 
+    def _build_messages_text(self, request: LLMRequest) -> list[dict[str, Any]]:
+        """Build DashScope text-generation messages from LLMRequest.
+
+        The ``text-generation`` task-group expects ``content`` as a
+        plain string per message (per
+        ``dashscope.aigc.generation.Generation._build_input_parameters``,
+        which assembles ``msgs.append({"role": Role.USER, "content": prompt})``).
+        This shape differs from the multimodal task-group, which
+        carries a ``list[dict]`` of ``{"image": ...}`` / ``{"text": ...}``
+        elements. ``request.contents`` is intentionally ignored on this
+        branch — callers must route bytes content through
+        ``_build_messages`` instead.
+        """
+        messages: list[dict[str, Any]] = []
+        if request.system_prompt:
+            messages.append({"role": "system", "content": request.system_prompt})
+        if request.prompt:
+            messages.append({"role": "user", "content": request.prompt})
+        return messages
+
+    def _extract_text_generation(self, response: Any) -> str:
+        """Extract assistant text from a DashScope ``Generation`` response.
+
+        The text-generation endpoint returns one of two shapes per the
+        SDK's ``result_format`` parameter
+        (``dashscope/aigc/generation.py`` docstring, line 362):
+
+        * default (``result_format="text"``) — ``output.text`` as a
+          plain string.
+        * ``result_format="message"`` —
+          ``output.choices[0].message.content`` as a plain string per
+          ``Message.from_generation_response``
+          (``dashscope/api_entities/dashscope_response.py:132``).
+
+        Both forms are handled here so future ladder rungs may pin
+        either without coupling the extractor to a single shape.
+        """
+        output = response.output
+        if not output:
+            return ""
+        text_field = output.get("text")
+        if text_field:
+            return str(text_field)
+        choices = output.get("choices")
+        if not choices:
+            return ""
+        message = choices[0].get("message")
+        if not message:
+            return ""
+        content = message.get("content")
+        if not content:
+            return ""
+        if isinstance(content, str):
+            return content
+        return ""
+
+    @staticmethod
+    def _has_image_bytes(request: LLMRequest) -> bool:
+        """Return True iff ``request.contents`` carries image bytes.
+
+        Routes ``complete`` between the multimodal and text-generation
+        SDK endpoints (DD-2.4-O). ``None`` and empty-list contents are
+        text-branch (no images); a contents list with at least one
+        ``bytes``/``bytearray`` element is VL-branch. Non-bytes elements
+        (e.g. plain text/URL items) do not by themselves switch the
+        branch — only raw image bytes do.
+        """
+        contents = request.contents
+        if not contents:
+            return False
+        return any(isinstance(item, (bytes, bytearray)) for item in contents)
+
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        """Generate completion via DashScope MultiModalConversation."""
+        """Generate completion via the appropriate DashScope endpoint.
+
+        Routes between ``AioMultiModalConversation.call`` (VL models,
+        image bytes in ``request.contents``) and ``AioGeneration.call``
+        (text-only reasoning models). The two endpoints share
+        identical multi-key / base-URL plumbing, error taxonomy
+        (``DashScopeResponseError``), and usage shape
+        (``input_tokens`` / ``output_tokens``); only the message shape
+        and the extractor differ per task-group. DD-2.4-O.
+        """
         model = request.model or self._default_model
-        messages = self._build_messages(request)
+        has_images = self._has_image_bytes(request)
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
             "api_key": self._next_key(),
         }
         if request.temperature is not None:
@@ -278,13 +380,21 @@ class DashScopeProvider(LLMProvider):
             kwargs["max_tokens"] = request.max_tokens
         if request.reasoning is not None:
             # Per-rung reasoning override (e.g. ``{"exclude": True}``)
-            # propagated verbatim. DashScope SDK forwards the kwarg to
-            # the Qwen reasoning-mode control; omitting it preserves
-            # the model's default behaviour.
+            # propagated verbatim on both branches per KD-2.3-S — the
+            # SDK forwards the kwarg to the Qwen reasoning-mode control
+            # symmetrically for VL and text models; omitting it
+            # preserves each model's default behaviour. No live ladder
+            # rung currently sets this on the text branch; the
+            # passthrough is mechanism-only.
             kwargs["reasoning"] = request.reasoning
 
         with self._measure_latency() as timer:
-            response = await AioMultiModalConversation.call(**kwargs)
+            if has_images:
+                kwargs["messages"] = self._build_messages(request)
+                response = await AioMultiModalConversation.call(**kwargs)
+            else:
+                kwargs["messages"] = self._build_messages_text(request)
+                response = await AioGeneration.call(**kwargs)
 
         if response.status_code != 200:
             raise DashScopeResponseError(
@@ -293,7 +403,10 @@ class DashScopeProvider(LLMProvider):
                 message=response.message or "",
             )
 
-        content_text = self._extract_text(response)
+        if has_images:
+            content_text = self._extract_text(response)
+        else:
+            content_text = self._extract_text_generation(response)
         if request.expects_json:
             content_text = strip_markdown_json(content_text)
         usage = response.usage

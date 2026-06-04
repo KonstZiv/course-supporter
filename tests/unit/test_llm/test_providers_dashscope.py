@@ -76,6 +76,13 @@ class _SchemaForTest(BaseModel):
     ok: bool
 
 
+# Minimal PNG magic header used to flip the ``_has_image_bytes`` detector
+# into the VL branch (DD-2.4-O). The byte sequence is what
+# ``_detect_image_mime`` recognises; the trailing zeros simply pad to a
+# realistic non-empty payload so the base64-encode path runs unchanged.
+_VL_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+
 # ── Pure helpers ────────────────────────────────────────────────
 
 
@@ -338,7 +345,14 @@ class TestClassifyError:
 
 
 class TestCompleteAsync:
-    """``complete`` end-to-end via mocked ``AioMultiModalConversation.call``."""
+    """``complete`` end-to-end via mocked ``AioMultiModalConversation.call``.
+
+    Each request carries ``contents=[_VL_PNG]`` so the
+    ``_has_image_bytes`` detector picks the multimodal branch
+    (DD-2.4-O). Without image bytes the same shape would route to the
+    text endpoint and the multimodal mock would never be hit — that
+    routing property is locked separately by ``TestCompleteRouting``.
+    """
 
     @pytest.mark.asyncio
     async def test_success_extracts_content_and_tokens(
@@ -353,7 +367,11 @@ class TestCompleteAsync:
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
         request = LLMRequest(
-            prompt="hi", model="qwen3-vl-32b-instruct", temperature=0.0, max_tokens=64
+            prompt="hi",
+            model="qwen3-vl-32b-instruct",
+            temperature=0.0,
+            max_tokens=64,
+            contents=[_VL_PNG],
         )
         response = await provider.complete(request)
 
@@ -385,13 +403,18 @@ class TestCompleteAsync:
 
         # expects_json -> fence stripped to bare JSON
         stripped = await provider.complete(
-            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", expects_json=True)
+            LLMRequest(
+                prompt="hi",
+                model="qwen3-vl-32b-instruct",
+                expects_json=True,
+                contents=[_VL_PNG],
+            )
         )
         assert stripped.content == '{"status": "ok"}'
 
         # default (plain text) -> raw passthrough
         raw = await provider.complete(
-            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
         )
         assert raw.content == fenced
 
@@ -411,7 +434,9 @@ class TestCompleteAsync:
         )
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
-        request = LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+        request = LLMRequest(
+            prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG]
+        )
         with pytest.raises(DashScopeResponseError) as exc_info:
             await provider.complete(request)
         assert exc_info.value.status_code == 429
@@ -428,7 +453,9 @@ class TestCompleteAsync:
         fake_call = AsyncMock(return_value=_success_response())
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
-        request = LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+        request = LLMRequest(
+            prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG]
+        )
         await provider.complete(request)
         await provider.complete(request)
 
@@ -483,6 +510,7 @@ class TestCompleteAsync:
             prompt="hi",
             model="qwen3-vl-32b-instruct",
             reasoning={"exclude": True},
+            contents=[_VL_PNG],
         )
         await provider.complete(request)
 
@@ -503,11 +531,393 @@ class TestCompleteAsync:
         fake_call = AsyncMock(return_value=_success_response())
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
-        request = LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct")
+        request = LLMRequest(
+            prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG]
+        )
         await provider.complete(request)
 
         kwargs = fake_call.await_args.kwargs
         assert "reasoning" not in kwargs
+
+
+# ── complete() async — text-generation branch (DD-2.4-O) ────────
+
+
+def _success_response_text(
+    text: str = "Hello.",
+    tokens_in: int = 42,
+    tokens_out: int = 7,
+) -> MagicMock:
+    """Mock for the ``AioGeneration`` default ``result_format='text'`` shape.
+
+    DashScope text endpoint returns ``output.text`` as a plain string
+    (see ``dashscope/aigc/generation.py`` line 362 — default
+    ``result_format`` is ``text``).
+    """
+    response = MagicMock()
+    response.status_code = 200
+    response.code = ""
+    response.message = ""
+    response.output = {"text": text}
+    response.usage = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    return response
+
+
+def _success_response_text_message_shape(
+    text: str = "Hello.",
+    tokens_in: int = 42,
+    tokens_out: int = 7,
+) -> MagicMock:
+    """Mock for ``AioGeneration`` with ``result_format='message'`` shape.
+
+    Per ``Message.from_generation_response`` (``dashscope_response.py:132``)
+    the message-format response carries ``content`` as a plain string,
+    not a list-of-dicts (the multimodal-only shape).
+    """
+    response = MagicMock()
+    response.status_code = 200
+    response.code = ""
+    response.message = ""
+    response.output = {"choices": [{"message": {"content": text}}]}
+    response.usage = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    return response
+
+
+class TestCompleteAsyncText:
+    """``complete`` end-to-end via mocked ``AioGeneration.call`` (DD-2.4-O).
+
+    Covers the text-generation branch — the SDK endpoint Qwen text
+    reasoning flagships (``qwen3.7-max-2026-05-20``,
+    ``qwen3-max-2026-01-23``) belong to. Image bytes intentionally
+    absent on every test in this class so the detector picks this
+    branch; the asymmetric routing proof (each branch picks its own
+    SDK class) lives in ``TestCompleteRouting``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_extracts_output_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_success_response_text(text="ok", tokens_in=10, tokens_out=3)
+        )
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        request = LLMRequest(
+            prompt="hi", model="qwen3.7-max-2026-05-20", temperature=0.0, max_tokens=64
+        )
+        response = await provider.complete(request)
+
+        fake_call.assert_awaited_once()
+        assert response.content == "ok"
+        assert response.tokens_in == 10
+        assert response.tokens_out == 3
+        assert response.provider == "dashscope"
+        assert response.model_id == "qwen3.7-max-2026-05-20"
+
+    @pytest.mark.asyncio
+    async def test_success_extracts_choices_message_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Forward compatibility: a future ladder rung may pin
+        # ``result_format="message"`` for a structural reason; the
+        # extractor must keep working without code change.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_success_response_text_message_shape(text="ok")
+        )
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        )
+        assert response.content == "ok"
+
+    @pytest.mark.asyncio
+    async def test_messages_shape_plain_string_with_system(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Text endpoint requires ``content`` as a plain string per role
+        # (NOT a list-of-dicts as multimodal). System prompt arrives as
+        # a separate, first-position message — not merged into the user
+        # turn the way some providers expect.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response_text())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        await provider.complete(
+            LLMRequest(
+                prompt="map this transcript",
+                system_prompt="you are a methodist",
+                model="qwen3.7-max-2026-05-20",
+            )
+        )
+
+        msgs = fake_call.await_args.kwargs["messages"]
+        assert msgs == [
+            {"role": "system", "content": "you are a methodist"},
+            {"role": "user", "content": "map this transcript"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_expects_json_strips_fence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fenced = '```json\n{"status": "ok"}\n```'
+        monkeypatch.setattr(
+            ds_module.AioGeneration,
+            "call",
+            AsyncMock(return_value=_success_response_text(text=fenced)),
+        )
+
+        # expects_json -> fence stripped to bare JSON
+        stripped = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20", expects_json=True)
+        )
+        assert stripped.content == '{"status": "ok"}'
+
+        # default (plain text) -> raw passthrough
+        raw = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        )
+        assert raw.content == fenced
+
+    @pytest.mark.asyncio
+    async def test_non_200_raises_response_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Text endpoint surfaces non-200 through the same
+        # ``DashScopeAPIResponse`` shape as the multimodal one
+        # (status_code / code / message), so the classifier mapping
+        # is shared without provider-level branching.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_error_response(
+                status_code=429,
+                code="Throttling.RateQuota",
+                message="rate limit exceeded",
+            )
+        )
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        request = LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        with pytest.raises(DashScopeResponseError) as exc_info:
+            await provider.complete(request)
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.code == "Throttling.RateQuota"
+        assert provider.classify_error(exc_info.value) == ErrorCategory.INFRASTRUCTURE
+
+    @pytest.mark.asyncio
+    async def test_multi_key_round_robin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two API keys → two text calls visit each key once via ``api_key`` kwarg."""
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider(api_keys=("key-A", "key-B"))
+        fake_call = AsyncMock(return_value=_success_response_text())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        request = LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        await provider.complete(request)
+        await provider.complete(request)
+
+        keys_used = [c.kwargs["api_key"] for c in fake_call.await_args_list]
+        assert keys_used == ["key-A", "key-B"]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_kwarg_omitted_when_request_field_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Parity guard with VL — when ``LLMRequest.reasoning`` is None,
+        # the provider must NOT surface a ``reasoning`` kwarg to the
+        # text endpoint either. No live text-branch ladder rung sets
+        # this today; the guard locks the symmetry per KD-2.3-S so
+        # adding a rung later cannot regress the default.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response_text())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        request = LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        await provider.complete(request)
+
+        kwargs = fake_call.await_args.kwargs
+        assert "reasoning" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_reasoning_kwarg_propagates_to_sdk_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mechanism-only: prove the override path reaches the SDK when
+        # set on the request. No live ladder rung activates this on
+        # text models today (the rationale lives in DD-2.4-O ratify
+        # notes — passthrough, NOT activation).
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response_text())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        request = LLMRequest(
+            prompt="hi",
+            model="qwen3.7-max-2026-05-20",
+            reasoning={"exclude": True},
+        )
+        await provider.complete(request)
+
+        kwargs = fake_call.await_args.kwargs
+        assert kwargs["reasoning"] == {"exclude": True}
+
+    @pytest.mark.asyncio
+    async def test_usage_input_output_tokens_extracted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ``GenerationUsage`` shape is identical to
+        # ``MultiModalConversationUsage`` for ``input_tokens`` /
+        # ``output_tokens`` (per ``dashscope_response.py:217-231``).
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_success_response_text(tokens_in=80_000, tokens_out=1_200)
+        )
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        )
+        assert response.tokens_in == 80_000
+        assert response.tokens_out == 1_200
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_and_temperature_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response_text())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        await provider.complete(
+            LLMRequest(
+                prompt="hi",
+                model="qwen3.7-max-2026-05-20",
+                temperature=0.3,
+                max_tokens=65_536,
+            )
+        )
+
+        kwargs = fake_call.await_args.kwargs
+        assert kwargs["temperature"] == 0.3
+        assert kwargs["max_tokens"] == 65_536
+
+
+# ── complete() async — branch detector (DD-2.4-O) ───────────────
+
+
+class TestCompleteRouting:
+    """Detector ``_has_image_bytes`` — picks the SDK endpoint per contents.
+
+    Asymmetric proof: in each scenario exactly one of
+    ``AioMultiModalConversation.call`` / ``AioGeneration.call`` is
+    awaited; the other is verified untouched. Covers the four
+    boundaries of the detector — ``contents=None``, ``contents=[]``,
+    ``contents=[<non-bytes>]``, ``contents=[<bytes>]``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_contents_none_routes_to_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_text = AsyncMock(return_value=_success_response_text())
+        fake_vl = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_text)
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_vl)
+
+        await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20", contents=None)
+        )
+        fake_text.assert_awaited_once()
+        fake_vl.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_contents_empty_list_routes_to_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_text = AsyncMock(return_value=_success_response_text())
+        fake_vl = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_text)
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_vl)
+
+        await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20", contents=[])
+        )
+        fake_text.assert_awaited_once()
+        fake_vl.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_contents_non_bytes_routes_to_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A contents list of non-bytes elements (e.g. plain strings or
+        # URL refs) is text-branch — only raw image bytes flip the
+        # router. Locks the detector against accidental flips by
+        # future contents shapes (e.g. a Gemini-style ``Part``).
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_text = AsyncMock(return_value=_success_response_text())
+        fake_vl = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_text)
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_vl)
+
+        await provider.complete(
+            LLMRequest(
+                prompt="hi",
+                model="qwen3.7-max-2026-05-20",
+                contents=["https://example.com/frame.jpg", {"text": "context"}],
+            )
+        )
+        fake_text.assert_awaited_once()
+        fake_vl.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_contents_png_bytes_routes_to_vl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_text = AsyncMock(return_value=_success_response_text())
+        fake_vl = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_text)
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_vl)
+
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        await provider.complete(
+            LLMRequest(prompt="describe", model="qwen3-vl-32b-instruct", contents=[png])
+        )
+        fake_vl.assert_awaited_once()
+        fake_text.assert_not_awaited()
 
 
 # ── complete_structured() async ─────────────────────────────────
@@ -527,7 +937,7 @@ class TestCompleteStructuredAsync:
         fake_call = AsyncMock(return_value=_success_response(text=fenced))
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
-        request = LLMRequest(prompt="ask", system_prompt="be terse")
+        request = LLMRequest(prompt="ask", system_prompt="be terse", contents=[_VL_PNG])
         parsed, raw = await provider.complete_structured(request, _SchemaForTest)
         assert isinstance(parsed, _SchemaForTest)
         assert parsed.ok is True

@@ -241,10 +241,12 @@ class Settings(BaseSettings):
     # --- DeepSeek ---
     # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.
     # Other providers have their own SDKs with built-in endpoints.
+    # Both ``deepseek`` and ``deepseek_thinking`` providers share this single
+    # field — the thinking-on sibling differs only in the omitted thinking-
+    # disable hook (provider-side), not the endpoint. Factory wires both
+    # providers from ``s.deepseek_base_url``; collapsing to one field removes
+    # the drift-via-ENV-override risk that ReviewBot flagged on PR #458.
     deepseek_base_url: str = "https://api.deepseek.com"
-    # Same endpoint as deepseek_base_url — the thinking-on sibling only differs
-    # in the omitted thinking-disable hook (provider-side), not the endpoint.
-    deepseek_thinking_base_url: str = "https://api.deepseek.com"
 
     # --- Mistral ---
     # Mistral uses OpenAI-compatible API via OpenAI SDK with custom base_url.

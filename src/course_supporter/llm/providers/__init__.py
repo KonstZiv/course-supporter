@@ -14,6 +14,7 @@ from course_supporter.llm.providers.anthropic import AnthropicProvider
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.providers.dashscope import DashScopeProvider
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
+from course_supporter.llm.providers.deepseek_thinking import DeepSeekThinkingProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 
@@ -22,6 +23,7 @@ PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
     "anthropic": AnthropicProvider,
     "openai": OpenAICompatProvider,
     "deepseek": DeepSeekProvider,
+    "deepseek_thinking": DeepSeekThinkingProvider,
     "mistral": OpenAICompatProvider,
     "dashscope": DashScopeProvider,
 }
@@ -31,6 +33,7 @@ __all__ = [
     "AnthropicProvider",
     "DashScopeProvider",
     "DeepSeekProvider",
+    "DeepSeekThinkingProvider",
     "GeminiProvider",
     "LLMProvider",
     "OpenAICompatProvider",

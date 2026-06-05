@@ -147,13 +147,25 @@ providers:
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028
       - id: deepseek-v4-pro
-        # "Smart" / deep-reasoning tier. Regular $1.74/$3.48 per 1M; a 75%
-        # promo runs to 2026-05-31 (~$0.435/$0.87). Registry uses the durable
-        # regular rate to avoid a silent post-promo jump. Reasoning output may
-        # warrant a per-rung max_output_tokens override above 8192.
+        # "Smart" / deep-reasoning tier. Durable regular rate $1.74/$3.48
+        # per 1M (this entry); the prior 75% promo expired 2026-05-31, and a
+        # rolling promo at $0.435/$0.87 was observed live 2026-06-05 — registry
+        # keeps the durable rate per the cross-vendor convention (avoid silent
+        # post-promo jumps; precedent: deepseek-v4-flash + qwen3.7-max). Context
+        # 1M / max output 384K per the official DeepSeek docs verified 2026-06-05;
+        # the conservative ``max_output_tokens`` here (65536) mirrors the video
+        # Pass 2a ladder pin — the model's true output ceiling is far higher,
+        # but the cap above which we have empirical evidence of clean emission
+        # is the spike's observed ~23k token thinking-on output (RUN_SMOKE #2,
+        # B-spike series). Raise as new stages exercise more output.
+        # Reasoning-mode behaviour: per KD-2.4-T this model is routed via the
+        # ``deepseek_thinking`` provider for reasoning-tier stages (video Pass
+        # 2a) so the thinking-on default is preserved; the ``deepseek`` provider
+        # (KD-2.4-S) still applies thinking-disabled for schema-bound consumers
+        # and can be used with this model when that contract is required.
         capabilities: [structured_output, long_context]
-        max_context: 131072
-        max_output_tokens: 8192
+        max_context: 1048576
+        max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.00174
         cost_per_1k_out: 0.00348
@@ -207,17 +219,27 @@ providers:
     # qwen3-vl). Reasoning/"thinking" variants (qwen3-235b-a22b-thinking-2507,
     # qwen3-next-80b-a3b-thinking) are also workspace-available — add on demand.
     models:
-      - id: qwen3.7-max-2026-05-20
+      - id: qwen3.7-max
         # Latest Qwen flagship "Max" (text reasoning; released 2026-05-20).
+        # Registered under the canonical alias (NOT the date-pinned
+        # ``qwen3.7-max-2026-05-20`` variant) because curl-probe 2026-06-05
+        # confirmed the workspace (ws-kyxnm2ipitv2bwlr, eu-central-1) grants
+        # access only to the canonical alias; the date-pinned id returns 403
+        # Model.AccessDenied (separate unauthorized entity, lower limits).
+        # Mirrors the VL alias precedent (qwen3-vl-32b-instruct).
+        # NB: canonical alias currently resolves to the 2026-05-20 snapshot
+        # per the workspace console card ("functionally equivalent to
+        # qwen3.7-max-2026-05-20"); the alias may advance to newer snapshots
+        # without a config change — behavior may shift silently. Pin
+        # explicitly if a frozen snapshot is ever required.
         # Context 1M / output 65536 confirmed from OpenRouter listing
         # 2026-06-02. Pricing $2.50/$7.50 per 1M is the Alibaba direct
         # durable regular rate (cross-checked via artificialanalysis.ai).
-        # OpenRouter / pricepertoken list $1.25/$3.75 — an exact 2× delta
-        # against the Alibaba direct rate (a 50% promo signature); registry
-        # convention prefers the durable regular rate to avoid a silent
-        # post-promo jump (precedent: deepseek-v4-pro). The Alibaba Model
-        # Studio public pricing page did not yet list qwen3.7-max as of
-        # 2026-06-02 — refresh this entry once it does and reconcile.
+        # The current $1.65/$4.951 per 1M tier is a limited-time promo —
+        # registry keeps the durable rate to avoid a silent post-promo jump
+        # (precedent: deepseek-v4-pro). The Alibaba Model Studio public
+        # pricing page did not yet list qwen3.7-max as of 2026-06-02 —
+        # refresh this entry once it does and reconcile.
         capabilities: [structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536

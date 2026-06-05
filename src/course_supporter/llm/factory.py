@@ -44,7 +44,11 @@ PROVIDER_CONFIGS: dict[str, ProviderFactoryConfig] = {
     ),
     "deepseek_thinking": ProviderFactoryConfig(
         get_default_model=lambda s: s.deepseek_thinking_default_model,
-        get_base_url=lambda s: s.deepseek_thinking_base_url,
+        # Shares the single ``deepseek_base_url`` Settings field with
+        # ``deepseek`` — the two providers diverge only in the thinking-mode
+        # hook (provider-side), not the endpoint. One source of truth removes
+        # the drift-via-ENV-override risk.
+        get_base_url=lambda s: s.deepseek_base_url,
         extra_kwargs={"provider_name": "deepseek_thinking"},
     ),
     "mistral": ProviderFactoryConfig(

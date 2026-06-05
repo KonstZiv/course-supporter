@@ -68,10 +68,7 @@ stages:
         max_output_tokens: 8192
 
   # Pass 2a semantic mapping (KD-2.2-A/F/H word-idx contract; landed in task
-  # 2.4.5, retuned for RUN_SMOKE #2 in task 2.4.12 after RUN_SMOKE #1 exposed
-  # the prior ladder as both ceiling- and reasoning-constrained on long video:
-  # the 8K output pin truncated 23-min transcripts and gemini-2.5-flash as R1
-  # was weak for single-shot structural segmentation at 265K input).
+  # 2.4.5, retuned across tasks 2.4.12 / 2.4.17 as live evidence accumulated).
   # Input: transcript word-stream (``words_json`` + ``words_count``) + a
   #   deterministic visual-overlay block (``visuals``) via Jinja render
   #   context; image bytes do NOT flow here (text-reasoning, not vision).
@@ -79,52 +76,81 @@ stages:
   #   word-idx schema) by the ``step_5_pass2a_mapping`` response_validator;
   #   a ``ValidationError`` → ``StructuralRetryError`` (Path 3, as audio).
   #
-  # Ladder rationale (text-reasoning; per-source_type calibration per
-  # KD-2.3-X — calibrated *within* the registered text pool, NOT a unique
-  # per-source model; ranking observed in RUN_SMOKE #2):
-  #   1. gemini/gemini-3.1-flash-lite — cost-first preview-tier primary.
-  #      Single-shot reasoning is sharper than gemini-2.5-flash on long
-  #      context, at comparable cost ($0.25/$1.50 vs $0.30/$2.50 per 1M).
-  #      Preview-tier status is an accepted trade-off.
-  #   2. dashscope/qwen3.7-max-2026-05-20 — diverse-provider rescue (NOT
-  #      Gemini, guards against a Gemini-API common issue). Reasoning-tier
-  #      flagship with 1M context and 65536 output (92.4% GPQA Diamond,
-  #      80.4% SWE-Verified). 1M context covers the longest video
-  #      transcripts (RUN_SMOKE #1 hit ~265K input). NOT calibrated on
-  #      video Pass 2a yet — performance observed in RUN_SMOKE #2.
-  #   3. gemini/gemini-2.5-flash — stable Gemini fallback (the proven
-  #      baseline; passed text / presentation Pass 2a in RUN_SMOKE #1).
-  #   4. gemini/gemini-2.5-pro — reasoning escalation on the hardest
-  #      materials ($1.25/$10 per 1M; the priciest rung, last resort).
+  # Ladder rationale — 5-way spike 2026-06-05 (task-2.4.17).
+  # ----------------------------------------------------------------------
+  # The same single video matter (0I8S6diyDjw, ~10:48 English lecture,
+  # 2653 STT words, 241 visual scenes) was Pass 2a'd through five models
+  # using a byte-identical reconstructed prompt. The decisive metric was
+  # the size of the largest segment (``%`` of duration AND chars); a
+  # well-balanced split keeps it below ~30%.
   #
-  # Anthropic/Sonnet R3 rung removed — no Anthropic credits make the rung a
-  # dead tier (separate operator concern). Promote back as a fifth tier
-  # once credits are restored.
-  # DeepSeek V4 Pro intentionally NOT added here — its reasoning mode needs
-  # a dedicated ``DeepSeekThinkingProvider`` (future work, separate task).
+  #   | model                          | mode        | largest dur% | result   |
+  #   | gemini-3.1-flash-lite          | cheap-tier  | 75.3%        | collapse |
+  #   | qwen3.7-plus                   | cheap-tier  | 79.3%        | collapse |
+  #   | deepseek-v4-pro (NON-thinking) | cheap-tier  | 66.8%        | collapse |
+  #   | qwen3.7-max                    | reasoning   | 25.9%        | balanced |
+  #   | deepseek-v4-pro (thinking ON)  | reasoning   | 23.5%        | balanced |
   #
-  # Output-pin policy (DD-2.4-H): per-rung ``max_output_tokens: 65536``
-  # lifts the budget from the sprint-wide 8192 baseline to the per-rung
-  # model ceiling — the 8K pin actively truncated long-video transcripts
-  # in RUN_SMOKE #1 (the Gemini 65K model ceiling was artificially
-  # constrained by the pin). All four rungs share the same 65536 cap
-  # (Gemini 3.1-flash-lite / 2.5-flash / 2.5-pro registry-confirmed 65536;
-  # Qwen 3.7-Max confirmed 65536 from OpenRouter listing 2026-06-02), so
-  # intra-ladder rung-uniformity still holds at the new, higher pin. Other
-  # Pass 2a stages (audio / presentation / text) keep the 8192 pin →
-  # DD-2.4-H stays live sprint-wide; for video Pass 2a it is lifted "as a
-  # class" per the ratified optional clause in task 2.4.12.
+  # The collapse pattern is a "catch-all tail" — the model bundles the last
+  # half-plus of the transcript into one segment regardless of label
+  # (gemini calls it "Closing Credits", plus calls it "Future of Science
+  # Photography", non-think Pro calls it "The Future Role of Science
+  # Photographers"). The empirical boundary is the reasoning budget:
+  # 0 reasoning_tokens (non-think Pro, gemini-flash-lite) → collapse;
+  # 5.5k reasoning_tokens (plus, cheap-tier) → still collapse; 21k
+  # reasoning_tokens (Pro thinking on) → balanced. The two reasoning-tier
+  # rungs (Pro thinking on, qwen3.7-max) both hold balance and emit
+  # semantically equivalent segmentations.
+  #
+  # KD-2.4-T (Phase 2.4 task-2.4.17) ratified the per-stage thinking opt-in:
+  # video Pass 2a goes through the new ``deepseek_thinking`` provider so the
+  # DeepSeek default-on thinking is preserved (the standard ``deepseek``
+  # provider keeps KD-2.4-S thinking-disabled for schema-bound stages).
+  #
+  # Rungs (post-task-2.4.17 — cost-first within reasoning-tier; flash-tier
+  # is excluded as proven-collapsing on this workload):
+  #   1. deepseek_thinking/deepseek-v4-pro — cheapest reasoning-tier
+  #      ($1.74/$3.48 per 1M durable, 28% cheaper than qwen3.7-max). Highest
+  #      latency (~7 min) is acceptable for background ingestion; tradeoff
+  #      ratified per Q3 ratify 2026-06-05.
+  #   2. dashscope/qwen3.7-max — diverse-provider rescue (different vendor /
+  #      data-centre / billing surface from DeepSeek). Reasoning-tier
+  #      flagship with 1M context and 65k output; ~4× faster than Pro.
+  #   3. gemini/gemini-2.5-pro — last-resort escalation ($1.25/$10 per 1M);
+  #      reasoning-tier baseline at Google; survives outages where both
+  #      DeepSeek and DashScope MaaS surfaces would be down.
+  #
+  # Dropped in task-2.4.17: gemini-3.1-flash-lite and gemini-2.5-flash.
+  # Both are flash-tier and the 5-way spike empirically demonstrated they
+  # collapse the long video Pass 2a workload (75% and unconfirmed-but-
+  # presumed-similar; the registry-confirmed cheap-tier behaviour at 5.5k
+  # reasoning_tokens is the supporting evidence).
+  #
+  # Anthropic / Sonnet R4 rung remains unavailable (operator credits
+  # concern; restoration would slot it after gemini-2.5-pro).
+  #
+  # n=1 caveat (KD-2.4-T). Rung order is calibrated against a single
+  # English mid-length lecture (~10:48). Other languages, very short
+  # videos, very long videos warrant their own calibration cycle on live
+  # operations per KD-2.3-X (per-source-type ladder calibration).
+  #
+  # Output-pin policy (DD-2.4-H). Per-rung ``max_output_tokens: 65536`` is
+  # the sprint-wide video Pass 2a value lifted from the 8192 baseline (the
+  # 8K pin truncated 23-min transcripts in RUN_SMOKE #1). All three rungs'
+  # underlying models support 65k+ output (DeepSeek V4 Pro 384k per the
+  # official docs verified 2026-06-05; Qwen 3.7-Max 65k from OpenRouter;
+  # Gemini 2.5 Pro 65k registered). Other Pass 2a stages (audio /
+  # presentation / text) keep the 8192 pin — DD-2.4-H stays live sprint-
+  # wide; video Pass 2a is lifted "as a class" per the optional clause
+  # ratified in task-2.4.12 and preserved here.
   video_pass_2a_mapping:
     prompt_ref: "prompts/video_pass_2a_mapping/v1.md"
     ladder:
-      - provider: gemini
-        model: gemini-3.1-flash-lite
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
         max_output_tokens: 65536
       - provider: dashscope
-        model: qwen3.7-max-2026-05-20
-        max_output_tokens: 65536
-      - provider: gemini
-        model: gemini-2.5-flash
+        model: qwen3.7-max
         max_output_tokens: 65536
       - provider: gemini
         model: gemini-2.5-pro

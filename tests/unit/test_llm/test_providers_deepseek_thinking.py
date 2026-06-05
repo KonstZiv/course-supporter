@@ -1,24 +1,19 @@
-"""Unit tests for :class:`DeepSeekProvider` thinking-mode override.
+"""Unit tests for :class:`DeepSeekThinkingProvider` (KD-2.4-T).
 
-Verifies the KD-2.4-S contract (legalised in Phase 2.4 task-2.4.17,
-2026-06-05; prior to that it lived as an orphan decision in the
-Phase 2.1 C5 commit ``bf54b30`` and was mis-attributed to KD-2.1-O):
-DeepSeek production calls for schema-bound workloads always spread
-``extra_body={"thinking": {"type": "disabled"}}`` into the underlying
-OpenAI-compatible client. Without this override the default thinking-on
-behaviour inflates output ~6x and latency ~7x (measured during Phase A
-spike, 2026-05-12).
+Mirror of :mod:`tests.unit.test_llm.test_providers_deepseek` for the
+thinking-on sibling. Verifies that:
 
-KD-2.4-T (the per-stage thinking opt-in for reasoning-tier work) is
-verified separately in :mod:`tests.unit.test_llm.test_providers_deepseek_thinking`.
-The two test modules together pin the contract: schema-bound stays on
-:class:`DeepSeekProvider` (thinking off), reasoning-tier stays on
-:class:`DeepSeekThinkingProvider` (thinking on).
-
-The tests use light fakes for the OpenAI client cycle and the
-instructor cycle so we can capture the kwargs passed into
-``chat.completions.create`` / ``create_with_completion`` without
-hitting the real DeepSeek API.
+* the subclass inherits :class:`OpenAICompatProvider` cleanly,
+* :meth:`_extra_create_kwargs` returns the empty base-class default
+  (NOT the thinking-disabled override from KD-2.4-S),
+* both call paths (``chat.completions.create`` and instructor's
+  ``create_with_completion``) reach the SDK with no ``extra_body``
+  injected, so the DeepSeek API applies its default thinking-on V4
+  behaviour,
+* the provider registry exposes the new class under
+  ``"deepseek_thinking"`` and the factory wires it from the shared
+  ``DEEPSEEK_API_KEY`` pool, returning a working instance alongside the
+  non-thinking :class:`DeepSeekProvider`.
 """
 
 from __future__ import annotations
@@ -31,6 +26,7 @@ import pytest
 from pydantic import BaseModel
 
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
+from course_supporter.llm.providers.deepseek_thinking import DeepSeekThinkingProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 from course_supporter.llm.schemas import LLMRequest
 
@@ -38,12 +34,12 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-def _make_provider() -> DeepSeekProvider:
-    """Construct a DeepSeekProvider with a single fake API key."""
-    return DeepSeekProvider(
+def _make_provider() -> DeepSeekThinkingProvider:
+    """Construct a DeepSeekThinkingProvider with a single fake API key."""
+    return DeepSeekThinkingProvider(
         api_keys=("test-key",),
-        default_model="deepseek-v4-flash",
-        provider_name="deepseek",
+        default_model="deepseek-v4-pro",
+        provider_name="deepseek_thinking",
         base_url="https://api.deepseek.com/v1",
     )
 
@@ -74,31 +70,36 @@ class _SchemaForTest(BaseModel):
     ok: bool
 
 
-class TestDeepSeekProviderExtraBody:
-    """KD-2.4-S: thinking-disabled forced on every DeepSeek call."""
+class TestDeepSeekThinkingProviderHook:
+    """KD-2.4-T: thinking-on default kept by omitting the disable override."""
 
     def test_inherits_from_openai_compat(self) -> None:
         provider = _make_provider()
         assert isinstance(provider, OpenAICompatProvider)
 
-    def test_extra_create_kwargs_returns_thinking_disabled(self) -> None:
-        """Hook returns exactly the body fragment the SDK expects."""
+    def test_extra_create_kwargs_returns_empty(self) -> None:
+        """The base-class neutral hook is exactly what we want here."""
         provider = _make_provider()
-        kwargs = provider._extra_create_kwargs()
-        assert kwargs == {"extra_body": {"thinking": {"type": "disabled"}}}
+        assert provider._extra_create_kwargs() == {}
 
-    def test_base_class_extra_kwargs_remains_empty(self) -> None:
-        """Sanity check: parent (openai / mistral) path is unaffected."""
-        base = OpenAICompatProvider(
+    def test_distinct_from_non_thinking_provider(self) -> None:
+        """The two DeepSeek classes are NOT the same — non-think keeps disable."""
+        thinking = _make_provider()
+        non_thinking = DeepSeekProvider(
             api_keys=("test-key",),
-            default_model="gpt-test",
-            provider_name="openai",
+            default_model="deepseek-v4-flash",
+            provider_name="deepseek",
+            base_url="https://api.deepseek.com/v1",
         )
-        assert base._extra_create_kwargs() == {}
+        assert type(thinking) is not type(non_thinking)
+        assert thinking._extra_create_kwargs() == {}
+        assert non_thinking._extra_create_kwargs() == {
+            "extra_body": {"thinking": {"type": "disabled"}}
+        }
 
     @pytest.mark.asyncio
-    async def test_complete_passes_thinking_disabled_in_extra_body(self) -> None:
-        """``complete`` spreads ``extra_body`` into ``chat.completions.create``."""
+    async def test_complete_omits_extra_body(self) -> None:
+        """``complete`` does NOT inject ``extra_body`` — thinking stays default-on."""
         provider = _make_provider()
         fake_client = MagicMock()
         fake_client.chat.completions.create = AsyncMock(
@@ -112,7 +113,7 @@ class TestDeepSeekProviderExtraBody:
         request = LLMRequest(
             prompt="hello",
             system_prompt="sys",
-            model="deepseek-v4-flash",
+            model="deepseek-v4-pro",
             temperature=0.0,
             max_tokens=1024,
         )
@@ -121,9 +122,10 @@ class TestDeepSeekProviderExtraBody:
 
         fake_client.chat.completions.create.assert_awaited_once()
         kwargs = fake_client.chat.completions.create.await_args.kwargs
-        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+        # KD-2.4-T contract: NO extra_body, so DeepSeek defaults to thinking-on.
+        assert "extra_body" not in kwargs
         # Sanity: base kwargs still pass through unchanged.
-        assert kwargs["model"] == "deepseek-v4-flash"
+        assert kwargs["model"] == "deepseek-v4-pro"
         assert kwargs["temperature"] == 0.0
         assert kwargs["max_tokens"] == 1024
         assert kwargs["messages"] == [
@@ -132,8 +134,8 @@ class TestDeepSeekProviderExtraBody:
         ]
 
     @pytest.mark.asyncio
-    async def test_complete_structured_passes_thinking_disabled(self) -> None:
-        """instructor's ``create_with_completion`` also receives ``extra_body``."""
+    async def test_complete_structured_omits_extra_body(self) -> None:
+        """instructor's ``create_with_completion`` also runs without ``extra_body``."""
         provider = _make_provider()
 
         fake_instructor = MagicMock()
@@ -148,7 +150,7 @@ class TestDeepSeekProviderExtraBody:
         request = LLMRequest(
             prompt="hello",
             system_prompt=None,
-            model="deepseek-v4-flash",
+            model="deepseek-v4-pro",
             temperature=0.0,
             max_tokens=256,
         )
@@ -158,49 +160,24 @@ class TestDeepSeekProviderExtraBody:
         instructor_create = fake_instructor.chat.completions.create_with_completion
         instructor_create.assert_awaited_once()
         kwargs = instructor_create.await_args.kwargs
-        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-        assert kwargs["model"] == "deepseek-v4-flash"
+        assert "extra_body" not in kwargs
+        assert kwargs["model"] == "deepseek-v4-pro"
         assert kwargs["max_retries"] == 2
         assert kwargs["response_model"] is _SchemaForTest
 
-    @pytest.mark.asyncio
-    async def test_openai_compat_complete_omits_extra_body(self) -> None:
-        """Non-DeepSeek providers must NOT inject ``extra_body``."""
-        base = OpenAICompatProvider(
-            api_keys=("test-key",),
-            default_model="gpt-test",
-            provider_name="openai",
-        )
-        fake_client = MagicMock()
-        fake_client.chat.completions.create = AsyncMock(
-            return_value=_stub_completion_response()
-        )
-        base._client_cycle = itertools.cycle([fake_client])  # type: ignore[assignment]
 
-        request = LLMRequest(
-            prompt="hi",
-            model="gpt-test",
-            temperature=0.0,
-        )
+class TestProviderRegistryDeepSeekThinking:
+    """Registry exposes the new class alongside the non-thinking default."""
 
-        await base.complete(request)
-
-        fake_client.chat.completions.create.assert_awaited_once()
-        kwargs = fake_client.chat.completions.create.await_args.kwargs
-        # Base class returns ``{}`` from the hook, so ``extra_body`` must
-        # not appear at all in the call kwargs.
-        assert "extra_body" not in kwargs
-
-
-class TestProviderRegistryDeepSeek:
-    """Registry now maps ``deepseek`` to the specialised subclass."""
-
-    def test_registry_uses_deepseek_subclass(self) -> None:
+    def test_registry_maps_deepseek_thinking_to_subclass(self) -> None:
         from course_supporter.llm.providers import PROVIDER_REGISTRY
 
+        assert PROVIDER_REGISTRY["deepseek_thinking"] is DeepSeekThinkingProvider
+        # Non-think mapping must stay untouched (KD-2.4-S contract preserved).
         assert PROVIDER_REGISTRY["deepseek"] is DeepSeekProvider
 
-    def test_factory_creates_deepseek_provider_instance(self) -> None:
+    def test_factory_shares_deepseek_key_pool(self) -> None:
+        """``DEEPSEEK_API_KEY`` ENV powers both providers via aliased Settings field."""
         from course_supporter.config import Settings
         from course_supporter.llm.factory import create_providers
 
@@ -210,6 +187,6 @@ class TestProviderRegistryDeepSeek:
         )
         providers = create_providers(s)
         assert isinstance(providers["deepseek"], DeepSeekProvider)
-        # Subclass relationship preserved for any downstream isinstance
-        # checks against the parent class.
-        assert isinstance(providers["deepseek"], OpenAICompatProvider)
+        assert isinstance(providers["deepseek_thinking"], DeepSeekThinkingProvider)
+        # Subclass relationship preserved for any downstream isinstance checks.
+        assert isinstance(providers["deepseek_thinking"], OpenAICompatProvider)

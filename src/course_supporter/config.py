@@ -25,6 +25,7 @@ _LLM_PROVIDER_KEYS = (
     "anthropic",
     "openai",
     "deepseek",
+    "deepseek_thinking",
     "mistral",
     "dashscope",
 )
@@ -136,6 +137,14 @@ class Settings(BaseSettings):
     deepseek_api_key_raw: SecretStr | None = Field(
         None, validation_alias="deepseek_api_key"
     )
+    # Same ENV var (DEEPSEEK_API_KEY) powers both DeepSeek providers — the
+    # thinking-on sibling lives in its own key pool so factory.create_providers
+    # instantiates a distinct provider class while sharing the operator's
+    # single DeepSeek quota. Precedent: alibaba_api_key drives both the
+    # DashScope-native pool and (if added) any sibling. (KD-2.4-T wiring.)
+    deepseek_thinking_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="deepseek_api_key"
+    )
     mistral_api_key_raw: SecretStr | None = Field(
         None, validation_alias="mistral_api_key"
     )
@@ -183,6 +192,11 @@ class Settings(BaseSettings):
         return pool.next_key() if pool else None
 
     @property
+    def deepseek_thinking_api_key(self) -> SecretStr | None:
+        pool = self._key_pools.get("deepseek_thinking")
+        return pool.next_key() if pool else None
+
+    @property
     def mistral_api_key(self) -> SecretStr | None:
         pool = self._key_pools.get("mistral")
         return pool.next_key() if pool else None
@@ -213,6 +227,9 @@ class Settings(BaseSettings):
     anthropic_default_model: str = "claude-sonnet-4-20250514"
     openai_default_model: str = "gpt-4o-mini"
     deepseek_default_model: str = "deepseek-chat"
+    # Thinking-on sibling defaults to V4 Pro (reasoning-tier flagship; the only
+    # current consumer is video Pass 2a rung 1 per KD-2.4-T).
+    deepseek_thinking_default_model: str = "deepseek-v4-pro"
     mistral_default_model: str = "mistral-large-2512"
     dashscope_default_model: str = "qwen3-vl-32b-instruct"
 
@@ -225,6 +242,9 @@ class Settings(BaseSettings):
     # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.
     # Other providers have their own SDKs with built-in endpoints.
     deepseek_base_url: str = "https://api.deepseek.com"
+    # Same endpoint as deepseek_base_url — the thinking-on sibling only differs
+    # in the omitted thinking-disable hook (provider-side), not the endpoint.
+    deepseek_thinking_base_url: str = "https://api.deepseek.com"
 
     # --- Mistral ---
     # Mistral uses OpenAI-compatible API via OpenAI SDK with custom base_url.

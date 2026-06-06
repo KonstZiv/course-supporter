@@ -255,8 +255,12 @@ class StageRouter:
         Per-rung overrides on ``entry`` (``reasoning`` /
         ``max_output_tokens``) propagate into the corresponding
         :class:`LLMRequest` fields so providers receive the
-        configured value. ``None`` defaults preserve provider-side
-        fallbacks (e.g. ``DashScopeProvider.default_max_output_tokens``).
+        configured value. When the rung's ``max_output_tokens`` is
+        ``None`` (unpinned), the H fallback (TASK-2.4.22) resolves
+        the registry's per-model cap; only when the model is also
+        absent from the registry does ``None`` fall through to the
+        provider-side default
+        (e.g. ``DashScopeProvider.default_max_output_tokens``).
         """
         # H — max_tokens registry fallback. Rung pin wins (status quo);
         # unpinned rung resolves the registry's per-model cap (closes the

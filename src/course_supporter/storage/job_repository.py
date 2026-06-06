@@ -98,6 +98,14 @@ class JobRepository:
             msg = f"Job {job_id} not found"
             raise ValueError(msg)
 
+        # Idempotent no-op when target equals current. ARQ task replay
+        # (worker restart mid-await, ``max_tries`` retry, manual rerun)
+        # would otherwise raise on ``active → active`` and crash the
+        # second attempt before the real work runs (TASK-2.4.18).
+        # Mirrors ``update_stage`` idempotency.
+        if job.status == status:
+            return job
+
         allowed = JOB_TRANSITIONS.get(job.status, set())
         if status not in allowed:
             msg = (

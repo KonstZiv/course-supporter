@@ -129,6 +129,13 @@ class WorkerSettings:
     keep_result: int = 3600
     poll_delay: float = 0.5
 
+    # ARQ defaults heartbeat to ``job_timeout`` (~6h here); explicit
+    # 120s makes the worker recoverable within reasonable bounds while
+    # comfortably exceeding a single reasoning-tier LLM await
+    # (TASK-2.4.17 observed 149-707s) when the loop is unblocked by
+    # the SDK timeout (openai_compat._DEFAULT_HTTP_TIMEOUT, TASK-2.4.18).
+    health_check_interval: int = 120
+
 
 class HomeworkWorkerSettings:
     """ARQ worker settings for the homework queue.
@@ -156,3 +163,4 @@ class HomeworkWorkerSettings:
 
     keep_result: int = 3600
     poll_delay: float = 0.5
+    health_check_interval: int = 120

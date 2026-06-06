@@ -409,6 +409,7 @@ dependencies = [
     { name = "dashscope" },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "imagehash" },
     { name = "instructor" },
     { name = "jinja2" },
@@ -435,7 +436,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -460,6 +460,7 @@ requires-dist = [
     { name = "dashscope", specifier = ">=1.25.18" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128" },
     { name = "google-genai", specifier = ">=1.12" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "imagehash", specifier = ">=4.3" },
     { name = "instructor", specifier = ">=1.7" },
     { name = "jinja2", specifier = ">=3.1" },
@@ -486,7 +487,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pre-commit", specifier = ">=4.1" },
     { name = "pytest", specifier = ">=8.3" },

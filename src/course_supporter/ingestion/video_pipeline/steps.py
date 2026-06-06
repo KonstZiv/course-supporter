@@ -28,8 +28,9 @@ import asyncio
 import bisect
 import itertools
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import structlog
 from pydantic import ValidationError
@@ -39,6 +40,7 @@ from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatEr
 from course_supporter.ingestion.schemas import (
     AudioPass2aResult,
     AudioPass2cResult,
+    AudioSegmentDraft,
     DocumentSegmentDraft,
     DocumentSummaryDraft,
     VisualSceneRef,
@@ -54,7 +56,10 @@ from course_supporter.ingestion.video_pipeline.schemas import (
     VideoFileMetadata,
 )
 from course_supporter.language import display_name
-from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.llm.error_categories import (
+    LadderExhaustedError,
+    StructuralRetryError,
+)
 from course_supporter.models.source import ChunkType
 from course_supporter.service_logging import get_current_job_id
 
@@ -87,6 +92,34 @@ _MAX_DURATION_MS = 150 * 60 * 1000
 # rationale: starting default; calibrated in 2.4.5 (the real consumer of
 # pauses — Pass 2a segment boundaries, KD2c).
 _PAUSE_THRESHOLD_MS = 700
+
+# Pass 2a balance gate threshold (TASK-2.4.19). The largest top-level
+# segment must cover no more than this fraction of the transcript — a
+# deterministic anti-dominant guard above the LLM's own reasoning. Live
+# calibration n=4 (1 EN spike + 3 UKR jobs, 10:48-90 min): healthy band
+# 23-35 %; the single historical 55 % outlier (EN spike `0I8S6diyDjw`)
+# motivates the gate. 0.45 leaves a clean margin above the healthy band
+# without forcing over-segmentation. Semantically ≈ "must have at least
+# 3 top-level segments with the dominant one bounded".
+_BALANCE_THRESHOLD: Final = 0.45
+
+
+def largest_segment_share(segments: Sequence[AudioSegmentDraft]) -> float:
+    """Return ``max(span) / sum(spans)`` over top-level word-idx ranges.
+
+    Used by the Pass 2a balance gate (TASK-2.4.19) to detect
+    anti-dominant collapse — a single top-level segment swallowing
+    most of the transcript. Past the schema validator empty input is
+    a programming bug (``AudioPass2aResult._full_cover`` already
+    rejects empty ``segments`` whenever ``total_word_count > 0``);
+    raises ``ValueError`` to surface it instead of silently
+    short-circuiting the gate.
+    """
+    if not segments:
+        msg = "largest_segment_share: empty segments"
+        raise ValueError(msg)
+    spans = [seg.end_word_idx - seg.start_word_idx for seg in segments]
+    return max(spans) / sum(spans)
 
 
 # ── Krok 1-4 — invoked from process_raw ────────────────────────────
@@ -274,8 +307,22 @@ async def step_5_pass2a_mapping(
     anchoring each visual to a transcript word so the LLM segments the clean
     word-stream while seeing a deterministic visual-overlay block.
 
-    Failures (carrier cache miss, ladder exhausted, persistent JSON
-    validation fail, word-idx out of range) → ``ProcessingError`` (R1).
+    Pass 2a balance gate (TASK-2.4.19): the in-closure ``_validator``
+    rejects parses whose largest top-level segment exceeds
+    ``_BALANCE_THRESHOLD`` of the transcript via ``StructuralRetryError``
+    — the ladder runs its standard one-retry-per-rung + cascade with a
+    self-contained feedback string. If every rung collapses on balance
+    (``parsed["fallback"]`` populated), the last valid parse is accepted
+    as degraded, a ``video.pass2a.degraded_segmentation_accepted``
+    warning is emitted, the job does NOT fail. Schema / infra
+    exhaustion without any valid parse (``parsed["fallback"]`` empty)
+    re-raises ``LadderExhaustedError`` so the orchestrator's failure
+    path treats it as a real provider outage — the degraded-catch
+    deliberately does not mask a real failure.
+
+    Failures: carrier cache miss / word-idx out of range →
+    ``ProcessingError`` (R1); schema validation fail on every rung →
+    ``LadderExhaustedError``.
     """
     job_id = get_current_job_id()
     if job_id is None:
@@ -312,6 +359,13 @@ async def step_5_pass2a_mapping(
         Reuses ``AudioPass2aResult`` (same word-idx schema) — the contiguity /
         full-cover / subsegment-cover validators apply unchanged, with
         ``total_word_count`` carried via the Pydantic context.
+
+        After a valid parse, runs the Pass 2a balance gate (TASK-2.4.19):
+        if the largest top-level segment exceeds ``_BALANCE_THRESHOLD``,
+        stores ``local`` in ``parsed["fallback"]`` for the degraded-catch
+        path in the caller and raises ``StructuralRetryError`` with a
+        self-contained feedback identifying the dominant segment and the
+        word-range to split.
         """
         try:
             local = AudioPass2aResult.model_validate_json(
@@ -333,17 +387,61 @@ async def step_5_pass2a_mapping(
                 "Regenerate the response with valid output."
             )
             raise StructuralRetryError(feedback) from exc
+
+        share = largest_segment_share(local.segments)
+        if share > _BALANCE_THRESHOLD:
+            spans = [s.end_word_idx - s.start_word_idx for s in local.segments]
+            max_idx = spans.index(max(spans))
+            dom = local.segments[max_idx]
+            pct = round(share * 100, 1)
+            balance_feedback = (
+                f'Segmentation imbalance: segment #{max_idx} ("{dom.title}") '
+                f"covers {pct}% of the transcript (words "
+                f"{dom.start_word_idx}-{dom.end_word_idx} of "
+                f"{total_word_count}). Top-level segments must each cover "
+                f"at most {int(_BALANCE_THRESHOLD * 100)}%. Split this range "
+                f"into multiple top-level segments around distinct subtopics "
+                f"within words {dom.start_word_idx}-{dom.end_word_idx}, "
+                f"keeping the rest of the segmentation intact."
+            )
+            parsed["fallback"] = local
+            logger.warning(
+                "video_pass2a.balance.threshold_exceeded",
+                job_id=str(job_id),
+                dominant_idx=max_idx,
+                share=share,
+                dominant_words=(dom.start_word_idx, dom.end_word_idx),
+                total_word_count=total_word_count,
+            )
+            raise StructuralRetryError(balance_feedback)
         parsed["result"] = local
 
-    await stage_router.execute_for_stage(
-        _PASS_2A_STAGE_NAME,
-        response_validator=_validator,
-        expects_json=True,
-        words_count=total_word_count,
-        words_json=words_json,
-        visuals=visuals,
-        language=display_name(doc.language) if doc.language else None,
-    )
+    try:
+        await stage_router.execute_for_stage(
+            _PASS_2A_STAGE_NAME,
+            response_validator=_validator,
+            expects_json=True,
+            words_count=total_word_count,
+            words_json=words_json,
+            visuals=visuals,
+            language=display_name(doc.language) if doc.language else None,
+        )
+    except LadderExhaustedError:
+        # Distinguish balance-exhaustion (fallback populated by the
+        # validator's accept-then-flag-as-degraded path) from schema /
+        # infra exhaustion (no rung ever produced a valid parse). The
+        # latter is a real provider outage and must not be masked.
+        if parsed.get("fallback") is None:
+            raise
+        fallback = parsed["fallback"]
+        logger.warning(
+            "video.pass2a.degraded_segmentation_accepted",
+            job_id=str(job_id),
+            share=largest_segment_share(fallback.segments),
+            segments=len(fallback.segments),
+            total_word_count=total_word_count,
+        )
+        parsed["result"] = fallback
     result = parsed["result"]
 
     cumsum = chars_per_word_cumsum(words)

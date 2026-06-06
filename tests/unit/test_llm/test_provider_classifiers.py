@@ -280,6 +280,21 @@ def _openai_other_bad_request() -> Exception:
     )
 
 
+def _httpx_read_timeout() -> Exception:
+    # ``httpx.ReadTimeout`` is the concrete timeout the SDK surfaces
+    # when the explicit ``httpx.Timeout(read=...)`` budget is hit. We
+    # classify the base ``httpx.TimeoutException`` so any variant
+    # (read / write / connect / pool) escalates the same way.
+    return httpx.ReadTimeout("read timeout")
+
+
+def _builtin_timeout_error() -> Exception:
+    # In Py3.11+ ``asyncio.TimeoutError`` is an alias of builtin
+    # ``TimeoutError``; the classifier matches the latter to cover
+    # outer ``asyncio.wait_for`` guards layered around the SDK call.
+    return TimeoutError()
+
+
 class TestOpenAICompatClassifier:
     @pytest.mark.parametrize(
         ("factory", "expected"),
@@ -288,6 +303,8 @@ class TestOpenAICompatClassifier:
             (_openai_timeout, ErrorCategory.INFRASTRUCTURE),
             (_openai_connection_error, ErrorCategory.INFRASTRUCTURE),
             (_openai_internal_server, ErrorCategory.INFRASTRUCTURE),
+            (_httpx_read_timeout, ErrorCategory.INFRASTRUCTURE),
+            (_builtin_timeout_error, ErrorCategory.INFRASTRUCTURE),
             (_openai_overflow_by_code, ErrorCategory.INPUT_OVERFLOW),
             (_deepseek_overflow_by_message, ErrorCategory.INPUT_OVERFLOW),
             (_openai_other_bad_request, ErrorCategory.SEMANTIC),

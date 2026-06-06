@@ -172,6 +172,33 @@ class TestJobTransitionValidation:
         with pytest.raises(ValueError, match="Invalid job status transition"):
             await repo.update_status(job.id, "complete")
 
+    async def test_update_status_idempotent_active_to_active(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Same-state transition is a no-op and preserves ``started_at``.
+
+        ARQ task replay (worker restart mid-await, ``max_tries`` retry,
+        manual rerun) would otherwise hit
+        ``Invalid job status transition: active → active`` and crash the
+        second attempt before the real work runs (TASK-2.4.18).
+        """
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+
+        first = await repo.update_status(job.id, "active")
+        first_started_at = first.started_at
+        assert first.status == "active"
+        assert first_started_at is not None
+
+        # Replay: no exception, same row returned, ``started_at`` frozen.
+        second = await repo.update_status(job.id, "active")
+        assert second.status == "active"
+        assert second.started_at == first_started_at
+
 
 class TestJobQueries:
     """Query methods against real data."""

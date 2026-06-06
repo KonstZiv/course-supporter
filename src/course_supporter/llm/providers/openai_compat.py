@@ -16,6 +16,7 @@ import re
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import openai
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
@@ -34,6 +35,12 @@ _OPENAI_OVERFLOW_PATTERN = re.compile(
     r"context length|too long|maximum context|tokens exceed",
     re.IGNORECASE,
 )
+
+# Explicit SDK timeout. Read budget covers reasoning-tier providers
+# (DeepSeek thinking-on observed 149-707s in TASK-2.4.17 live runs);
+# connect kept short so DNS / TLS hiccups fail fast and the ladder
+# escalates instead of hanging the ARQ event loop (TASK-2.4.18).
+_DEFAULT_HTTP_TIMEOUT = httpx.Timeout(900.0, connect=30.0)
 
 
 def _build_vision_content(
@@ -86,7 +93,10 @@ class OpenAICompatProvider(LLMProvider):
         self._api_keys = tuple(api_keys)
         self._base_url = base_url
         self._clients = tuple(
-            openai.AsyncOpenAI(api_key=k, base_url=base_url) for k in api_keys
+            openai.AsyncOpenAI(
+                api_key=k, base_url=base_url, timeout=_DEFAULT_HTTP_TIMEOUT
+            )
+            for k in api_keys
         )
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
@@ -119,6 +129,11 @@ class OpenAICompatProvider(LLMProvider):
         Mapping:
         * RateLimitError / APITimeoutError / APIConnectionError /
           InternalServerError -> INFRASTRUCTURE.
+        * ``httpx.TimeoutException`` / builtin ``TimeoutError``
+          (alias of ``asyncio.TimeoutError`` since Py3.11) ->
+          INFRASTRUCTURE. Covers transport-level timeouts the OpenAI
+          SDK may surface unwrapped and outer ``asyncio.wait_for``
+          guards layered around the call.
         * BadRequestError with code ``context_length_exceeded``, or a
           message matching a known overflow pattern (DeepSeek /
           Mistral fallback) -> INPUT_OVERFLOW.
@@ -132,6 +147,8 @@ class OpenAICompatProvider(LLMProvider):
                 openai.APITimeoutError,
                 openai.APIConnectionError,
                 openai.InternalServerError,
+                httpx.TimeoutException,
+                TimeoutError,
             ),
         ):
             return ErrorCategory.INFRASTRUCTURE
@@ -154,7 +171,11 @@ class OpenAICompatProvider(LLMProvider):
 
         self._instructor_clients = tuple(
             _instructor.from_openai(
-                openai.AsyncOpenAI(api_key=k, base_url=self._base_url)
+                openai.AsyncOpenAI(
+                    api_key=k,
+                    base_url=self._base_url,
+                    timeout=_DEFAULT_HTTP_TIMEOUT,
+                )
             )
             for k in self._api_keys
         )

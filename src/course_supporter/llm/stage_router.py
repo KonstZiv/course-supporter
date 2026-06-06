@@ -391,7 +391,10 @@ class StageRouter:
                 response_validator(response.content)
             return response
         except Exception as exc:
-            error_message = str(exc)
+            # Guard against exception types whose ``str(exc)`` is empty
+            # (no args). Without this, ESC row degrades to "success=False,
+            # error_message=NULL" — zero diagnostic surface (TASK-2.4.18).
+            error_message = str(exc).strip() or f"{type(exc).__name__} (no message)"
             raise
         finally:
             if self._session_factory is not None:

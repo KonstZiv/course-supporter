@@ -38,6 +38,7 @@ stages:
   # Phase 2.1 concern.
   safety_check:
     prompt_ref: "prompts/safety_check/v1.md"
+    requires: [structured_output]
     ladder:
       - provider: mistral
         model: mistral-small-latest
@@ -54,6 +55,7 @@ stages:
   # off_topic is high-bar. Injection / policy / suspicious preserved.
   safety_check_authored:
     prompt_ref: "prompts/safety_check_authored/v1.md"
+    requires: [structured_output]
     ladder:
       - provider: mistral
         model: mistral-small-latest

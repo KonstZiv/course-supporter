@@ -18,6 +18,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from course_supporter.llm.registry import Capability, ModelRegistryConfig
+
 # Strict input-config models: typo in a YAML key fails validation
 # instead of silently shadowing a real field.
 _FORBID = ConfigDict(extra="forbid")
@@ -58,12 +60,18 @@ class StageConfig(BaseModel):
             backend repo CWD (e.g. ``"prompts/example/v1.md"``). The
             actual file read happens in
             :mod:`course_supporter.llm.prompt_loader_md`.
+        requires: Capabilities every ladder rung's model must declare
+            (TASK-2.4.23). Empty default keeps existing stages without
+            constraint; non-empty values are checked at startup by
+            :func:`validate_ladders_against_registry`. Mirrors
+            ``ActionConfig.requires`` in the registry.
         ladder: Ordered fallback ladder; at least one entry.
     """
 
     model_config = _FORBID
 
     prompt_ref: str
+    requires: list[Capability] = Field(default_factory=list)
     ladder: list[LadderEntry] = Field(min_length=1)
 
 
@@ -145,3 +153,53 @@ def load_ladder_config(directory: Path) -> LadderConfig:
             origins[stage_name] = path
 
     return LadderConfig(stages=merged)
+
+
+def validate_ladders_against_registry(
+    cfg: LadderConfig, registry: ModelRegistryConfig
+) -> None:
+    """Cross-check every ladder rung against the model registry (TASK-2.4.23).
+
+    Two invariants enforced fail-fast at startup:
+
+    * **K — membership:** every ``rung.model`` must exist in
+      ``registry.models``. A typo / rename / drift between
+      ``ladders_*.yaml`` and ``external_services.yaml`` would otherwise
+      surface only on the first runtime hit through the affected rung.
+    * **Q-axis1 — capability:** every capability declared in
+      ``stage.requires`` must appear in ``model.capabilities`` for each
+      rung. Catches text-only models accidentally placed in a
+      vision-required stage (and similar mismatches).
+
+    Errors are aggregated and raised as a single ``ValueError`` so a
+    multi-typo config surfaces every problem at once. Mirrors the
+    pattern in :meth:`ModelRegistryConfig.validate_and_flatten` for
+    action chains.
+
+    Raises:
+        ValueError: if any rung references an unknown model OR lacks a
+            capability declared in ``stage.requires``.
+    """
+    errors: list[str] = []
+
+    for stage_name, stage in cfg.stages.items():
+        for i, entry in enumerate(stage.ladder):
+            if entry.model not in registry.models:
+                errors.append(
+                    f"Stage '{stage_name}' rung {i} "
+                    f"references unknown model: '{entry.model}'"
+                )
+                continue
+
+            model = registry.models[entry.model]
+            missing = set(stage.requires) - set(model.capabilities)
+            if missing:
+                errors.append(
+                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
+                    f"lacks required capabilities: {sorted(missing)}"
+                )
+
+    if errors:
+        raise ValueError(
+            "Ladder validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        )

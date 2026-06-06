@@ -1,4 +1,4 @@
-.PHONY: help install lint format typecheck test test-cov check all run-api up down reset logs ps migrate db-upgrade db-downgrade db-reset
+.PHONY: help install lint format typecheck test test-cov check all run-api up down reset logs ps doctor migrate db-upgrade db-downgrade db-reset
 
 help:  ## Показати цю довідку
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -68,6 +68,24 @@ logs:  ## Показати логи сервісів
 
 ps:  ## Статус сервісів
 	docker compose ps
+
+doctor:  ## Pre-flight infra check (postgres/redis/minio up + alembic at head + pings)
+	@fail=0; \
+	running=$$(docker compose ps --status=running --services 2>/dev/null); \
+	for svc in postgres redis minio; do \
+		if echo "$$running" | grep -qw $$svc; then echo "$$svc: up"; \
+		else echo "$$svc: DOWN"; fail=1; fi; \
+	done; \
+	head=$$(uv run alembic heads 2>/dev/null | head -1 | awk '{print $$1}'); \
+	cur=$$(uv run alembic current 2>/dev/null | head -1 | awk '{print $$1}'); \
+	if [ -n "$$head" ] && [ "$$cur" = "$$head" ]; then echo "alembic: $$cur (head)"; \
+	else echo "alembic: MISMATCH cur='$$cur' head='$$head'"; fail=1; fi; \
+	if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then echo "redis ping: PONG"; \
+	else echo "redis ping: FAIL"; fail=1; fi; \
+	if curl -fs http://localhost:9000/minio/health/live >/dev/null 2>&1; then echo "minio health: ok"; \
+	else echo "minio health: FAIL"; fail=1; fi; \
+	if [ $$fail -eq 0 ]; then echo "doctor: PASS"; else echo "doctor: FAIL"; fi; \
+	exit $$fail
 
 psql:  ## Відкрити psql shell у postgres контейнері
 	docker compose exec postgres psql -U $${POSTGRES_USER:-course_supporter} -d $${POSTGRES_DB:-course_supporter}

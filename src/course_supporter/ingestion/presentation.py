@@ -38,7 +38,7 @@ PyMuPDF.
 
 LibreOffice 26.2.x is a worker-image system dependency (``soffice`` on
 PATH) required only for the PPTX/PPT normalize path; the PDF path uses
-PyMuPDF alone. The Dockerfile install lands in sub-area #7.
+PyMuPDF alone.
 """
 
 from __future__ import annotations

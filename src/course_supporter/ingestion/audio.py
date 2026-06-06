@@ -19,7 +19,7 @@ stages mirror ``VideoProcessor``:
   ``audio_pass_2c_denoise`` stage (``asyncio.gather`` over the
   filtered subset).
 
-Factory dispatch invariant (sub-area #6 ``create_processors``):
+Factory dispatch invariant (``create_processors``):
 the factory routes by ``source_type`` so AudioProcessor only ever
 receives ``SourceType.AUDIO`` inputs. Entry guard intentionally
 absent — the belt-and-suspenders pattern in TextProcessor /
@@ -68,14 +68,11 @@ cache write.
 Critical invariant (KD-2.2-E line 333): ``process_raw`` asserts
 ``assemble_text(doc) == " ".join(w.text for w in result.words)``
 as a runtime precondition for Pass 2b correctness. The assertion
-references audio's source_type-conditional separator that lands
-in sub-area #6 (``models/source.py`` per the v0.3 ``5b7fc67``
-consolidation); the activation gap is non-functional because no
-caller invokes ``process_raw`` until sub-area #7 wires the arq
-task entry. The assert serves as a cross-sub-area dependency
-tripwire — it fails fast if sub-area #6 reverts the separator
-branch or if chunk construction here violates segment-ordering
-invariants.
+references audio's source_type-conditional separator in
+``models/source.py`` (v0.3 ``5b7fc67`` consolidation). The assert
+serves as a production runtime tripwire — it fails fast if
+``models/source.py`` reverts the separator branch or if chunk
+construction here violates segment-ordering invariants.
 """
 
 from __future__ import annotations

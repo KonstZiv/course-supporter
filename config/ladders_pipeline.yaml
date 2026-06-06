@@ -43,6 +43,7 @@ stages:
   # provider-side stability guarantee per existing repo convention).
   pass_2a_mapping:
     prompt_ref: "prompts/pass_2a_mapping/v1.md"
+    requires: [structured_output]
     ladder:
       - provider: deepseek
         model: deepseek-v4-flash

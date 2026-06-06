@@ -118,6 +118,7 @@ stages:
   # ``PresentationProcessor.process_macro``.
   presentation_pass_1_vision:
     prompt_ref: "prompts/presentation_pass_1_vision/v1.md"
+    requires: [vision]
     ladder:
       - provider: dashscope
         model: qwen3-vl-32b-instruct
@@ -141,6 +142,7 @@ stages:
   # completes.
   presentation_pass_2a_mapping:
     prompt_ref: "prompts/presentation_pass_2a_mapping/v1.md"
+    requires: [structured_output]
     ladder:
       - provider: mistral
         model: mistral-large-2512

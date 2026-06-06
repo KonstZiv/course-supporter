@@ -39,7 +39,10 @@ async def startup(ctx: WorkerCtx) -> None:
 
     from course_supporter.llm import create_model_router
     from course_supporter.llm.factory import create_providers
-    from course_supporter.llm.ladder_config import load_ladder_config
+    from course_supporter.llm.ladder_config import (
+        load_ladder_config,
+        validate_ladders_against_registry,
+    )
     from course_supporter.llm.registry import load_registry
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.s3 import S3Client
@@ -73,6 +76,9 @@ async def startup(ctx: WorkerCtx) -> None:
     # invoking ``run_stage2_safety_check``) can read the same ladder
     # registry as HTTP-side consumers.
     ladder_config = load_ladder_config(s.ladders_dir)
+    # Fail-fast on rung-typo / capability-mismatch before the worker
+    # starts accepting jobs (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1).
+    validate_ladders_against_registry(ladder_config, registry)
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(
         ladder_config=ladder_config,

@@ -31,7 +31,10 @@ from course_supporter.auth.scopes import rate_limiter
 from course_supporter.config import settings
 from course_supporter.llm import create_model_router
 from course_supporter.llm.factory import create_providers
-from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.ladder_config import (
+    load_ladder_config,
+    validate_ladders_against_registry,
+)
 from course_supporter.llm.registry import load_registry
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.logging_config import configure_logging
@@ -84,6 +87,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # (option a, two-build); providers are stateless HTTP wrappers and a
     # second construction is cheap.
     ladder_config = load_ladder_config(settings.ladders_dir)
+    # Fail-fast on rung-typo / capability-mismatch before the FastAPI
+    # app starts serving (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1).
+    validate_ladders_against_registry(ladder_config, registry)
     stage_router_providers = create_providers(settings)
     app.state.stage_router = StageRouter(
         ladder_config=ladder_config,

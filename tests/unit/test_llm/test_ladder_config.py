@@ -11,6 +11,14 @@ from course_supporter.llm.ladder_config import (
     LadderFile,
     StageConfig,
     load_ladder_config,
+    validate_ladders_against_registry,
+)
+from course_supporter.llm.registry import (
+    Capability,
+    ModelRegistryConfig,
+    ProviderConfig,
+    ProviderModelConfig,
+    load_registry,
 )
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -389,3 +397,182 @@ class TestRealConfigs:
             assert Path(stage.prompt_ref).is_file(), (
                 f"prompt_ref for {stage_name!r} not found: {stage.prompt_ref}"
             )
+
+
+# ── TASK-2.4.23: validate_ladders_against_registry ─────────────────
+
+
+def _two_model_registry() -> ModelRegistryConfig:
+    """Registry with one vision + one text-only model — fixture for tests."""
+    return ModelRegistryConfig(
+        providers={
+            "anthropic": ProviderConfig(
+                type="llm",
+                models=[
+                    ProviderModelConfig(
+                        id="vl-model",
+                        capabilities=[
+                            Capability.VISION,
+                            Capability.STRUCTURED_OUTPUT,
+                        ],
+                    ),
+                    ProviderModelConfig(
+                        id="text-model",
+                        capabilities=[Capability.STRUCTURED_OUTPUT],
+                    ),
+                ],
+            )
+        },
+        actions={},
+    )
+
+
+def _stage(
+    *,
+    requires: list[Capability] | None = None,
+    models: tuple[str, ...] = ("vl-model",),
+) -> StageConfig:
+    return StageConfig(
+        prompt_ref="prompts/x/v1.md",
+        requires=list(requires) if requires is not None else [],
+        ladder=[LadderEntry(provider="anthropic", model=m) for m in models],
+    )
+
+
+class TestStageConfigRequiresField:
+    """StageConfig.requires accepts list[Capability] and defaults to []."""
+
+    def test_default_is_empty_list(self) -> None:
+        stage = StageConfig(
+            prompt_ref="prompts/x.md",
+            ladder=[LadderEntry(provider="anthropic", model="m")],
+        )
+        assert stage.requires == []
+
+    def test_explicit_capability_list_round_trips(self) -> None:
+        stage = StageConfig(
+            prompt_ref="prompts/x.md",
+            requires=[Capability.VISION],
+            ladder=[LadderEntry(provider="anthropic", model="m")],
+        )
+        assert stage.requires == [Capability.VISION]
+
+    def test_yaml_string_capability_coerces(self) -> None:
+        """YAML emits ``requires: [vision]`` as strings — Pydantic coerces."""
+        stage = StageConfig.model_validate(
+            {
+                "prompt_ref": "prompts/x.md",
+                "requires": ["vision", "structured_output"],
+                "ladder": [{"provider": "anthropic", "model": "m"}],
+            }
+        )
+        assert stage.requires == [Capability.VISION, Capability.STRUCTURED_OUTPUT]
+
+
+class TestValidateLaddersAgainstRegistry:
+    """validate_ladders_against_registry — K + Q-axis1 fail-fast."""
+
+    def test_happy_path_no_errors(self) -> None:
+        cfg = LadderConfig(stages={"demo": _stage(models=("vl-model",))})
+        validate_ladders_against_registry(cfg, _two_model_registry())
+        # Returns None on success; absence of exception is the contract.
+
+    def test_unknown_model_raises_with_stage_and_rung(self) -> None:
+        cfg = LadderConfig(
+            stages={"demo": _stage(models=("typo-model",))},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        assert "Ladder validation failed" in msg
+        assert "Stage 'demo' rung 0" in msg
+        assert "typo-model" in msg
+
+    def test_capability_mismatch_raises(self) -> None:
+        cfg = LadderConfig(
+            stages={
+                "vision_stage": _stage(
+                    requires=[Capability.VISION], models=("text-model",)
+                )
+            },
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        assert "Stage 'vision_stage' rung 0" in msg
+        assert "text-model" in msg
+        assert "vision" in msg
+        assert "lacks required capabilities" in msg
+
+    def test_capability_satisfied_by_vision_model(self) -> None:
+        cfg = LadderConfig(
+            stages={
+                "vision_stage": _stage(
+                    requires=[Capability.VISION], models=("vl-model",)
+                )
+            },
+        )
+        validate_ladders_against_registry(cfg, _two_model_registry())
+
+    def test_empty_requires_means_no_capability_check(self) -> None:
+        """Default empty requires admits any registered rung."""
+        cfg = LadderConfig(
+            stages={
+                "free_stage": _stage(requires=[], models=("text-model", "vl-model"))
+            },
+        )
+        validate_ladders_against_registry(cfg, _two_model_registry())
+
+    def test_multiple_errors_aggregated(self) -> None:
+        """A multi-typo / multi-mismatch config surfaces all problems at once."""
+        cfg = LadderConfig(
+            stages={
+                "a": _stage(models=("typo-1",)),
+                "b": _stage(
+                    requires=[Capability.VISION], models=("text-model", "typo-2")
+                ),
+            },
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        # All three errors present in one raise.
+        assert msg.count("Stage 'a' rung 0") == 1
+        assert "typo-1" in msg
+        assert "Stage 'b' rung 0" in msg
+        assert "text-model" in msg
+        assert "Stage 'b' rung 1" in msg
+        assert "typo-2" in msg
+
+    def test_rung_index_reflects_position(self) -> None:
+        cfg = LadderConfig(
+            stages={"demo": _stage(models=("vl-model", "vl-model", "typo-model"))},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        assert "Stage 'demo' rung 2" in str(exc_info.value)
+
+
+class TestProductionLaddersValidate:
+    """Live config vs live registry passes day-1 (TASK-2.4.23 acceptance #3)."""
+
+    def test_real_config_passes_validation(self) -> None:
+        config = load_ladder_config(Path("config"))
+        registry = load_registry(Path("config/external_services.yaml"))
+        # No exception = invariant holds for every annotated stage.
+        validate_ladders_against_registry(config, registry)
+
+    def test_annotated_stages_carry_expected_requires(self) -> None:
+        config = load_ladder_config(Path("config"))
+        # Spot-check the per-stage requires map from the TASK-23 spec.
+        assert config.get_stage("video_pass_1_vision").requires == [Capability.VISION]
+        assert config.get_stage("presentation_pass_1_vision").requires == [
+            Capability.VISION
+        ]
+        assert config.get_stage("safety_check").requires == [
+            Capability.STRUCTURED_OUTPUT
+        ]
+        # Pass 2c / example stages stay unconstrained.
+        assert config.get_stage("video_pass_2c_denoise").requires == []
+        assert config.get_stage("audio_pass_2c_denoise").requires == []
+        assert config.get_stage("example_stage").requires == []

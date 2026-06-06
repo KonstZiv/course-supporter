@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.config import Settings
 from course_supporter.llm.factory import create_providers
-from course_supporter.llm.registry import load_registry
+from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.llm.router import ModelRouter
 from course_supporter.service_logging import create_llm_log_callback
 
@@ -26,6 +26,7 @@ def create_model_router(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     *,
     max_attempts: int = 2,
+    registry: ModelRegistryConfig | None = None,
 ) -> ModelRouter:
     """Assemble ModelRouter with providers, registry, and optional DB logging.
 
@@ -33,11 +34,16 @@ def create_model_router(
         settings: Application settings with API keys and registry path.
         session_factory: If provided, calls are logged to external_service_calls table.
         max_attempts: Max retry attempts per model (default 2).
+        registry: Optional pre-loaded registry to share with StageRouter and
+            avoid a redundant YAML parse. When ``None`` (default), loads from
+            ``settings.external_services_path`` — backwards-compatible with
+            callers built before the StageRouter registry-sharing wiring.
 
     Returns:
         Configured ModelRouter ready for use.
     """
-    registry = load_registry(settings.external_services_path)
+    if registry is None:
+        registry = load_registry(settings.external_services_path)
     providers = create_providers(settings)
 
     log_callback = None

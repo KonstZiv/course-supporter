@@ -55,6 +55,7 @@ from course_supporter.security.schemas import SafetyResult, ViolationCategory
 from course_supporter.security.stage2 import run_stage2_safety_check
 from course_supporter.service_logging import job_scope, tenant_scope
 from course_supporter.storage.orm import ExternalServiceCall, Job
+from tests._helpers.registry import empty_registry
 
 pytestmark = pytest.mark.requires_db
 
@@ -170,6 +171,7 @@ def _build_router(
         config,
         providers,  # type: ignore[arg-type]
         session_factory=session_factory,
+        registry=empty_registry(),
     )
 
 

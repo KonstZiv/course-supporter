@@ -1,25 +1,18 @@
 """Seven pipeline gnízda (steps) of the canonical 7-step video flow.
 
-Each function is one gnízdo of ``PHASE-2-4.md`` §1. Krok 1-2 are real
-as of task 2.4.2 (ingestion via S3/yt-dlp + ffprobe; STT via ffmpeg
-audio extraction → ElevenLabs Scribe core); Krok 3-7 remain offline
-stubs returning mock §1 structures (tasks 2.4.3-2.4.7 fill them).
+Each function is one gnízdo of ``PHASE-2-4.md`` §1. Steps 1-4 are
+invoked from ``VideoProcessor.process_raw``; step 5 from
+``process_macro``; steps 6-7 from ``process_detail``.
 
 Data flows in-memory between steps (return values / arguments). The
-real STT carrier is *additionally* written to Redis by the processor
-(``video_stt_result:{job_id}``) for the future Pass 2a consumer — that
+STT carrier is *additionally* written to Redis by the processor
+(``video_stt_result:{job_id}``) for the Pass 2a consumer — that
 producer write lives in ``processor.py``, not here.
 
-Filling order (per ``PHASE-2-4.md`` §3): each task replaces one or two
-step bodies, leaving neighbours and the ``VideoProcessor`` orchestration
-untouched. Real steps raise
-:class:`~course_supporter.ingestion.base.UnsupportedFormatError`
+Steps raise :class:`~course_supporter.ingestion.base.UnsupportedFormatError`
 (constraint) or :class:`~course_supporter.ingestion.base.ProcessingError`
-(operational) per the per-task taxonomy (D3); the failure-injection seam
-is to patch any step (or ``media.*``) to raise (see the tests).
-
-Steps 1-4 are invoked from ``VideoProcessor.process_raw``; step 5 from
-``process_macro``; steps 6-7 from ``process_detail``.
+(operational); the failure-injection seam is to patch any step (or
+``media.*``) to raise (see the tests).
 """
 
 from __future__ import annotations

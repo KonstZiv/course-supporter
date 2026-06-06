@@ -289,8 +289,14 @@ class TestVideoStep5LanguageKwarg:
 
     @pytest.mark.asyncio
     async def test_pinned_language_resolves_to_english_display_name(self) -> None:
-        words = [SttWord(text="alpha", start_ms=0, end_ms=500)]
+        words = [
+            SttWord(text="alpha", start_ms=0, end_ms=500),
+            SttWord(text="beta", start_ms=600, end_ms=1100),
+            SttWord(text="gamma", start_ms=1200, end_ms=1800),
+        ]
         doc = _video_doc(words, language="ukr")
+        # 3 balanced segments so the Pass 2a balance gate (TASK-2.4.19)
+        # passes; this test only inspects the render_context language kwarg.
         router = _CapturingStageRouter(
             json.dumps(
                 {
@@ -298,15 +304,16 @@ class TestVideoStep5LanguageKwarg:
                     "description": "D.",
                     "segments": [
                         {
-                            "start_word_idx": 0,
-                            "end_word_idx": 1,
-                            "title": "Seg",
-                            "description": "Segment description.",
+                            "start_word_idx": i,
+                            "end_word_idx": i + 1,
+                            "title": f"Seg-{i}",
+                            "description": f"Segment {i} description.",
                             "main_concepts": [],
                             "secondary_concepts": [],
                             "noisy": False,
                             "subsegments": [],
                         }
+                        for i in range(3)
                     ],
                 }
             )
@@ -325,8 +332,14 @@ class TestVideoStep5LanguageKwarg:
 
     @pytest.mark.asyncio
     async def test_unset_language_forwards_none(self) -> None:
-        words = [SttWord(text="alpha", start_ms=0, end_ms=500)]
+        words = [
+            SttWord(text="alpha", start_ms=0, end_ms=500),
+            SttWord(text="beta", start_ms=600, end_ms=1100),
+            SttWord(text="gamma", start_ms=1200, end_ms=1800),
+        ]
         doc = _video_doc(words, language=None)
+        # 3 balanced segments so the Pass 2a balance gate (TASK-2.4.19)
+        # passes; this test only inspects the render_context language kwarg.
         router = _CapturingStageRouter(
             json.dumps(
                 {
@@ -334,15 +347,16 @@ class TestVideoStep5LanguageKwarg:
                     "description": "D.",
                     "segments": [
                         {
-                            "start_word_idx": 0,
-                            "end_word_idx": 1,
-                            "title": "Seg",
-                            "description": "Segment description.",
+                            "start_word_idx": i,
+                            "end_word_idx": i + 1,
+                            "title": f"Seg-{i}",
+                            "description": f"Segment {i} description.",
                             "main_concepts": [],
                             "secondary_concepts": [],
                             "noisy": False,
                             "subsegments": [],
                         }
+                        for i in range(3)
                     ],
                 }
             )

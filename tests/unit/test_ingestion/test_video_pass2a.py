@@ -69,23 +69,31 @@ def _video_doc(words: list[SttWord], visuals: list[tuple[int, str]]) -> SourceDo
 
 
 def _one_segment_json(render_context: dict[str, Any]) -> str:
-    """A valid AudioPass2aResult JSON covering the whole word stream."""
+    """A balanced AudioPass2aResult JSON covering the whole word stream.
+
+    Splits the word stream evenly across the available words so the
+    Pass 2a balance gate (TASK-2.4.19) passes — single-segment output
+    is rejected by the validator. Concepts and ``noisy`` are concentrated
+    on the first segment so existing aggregation assertions stay valid.
+    """
     n = render_context["words_count"]
+    boundaries = [round(i * n / 3) for i in range(4)]
     return json.dumps(
         {
             "title": "Theme",
             "description": "Doc-level description.",
             "segments": [
                 {
-                    "start_word_idx": 0,
-                    "end_word_idx": n,
-                    "title": "Seg",
-                    "description": "Segment description.",
-                    "main_concepts": ["concept-a"],
-                    "secondary_concepts": ["concept-b"],
-                    "noisy": True,
+                    "start_word_idx": boundaries[i],
+                    "end_word_idx": boundaries[i + 1],
+                    "title": f"Seg-{i}",
+                    "description": f"Segment {i} description.",
+                    "main_concepts": ["concept-a"] if i == 0 else [],
+                    "secondary_concepts": ["concept-b"] if i == 0 else [],
+                    "noisy": i == 0,
                     "subsegments": [],
                 }
+                for i in range(3)
             ],
         }
     )
@@ -211,14 +219,17 @@ class TestStep5:
             )
 
         assert isinstance(summary, DocumentSummaryDraft)
-        seg = summary.segments[0]
-        # bridge: word-idx [0, 3) → char offsets [0, len(assemble_text)].
-        assert seg.start_pos == 0
-        assert seg.end_pos == len(doc.assemble_text()) == 16  # "alpha beta gamma"
+        # Balanced 3-segment fixture: first segment starts at 0, last ends at
+        # end of the transcript — covers the word-idx → char-offset bridge.
+        first = summary.segments[0]
+        last = summary.segments[-1]
+        assert first.start_pos == 0
+        assert last.end_pos == len(doc.assemble_text()) == 16  # "alpha beta gamma"
         # timestamps adapted ms → sec (the single audio→video difference).
-        assert seg.start_time_sec == 0.0
-        assert seg.end_time_sec == 1.8
-        assert seg.noisy is True
+        assert first.start_time_sec == 0.0
+        assert last.end_time_sec == 1.8
+        # noisy concentrated on the first segment in the fixture.
+        assert first.noisy is True
         # concept union+dedup (secondary minus main).
         assert summary.main_concepts == ["concept-a"]
         assert summary.secondary_concepts == ["concept-b"]

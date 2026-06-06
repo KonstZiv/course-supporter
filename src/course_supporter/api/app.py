@@ -32,6 +32,7 @@ from course_supporter.config import settings
 from course_supporter.llm import create_model_router
 from course_supporter.llm.factory import create_providers
 from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.registry import load_registry
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
@@ -70,7 +71,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         environment=str(settings.environment),
         log_level=settings.log_level,
     )
-    app.state.model_router = create_model_router(settings, async_session)
+    # Load the model registry once and share it across both routers
+    # (TASK-2.4.22): ModelRouter consumes it for action-chain routing and
+    # cost; StageRouter consumes it for ESC cost_usd + max_tokens fallback
+    # on unpinned ladder rungs.
+    registry = load_registry(settings.external_services_path)
+    app.state.model_router = create_model_router(
+        settings, async_session, registry=registry
+    )
 
     # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
     # (option a, two-build); providers are stateless HTTP wrappers and a
@@ -80,6 +88,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.stage_router = StageRouter(
         ladder_config=ladder_config,
         providers=stage_router_providers,
+        registry=registry,
         session_factory=async_session,
     )
 

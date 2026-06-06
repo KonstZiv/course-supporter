@@ -31,6 +31,7 @@ from course_supporter.config import settings
 from course_supporter.llm.factory import create_providers
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.stage_router import StageRouter
+from tests._helpers.registry import empty_registry
 
 
 @pytest.mark.requires_db
@@ -60,6 +61,7 @@ class TestStageRouterFoundation:
         stage_router = StageRouter(
             ladder_config=ladder_config,
             providers=providers,
+            registry=empty_registry(),
         )
         assert isinstance(stage_router, StageRouter)
 
@@ -75,6 +77,7 @@ class TestStageRouterFoundation:
         sentinel_router = StageRouter(
             ladder_config=ladder_config,
             providers=providers,
+            registry=empty_registry(),
         )
 
         class _State:

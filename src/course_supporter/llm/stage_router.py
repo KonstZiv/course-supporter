@@ -58,6 +58,7 @@ from course_supporter.llm.error_categories import (
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
+from course_supporter.llm.registry import ModelRegistryConfig
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 from course_supporter.service_logging import _persist
 
@@ -111,6 +112,7 @@ class StageRouter:
         ladder_config: LadderConfig,
         providers: dict[str, LLMProvider],
         *,
+        registry: ModelRegistryConfig,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         prompt_base_path: Path | None = None,
         max_retries_infrastructure: int = 3,
@@ -118,6 +120,12 @@ class StageRouter:
     ) -> None:
         self._ladder_config = ladder_config
         self._providers = providers
+        # Registry is required (keyword-only, no default) so the
+        # invariant "StageRouter knows pricing + per-model token caps" is
+        # structural — a forgotten registry would silently revert
+        # cost_usd / max_tokens fallback to NULL / None (the bug TASK-2.4.22
+        # closes). Mirrors the legacy ModelRouter's required registry slot.
+        self._registry = registry
         self._session_factory = session_factory
         self._prompt_base_path = prompt_base_path
         self._max_retries_infra = max_retries_infrastructure
@@ -233,8 +241,8 @@ class StageRouter:
 
     # ── Private helpers ─────────────────────────────────────────
 
-    @staticmethod
     def _build_request(
+        self,
         prompt: StagePrompt,
         entry: LadderEntry,
         stage_name: str,
@@ -250,6 +258,17 @@ class StageRouter:
         configured value. ``None`` defaults preserve provider-side
         fallbacks (e.g. ``DashScopeProvider.default_max_output_tokens``).
         """
+        # H — max_tokens registry fallback. Rung pin wins (status quo);
+        # unpinned rung resolves the registry's per-model cap (closes the
+        # silent-truncation gap for single-string stages where a truncated
+        # ``response.content`` validates as any string — e.g.
+        # ``presentation_pass_1_vision`` Pass 1 had no rung pin pre-2.4.22).
+        # Model not in registry → ``None`` preserves the legacy provider-
+        # default (DashScopeProvider.default_max_output_tokens etc.).
+        registry_model = self._registry.models.get(entry.model)
+        registry_max_tokens = (
+            registry_model.max_output_tokens if registry_model else None
+        )
         return LLMRequest(
             prompt=prompt.user or "",
             system_prompt=prompt.system,
@@ -258,7 +277,7 @@ class StageRouter:
             strategy="default",
             contents=contents,
             reasoning=entry.reasoning,
-            max_tokens=entry.max_output_tokens,
+            max_tokens=entry.max_output_tokens or registry_max_tokens,
             expects_json=expects_json,
         )
 
@@ -406,6 +425,21 @@ class StageRouter:
                 # async-context violation, etc.) so the original LLM
                 # exception always wins propagation.
                 fallback_latency_ms = int((time.perf_counter() - start) * 1000)
+                # F(a) — compute cost_usd from registry pricing (providers
+                # do not set ``response.cost_usd``; pre-2.4.22 every ESC row
+                # carried NULL). Skip the lookup on failed calls (response
+                # None) and zero-token success (NULL is semantically right
+                # for "nothing billable"). Model not in registry → NULL
+                # (graceful — caller's responsibility to keep registry in
+                # sync). Mirrors legacy ``ModelRouter`` cost computation.
+                computed_cost: float | None = None
+                if response is not None and (response.tokens_in or response.tokens_out):
+                    cost_model = self._registry.models.get(entry.model)
+                    if cost_model is not None:
+                        computed_cost = cost_model.estimate_cost(
+                            response.tokens_in or 0,
+                            response.tokens_out or 0,
+                        )
                 try:
                     await _persist(
                         self._session_factory,
@@ -419,7 +453,7 @@ class StageRouter:
                         latency_ms=(
                             response.latency_ms if response else fallback_latency_ms
                         ),
-                        cost_usd=response.cost_usd if response else None,
+                        cost_usd=computed_cost,
                         success=response is not None,
                         error_message=error_message,
                     )

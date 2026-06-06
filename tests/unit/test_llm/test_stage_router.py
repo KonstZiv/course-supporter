@@ -24,6 +24,8 @@ from course_supporter.llm.prompt_loader_md import StagePrompt
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageResult, StageRouter
+from tests._helpers.registry import empty_registry as _registry
+from tests._helpers.registry import registry_with as _registry_with
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -160,7 +162,7 @@ class TestHappyPath:
     ) -> None:
         _mock_load_prompt(monkeypatch)
         provider = _ok_provider("hello world")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         result = await router.execute_for_stage("demo")
 
@@ -187,6 +189,7 @@ class TestHappyPath:
         router = StageRouter(
             config,
             {"anthropic": bad, "gemini": good},
+            registry=_registry(),
         )
         result = await router.execute_for_stage("demo")
 
@@ -211,7 +214,7 @@ class TestInfrastructureFallback:
 
         provider.classify_error = lambda _exc: ErrorCategory.INFRASTRUCTURE  # type: ignore[method-assign]
 
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
         result = await router.execute_for_stage("demo")
 
         assert result.content == "recovered"
@@ -247,6 +250,7 @@ class TestInfrastructureFallback:
             _config(),
             {"anthropic": provider},
             max_retries_infrastructure=max_retries,
+            registry=_registry(),
         )
 
         with pytest.raises(LadderExhaustedError) as exc_info:
@@ -273,6 +277,7 @@ class TestInfrastructureFallback:
             _config(),
             {"anthropic": provider},
             max_retries_infrastructure=3,
+            registry=_registry(),
         )
 
         with pytest.raises(LadderExhaustedError):
@@ -296,7 +301,7 @@ class TestStructuralRetry:
                 _ok_response("retry succeeded"),
             ],
         )
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         result = await router.execute_for_stage("demo")
 
@@ -327,6 +332,7 @@ class TestStructuralRetry:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": bad, "gemini": good},
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -349,7 +355,7 @@ class TestStructuralRetry:
                 _ok_response("ok"),
             ],
         )
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         result = await router.execute_for_stage("demo")
         assert result.attempt_count == 2  # original + structural retry
@@ -368,6 +374,7 @@ class TestSemanticFallback:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": bad, "gemini": good},
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -392,6 +399,7 @@ class TestSemanticFallback:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": empty_provider, "gemini": good},
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -415,6 +423,7 @@ class TestInputOverflowFallback:
         router = StageRouter(
             _config(entries=(("openai", "gpt-4"), ("gemini", "g-x"))),
             {"openai": bad, "gemini": good},
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -437,6 +446,7 @@ class TestLadderExhaustion:
         router = StageRouter(
             _config(entries=(("anthropic", "a-1"), ("gemini", "g-1"))),
             {"anthropic": bad_a, "gemini": bad_b},
+            registry=_registry(),
         )
 
         with pytest.raises(LadderExhaustedError) as exc_info:
@@ -463,6 +473,7 @@ class TestLadderExhaustion:
         router = StageRouter(
             _config(entries=(("openai", "gpt-4"), ("anthropic", "claude-x"))),
             {"openai": overflow, "anthropic": semantic},
+            registry=_registry(),
         )
 
         with pytest.raises(LadderExhaustedError) as exc_info:
@@ -488,6 +499,7 @@ class TestESCPersistence:
             _config(entries=(("anthropic", "a-x"), ("gemini", "g-x"))),
             {"anthropic": bad, "gemini": good},
             session_factory=AsyncMock(),  # truthy stand-in
+            registry=_registry(),
         )
 
         await router.execute_for_stage("demo")
@@ -513,7 +525,7 @@ class TestESCPersistence:
         calls = _capture_persist_calls(monkeypatch)
 
         provider = _ok_provider("ok")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo")
 
@@ -533,6 +545,7 @@ class TestProviderUnavailable:
         router = StageRouter(
             _config(entries=(("absent", "x"), ("gemini", "g-x"))),
             {"gemini": good},  # "absent" not registered
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -552,6 +565,7 @@ class TestProviderUnavailable:
         router = StageRouter(
             _config(entries=(("anthropic", "a-x"), ("gemini", "g-x"))),
             {"anthropic": disabled, "gemini": good},
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -577,7 +591,7 @@ class TestRenderContextFlow:
         )
 
         provider = _ok_provider("ok")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo", lang="ua", topic="recursion")
 
@@ -596,7 +610,7 @@ class TestStageNameUnknown:
     ) -> None:
         _mock_load_prompt(monkeypatch)
         provider = _ok_provider()
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         with pytest.raises(KeyError, match="Unknown stage"):
             await router.execute_for_stage("nope")
@@ -642,6 +656,7 @@ class TestPersistFailureDoesNotMask:
             _config(),  # single-entry ladder -- no fallback safety net
             {"anthropic": provider},
             session_factory=AsyncMock(),  # truthy; persist will be invoked
+            registry=_registry(),
         )
 
         result = await router.execute_for_stage("demo")
@@ -666,7 +681,7 @@ class TestResponseValidator:
         _capture_sleeps(monkeypatch)
 
         provider = _ok_provider("legacy answer")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         result = await router.execute_for_stage("demo")
 
@@ -683,7 +698,7 @@ class TestResponseValidator:
         _capture_sleeps(monkeypatch)
 
         provider = _ok_provider("good content")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         seen: list[str] = []
 
@@ -715,7 +730,7 @@ class TestResponseValidator:
         )
         provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
 
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         call_count = {"n": 0}
 
@@ -760,6 +775,7 @@ class TestResponseValidator:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": bad, "gemini": good},
+            registry=_registry(),
         )
 
         bad_contents = {"bad-1", "bad-2"}
@@ -802,6 +818,7 @@ class TestResponseValidator:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": bad_a, "gemini": bad_b},
+            registry=_registry(),
         )
 
         def _always_fail(content: str) -> None:
@@ -838,6 +855,7 @@ class TestResponseValidator:
         router = StageRouter(
             _config(entries=(("anthropic", "claude-x"), ("gemini", "g-x"))),
             {"anthropic": empty_provider, "gemini": good},
+            registry=_registry(),
         )
 
         observed: list[str] = []
@@ -865,7 +883,7 @@ class TestExecuteForStageContents:
     ) -> None:
         _mock_load_prompt(monkeypatch)
         provider = _ok_provider("ok")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
         await router.execute_for_stage("demo", contents=[png])
@@ -881,7 +899,7 @@ class TestExecuteForStageContents:
         # must continue producing requests with ``contents is None``.
         _mock_load_prompt(monkeypatch)
         provider = _ok_provider("ok")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo")
 
@@ -913,7 +931,7 @@ class TestLadderEntryOverridesPropagation:
                 ),
             }
         )
-        router = StageRouter(config, {"anthropic": provider})
+        router = StageRouter(config, {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo")
 
@@ -941,7 +959,7 @@ class TestLadderEntryOverridesPropagation:
                 ),
             }
         )
-        router = StageRouter(config, {"anthropic": provider})
+        router = StageRouter(config, {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo")
 
@@ -957,10 +975,237 @@ class TestLadderEntryOverridesPropagation:
         # is None so the provider uses its class-level default.
         _mock_load_prompt(monkeypatch)
         provider = _ok_provider("ok")
-        router = StageRouter(_config(), {"anthropic": provider})
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
 
         await router.execute_for_stage("demo")
 
         request = provider.complete.await_args.args[0]
         assert request.reasoning is None
+        assert request.max_tokens is None
+
+
+# ── TASK-2.4.22: registry-aware StageRouter ────────────────────────
+
+
+class TestRegistryAwareCost:
+    """F(a) — StageRouter computes cost_usd from registry pricing."""
+
+    async def test_cost_populated_from_registry_on_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = _ok_provider("ok")
+        # _ok_response sets tokens_in=10, tokens_out=20 →
+        # 10 * 0.001 / 1000 + 20 * 0.002 / 1000 = 0.00001 + 0.00004 = 0.00005
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(cost_per_1k_in=0.001, cost_per_1k_out=0.002),
+            session_factory=AsyncMock(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert len(calls) == 1
+        assert calls[0]["success"] is True
+        assert calls[0]["cost_usd"] == pytest.approx(0.00005)
+
+    async def test_cost_null_when_model_not_in_registry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = _ok_provider("ok")
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry(),  # empty registry — model unknown
+            session_factory=AsyncMock(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert len(calls) == 1
+        assert calls[0]["success"] is True
+        assert calls[0]["cost_usd"] is None
+
+    async def test_cost_null_when_zero_tokens(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = AsyncMock(spec=LLMProvider)
+        provider.enabled = True
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="ok",
+                provider="anthropic",
+                model_id="claude-x",
+                tokens_in=0,
+                tokens_out=0,
+                latency_ms=10,
+                cost_usd=None,
+            )
+        )
+        provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},  # type: ignore[dict-item]
+            registry=_registry_with(cost_per_1k_in=0.001, cost_per_1k_out=0.002),
+            session_factory=AsyncMock(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert len(calls) == 1
+        assert calls[0]["success"] is True
+        assert calls[0]["cost_usd"] is None
+
+    async def test_cost_null_on_failed_call(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = _failing_provider(side_effects=[_semantic_exception()])
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(cost_per_1k_in=0.001, cost_per_1k_out=0.002),
+            session_factory=AsyncMock(),
+        )
+
+        with pytest.raises(LadderExhaustedError):
+            await router.execute_for_stage("demo")
+
+        assert len(calls) == 1
+        assert calls[0]["success"] is False
+        assert calls[0]["cost_usd"] is None
+
+    async def test_cost_zero_for_unpriced_model(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Model in registry with 0.0 pricing → cost_usd=0.0 (not NULL).
+
+        Mirrors legacy ModelRouter behaviour; semantically the model is
+        either free or pricing is unset in YAML — caller's responsibility
+        to keep registry accurate (DD-2.4-F audit script territory).
+        """
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = _ok_provider("ok")
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(cost_per_1k_in=0.0, cost_per_1k_out=0.0),
+            session_factory=AsyncMock(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert len(calls) == 1
+        assert calls[0]["cost_usd"] == 0.0
+
+
+class TestRegistryAwareMaxTokens:
+    """H — _build_request resolves max_tokens from registry on unpinned rungs."""
+
+    async def test_rung_pin_wins_over_registry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+
+        provider = _ok_provider("ok")
+        config = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/example/v1.md",
+                    ladder=[
+                        LadderEntry(
+                            provider="anthropic",
+                            model="claude-x",
+                            max_output_tokens=999,  # rung pin
+                        )
+                    ],
+                )
+            }
+        )
+        router = StageRouter(
+            config,
+            {"anthropic": provider},
+            registry=_registry_with(max_output_tokens=4096),
+        )
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.max_tokens == 999  # rung wins
+
+    async def test_unpinned_rung_resolves_registry_max_tokens(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+
+        provider = _ok_provider("ok")
+        router = StageRouter(
+            _config(),  # rung has no max_output_tokens
+            {"anthropic": provider},
+            registry=_registry_with(max_output_tokens=8192),
+        )
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.max_tokens == 8192
+
+    async def test_unpinned_rung_with_unknown_model_returns_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Status-quo provider-default path when model not in registry."""
+        _mock_load_prompt(monkeypatch)
+
+        provider = _ok_provider("ok")
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry(),  # empty registry — model unknown
+        )
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
+        assert request.max_tokens is None
+
+    async def test_unpinned_rung_with_registry_model_without_cap_returns_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Registry has the model but its max_output_tokens is None."""
+        _mock_load_prompt(monkeypatch)
+
+        provider = _ok_provider("ok")
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(max_output_tokens=None),
+        )
+
+        await router.execute_for_stage("demo")
+
+        request = provider.complete.await_args.args[0]
         assert request.max_tokens is None

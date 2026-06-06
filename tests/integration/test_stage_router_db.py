@@ -39,6 +39,7 @@ from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.service_logging import job_scope, tenant_scope
 from course_supporter.storage.orm import ExternalServiceCall, Job
+from tests._helpers.registry import empty_registry, registry_with
 
 pytestmark = pytest.mark.requires_db
 
@@ -204,6 +205,15 @@ class TestStageRouterDB:
             config,
             {"anthropic": provider},
             session_factory=session_factory,
+            # TASK-2.4.22: F(a) computes cost_usd from registry pricing
+            # (providers no longer carry it). The mocked response has
+            # tokens_in=12, tokens_out=34; with the rates below the
+            # expected cost is 12*0.1/1000 + 34*0.2/1000 = 0.008.
+            registry=registry_with(
+                model_id="claude-x",
+                cost_per_1k_in=0.1,
+                cost_per_1k_out=0.2,
+            ),
         )
 
         with (
@@ -233,10 +243,11 @@ class TestStageRouterDB:
         assert second.strategy == "default"
         assert second.success is True
         assert second.error_message is None
-        # Successful call carries token / cost telemetry from the response.
+        # Successful call carries token / cost telemetry. Cost is computed
+        # from the registry pricing above (F(a)), not from the response.
         assert second.unit_in == 12
         assert second.unit_out == 34
-        assert second.cost_usd == pytest.approx(0.0123)
+        assert second.cost_usd == pytest.approx(0.008)
 
     async def test_full_ladder_exhaustion(
         self,
@@ -269,6 +280,7 @@ class TestStageRouterDB:
             config,
             {"anthropic": bad_a, "gemini": bad_b},
             session_factory=session_factory,
+            registry=empty_registry(),
         )
 
         with (
@@ -328,6 +340,7 @@ class TestStageRouterDB:
             config,
             {"anthropic": empty_provider, "gemini": good_provider},
             session_factory=session_factory,
+            registry=empty_registry(),
         )
 
         with (

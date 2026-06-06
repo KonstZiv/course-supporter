@@ -40,6 +40,7 @@ async def startup(ctx: WorkerCtx) -> None:
     from course_supporter.llm import create_model_router
     from course_supporter.llm.factory import create_providers
     from course_supporter.llm.ladder_config import load_ladder_config
+    from course_supporter.llm.registry import load_registry
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.s3 import S3Client
 
@@ -59,7 +60,12 @@ async def startup(ctx: WorkerCtx) -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    model_router = create_model_router(s, session_factory)
+    # Load the model registry once and share it across both routers
+    # (TASK-2.4.22): ModelRouter consumes it for action-chain routing and
+    # cost; StageRouter consumes it for ESC cost_usd + max_tokens fallback
+    # on unpinned ladder rungs.
+    registry = load_registry(s.external_services_path)
+    model_router = create_model_router(s, session_factory, registry=registry)
 
     # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
     # (option a, two-build); mirrors the FastAPI lifespan wiring in
@@ -71,6 +77,7 @@ async def startup(ctx: WorkerCtx) -> None:
     stage_router = StageRouter(
         ladder_config=ladder_config,
         providers=stage_router_providers,
+        registry=registry,
         session_factory=session_factory,
     )
 

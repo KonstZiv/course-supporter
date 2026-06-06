@@ -16,11 +16,6 @@ from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
 )
-from course_supporter.language import (
-    InvalidLanguageError,
-    LanguageNotAllowedError,
-    normalize_and_validate,
-)
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
     set_job_from_arq,
@@ -171,8 +166,6 @@ async def arq_ingest_material(
     )
     s3: S3Client | None = ctx.get("s3_client")
 
-    detected_language: str | None = None
-
     async with session_factory() as session:
         job_repo = JobRepository(session)
         entry_repo = AuthoredDocumentRepository(session)
@@ -184,8 +177,10 @@ async def arq_ingest_material(
             return
 
         # Resolve effective language: entry override → course default → None.
-        # When None, STT will auto-detect and return detected_language which
-        # we persist back to the entry after successful ingestion.
+        # Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
+        # the root always has ``default_language``, so inheritance fires before
+        # STT runs and the entry is persisted with the root's language; STT
+        # auto-detect is observational only (no cache-back since 2.4.21).
         if entry.language is None:
             root = await node_repo.get_root_for(entry.course_node_id)
             if root is not None and root.default_language:
@@ -346,7 +341,6 @@ async def arq_ingest_material(
             # ── /Pass 2b ──
 
             content = doc.model_dump_json()
-            detected_language = doc.metadata.get("detected_language")
 
         except SecurityRejectedError as exc:
             # Stage 2 reject branch (KD-2.1-P, Phase 2.1 C6). The
@@ -376,35 +370,6 @@ async def arq_ingest_material(
             )
             log.error("ingestion_failed", error=str(exc))
             return
-
-    # Cache auto-detected language back to the entry for future STT calls.
-    # Uses an atomic UPDATE ... WHERE language IS NULL to avoid a race
-    # where a concurrent PATCH may set language between our check and write.
-    #
-    # STT output is a black-box external signal — a provider may return a
-    # code outside the project whitelist (Task 2.4.13). Normalize through
-    # the helper; if it cannot be resolved or is not allowed, warn-log and
-    # skip the cache write (do NOT fail ingestion — language authority is
-    # the course root, not STT auto-detect).
-    if detected_language:
-        try:
-            normalized = normalize_and_validate(detected_language)
-        except (InvalidLanguageError, LanguageNotAllowedError) as exc:
-            log.warning(
-                "language_auto_detect_skipped",
-                raw=detected_language,
-                reason=str(exc),
-            )
-        else:
-            async with session_factory() as session:
-                entry_repo = AuthoredDocumentRepository(session)
-                updated = await entry_repo.set_language_if_unset(mid, normalized)
-                await session.commit()
-                if updated:
-                    log.info(
-                        "language_auto_detected_cached",
-                        language=normalized,
-                    )
 
     await callback.on_success(
         job_id=jid,

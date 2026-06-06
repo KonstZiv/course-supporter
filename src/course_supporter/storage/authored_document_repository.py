@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.source import AssignmentType, MaterialRole
@@ -227,33 +227,6 @@ class AuthoredDocumentRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalars().first()
-
-    async def set_language_if_unset(
-        self,
-        entry_id: uuid.UUID,
-        language: str,
-    ) -> bool:
-        """Atomically set ``language`` only if it is currently NULL.
-
-        Guards against races where a concurrent PATCH may set the
-        language between our read and write. Returns True if the row
-        was updated, False if it was skipped because the language
-        was already set (or the row does not exist).
-        """
-        stmt = (
-            update(AuthoredDocument)
-            .where(
-                AuthoredDocument.id == entry_id,
-                AuthoredDocument.language.is_(None),
-            )
-            .values(language=language)
-            .execution_options(synchronize_session=False)
-        )
-        result = await self._session.execute(stmt)
-        # ``rowcount`` is provided by CursorResult (actual runtime type
-        # for DML execute); SQLAlchemy's static return type is the wider
-        # ``Result`` which does not expose it — hence the ignore.
-        return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     async def set_pending(
         self,

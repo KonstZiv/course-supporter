@@ -1,12 +1,10 @@
 """Language allowlist, normalization, and validation (Task 2.4.13).
 
-Single point of language logic for the backend. Three consumers today:
+Single point of language logic for the backend. Two consumers today:
 
 * ``api.schemas`` — Pydantic field validators on ``RootNodeCreateRequest``
   and ``NodeUpdateRequest`` accept any standard description (639-1,
   639-3, or English name) and normalize to canonical 639-3.
-* ``api.tasks`` (STT auto-detect cache) — wraps ``detected_language``
-  before persisting via ``AuthoredDocumentRepository.set_language_if_unset``.
 * ``api.routes.config`` — ``GET /api/v1/config/languages`` returns the
   allowed set enriched with English names (and native names where
   ``iso639`` exposes them) for the UI selector.

@@ -208,10 +208,9 @@ class TestArqIngestMaterialE2E:
         test now locks the inheritance-dominates invariant from task
         2.4.13 рішення 1.
 
-        The orchestrator still calls ``set_language_if_unset`` and
-        still reads ``detected_language`` — that code path is
-        vestigial post-2.4.13 (DD-2.4-N) and is left for a separate
-        cleanup task; this hotfix is tests-only.
+        Task 2.4.21 removed the cache-back path entirely (DD-2.4-N
+        closure): the 2.4.13 inheritance invariant is now the sole
+        guarantee that the entry persists with the root's language.
         """
         mid = committed_seeds["material_id"]
         tid = committed_seeds["tenant_id"]

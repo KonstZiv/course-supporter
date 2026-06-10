@@ -48,10 +48,17 @@ class TestCourseNodeModel:
         assert isinstance(pk, uuid.UUID)
         assert pk.version == 7
 
-    def test_content_hash_nullable(self) -> None:
-        """content_hash is nullable (lazy cached)."""
+    def test_content_hash_not_null_with_empty_default(self) -> None:
+        """``content_hash`` is NOT NULL + ``server_default`` = empty-hash.
+
+        Phase 3.1 commit 4 closed the KD9 NULL-at-INSERT regression
+        (vision §3 KD9 "Спостереження Phase 1"). The column carries a
+        defined empty-hash at INSERT — an empty CourseNode never has
+        ``content_hash IS NULL`` at any point in its lifecycle.
+        """
         col = CourseNode.__table__.c.content_hash
-        assert col.nullable is True
+        assert col.nullable is False
+        assert col.server_default is not None
 
     def test_title_max_length(self) -> None:
         """Title column accepts up to 500 chars."""

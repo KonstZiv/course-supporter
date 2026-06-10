@@ -152,11 +152,15 @@ class TestInvalidateUpPersistsHashes:
         section = await _make_section(db_session, entry.id)
         segment = await _make_segment(db_session, section.id, content="hello")
 
-        # All hashes are NULL initially (no backfill in 0.2).
+        # Phase 3.1 commit 4 closed the KD9 NULL-at-INSERT regression
+        # for CourseNode (now carries a server_default empty-hash) —
+        # the three levels below CourseNode still start NULL pending
+        # invalidate_up rewrite per Phase 1.3+ targets.
         assert segment.content_hash is None
         assert section.content_hash is None
         assert entry.content_hash is None
-        assert node.content_hash is None
+        assert node.content_hash is not None
+        node_hash_before = node.content_hash
 
         await ContentHashService(db_session).invalidate_up(segment)
 
@@ -169,6 +173,12 @@ class TestInvalidateUpPersistsHashes:
         assert section.content_hash is not None
         assert entry.content_hash is not None
         assert node.content_hash is not None
+        # The CourseNode hash must NOT still be the empty-hash default
+        # after a content-bearing AuthoredDocument joined its subtree —
+        # ``invalidate_up`` is supposed to recompute it from the new
+        # children. Equality with ``node_hash_before`` would mean the
+        # walker silently stopped one level short.
+        assert node.content_hash != node_hash_before
         # All 64-char lowercase hex.
         for h in (
             segment.content_hash,

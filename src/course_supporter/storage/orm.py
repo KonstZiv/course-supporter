@@ -261,11 +261,22 @@ class CourseNode(SoftDeleteMixin, Base):
         "sorted last by created_at. Sort: ORDER BY order ASC NULLS LAST, "
         "created_at ASC.",
     )
+    # Python type is ``str | None`` for compatibility with the
+    # ``HashableEntity`` Protocol invariance (the Protocol declares
+    # ``content_hash: str | None`` and all sibling hash-bearing models
+    # use the same nullable Python type). DB layer is ``NOT NULL +
+    # server_default`` so a runtime NULL is impossible — Phase 3.1 Q-G.
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=False,
+        server_default=text(
+            "'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'"
+        ),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
-        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
-        "per-entity formula wired in Phase 2/3.",
+        "server_default = EMPTY_NODE_CONTENT_HASH (= compute_content_hash(b'', [])). "
+        "Phase 3.1 commit 4 fixed the KD9 NULL-at-INSERT regression: "
+        "empty CourseNodes now carry a defined empty-hash, not NULL. "
+        "Recomputed at INSERT/UPDATE via ContentHashService.invalidate_up.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -1214,11 +1225,18 @@ class NodeSummaryRaw(SoftDeleteMixin, Base):
     )
 
     # ─── Hash axes ───────────────────────────────
+    # Python type ``str | None`` for HashableEntity Protocol compat;
+    # DB-level NOT NULL + server_default makes runtime NULL impossible.
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=False,
+        server_default=text(
+            "'bcaf467defc6a11d9f437368b2388f310b8538fc2fe21621587f69175766cadd'"
+        ),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex) — "
         "SHA256 over all content fields EXCEPT enclosing_context. "
-        "server_default + NOT NULL wired in task 3.1 commit 4.",
+        "server_default = EMPTY_NODE_SUMMARY_RAW_CONTENT_HASH (rule "
+        "«визначений хеш, ніколи NULL» — Phase 3.1 Q-G).",
     )
     enclosing_context_source_hash: Mapped[str | None] = mapped_column(
         String(64),
@@ -1349,11 +1367,18 @@ class NodeSummaryFinal(SoftDeleteMixin, Base):
     )
 
     # ─── Hash axis ───────────────────────────────
+    # Python type ``str | None`` for HashableEntity Protocol compat;
+    # DB-level NOT NULL + server_default makes runtime NULL impossible.
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=False,
+        server_default=text(
+            "'85ef8d5f3881ffae484d1c1b47d18c0984b19c03bc9dd44e6fc1010e9fcdbf03'"
+        ),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex) — "
         "SHA256 over all content fields EXCEPT enclosing_context. "
-        "server_default + NOT NULL wired in task 3.1 commit 4.",
+        "server_default = EMPTY_NODE_SUMMARY_FINAL_CONTENT_HASH (rule "
+        "«визначений хеш, ніколи NULL» — Phase 3.1 Q-G).",
     )
 
     # ─── Approval pair (read as two dates per KD11) ──────────

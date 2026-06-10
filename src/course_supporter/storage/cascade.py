@@ -253,6 +253,88 @@ async def scrub_authored_document(document: Any) -> None:
     document.source_url = marker
 
 
+async def scrub_node_summary_raw(summary: Any) -> None:
+    """KD3 scrub: clear NodeSummaryRaw author-content fields on soft-delete.
+
+    Per vision §3 KD3 + Phase 3.1 Q-D ratify, all author-meaningful
+    content fields are emptied: top-level string fields receive the
+    formatted marker (:func:`_format_deleted_marker`); list fields
+    (concept sets, learning items, methodist observations) reset to
+    ``[]`` rather than carrying synthetic marker elements.
+
+    Excluded (not author content): ``content_hash``,
+    ``enclosing_context_source_hash`` (top-down memoization key —
+    Phase 3.2), size metrics, FK, timestamps.
+
+    Wired as the class-level ``__scrub_callable__`` on
+    ``NodeSummaryRaw``; fires on every Raw descendant in a cascade
+    (e.g. ``CourseNode`` soft-delete cascading to its Raw).
+    """
+    marker = _format_deleted_marker()
+    summary.title = marker
+    summary.description = marker
+    summary.assessment_approach = marker
+    summary.teaching_approach = marker
+    summary.compressed_summary = marker
+    summary.enclosing_context = marker
+    summary.learning_objectives = []
+    summary.knowledge = []
+    summary.skills = []
+    summary.success_criteria = []
+    summary.key_activities = []
+    summary.common_mistakes = []
+    summary.main_concepts = []
+    summary.secondary_concepts = []
+    summary.methodist_observations = []
+
+
+async def scrub_node_summary_final(summary: Any) -> None:
+    """KD3 scrub: clear NodeSummaryFinal author-content fields on soft-delete.
+
+    Mirrors :func:`scrub_node_summary_raw` for the Final shape: same
+    Q-D ratify (markers for str, ``[]`` for lists). ``manual_description``
+    receives the marker — it is author-provided content for empty-leaf
+    authoring. ``is_manual`` is NOT scrubbed (author-state flag, not
+    content). ``approved_at`` and ``enclosing_context_updated_at`` are
+    timestamps, not author content — excluded.
+
+    Wired as the class-level ``__scrub_callable__`` on
+    ``NodeSummaryFinal``.
+    """
+    marker = _format_deleted_marker()
+    summary.title = marker
+    summary.description = marker
+    summary.assessment_approach = marker
+    summary.teaching_approach = marker
+    summary.enclosing_context = marker
+    summary.manual_description = marker
+    summary.learning_objectives = []
+    summary.knowledge = []
+    summary.skills = []
+    summary.success_criteria = []
+    summary.key_activities = []
+    summary.common_mistakes = []
+    summary.main_concepts = []
+    summary.secondary_concepts = []
+
+
+async def scrub_node_summary_final_previous_snapshot(snapshot: Any) -> None:
+    """KD3 scrub: clear PreviousSnapshot JSONB on soft-delete.
+
+    The ``snapshot`` JSONB column is a bitwise copy of a prior Final
+    version's content fields. Per Phase 3.1 Q-B ratify (vision-side
+    fix to the KD3 scrub table — PreviousSnapshot row was previously
+    missing), the cascade soft-delete path resets it to ``{}``
+    rather than the marker string (the column is a structured
+    payload, not text — emitting a marker would invalidate the
+    document shape).
+
+    Wired as the class-level ``__scrub_callable__`` on
+    ``NodeSummaryFinalPreviousSnapshot``.
+    """
+    snapshot.snapshot = {}
+
+
 def build_cascade_map(root: type) -> dict[type, list[type]]:
     """Build a cascade_map from ``__cascades_soft_delete_to__`` declarations.
 

@@ -28,6 +28,9 @@ from course_supporter.storage.cascade import (
     ScrubCallable,
     scrub_authored_document,
     scrub_course_node,
+    scrub_node_summary_final,
+    scrub_node_summary_final_previous_snapshot,
+    scrub_node_summary_raw,
 )
 
 
@@ -1439,9 +1442,19 @@ class NodeSummaryFinalPreviousSnapshot(SoftDeleteMixin, Base):
 # Wiring per Phase 1 PHASE.md §1.2 cascade declaration audit. Self-
 # reference on CourseNode supports recursive course-tree traversal.
 Tenant.__cascades_soft_delete_to__ = [APIKey, CourseNode, Student, HomeworkSubmission]
-CourseNode.__cascades_soft_delete_to__ = [CourseNode, AuthoredDocument]
+CourseNode.__cascades_soft_delete_to__ = [
+    CourseNode,
+    AuthoredDocument,
+    NodeSummaryRaw,
+    NodeSummaryFinal,
+]
 AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary]
 DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
+# Phase 3.1 Q-C ratify (Option A — two-level): PreviousSnapshot cascades
+# from its parent NodeSummaryFinal, mirroring the AuthoredDocument →
+# DocumentSummary → DocumentSegment two-level pattern. This preserves
+# the 1:1 Final↔PreviousSnapshot invariant on the cascade path.
+NodeSummaryFinal.__cascades_soft_delete_to__ = [NodeSummaryFinalPreviousSnapshot]
 Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
 
 
@@ -1459,3 +1472,8 @@ Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
 # tables stay empty, cascade traversal through them is no-op.
 CourseNode.__scrub_callable__ = scrub_course_node
 AuthoredDocument.__scrub_callable__ = scrub_authored_document
+NodeSummaryRaw.__scrub_callable__ = scrub_node_summary_raw
+NodeSummaryFinal.__scrub_callable__ = scrub_node_summary_final
+NodeSummaryFinalPreviousSnapshot.__scrub_callable__ = (
+    scrub_node_summary_final_previous_snapshot
+)

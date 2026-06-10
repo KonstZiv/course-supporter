@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 import uuid_utils as uuid7_lib
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -27,6 +28,9 @@ from course_supporter.storage.cascade import (
     ScrubCallable,
     scrub_authored_document,
     scrub_course_node,
+    scrub_node_summary_final,
+    scrub_node_summary_final_previous_snapshot,
+    scrub_node_summary_raw,
 )
 
 
@@ -257,11 +261,22 @@ class CourseNode(SoftDeleteMixin, Base):
         "sorted last by created_at. Sort: ORDER BY order ASC NULLS LAST, "
         "created_at ASC.",
     )
+    # Python type is ``str | None`` for compatibility with the
+    # ``HashableEntity`` Protocol invariance (the Protocol declares
+    # ``content_hash: str | None`` and all sibling hash-bearing models
+    # use the same nullable Python type). DB layer is ``NOT NULL +
+    # server_default`` so a runtime NULL is impossible — Phase 3.1 Q-G.
     content_hash: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=False,
+        server_default=text(
+            "'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'"
+        ),
         comment="Materialised content_hash (vision §3 KD9, SHA-256 hex). "
-        "NULL = never computed / stale. Populated at INSERT/UPDATE; "
-        "per-entity formula wired in Phase 2/3.",
+        "server_default = EMPTY_NODE_CONTENT_HASH (= compute_content_hash(b'', [])). "
+        "Phase 3.1 commit 4 fixed the KD9 NULL-at-INSERT regression: "
+        "empty CourseNodes now carry a defined empty-hash, not NULL. "
+        "Recomputed at INSERT/UPDATE via ContentHashService.invalidate_up.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -1073,6 +1088,377 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
 
 
 # ──────────────────────────────────────────────
+# Methodist layer — NodeSummary models (vision §2.2, KD6, KD9, KD10, KD11, KD12)
+# ──────────────────────────────────────────────
+
+
+class NodeSummaryRaw(SoftDeleteMixin, Base):
+    """System-generated methodist summary of a CourseNode (vision §3 KD10).
+
+    1:1 with CourseNode (UNIQUE on course_node_id). Produced by the
+    two-pass methodist pipeline: bottom-up generates all canonical
+    fields + compressed_summary; top-down generates enclosing_context
+    + appends methodist_observations. Per vision rule "є вузол, є Raw"
+    (v0.20.x) a Raw row exists for every CourseNode, including empty
+    leaves — emptiness is null-valued content fields, NOT row absence.
+
+    Per KD9 the ``content_hash`` covers all content fields EXCEPT
+    ``enclosing_context`` (which depends on ancestors, not on own
+    content). Per probe-resolved Phase 3 pre-review the second axis
+    of memoization for top-down — ``enclosing_context_source_hash``
+    (hash of parent enclosing_context) — lives on Raw only; the
+    walker service that maintains it lands in Phase 3.2.
+    """
+
+    __tablename__ = "node_summaries_raw"
+    __table_args__ = (
+        Index(
+            "ix_node_summaries_raw_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "System-generated methodist summary (vision §3 KD10) — "
+                "1:1 with CourseNode; rule «є вузол, є Raw» (v0.20.x)"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        comment="FK to CourseNode (UNIQUE — 1:1 invariant per KD10 «є вузол, є Raw»)",
+    )
+
+    # ─── Identity (KD3 scrub targets — str) ──────
+    title: Mapped[str | None] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+
+    # ─── Learning outcomes ───────────────────────
+    learning_objectives: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="Bloom-taxonomy outcome statements (3-7; overflow → observations)",
+    )
+    knowledge: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="LearningOutcomeItem[]: {name, description} — what student WILL KNOW",
+    )
+    skills: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="LearningOutcomeItem[]: {name, description} — what student WILL DO",
+    )
+
+    # ─── Assessment ──────────────────────────────
+    success_criteria: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    assessment_approach: Mapped[str | None] = mapped_column(Text)
+
+    # ─── Methodology ─────────────────────────────
+    teaching_approach: Mapped[str | None] = mapped_column(Text)
+    key_activities: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    common_mistakes: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="EXPLICIT-only (per KD10) — items mentioned in source documents",
+    )
+
+    # ─── Concepts (navigation) ───────────────────
+    main_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    secondary_concepts: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+
+    # ─── Cross-level context ─────────────────────
+    compressed_summary: Mapped[str | None] = mapped_column(
+        Text,
+        comment="1-2k tokens, KD10 bottom-up output — passed to parent on next walk",
+    )
+    enclosing_context: Mapped[str | None] = mapped_column(
+        Text,
+        comment="1-2k tokens, KD10 top-down output — NOT included in content_hash "
+        "(depends on ancestors, not own content); NULL on root (top-down skipped)",
+    )
+
+    # ─── Raw-only ────────────────────────────────
+    methodist_observations: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="Methodist annotations from both passes; Raw-only (not in Final)",
+    )
+
+    # ─── Size metrics ────────────────────────────
+    own_documents_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    own_chars_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    cumulative_documents_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    cumulative_chars_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+
+    # ─── Hash axes ───────────────────────────────
+    # Python type ``str | None`` for HashableEntity Protocol compat;
+    # DB-level NOT NULL + server_default makes runtime NULL impossible.
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=False,
+        server_default=text(
+            "'bcaf467defc6a11d9f437368b2388f310b8538fc2fe21621587f69175766cadd'"
+        ),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex) — "
+        "SHA256 over all content fields EXCEPT enclosing_context. "
+        "server_default = EMPTY_NODE_SUMMARY_RAW_CONTENT_HASH (rule "
+        "«визначений хеш, ніколи NULL» — Phase 3.1 Q-G).",
+    )
+    enclosing_context_source_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Top-down memoization key (KD10) = hash of parent's "
+        "enclosing_context. Raw-only — Final does not carry this key. "
+        "NULL until first top-down walk populates it (walker — Phase 3.2).",
+    )
+
+    # ─── Timestamps ──────────────────────────────
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class NodeSummaryFinal(SoftDeleteMixin, Base):
+    """Editable canonical methodist summary for downstream agents (vision §3 KD11).
+
+    1:1 with CourseNode (UNIQUE on course_node_id). Created as a
+    bitwise copy of NodeSummaryRaw immediately after Raw generation;
+    edited by the author thereafter. Three write channels (KD11):
+    (1) automatic overwrite on Raw regeneration (resets approved_at),
+    (2) author manual edit, (3) top-down direct refresh of
+    ``enclosing_context`` + ``enclosing_context_updated_at`` WITHOUT
+    resetting approved_at (third channel — KD11 explicit exception).
+
+    Per KD11 ``enclosing_context`` is read-only on Final (not author-
+    editable); ``main_concepts`` / ``secondary_concepts`` are read-only
+    copies of Raw (concept-based navigation invariant). ``compressed_summary``
+    is NOT stored on Final — downstream gets the full fields, so
+    duplicating the bottom-up bridge would be redundant.
+
+    Empty-leaf author flow (Phase 3.1 MVP — operator-ratified question 6):
+    ``is_manual`` + ``manual_description`` allow the author to
+    populate an empty leaf manually as a future generalisation
+    point. ``methodist_observations`` is Raw-only and intentionally
+    absent here.
+    """
+
+    __tablename__ = "node_summaries_final"
+    __table_args__ = (
+        Index(
+            "ix_node_summaries_final_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "Editable canonical methodist summary (vision §3 KD11) — "
+                "1:1 with CourseNode; downstream source of truth"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        comment="FK to CourseNode (UNIQUE — 1:1 invariant per KD11)",
+    )
+
+    # ─── Editable by author (11 content fields) ──
+    title: Mapped[str | None] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    learning_objectives: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    knowledge: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    skills: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    success_criteria: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    assessment_approach: Mapped[str | None] = mapped_column(Text)
+    teaching_approach: Mapped[str | None] = mapped_column(Text)
+    key_activities: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    common_mistakes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    # ─── Read-only — copied from Raw (KD11) ──────
+    main_concepts: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    secondary_concepts: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    enclosing_context: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Read-only on Final (KD11). Refreshed via third channel "
+        "(top-down direct write) WITHOUT resetting approved_at. "
+        "NULL on root (top-down skipped). NOT included in content_hash.",
+    )
+
+    # ─── Empty-leaf author flow (probe-resolved question 6, MVP 3.1) ─
+    is_manual: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        comment="True when Final was author-created/edited on an empty "
+        "leaf rather than copied from a Raw with content.",
+    )
+    manual_description: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Author-provided description for empty-leaf author-flow.",
+    )
+
+    # ─── Size metrics ────────────────────────────
+    own_documents_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    own_chars_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    cumulative_documents_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    cumulative_chars_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+
+    # ─── Hash axis ───────────────────────────────
+    # Python type ``str | None`` for HashableEntity Protocol compat;
+    # DB-level NOT NULL + server_default makes runtime NULL impossible.
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=False,
+        server_default=text(
+            "'85ef8d5f3881ffae484d1c1b47d18c0984b19c03bc9dd44e6fc1010e9fcdbf03'"
+        ),
+        comment="Materialised content_hash (vision §3 KD9, SHA-256 hex) — "
+        "SHA256 over all content fields EXCEPT enclosing_context. "
+        "server_default = EMPTY_NODE_SUMMARY_FINAL_CONTENT_HASH (rule "
+        "«визначений хеш, ніколи NULL» — Phase 3.1 Q-G).",
+    )
+
+    # ─── Approval pair (read as two dates per KD11) ──────────
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="NULL after automatic Raw-overwrite; set by explicit author "
+        "approve. Top-down third channel refresh does NOT reset this.",
+    )
+    enclosing_context_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When top-down last refreshed enclosing_context. Paired "
+        "with approved_at — content can be approved BEFORE the latest "
+        "context refresh. NULL on root (top-down skipped) and until "
+        "the first top-down walk lands.",
+    )
+
+    # ─── Timestamps ──────────────────────────────
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class NodeSummaryFinalPreviousSnapshot(SoftDeleteMixin, Base):
+    """Single-version snapshot of NodeSummaryFinal before last overwrite (KD11).
+
+    1:1 with NodeSummaryFinal (UNIQUE on node_summary_final_id) — at
+    most ONE prior version is kept, not a history. Lifecycle (KD11):
+
+    - Created on the FIRST automatic overwrite (Raw regeneration).
+    - REPLACED in-place on every subsequent overwrite.
+    - HARD-DELETED on explicit author approve (KD12 Path 3 — the
+      prior version is irrelevant once the current state is approved).
+    - Cascade soft-deleted with scrub on CourseNode soft-delete
+      (KD3 + KD12 — operator-ratified Q-B (a) at 3.1 pre-flight:
+      both soft-delete-with-scrub and hard-delete-on-approve are
+      legitimate, non-conflicting paths).
+    """
+
+    __tablename__ = "node_summaries_final_previous_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_node_summaries_final_previous_snapshots_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "Single prior version of NodeSummaryFinal (vision §3 KD11) — "
+                "1:1; replaced on overwrite; hard-deleted on approve"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    node_summary_final_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("node_summaries_final.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        comment="FK to NodeSummaryFinal (UNIQUE — single-version invariant)",
+    )
+    snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        comment="Bitwise copy of prior NodeSummaryFinal content fields.",
+    )
+    replaced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the prior version was overwritten by automatic Raw regen.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# ──────────────────────────────────────────────
 # Cascade soft-delete topology (vision §3 KD3 + KD12)
 # ──────────────────────────────────────────────
 # Each list enumerates direct cascade descendants whose ``deleted_at``
@@ -1081,9 +1467,19 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
 # Wiring per Phase 1 PHASE.md §1.2 cascade declaration audit. Self-
 # reference on CourseNode supports recursive course-tree traversal.
 Tenant.__cascades_soft_delete_to__ = [APIKey, CourseNode, Student, HomeworkSubmission]
-CourseNode.__cascades_soft_delete_to__ = [CourseNode, AuthoredDocument]
+CourseNode.__cascades_soft_delete_to__ = [
+    CourseNode,
+    AuthoredDocument,
+    NodeSummaryRaw,
+    NodeSummaryFinal,
+]
 AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary]
 DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
+# Phase 3.1 Q-C ratify (Option A — two-level): PreviousSnapshot cascades
+# from its parent NodeSummaryFinal, mirroring the AuthoredDocument →
+# DocumentSummary → DocumentSegment two-level pattern. This preserves
+# the 1:1 Final↔PreviousSnapshot invariant on the cascade path.
+NodeSummaryFinal.__cascades_soft_delete_to__ = [NodeSummaryFinalPreviousSnapshot]
 Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
 
 
@@ -1101,3 +1497,8 @@ Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
 # tables stay empty, cascade traversal through them is no-op.
 CourseNode.__scrub_callable__ = scrub_course_node
 AuthoredDocument.__scrub_callable__ = scrub_authored_document
+NodeSummaryRaw.__scrub_callable__ = scrub_node_summary_raw
+NodeSummaryFinal.__scrub_callable__ = scrub_node_summary_final
+NodeSummaryFinalPreviousSnapshot.__scrub_callable__ = (
+    scrub_node_summary_final_previous_snapshot
+)

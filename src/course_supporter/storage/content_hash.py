@@ -29,7 +29,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime
-from typing import Protocol, cast
+from typing import Final, Protocol, cast
 
 import structlog
 from sqlalchemy import select
@@ -40,6 +40,8 @@ from course_supporter.storage.orm import (
     CourseNode,
     DocumentSegment,
     DocumentSummary,
+    NodeSummaryFinal,
+    NodeSummaryRaw,
 )
 
 logger = structlog.get_logger(__name__)
@@ -407,6 +409,27 @@ class ContentHashService:
             children += [h for (h,) in node_result.all() if h is not None]
             return compute_content_hash(b"", children)
 
+        # NodeSummaryRaw / NodeSummaryFinal — leaves of the content_hash
+        # graph (Q-A ratified at Phase 3.1 pre-flight): CourseNode hash
+        # formula does NOT include NodeSummary children (vision §3 KD9
+        # table line 725), and NodeSummary is derivative of the node,
+        # not a Merkle parent of anything — children=[] for both.
+        # ``enclosing_context`` is EXCLUDED from both formulas per
+        # vision §3 KD9 table lines 729-730: it depends on ancestors,
+        # not on own content, and is propagated through the SEPARATE
+        # top-down axis (``enclosing_context_source_hash``, Phase 3.2).
+        # Concept lists are ``sorted(...)`` at the formula boundary —
+        # same convention as ``DocumentSegment`` / ``DocumentSummary``
+        # — because LLM output order is non-deterministic.
+        if isinstance(entity, NodeSummaryRaw):
+            return compute_content_hash(
+                _encode_local_fields(_node_summary_raw_payload(entity)), []
+            )
+        if isinstance(entity, NodeSummaryFinal):
+            return compute_content_hash(
+                _encode_local_fields(_node_summary_final_payload(entity)), []
+            )
+
         raise TypeError(
             f"ContentHashService does not support entity type {type(entity).__name__}"
         )
@@ -432,6 +455,146 @@ class ContentHashService:
             if entity.parent_id is None:
                 return None
             return await self._session.get(CourseNode, entity.parent_id)
+        if isinstance(entity, NodeSummaryRaw | NodeSummaryFinal):
+            # Leaves of the content_hash graph (Q-A ratified): NodeSummary
+            # is derivative of the CourseNode, not a Merkle ancestor of
+            # anything — and is NOT a child of CourseNode in the hash
+            # formula either (KD9 table line 725 excludes it). Returning
+            # ``None`` means ``invalidate_up(NodeSummary*)`` recomputes
+            # the entity's own hash and stops; no CourseNode parent walk.
+            return None
         raise TypeError(
             f"ContentHashService does not support entity type {type(entity).__name__}"
         )
+
+
+# ──────────────────────────────────────────────
+# NodeSummary content-hash payloads + empty-hash constants (Phase 3.1)
+# ──────────────────────────────────────────────
+# Both Raw and Final hash all content fields EXCEPT ``enclosing_context``
+# per vision §3 KD9 table lines 729-730 — that field depends on
+# ancestors, not on own content, and is propagated through the SEPARATE
+# top-down axis (``enclosing_context_source_hash``; walker lands in
+# Phase 3.2). ``None``-coalescing to ``""``/``[]`` mirrors the
+# ``DocumentSegment`` convention and keeps the formula stable across
+# the empty-value-vs-NULL distinction (rule «є вузол — є Raw»).
+#
+# Concept lists alone are ``sorted(...)`` at the formula boundary —
+# the LLM-output-order non-determinism that motivated sorting in
+# ``DocumentSegment``/``DocumentSummary`` applies here too. Other
+# list fields (objectives, criteria, activities, mistakes, knowledge,
+# skills, methodist_observations) preserve insertion order because
+# they encode author-/methodist-meaningful sequencing rather than
+# a set.
+
+
+def _node_summary_raw_payload(entity: NodeSummaryRaw) -> dict[str, object]:
+    """Stable payload dict for ``NodeSummaryRaw.content_hash`` (vision §3 KD9)."""
+    return {
+        "title": entity.title or "",
+        "description": entity.description or "",
+        "learning_objectives": list(entity.learning_objectives or []),
+        "knowledge": list(entity.knowledge or []),
+        "skills": list(entity.skills or []),
+        "success_criteria": list(entity.success_criteria or []),
+        "assessment_approach": entity.assessment_approach or "",
+        "teaching_approach": entity.teaching_approach or "",
+        "key_activities": list(entity.key_activities or []),
+        "common_mistakes": list(entity.common_mistakes or []),
+        "main_concepts": sorted(entity.main_concepts or []),
+        "secondary_concepts": sorted(entity.secondary_concepts or []),
+        "compressed_summary": entity.compressed_summary or "",
+        # ``enclosing_context`` deliberately EXCLUDED (vision §3 KD9).
+        "methodist_observations": list(entity.methodist_observations or []),
+    }
+
+
+def _node_summary_final_payload(entity: NodeSummaryFinal) -> dict[str, object]:
+    """Stable payload dict for ``NodeSummaryFinal.content_hash`` (vision §3 KD9)."""
+    return {
+        "title": entity.title or "",
+        "description": entity.description or "",
+        "learning_objectives": list(entity.learning_objectives or []),
+        "knowledge": list(entity.knowledge or []),
+        "skills": list(entity.skills or []),
+        "success_criteria": list(entity.success_criteria or []),
+        "assessment_approach": entity.assessment_approach or "",
+        "teaching_approach": entity.teaching_approach or "",
+        "key_activities": list(entity.key_activities or []),
+        "common_mistakes": list(entity.common_mistakes or []),
+        "main_concepts": sorted(entity.main_concepts or []),
+        "secondary_concepts": sorted(entity.secondary_concepts or []),
+        # ``enclosing_context`` deliberately EXCLUDED (vision §3 KD9).
+        # ``compressed_summary`` not stored on Final (vision §267).
+        # ``methodist_observations`` is Raw-only.
+        "is_manual": bool(entity.is_manual),
+        "manual_description": entity.manual_description or "",
+    }
+
+
+def _empty_node_summary_raw_payload() -> dict[str, object]:
+    """Payload for an empty NodeSummaryRaw — every content field at its default."""
+    return {
+        "title": "",
+        "description": "",
+        "learning_objectives": [],
+        "knowledge": [],
+        "skills": [],
+        "success_criteria": [],
+        "assessment_approach": "",
+        "teaching_approach": "",
+        "key_activities": [],
+        "common_mistakes": [],
+        "main_concepts": [],
+        "secondary_concepts": [],
+        "compressed_summary": "",
+        "methodist_observations": [],
+    }
+
+
+def _empty_node_summary_final_payload() -> dict[str, object]:
+    """Payload for an empty NodeSummaryFinal — every content field at its default."""
+    return {
+        "title": "",
+        "description": "",
+        "learning_objectives": [],
+        "knowledge": [],
+        "skills": [],
+        "success_criteria": [],
+        "assessment_approach": "",
+        "teaching_approach": "",
+        "key_activities": [],
+        "common_mistakes": [],
+        "main_concepts": [],
+        "secondary_concepts": [],
+        "is_manual": False,
+        "manual_description": "",
+    }
+
+
+# Empty-hash constants — DERIVED via the same pure helpers used by
+# ``_compute_hash_for`` (Q-F: prove via the actual formula, not assumed).
+# Used by:
+#   * ``CourseNode.content_hash`` ``server_default`` (KD9 NULL-at-INSERT
+#     regression fix — commit 4 of task 3.1).
+#   * ``NodeSummaryRaw.content_hash`` / ``NodeSummaryFinal.content_hash``
+#     ``server_default`` (rule «визначений хеш, ніколи NULL» — Q-G).
+#   * Memoization sentinels for empty leaves (Phase 3.2 generation
+#     pipeline).
+EMPTY_NODE_CONTENT_HASH: Final[str] = compute_content_hash(b"", [])
+"""Hash of an empty CourseNode (no own documents, no children).
+
+Equals ``compute_content_hash(b"", [])`` — the same path
+``_compute_hash_for(CourseNode)`` walks for a node with zero documents
+and zero child nodes.
+"""
+
+EMPTY_NODE_SUMMARY_RAW_CONTENT_HASH: Final[str] = compute_content_hash(
+    _encode_local_fields(_empty_node_summary_raw_payload()), []
+)
+"""Hash of an empty NodeSummaryRaw (all content fields at default)."""
+
+EMPTY_NODE_SUMMARY_FINAL_CONTENT_HASH: Final[str] = compute_content_hash(
+    _encode_local_fields(_empty_node_summary_final_payload()), []
+)
+"""Hash of an empty NodeSummaryFinal (all content fields at default)."""

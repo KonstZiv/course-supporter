@@ -33,6 +33,7 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.kd3_marker import assert_marker_recent
 
 pytestmark = pytest.mark.requires_db
 
@@ -200,8 +201,14 @@ class TestCascadeSoftDelete:
         await db_session.refresh(raw)
         # KD3 markers on string content (Q-D ratify); list fields reset
         # to ``[]`` rather than carrying synthetic marker elements.
+        # Marker format validated via the canonical helper
+        # ``tests/_helpers/kd3_marker.assert_marker_recent`` (regex +
+        # timestamp tolerance) — sibling tests in ``test_cascade_*``
+        # use the same helper, so a contract change picks up here
+        # atomically without per-test substring drift.
         assert raw.title is not None
-        assert "інформація видалена автором" in raw.title
-        assert "інформація видалена автором" in (raw.description or "")
+        assert_marker_recent(raw.title)
+        assert raw.description is not None
+        assert_marker_recent(raw.description)
         assert raw.main_concepts == []
         assert raw.methodist_observations == []

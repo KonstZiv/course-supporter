@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from course_supporter.storage.enclosing_context_hash import (
+    EnclosingContextHashable,
     EnclosingContextHashService,
 )
 from course_supporter.storage.orm import NodeSummaryRaw
@@ -85,7 +86,9 @@ class _StubService(EnclosingContextHashService):
         super().__init__(session=AsyncMock())
         self._stub_parent = parent_raw
 
-    async def _fetch_parent_raw(self, node: Any) -> NodeSummaryRaw | None:
+    async def _fetch_parent_raw(
+        self, node: EnclosingContextHashable
+    ) -> NodeSummaryRaw | None:
         return self._stub_parent
 
 

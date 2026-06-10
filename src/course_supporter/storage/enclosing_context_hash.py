@@ -163,7 +163,8 @@ class EnclosingContextHashService:
         computed value are ``None`` (root case, or a non-root child
         whose parent has no enclosing_context yet — stable absence).
         """
-        raise NotImplementedError("Commit 3 of task 3.2.1")
+        computed = await self.compute_source_hash_for(node)
+        return computed != node.enclosing_context_source_hash
 
     async def update_source_hash(
         self,
@@ -176,7 +177,8 @@ class EnclosingContextHashService:
         nullable (Phase 3.1 schema). Caller is responsible for the
         surrounding transaction boundary; this method only flushes.
         """
-        raise NotImplementedError("Commit 3 of task 3.2.1")
+        node.enclosing_context_source_hash = new_hash
+        await self._session.flush()
 
     async def _fetch_parent_raw(
         self, node: EnclosingContextHashable

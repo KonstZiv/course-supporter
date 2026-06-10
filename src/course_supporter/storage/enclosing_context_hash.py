@@ -52,9 +52,19 @@ import uuid
 from datetime import datetime
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import NodeSummaryRaw
+# Pure helper reuse per Q-A subpoint: import the private helper directly
+# from the sibling module rather than promoting it to public API for a
+# single new consumer in the same ``storage/`` package. If a third
+# consumer arrives, the helper can be lifted to a shared module —
+# premature now.
+from course_supporter.storage.content_hash import (
+    _encode_local_fields,
+    compute_content_hash,
+)
+from course_supporter.storage.orm import CourseNode, NodeSummaryRaw
 
 
 class EnclosingContextHashable(Protocol):
@@ -136,7 +146,15 @@ class EnclosingContextHashService:
         every child's computed source_hash flips, and orchestrator
         sees them as stale.
         """
-        raise NotImplementedError("Commit 2 of task 3.2.1")
+        parent_raw = await self._fetch_parent_raw(node)
+        if parent_raw is None:
+            return None
+        return compute_content_hash(
+            _encode_local_fields(
+                {"enclosing_context": parent_raw.enclosing_context or ""}
+            ),
+            [],
+        )
 
     async def is_stale(self, node: EnclosingContextHashable) -> bool:
         """Return ``True`` when stored differs from currently-computed.
@@ -181,4 +199,13 @@ class EnclosingContextHashService:
         out-of-order'd — service does not raise; it returns ``None``
         and lets the downstream policy decide.
         """
-        raise NotImplementedError("Commit 2 of task 3.2.1")
+        course_node = await self._session.get(CourseNode, node.course_node_id)
+        if course_node is None or course_node.parent_id is None:
+            return None
+        parent_id = course_node.parent_id
+        stmt = select(NodeSummaryRaw).where(
+            NodeSummaryRaw.course_node_id == parent_id,
+            NodeSummaryRaw.deleted_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()

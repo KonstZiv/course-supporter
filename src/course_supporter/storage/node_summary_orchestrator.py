@@ -9,11 +9,10 @@ implementation lets the skeleton walk a synthetic subtree end-to-end
 without any model calls; Phase 3.2.3 wires the real methodist agent
 against the same protocol.
 
-This module is **commit 1** of the four-commit Phase 3.2.2 plan: scope-
-validation + run-state shape only. ``ensure_raw`` / ``visit_pass1`` /
-``visit_pass2`` / ``run`` land in subsequent commits and raise
-``NotImplementedError`` here so the import surface is stable but
-incomplete execution is loud.
+Commits 1+2 ship scope-validation, run-state shape, and the full
+Pass 1 leg (ensure-Raw, memo-skip, hook, source-hash materialise,
+per-node COMMIT). ``visit_pass2`` and the Pass 2 leg of :meth:`run`
+land in commit 3 and currently raise ``NotImplementedError``.
 
 Boundary recap (Q-5 ratify): the worker entry, ARQ task function,
 ``enqueue_node_summary_regeneration`` helper, and HTTP trigger all live
@@ -25,16 +24,24 @@ in Phase 3.2.4. The orchestrator's entry point is the plain Python
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Protocol
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.enclosing_context_hash import (
     EnclosingContextHashService,
 )
-from course_supporter.storage.node_summary_run_state import NodeSummaryRunScope
+from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.node_summary_run_state import (
+    NodeSummaryNodeStatus,
+    NodeSummaryRunError,
+    NodeSummaryRunScope,
+    NodeSummaryRunState,
+)
 from course_supporter.storage.orm import CourseNode, NodeSummaryRaw
 
 logger = structlog.get_logger(__name__)
@@ -121,9 +128,9 @@ class NodeSummaryGenerationOrchestrator:
     orchestrator does NOT create Job rows, enqueue ARQ tasks, or
     speak HTTP — Phase 3.2.4 owns all of that.
 
-    Skeleton commit 1 ships only :meth:`validate_scope`; ensure-Raw
-    + Pass 1 + Pass 2 + :meth:`run` land in subsequent commits of
-    the same task.
+    Commit 2 ships scope-validation + Pass 1 leg (ensure-Raw +
+    memo-skip + no-op hook + source-hash materialise + per-node
+    COMMIT). Pass 2 leg + None-contract enforcement land in commit 3.
     """
 
     def __init__(
@@ -208,13 +215,54 @@ class NodeSummaryGenerationOrchestrator:
         vertex_node_id: uuid.UUID,
         force: bool = False,
     ) -> None:
-        """Orchestrate Pass 1 + Pass 2 on the existing ``Job`` row.
+        """Orchestrate Pass 1 (Pass 2 lands in commit 3) on an existing Job row.
 
-        Lands in commits 2-3 of Phase 3.2.2.
+        Commit-2 scope:
+
+        1. ``Job.current_stage='bottomup'``.
+        2. ``validate_scope`` → record into ``run_state.scope``.
+        3. Seed ``run_state.pass1[node]=pending`` for every in-scope node;
+           persist + commit (so resume sees the initial scope even if
+           a crash happens before the first visit lands).
+        4. Walk in-scope leaf→root order; for each node call
+           :meth:`_visit_pass1` (per-node atomic transaction:
+           ensure-Raw → memo-skip OR hook → source-hash → status → commit).
+
+        ``force`` is informational here per K1 ratify (memo-skip is
+        unconditional; force only changes the API's 422 decision,
+        recorded into run-state for resume diagnostics).
         """
-        del job_id, vertex_node_id, force
-        msg = "run() lands in Phase 3.2.2 commits 2-3 (Pass 1 + Pass 2 visits)"
-        raise NotImplementedError(msg)
+        vertex = await self._session.get(CourseNode, vertex_node_id)
+        if vertex is None or vertex.deleted_at is not None:
+            msg = f"run: vertex CourseNode {vertex_node_id} not found or soft-deleted"
+            raise ValueError(msg)
+
+        job_repo = JobRepository(self._session)
+        await job_repo.update_stage(job_id, "bottomup")
+
+        scope = await self.validate_scope(vertex_node_id, force)
+        run_state = NodeSummaryRunState(
+            vertex_node_id=vertex_node_id,
+            force=force,
+            scope=scope,
+            pass1={
+                nid: NodeSummaryNodeStatus.PENDING for nid in scope.in_scope_node_ids
+            },
+        )
+        await self._persist_run_state(job_id, run_state)
+        await self._session.commit()
+
+        course_nodes = await self._collect_course_nodes(vertex)
+        order = self._compute_leaf_to_root_order(
+            vertex_node_id,
+            set(scope.in_scope_node_ids),
+            course_nodes,
+        )
+        for nid in order:
+            # K3 ratify: visits are STRICTLY sequential. Full-replace JSON
+            # on Job.stage_progress is safe only because no two visits
+            # race. Any future asyncio.gather over this loop = STOP-escalate.
+            await self._visit_pass1(course_nodes[nid], run_state, job_id)
 
     # ─── helpers (private) ────────────────────────
 
@@ -280,11 +328,193 @@ class NodeSummaryGenerationOrchestrator:
     async def _is_node_stale(
         self, node: CourseNode, raw: NodeSummaryRaw | None
     ) -> bool:
-        """Two-axis staleness check (vision §3 KD10 line 975)."""
-        if raw is None:
+        """Two-axis staleness check (vision §3 KD10 line 975).
+
+        Axis-1 negation delegates to :meth:`_is_axis1_fresh` so the
+        memo-skip predicate in :meth:`_visit_pass1` and the scope-
+        validation predicate here share one formula (single source of
+        truth — no risk of the two drifting on a future tweak).
+        """
+        if not self._is_axis1_fresh(node, raw):
             return True
-        if raw.source_content_hash != node.content_hash:
-            return True
+        # Past the early return, raw is non-None and axis-1 fresh.
         if node.parent_id is None:
             return False
+        assert raw is not None
         return await self._encl_hash.is_stale(raw)
+
+    @staticmethod
+    def _is_axis1_fresh(node: CourseNode, raw: NodeSummaryRaw | None) -> bool:
+        """Axis-1 (``content_hash`` linkage) freshness — KD10 line 1011.
+
+        Shared by :meth:`_is_node_stale` (scope-validation) and
+        :meth:`_visit_pass1` (memo-skip). Both read the same column
+        with the same comparator; centralising the formula eliminates
+        the drift risk between the two call-sites.
+        """
+        return raw is not None and raw.source_content_hash == node.content_hash
+
+    async def _ensure_raw(self, course_node_id: uuid.UUID) -> NodeSummaryRaw:
+        """Idempotent ensure-Raw — race-free at the DB level.
+
+        Uses ``INSERT ... ON CONFLICT (course_node_id) DO NOTHING`` via
+        the PG dialect so a parallel orchestrator (e.g. two operators
+        re-running on overlapping subtrees) cannot collide on the
+        ``UNIQUE`` constraint mid-flight. ``source_content_hash`` stays
+        NULL on insert — only :meth:`_visit_pass1` materialises it
+        (after the LLM hook commits per-node, even when the hook is the
+        no-op default in skeleton 3.2.2).
+
+        Returns the live Raw row (newly inserted or pre-existing).
+        Structural fields land at their server-side defaults (empty
+        strings / ``'[]'::jsonb`` / zero counters / empty-hash literal
+        on ``content_hash``). Canonical content fields stay at their
+        defaults until the LLM hook populates them in commit-2/3 +
+        Phase 3.2.3.
+        """
+        stmt = (
+            pg_insert(NodeSummaryRaw)
+            .values(course_node_id=course_node_id)
+            .on_conflict_do_nothing(index_elements=["course_node_id"])
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+        result = await self._session.execute(
+            select(NodeSummaryRaw).where(
+                NodeSummaryRaw.course_node_id == course_node_id,
+                NodeSummaryRaw.deleted_at.is_(None),
+            )
+        )
+        raw = result.scalar_one_or_none()
+        if raw is None:  # pragma: no cover — implies cascade soft-delete race
+            msg = (
+                f"_ensure_raw: NodeSummaryRaw for course_node {course_node_id} "
+                f"is missing after INSERT — likely a concurrent cascade "
+                f"soft-delete on the parent CourseNode"
+            )
+            raise RuntimeError(msg)
+        return raw
+
+    @staticmethod
+    def _compute_leaf_to_root_order(
+        vertex_id: uuid.UUID,
+        in_scope_ids: set[uuid.UUID],
+        course_nodes: dict[uuid.UUID, CourseNode],
+    ) -> list[uuid.UUID]:
+        """Post-order DFS from ``vertex_id`` over in-scope children.
+
+        Iterative implementation (explicit stack of ``(node_id, processed)``
+        tuples) to keep the recursion-depth ceiling on the Python stack
+        out of the picture for pathologically deep courses. Course trees
+        are shallow in practice (<10 levels), but the post-order DFS
+        guarantee — every child emitted before its parent — is the
+        correctness condition for the bottom-up pass (KD10 line 1024:
+        children must be committed before the parent's visit starts).
+        """
+        children_by_parent: dict[uuid.UUID, list[uuid.UUID]] = {}
+        for node_id in in_scope_ids:
+            parent_id = course_nodes[node_id].parent_id
+            if parent_id is not None and parent_id in in_scope_ids:
+                children_by_parent.setdefault(parent_id, []).append(node_id)
+
+        order: list[uuid.UUID] = []
+        stack: list[tuple[uuid.UUID, bool]] = [(vertex_id, False)]
+        seen: set[uuid.UUID] = set()
+        while stack:
+            node_id, processed = stack.pop()
+            if processed:
+                order.append(node_id)
+                continue
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            stack.append((node_id, True))
+            for child_id in children_by_parent.get(node_id, []):
+                stack.append((child_id, False))
+        return order
+
+    async def _visit_pass1(
+        self,
+        node: CourseNode,
+        run_state: NodeSummaryRunState,
+        job_id: uuid.UUID,
+    ) -> None:
+        """Per-node Pass 1 visit — atomic transaction (KD10 commit-per-node).
+
+        Sequence within the single transaction:
+
+        1. ensure-Raw (idempotent INSERT ON CONFLICT DO NOTHING).
+        2. fetch the live Raw row.
+        3. memo-skip check (:meth:`_is_axis1_fresh`) — **unconditional**
+           per K1 ratify; ``force`` does not regenerate axis-1-fresh
+           nodes (force only widens scope at validate-time / API-time).
+        4. invoke ``MethodistGenerator.generate_bottomup`` (no-op default
+           in skeleton; Phase 3.2.3 fills it in).
+        5. materialise ``raw.source_content_hash := node.content_hash``
+           **after** the hook returns (even when the hook is no-op).
+        6. record status in ``run_state.pass1[node.id]``.
+        7. persist run-state + ``await self._session.commit()``.
+
+        Error contract (K2 ratify): an exception inside the hook is
+        recorded into ``run_state.errors[]`` + ``pass1[node]=error`` and
+        committed; the walk **does not abort**. The default no-op hook
+        cannot raise; this branch protects future Phase 3.2.3 LLM hooks
+        + lets resume diagnostics see the full history. An error on a
+        child leaves the parent with incomplete bottom-up input — the
+        downstream propagation policy (whether the parent should still
+        attempt generation, mark itself blocked, etc.) is **not**
+        decided here; operators inspect errors[] after the run.
+        """
+        await self._ensure_raw(node.id)
+        raw = await self._fetch_raw_for_node(node.id)
+        if raw is None:  # pragma: no cover — _ensure_raw guarantees presence
+            msg = f"_visit_pass1: Raw row vanished between ensure and fetch ({node.id})"
+            raise RuntimeError(msg)
+
+        if self._is_axis1_fresh(node, raw):
+            run_state.pass1[node.id] = NodeSummaryNodeStatus.SKIPPED_MEMO
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        try:
+            await self._methodist.generate_bottomup(node, raw)
+        except Exception as exc:
+            run_state.errors.append(
+                NodeSummaryRunError(
+                    node_id=node.id,
+                    stage="bottomup",
+                    reason=str(exc),
+                )
+            )
+            run_state.pass1[node.id] = NodeSummaryNodeStatus.ERROR
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        raw.source_content_hash = node.content_hash
+        run_state.pass1[node.id] = NodeSummaryNodeStatus.DONE
+        run_state.updated_at = datetime.now(UTC)
+        await self._persist_run_state(job_id, run_state)
+        await self._session.commit()
+
+    async def _fetch_raw_for_node(
+        self, course_node_id: uuid.UUID
+    ) -> NodeSummaryRaw | None:
+        """Load the active Raw row for a single CourseNode (1:1)."""
+        result = await self._session.execute(
+            select(NodeSummaryRaw).where(
+                NodeSummaryRaw.course_node_id == course_node_id,
+                NodeSummaryRaw.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _persist_run_state(
+        self, job_id: uuid.UUID, run_state: NodeSummaryRunState
+    ) -> None:
+        """Full-replace ``Job.stage_progress`` from ``run_state`` (K3 contract)."""
+        job_repo = JobRepository(self._session)
+        await job_repo.update_stage_progress(job_id, run_state.to_jsonb())

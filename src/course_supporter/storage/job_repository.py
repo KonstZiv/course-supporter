@@ -181,6 +181,36 @@ class JobRepository:
                 stage_name=stage_name,
             )
 
+    async def update_stage_progress(
+        self, job_id: uuid.UUID, payload: dict[str, Any]
+    ) -> None:
+        """Full-replace ``Job.stage_progress`` JSONB (KD13 checkpoint).
+
+        Atomic UPDATE filtered through ``Job.deleted_at IS NULL`` (same
+        contract as :meth:`update_stage`). Silent skip on missing /
+        soft-deleted row + warn-log for observability.
+
+        **Full-replace is safe only because callers are strictly
+        sequential** (Phase 3.2.2 visits await one another; no
+        ``asyncio.gather`` over visits). Parallel visits would need
+        JSON-merge instead of replace — a separate design decision,
+        not a refactor. Any future temptation to fan-out node visits
+        must surface as STOP-escalate first (K3 ratify, Phase 3.2.2
+        commit 2).
+        """
+        stmt = (
+            update(Job)
+            .where(Job.id == job_id, Job.deleted_at.is_(None))
+            .values(stage_progress=payload)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        if (result.rowcount or 0) == 0:  # type: ignore[attr-defined]
+            logger.warning(
+                "update_stage_progress_no_job_found",
+                job_id=str(job_id),
+            )
+
     async def reactivate(self, job_id: uuid.UUID) -> Job:
         """Re-queue a failed Job for retry (vision §3 KD13).
 

@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import structlog
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +46,7 @@ from course_supporter.storage.node_summary_run_state import (
     NodeSummaryRunScope,
     NodeSummaryRunState,
 )
-from course_supporter.storage.orm import CourseNode, NodeSummaryRaw
+from course_supporter.storage.orm import CourseNode, Job, NodeSummaryRaw
 
 logger = structlog.get_logger(__name__)
 
@@ -321,6 +322,15 @@ class NodeSummaryGenerationOrchestrator:
             msg = f"run: vertex CourseNode {vertex_node_id} not found or soft-deleted"
             raise ValueError(msg)
 
+        # Preserve cross-run errors[] per Q-4 contract (commit-1: ``errors``
+        # is append-only ACROSS runs so resume sees the full attempt history).
+        # Tolerant per-entry parse on read-back: ``extra='forbid'`` on the
+        # top-level NodeSummaryRunState would refuse a future-version JSON
+        # outright; per-entry ``NodeSummaryRunError.model_validate`` only
+        # drops the offending entry (logged) and keeps the rest. This makes
+        # forward-schema additions on the top-level safe for the resume path.
+        preserved_errors = await self._read_back_preserved_errors(job_id)
+
         job_repo = JobRepository(self._session)
         await job_repo.update_stage(job_id, "bottomup")
 
@@ -332,6 +342,7 @@ class NodeSummaryGenerationOrchestrator:
             pass1={
                 nid: NodeSummaryNodeStatus.PENDING for nid in scope.in_scope_node_ids
             },
+            errors=preserved_errors,
         )
         await self._persist_run_state(job_id, run_state)
         await self._session.commit()
@@ -809,3 +820,31 @@ class NodeSummaryGenerationOrchestrator:
         """Full-replace ``Job.stage_progress`` from ``run_state`` (K3 contract)."""
         job_repo = JobRepository(self._session)
         await job_repo.update_stage_progress(job_id, run_state.to_jsonb())
+
+    async def _read_back_preserved_errors(
+        self, job_id: uuid.UUID
+    ) -> list[NodeSummaryRunError]:
+        """Read ``errors[]`` from existing ``stage_progress`` (Q-4 cross-run).
+
+        Tolerant per-entry parse: bad entries are logged + skipped, good
+        entries are preserved. NULL stage_progress / missing ``errors``
+        key / non-list shape → empty list. Schema drift on the top-level
+        does NOT lose the history (we never call ``from_jsonb`` on the
+        outer envelope here).
+        """
+        existing_job = await self._session.get(Job, job_id)
+        if existing_job is None or not isinstance(existing_job.stage_progress, dict):
+            return []
+        raw_errors = existing_job.stage_progress.get("errors", [])
+        if not isinstance(raw_errors, list):
+            return []
+        preserved: list[NodeSummaryRunError] = []
+        for entry in raw_errors:
+            try:
+                preserved.append(NodeSummaryRunError.model_validate(entry))
+            except ValidationError:
+                logger.warning(
+                    "node_summary_run_state_error_entry_skipped",
+                    job_id=str(job_id),
+                )
+        return preserved

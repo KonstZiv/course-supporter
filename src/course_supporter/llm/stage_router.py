@@ -60,6 +60,7 @@ from course_supporter.llm.ladder_config import LadderConfig, LadderEntry
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
 from course_supporter.llm.registry import ModelRegistryConfig
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.token_budget import estimate_tokens
 from course_supporter.service_logging import _persist
 
 if TYPE_CHECKING:
@@ -218,6 +219,43 @@ class StageRouter:
             if not provider.enabled:
                 attempts.append((entry.provider, entry.model, "provider disabled"))
                 continue
+
+            # Phase 3.2.3-pre — opt-in input-budget check (KD10 «Token budget
+            # policy»). When the stage declares ``input_budget_ratio``, skip
+            # the rung if the estimated input exceeds ``ratio * max_context``.
+            # ``input_budget_ratio is None`` (default) → no estimation, no
+            # skip — byte-identical to pre-3.2.3-pre behavior.
+            # ``validate_ladders_against_registry`` enforces at startup that
+            # ``max_context`` is set on every rung's model when the stage
+            # declares the ratio, so reaching this branch with
+            # ``max_context is None`` would mean the validator did not run
+            # (callsite bug); the defensive skip surfaces that as a visible
+            # ladder reason rather than silently passing every rung.
+            if stage.input_budget_ratio is not None:
+                registry_model = self._registry.models.get(entry.model)
+                if registry_model is None or registry_model.max_context is None:
+                    attempts.append(
+                        (
+                            entry.provider,
+                            entry.model,
+                            "input budget check requires registry model "
+                            "with max_context (config-time validator skipped?)",
+                        )
+                    )
+                    continue
+                estimated_input = estimate_tokens(prompt.user or "", prompt.system)
+                budget = int(stage.input_budget_ratio * registry_model.max_context)
+                if estimated_input > budget:
+                    attempts.append(
+                        (
+                            entry.provider,
+                            entry.model,
+                            f"input budget exceeded: ~{estimated_input:,} "
+                            f"tokens > {stage.input_budget_ratio} * "
+                            f"{registry_model.max_context:,} = {budget:,}",
+                        )
+                    )
+                    continue
 
             request = self._build_request(
                 prompt, entry, stage_name, contents=contents, expects_json=expects_json

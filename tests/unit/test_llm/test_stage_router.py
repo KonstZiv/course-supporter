@@ -22,6 +22,7 @@ from course_supporter.llm.ladder_config import (
 )
 from course_supporter.llm.prompt_loader_md import StagePrompt
 from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.registry import ModelRegistryConfig
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageResult, StageRouter
 from tests._helpers.registry import empty_registry as _registry
@@ -1209,3 +1210,161 @@ class TestRegistryAwareMaxTokens:
 
         request = provider.complete.await_args.args[0]
         assert request.max_tokens is None
+
+
+# ── Phase 3.2.3-pre — input-budget opt-in skip block ─────────────
+
+
+def _two_rung_registry(
+    *,
+    first_max_context: int | None = 100,
+    second_max_context: int | None = 1_000_000,
+) -> ModelRegistryConfig:
+    """Build a registry with two models, configurable ``max_context``."""
+    from course_supporter.llm.registry import (
+        ProviderConfig,
+        ProviderModelConfig,
+    )
+
+    return ModelRegistryConfig(
+        providers={
+            "anthropic": ProviderConfig(
+                type="llm",
+                models=[
+                    ProviderModelConfig(
+                        id="small-context",
+                        max_context=first_max_context,
+                    ),
+                    ProviderModelConfig(
+                        id="big-context",
+                        max_context=second_max_context,
+                    ),
+                ],
+            )
+        },
+        actions={},
+    )
+
+
+def _budget_config(
+    *,
+    input_budget_ratio: float | None,
+    entries: Iterable[tuple[str, str]] = (
+        ("anthropic", "small-context"),
+        ("anthropic", "big-context"),
+    ),
+) -> LadderConfig:
+    """Build a two-rung ladder with the given input_budget_ratio."""
+    return LadderConfig(
+        stages={
+            "demo": StageConfig(
+                prompt_ref="prompts/example/v1.md",
+                ladder=_ladder(*entries),
+                input_budget_ratio=input_budget_ratio,
+            )
+        }
+    )
+
+
+def _mock_load_prompt_with_size(
+    monkeypatch: pytest.MonkeyPatch, *, system_chars: int, user_chars: int
+) -> None:
+    """Replace load_prompt with sized templates so estimate_tokens is deterministic."""
+    monkeypatch.setattr(
+        "course_supporter.llm.stage_router.load_prompt",
+        lambda prompt_ref, *, base_path=None: StagePrompt(
+            system="s" * system_chars,
+            user="u" * user_chars,
+        ),
+    )
+
+
+class TestInputBudgetSkipBlock:
+    """Phase 3.2.3-pre — opt-in input-budget check skips rungs at runtime."""
+
+    async def test_rung_skipped_when_input_exceeds_ratio_budget(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First rung's small max_context can't fit input; ladder advances."""
+        # Prompt: 35 + 35 = 70 chars → estimate 70/3.5 = 20 tokens.
+        _mock_load_prompt_with_size(monkeypatch, system_chars=35, user_chars=35)
+
+        # Single provider services both rungs; first rung's model has a
+        # small max_context so the budget check skips it before
+        # provider.complete is called; the second rung's model has a huge
+        # max_context and the call proceeds.
+        provider = _ok_provider("from-big")
+
+        # ratio=0.1: 0.1 * 100 = 10-token budget < 20-token estimate
+        # -> skip first rung.
+        # Second rung: 0.1 * 1_000_000 = 100_000 >> 20 -> passes.
+        router = StageRouter(
+            _budget_config(input_budget_ratio=0.1),
+            {"anthropic": provider},
+            registry=_two_rung_registry(
+                first_max_context=100, second_max_context=1_000_000
+            ),
+        )
+
+        result = await router.execute_for_stage("demo")
+
+        # Second rung answered: provider.complete was called exactly once,
+        # with the second model.
+        assert provider.complete.await_count == 1
+        request = provider.complete.await_args.args[0]
+        assert request.model == "big-context"
+        assert result.model_used == "big-context"
+
+    async def test_all_rungs_skipped_raises_ladder_exhausted_with_reasons(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Every rung's max_context too small for the prompt → exhaustion."""
+        # Prompt: 350 + 350 = 700 chars → estimate 700/3.5 = 200 tokens.
+        _mock_load_prompt_with_size(monkeypatch, system_chars=350, user_chars=350)
+
+        provider = _ok_provider("never-called")
+
+        # ratio=0.5; budgets = 50 and 60 tokens; estimate=200 > both → skip
+        # all → LadderExhaustedError.
+        router = StageRouter(
+            _budget_config(input_budget_ratio=0.5),
+            {"anthropic": provider},
+            registry=_two_rung_registry(first_max_context=100, second_max_context=120),
+        )
+
+        with pytest.raises(LadderExhaustedError) as exc_info:
+            await router.execute_for_stage("demo")
+
+        # Provider.complete was NEVER called — both skipped pre-call.
+        assert provider.complete.await_count == 0
+
+        msg = str(exc_info.value)
+        # Both rungs surfaced as input-budget-exceeded.
+        assert msg.count("input budget exceeded") == 2
+        assert "small-context" in msg
+        assert "big-context" in msg
+
+    async def test_byte_identical_when_ratio_not_set(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stage without ``input_budget_ratio`` → no estimation, no skip."""
+        _mock_load_prompt_with_size(monkeypatch, system_chars=350, user_chars=350)
+
+        provider = _ok_provider("ok")
+        # ratio is None — even a tiny max_context must NOT trigger skip.
+        router = StageRouter(
+            _budget_config(input_budget_ratio=None),
+            {"anthropic": provider},
+            registry=_two_rung_registry(first_max_context=10, second_max_context=10),
+        )
+
+        result = await router.execute_for_stage("demo")
+
+        # First rung answers without budget check.
+        assert provider.complete.await_count == 1
+        request = provider.complete.await_args.args[0]
+        assert request.model == "small-context"
+        assert result.model_used == "small-context"

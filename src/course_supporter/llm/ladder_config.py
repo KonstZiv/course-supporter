@@ -66,6 +66,19 @@ class StageConfig(BaseModel):
             :func:`validate_ladders_against_registry`. Mirrors
             ``ActionConfig.requires`` in the registry.
         ladder: Ordered fallback ladder; at least one entry.
+        input_budget_ratio: Optional opt-in input-budget check
+            (Phase 3.2.3-pre, KD10 «Token budget policy»). When set
+            (float in ``(0.0, 1.0]``), the router estimates input size
+            via :func:`course_supporter.llm.token_budget.estimate_tokens`
+            and skips a rung if the estimate exceeds
+            ``ratio * max_context`` of that rung's model from the
+            registry. ``None`` (default) preserves byte-identical
+            existing behavior — no estimation, no skip. The router
+            does NOT translate "no rung passes" into a domain-level
+            message ("restructure your course"); that translation
+            lives at the callsite (Phase 3.2.3a methodist agent).
+            Numeric policy value (e.g. 0.5 from KD10) is owned by the
+            caller's stage YAML, NOT hard-coded in the router.
     """
 
     model_config = _FORBID
@@ -73,6 +86,7 @@ class StageConfig(BaseModel):
     prompt_ref: str
     requires: list[Capability] = Field(default_factory=list)
     ladder: list[LadderEntry] = Field(min_length=1)
+    input_budget_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
 
 
 class LadderFile(BaseModel):
@@ -160,7 +174,7 @@ def validate_ladders_against_registry(
 ) -> None:
     """Cross-check every ladder rung against the model registry (TASK-2.4.23).
 
-    Two invariants enforced fail-fast at startup:
+    Three invariants enforced fail-fast at startup:
 
     * **K — membership:** every ``rung.model`` must exist in
       ``registry.models``. A typo / rename / drift between
@@ -170,6 +184,14 @@ def validate_ladders_against_registry(
       ``stage.requires`` must appear in ``model.capabilities`` for each
       rung. Catches text-only models accidentally placed in a
       vision-required stage (and similar mismatches).
+    * **Input-budget (Phase 3.2.3-pre):** if a stage declares
+      ``input_budget_ratio``, every rung's model in the registry MUST
+      have a non-None ``max_context``. Otherwise the runtime
+      ratio-vs-context check at the StageRouter loop body would
+      degrade to "always skip" or "always pass" silently — depending
+      on guard wiring. Fail-fast at config-time so a missing
+      registry entry surfaces as a startup error, not as a misrouted
+      production hit.
 
     Errors are aggregated and raised as a single ``ValueError`` so a
     multi-typo config surfaces every problem at once. Mirrors the
@@ -177,8 +199,10 @@ def validate_ladders_against_registry(
     action chains.
 
     Raises:
-        ValueError: if any rung references an unknown model OR lacks a
-            capability declared in ``stage.requires``.
+        ValueError: if any rung references an unknown model, lacks a
+            capability declared in ``stage.requires``, OR (when the
+            stage declares ``input_budget_ratio``) lacks ``max_context``
+            in the registry.
     """
     errors: list[str] = []
 
@@ -197,6 +221,14 @@ def validate_ladders_against_registry(
                 errors.append(
                     f"Stage '{stage_name}' rung {i} model '{entry.model}' "
                     f"lacks required capabilities: {sorted(missing)}"
+                )
+
+            if stage.input_budget_ratio is not None and model.max_context is None:
+                errors.append(
+                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
+                    f"has no max_context in the registry "
+                    f"(required by input_budget_ratio="
+                    f"{stage.input_budget_ratio})"
                 )
 
     if errors:

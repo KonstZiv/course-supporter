@@ -576,3 +576,176 @@ class TestProductionLaddersValidate:
         assert config.get_stage("video_pass_2c_denoise").requires == []
         assert config.get_stage("audio_pass_2c_denoise").requires == []
         assert config.get_stage("example_stage").requires == []
+
+
+# ── Phase 3.2.3-pre: input_budget_ratio field + config-time validator ──
+
+
+def _registry_with_max_context(
+    *, vl_max_context: int | None = 1_000_000, text_max_context: int | None = 32_000
+) -> ModelRegistryConfig:
+    """Registry where models carry ``max_context`` (Phase 3.2.3-pre coverage).
+
+    ``_two_model_registry`` above leaves ``max_context=None`` everywhere
+    (capabilities-focused). The input-budget validator (and runtime
+    skip block in StageRouter) need real values; this helper exposes
+    a knob per model so a test can omit ``max_context`` selectively.
+    """
+    return ModelRegistryConfig(
+        providers={
+            "anthropic": ProviderConfig(
+                type="llm",
+                models=[
+                    ProviderModelConfig(
+                        id="vl-model",
+                        capabilities=[
+                            Capability.VISION,
+                            Capability.STRUCTURED_OUTPUT,
+                        ],
+                        max_context=vl_max_context,
+                    ),
+                    ProviderModelConfig(
+                        id="text-model",
+                        capabilities=[Capability.STRUCTURED_OUTPUT],
+                        max_context=text_max_context,
+                    ),
+                ],
+            )
+        },
+        actions={},
+    )
+
+
+class TestStageConfigInputBudgetRatioField:
+    """``input_budget_ratio`` field on :class:`StageConfig` — shape + bounds."""
+
+    def test_default_is_none(self) -> None:
+        stage = StageConfig(
+            prompt_ref="prompts/x.md",
+            ladder=[LadderEntry(provider="anthropic", model="m")],
+        )
+        assert stage.input_budget_ratio is None
+
+    def test_accepts_valid_ratio(self) -> None:
+        stage = StageConfig(
+            prompt_ref="prompts/x.md",
+            ladder=[LadderEntry(provider="anthropic", model="m")],
+            input_budget_ratio=0.5,
+        )
+        assert stage.input_budget_ratio == 0.5
+
+    def test_upper_bound_inclusive(self) -> None:
+        # 1.0 is allowed (whole context window usable, no reserve).
+        stage = StageConfig(
+            prompt_ref="prompts/x.md",
+            ladder=[LadderEntry(provider="anthropic", model="m")],
+            input_budget_ratio=1.0,
+        )
+        assert stage.input_budget_ratio == 1.0
+
+    def test_rejects_zero(self) -> None:
+        # 0.0 is meaningless (would skip every rung) — must be > 0.
+        with pytest.raises(ValueError):
+            StageConfig(
+                prompt_ref="prompts/x.md",
+                ladder=[LadderEntry(provider="anthropic", model="m")],
+                input_budget_ratio=0.0,
+            )
+
+    def test_rejects_above_one(self) -> None:
+        with pytest.raises(ValueError):
+            StageConfig(
+                prompt_ref="prompts/x.md",
+                ladder=[LadderEntry(provider="anthropic", model="m")],
+                input_budget_ratio=1.5,
+            )
+
+    def test_rejects_negative(self) -> None:
+        with pytest.raises(ValueError):
+            StageConfig(
+                prompt_ref="prompts/x.md",
+                ladder=[LadderEntry(provider="anthropic", model="m")],
+                input_budget_ratio=-0.1,
+            )
+
+
+class TestInputBudgetRatioConfigTimeValidation:
+    """``validate_ladders_against_registry`` enforces max_context presence
+    when a stage declares ``input_budget_ratio``.
+    """
+
+    def test_happy_path_all_rungs_have_max_context(self) -> None:
+        cfg = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/x.md",
+                    ladder=[LadderEntry(provider="anthropic", model="vl-model")],
+                    input_budget_ratio=0.5,
+                )
+            }
+        )
+        validate_ladders_against_registry(cfg, _registry_with_max_context())
+
+    def test_rung_without_max_context_raises(self) -> None:
+        # vl-model has max_context=None in registry → invariant violated.
+        registry = _registry_with_max_context(vl_max_context=None)
+        cfg = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/x.md",
+                    ladder=[LadderEntry(provider="anthropic", model="vl-model")],
+                    input_budget_ratio=0.5,
+                )
+            }
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, registry)
+        msg = str(exc_info.value)
+        assert "Stage 'demo' rung 0" in msg
+        assert "vl-model" in msg
+        assert "no max_context" in msg
+        assert "input_budget_ratio=0.5" in msg
+
+    def test_no_ratio_means_no_max_context_check(self) -> None:
+        # Without input_budget_ratio, missing max_context is fine — this is the
+        # byte-identical-pre-3.2.3-pre regression pin.
+        registry = _registry_with_max_context(
+            vl_max_context=None, text_max_context=None
+        )
+        cfg = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/x.md",
+                    ladder=[LadderEntry(provider="anthropic", model="vl-model")],
+                )
+            }
+        )
+        validate_ladders_against_registry(cfg, registry)
+
+    def test_per_rung_max_context_aggregates_errors(self) -> None:
+        # ratio set + multi-rung ladder where ONLY some rungs miss max_context.
+        registry = _registry_with_max_context(
+            vl_max_context=1_000_000, text_max_context=None
+        )
+        cfg = LadderConfig(
+            stages={
+                "demo": StageConfig(
+                    prompt_ref="prompts/x.md",
+                    ladder=[
+                        LadderEntry(provider="anthropic", model="vl-model"),
+                        LadderEntry(provider="anthropic", model="text-model"),
+                    ],
+                    input_budget_ratio=0.5,
+                )
+            }
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, registry)
+        msg = str(exc_info.value)
+        # Only rung 1 (text-model) is reported — vl-model has max_context.
+        assert "rung 1" in msg
+        assert "text-model" in msg
+        assert (
+            "rung 0" not in msg
+            or "vl-model" not in msg.split("rung 0")[1].split("rung 1")[0]
+        )

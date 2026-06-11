@@ -14,27 +14,11 @@ from pydantic import BaseModel
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.registry import ModelConfig, ModelRegistryConfig
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.token_budget import estimate_tokens
 
 logger = structlog.get_logger()
 
-# Average chars per token across common LLM tokenizers.
-# Conservative estimate (lower ratio = higher token count = safer guard).
-_CHARS_PER_TOKEN = 3.5
-
 LogCallback = Callable[[LLMResponse, bool, str | None], Awaitable[None]]
-
-
-def estimate_tokens(prompt: str, system_prompt: str | None = None) -> int:
-    """Estimate token count from text length.
-
-    Uses a conservative chars-per-token ratio (~3.5) to avoid
-    underestimating. Accuracy is ±15-20%, sufficient for pre-flight
-    context window guards.
-    """
-    total_chars = len(prompt)
-    if system_prompt:
-        total_chars += len(system_prompt)
-    return int(total_chars / _CHARS_PER_TOKEN)
 
 
 # Return type for helper methods that inspect result via isinstance.

@@ -51,6 +51,15 @@ from course_supporter.storage.orm import CourseNode, Job, NodeSummaryRaw
 logger = structlog.get_logger(__name__)
 
 
+# Defensive cap on the course-tree walk-up depth in ``_collect_course_nodes``.
+# Real courses are shallow (a handful of levels); the cap exists to surface
+# accidentally-introduced cycles in future schema changes rather than to bound
+# legitimate work. Mirrors ``_MAX_WALK_DEPTH`` in ``storage/content_hash.py``
+# (same defensive intent, separate concern: content_hash walks the hash chain;
+# this walks the CourseNode parent chain).
+_MAX_COURSE_DEPTH = 25
+
+
 class Pass2ParentRawMissingError(RuntimeError):
     """Pass 2 None-contract violation: non-root node lost its parent Raw.
 
@@ -391,7 +400,7 @@ class NodeSummaryGenerationOrchestrator:
         """Load every active CourseNode in the course containing ``vertex``."""
         root = vertex
         depth = 0
-        while root.parent_id is not None and depth < 25:
+        while root.parent_id is not None and depth < _MAX_COURSE_DEPTH:
             parent = await self._session.get(CourseNode, root.parent_id)
             if parent is None or parent.deleted_at is not None:
                 break
@@ -413,7 +422,12 @@ class NodeSummaryGenerationOrchestrator:
     def _collect_subtree_ids(
         vertex_id: uuid.UUID, course_nodes: dict[uuid.UUID, CourseNode]
     ) -> set[uuid.UUID]:
-        """BFS-collect IDs under ``vertex_id`` using in-memory parent map."""
+        """Set-collect IDs under ``vertex_id`` using in-memory parent map.
+
+        Iterative DFS with ``list.pop()`` (LIFO, O(1) from end). Returns
+        a set; traversal order is irrelevant to the caller — the only
+        invariant is "every descendant in the active tree is included".
+        """
         children_by_parent: dict[uuid.UUID, list[uuid.UUID]] = {}
         for node_id, node in course_nodes.items():
             if node.parent_id is not None:

@@ -448,27 +448,50 @@ class TestPerNodeCommit:
             await _cleanup_course(session_factory, ids["tenant_id"])
 
 
-# ── Job.current_stage advances to 'bottomup' ───────────────────
+# ── Job.current_stage advances through Pass 1 ───────────────────
 
 
 class TestJobStageMarker:
-    """``Job.current_stage`` flips to ``'bottomup'`` when the run starts."""
+    """``Job.current_stage`` is set to ``'bottomup'`` once Pass 1 starts.
 
-    async def test_current_stage_set_to_bottomup(
+    Post commit-3 the final value advances to ``'topdown'`` (the last
+    pass to run); the Pass 1 marker is verified mid-flight via a hook
+    that snapshots ``Job.current_stage`` from a fresh session.
+    """
+
+    async def test_current_stage_is_bottomup_during_pass1(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         ids = await _setup_course_with_job(session_factory)
         try:
+            observed_stage: list[str | None] = []
+
+            class _SnoopStage:
+                async def generate_bottomup(
+                    self, node: CourseNode, raw: NodeSummaryRaw
+                ) -> None:
+                    async with session_factory() as snoop:
+                        job = await snoop.get(Job, ids["job_id"])
+                        if job is not None:
+                            observed_stage.append(job.current_stage)
+
+                async def generate_topdown(
+                    self,
+                    node: CourseNode,
+                    raw: NodeSummaryRaw,
+                    parent_raw: NodeSummaryRaw,
+                ) -> None:
+                    return
+
             async with session_factory() as session:
                 orch = NodeSummaryGenerationOrchestrator(
-                    session, methodist=_RecordingMethodist()
+                    session, methodist=_SnoopStage()
                 )
                 await orch.run(job_id=ids["job_id"], vertex_node_id=ids["root"])
 
-            async with session_factory() as session:
-                job = await session.get(Job, ids["job_id"])
-                assert job is not None
-                assert job.current_stage == "bottomup"
+            # Every Pass 1 hook invocation saw current_stage='bottomup'.
+            assert observed_stage  # at least one bottom-up hook fired
+            assert all(stage == "bottomup" for stage in observed_stage)
         finally:
             await _cleanup_course(session_factory, ids["tenant_id"])
 

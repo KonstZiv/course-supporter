@@ -9,10 +9,13 @@ implementation lets the skeleton walk a synthetic subtree end-to-end
 without any model calls; Phase 3.2.3 wires the real methodist agent
 against the same protocol.
 
-Commits 1+2 ship scope-validation, run-state shape, and the full
-Pass 1 leg (ensure-Raw, memo-skip, hook, source-hash materialise,
-per-node COMMIT). ``visit_pass2`` and the Pass 2 leg of :meth:`run`
-land in commit 3 and currently raise ``NotImplementedError``.
+Commits 1-3 ship scope-validation, run-state shape, the Pass 1 leg
+(ensure-Raw, memo-skip, hook, source-hash materialise, per-node
+COMMIT), and the Pass 2 leg (root-of-course exemption, parent-Raw
+resolution with None-contract enforcement, composite-key memoization
+via Phase 3.2.1, ``enclosing_context_source_hash`` materialise).
+Commit 4 adds the full crash-resume integration coverage on top of
+the per-node COMMIT atomicity already enforced here.
 
 Boundary recap (Q-5 ratify): the worker entry, ARQ task function,
 ``enqueue_node_summary_regeneration`` helper, and HTTP trigger all live
@@ -45,6 +48,79 @@ from course_supporter.storage.node_summary_run_state import (
 from course_supporter.storage.orm import CourseNode, NodeSummaryRaw
 
 logger = structlog.get_logger(__name__)
+
+
+class Pass2ParentRawMissingError(RuntimeError):
+    """Pass 2 None-contract violation: non-root node lost its parent Raw.
+
+    Vision §3 KD10 + the 3.2.1 service ``_fetch_parent_raw`` collapses
+    three semantically different "parent Raw absent" cases into a
+    single ``None`` return value (root / missing CourseNode / missing
+    parent Raw). The orchestrator excludes the root case BEFORE asking
+    (Pass 2 short-circuits on ``node.parent_id IS NULL`` →
+    :attr:`NodeSummaryNodeStatus.NOT_APPLICABLE`), so a ``None`` from
+    parent-Raw lookup at this point is **always** an invariant
+    violation — fail loud per K2-analog for axis 2.
+
+    Discrimination (Phase 3.2.2 commit 3): three orthogonal sub-cases,
+    pinned to inline diagnostics via the two boolean discriminators:
+
+    * **A1 — ordering violation (in-scope parent without Raw):**
+      ``parent_course_node_present=True`` and ``parent_in_scope=True``.
+      Pass 1 was supposed to ensure-Raw before Pass 2 touched a
+      child. Implies a Pass 1 visit error on the parent (also in
+      ``errors[]``) — operator inspects both and decides whether to
+      reactivate.
+
+    * **A2 — uncovered-stale bypassed by ``force``:**
+      ``parent_course_node_present=True`` and ``parent_in_scope=False``.
+      Vertex is not the course root and its parent (outside scope) has
+      no Raw — ``validate_scope`` flagged this as ``uncovered_stale``;
+      the user ran with ``force=True``. Expected when force is used
+      with a small vertex.
+
+    * **B — missing parent CourseNode:**
+      ``parent_course_node_present=False``. The parent CourseNode is
+      not in the orchestrator's in-memory course tree, either because
+      a cascade soft-delete fired between scope-validation and the
+      Pass 2 visit, or because ``node.parent_id`` points at a deleted
+      / nonexistent CourseNode (structural inconsistency).
+
+    Caught by :meth:`NodeSummaryGenerationOrchestrator._visit_pass2`;
+    recorded into ``run_state.errors[]`` + ``pass2[node]=ERROR``; the
+    walk **continues** (K2 contract). ``update_source_hash(None)`` is
+    NEVER called (which would corrupt the second-axis cache).
+    """
+
+    def __init__(
+        self,
+        *,
+        node_id: uuid.UUID,
+        parent_course_node_id: uuid.UUID,
+        parent_course_node_present: bool,
+        parent_in_scope: bool,
+    ) -> None:
+        self.node_id = node_id
+        self.parent_course_node_id = parent_course_node_id
+        self.parent_course_node_present = parent_course_node_present
+        self.parent_in_scope = parent_in_scope
+
+        if not parent_course_node_present:
+            sub_case = (
+                "B (missing parent CourseNode — soft-delete race or "
+                "structural inconsistency)"
+            )
+        elif parent_in_scope:
+            sub_case = "A1 (in-scope parent without Raw — Pass 1 ordering violation)"
+        else:
+            sub_case = (
+                "A2 (out-of-scope parent without Raw — uncovered_stale "
+                "bypassed by force=True)"
+            )
+        super().__init__(
+            f"Pass 2 None-contract violation on node {node_id}: {sub_case} "
+            f"(parent_course_node_id={parent_course_node_id})"
+        )
 
 
 class MethodistGenerator(Protocol):
@@ -128,9 +204,12 @@ class NodeSummaryGenerationOrchestrator:
     orchestrator does NOT create Job rows, enqueue ARQ tasks, or
     speak HTTP — Phase 3.2.4 owns all of that.
 
-    Commit 2 ships scope-validation + Pass 1 leg (ensure-Raw +
-    memo-skip + no-op hook + source-hash materialise + per-node
-    COMMIT). Pass 2 leg + None-contract enforcement land in commit 3.
+    Commit 3 ships the Pass 2 leg in addition to Pass 1 + scope
+    validation: root-of-course → ``NOT_APPLICABLE`` short-circuit,
+    parent-Raw resolution with None-contract enforcement
+    (:class:`Pass2ParentRawMissingError`), composite-key memoization
+    via the Phase 3.2.1 service, and per-node materialisation of
+    ``enclosing_context_source_hash`` after the (no-op default) hook.
     """
 
     def __init__(
@@ -217,20 +296,25 @@ class NodeSummaryGenerationOrchestrator:
     ) -> None:
         """Orchestrate Pass 1 (Pass 2 lands in commit 3) on an existing Job row.
 
-        Commit-2 scope:
+        Commits 2+3 scope:
 
-        1. ``Job.current_stage='bottomup'``.
-        2. ``validate_scope`` → record into ``run_state.scope``.
-        3. Seed ``run_state.pass1[node]=pending`` for every in-scope node;
-           persist + commit (so resume sees the initial scope even if
-           a crash happens before the first visit lands).
-        4. Walk in-scope leaf→root order; for each node call
-           :meth:`_visit_pass1` (per-node atomic transaction:
-           ensure-Raw → memo-skip OR hook → source-hash → status → commit).
+        1. ``Job.current_stage='bottomup'`` + ``validate_scope`` +
+           seed ``pass1`` PENDING + commit.
+        2. Walk in-scope **leaf→root** for Pass 1
+           (:meth:`_visit_pass1` — ensure-Raw / memo-skip / hook /
+           materialise source_content_hash / per-node COMMIT).
+        3. ``Job.current_stage='topdown'`` + seed ``pass2`` PENDING +
+           commit.
+        4. Walk in-scope **root→leaves** for Pass 2
+           (:meth:`_visit_pass2` — root-of-course →
+           ``NOT_APPLICABLE``; non-root → fetch parent_raw with
+           None-contract enforcement, composite-key memo, hook,
+           materialise ``enclosing_context_source_hash`` via the
+           3.2.1 service, per-node COMMIT).
 
         ``force`` is informational here per K1 ratify (memo-skip is
-        unconditional; force only changes the API's 422 decision,
-        recorded into run-state for resume diagnostics).
+        unconditional on both axes; force only changes the API's 422
+        decision and is recorded into run-state for diagnostics).
         """
         vertex = await self._session.get(CourseNode, vertex_node_id)
         if vertex is None or vertex.deleted_at is not None:
@@ -253,16 +337,40 @@ class NodeSummaryGenerationOrchestrator:
         await self._session.commit()
 
         course_nodes = await self._collect_course_nodes(vertex)
-        order = self._compute_leaf_to_root_order(
+        in_scope_set = set(scope.in_scope_node_ids)
+        pass1_order = self._compute_leaf_to_root_order(
             vertex_node_id,
-            set(scope.in_scope_node_ids),
+            in_scope_set,
             course_nodes,
         )
-        for nid in order:
+        for nid in pass1_order:
             # K3 ratify: visits are STRICTLY sequential. Full-replace JSON
             # on Job.stage_progress is safe only because no two visits
             # race. Any future asyncio.gather over this loop = STOP-escalate.
             await self._visit_pass1(course_nodes[nid], run_state, job_id)
+
+        # ── Pass 2 leg (commit 3) ──────────────────
+        await job_repo.update_stage(job_id, "topdown")
+        for nid in in_scope_set:
+            run_state.pass2[nid] = NodeSummaryNodeStatus.PENDING
+        run_state.updated_at = datetime.now(UTC)
+        await self._persist_run_state(job_id, run_state)
+        await self._session.commit()
+
+        pass2_order = self._compute_root_to_leaf_order(
+            vertex_node_id,
+            in_scope_set,
+            course_nodes,
+        )
+        for nid in pass2_order:
+            # Same K3 sequential-only invariant as Pass 1.
+            await self._visit_pass2(
+                course_nodes[nid],
+                run_state,
+                job_id,
+                course_nodes=course_nodes,
+                in_scope_ids=in_scope_set,
+            )
 
     # ─── helpers (private) ────────────────────────
 
@@ -433,6 +541,42 @@ class NodeSummaryGenerationOrchestrator:
                 stack.append((child_id, False))
         return order
 
+    @staticmethod
+    def _compute_root_to_leaf_order(
+        vertex_id: uuid.UUID,
+        in_scope_ids: set[uuid.UUID],
+        course_nodes: dict[uuid.UUID, CourseNode],
+    ) -> list[uuid.UUID]:
+        """Pre-order DFS from ``vertex_id`` over in-scope children.
+
+        Mirror of :meth:`_compute_leaf_to_root_order` but emits the
+        parent **before** its children — the correctness condition for
+        the top-down Pass 2 (KD10 line 989: parents must materialise
+        their ``enclosing_context`` before children read it for their
+        own second-axis key). Iterative for the same depth-ceiling
+        reason as the bottom-up sibling; children are pushed reversed
+        so the pop order matches their natural insertion order.
+        """
+        children_by_parent: dict[uuid.UUID, list[uuid.UUID]] = {}
+        for node_id in in_scope_ids:
+            parent_id = course_nodes[node_id].parent_id
+            if parent_id is not None and parent_id in in_scope_ids:
+                children_by_parent.setdefault(parent_id, []).append(node_id)
+
+        order: list[uuid.UUID] = []
+        stack: list[uuid.UUID] = [vertex_id]
+        seen: set[uuid.UUID] = set()
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            order.append(node_id)
+            # Reverse so the natural-order child is popped first.
+            for child_id in reversed(children_by_parent.get(node_id, [])):
+                stack.append(child_id)
+        return order
+
     async def _visit_pass1(
         self,
         node: CourseNode,
@@ -496,6 +640,153 @@ class NodeSummaryGenerationOrchestrator:
 
         raw.source_content_hash = node.content_hash
         run_state.pass1[node.id] = NodeSummaryNodeStatus.DONE
+        run_state.updated_at = datetime.now(UTC)
+        await self._persist_run_state(job_id, run_state)
+        await self._session.commit()
+
+    async def _visit_pass2(
+        self,
+        node: CourseNode,
+        run_state: NodeSummaryRunState,
+        job_id: uuid.UUID,
+        *,
+        course_nodes: dict[uuid.UUID, CourseNode],
+        in_scope_ids: set[uuid.UUID],
+    ) -> None:
+        """Per-node Pass 2 visit — atomic transaction (KD10 commit-per-node).
+
+        Sequence within the single transaction:
+
+        1. Course-root short-circuit: ``node.parent_id IS NULL`` →
+           ``pass2[node]=NOT_APPLICABLE`` + commit; return. This is the
+           **structural** Pass 2 exemption from KD10 line 1001 — applies
+           only to the course root (not to the run's vertex when the
+           vertex is an inner node, which is processed normally with
+           its out-of-scope parent's Raw).
+        2. Fetch own Raw (created by Pass 1). If missing → error path
+           (Pass 1 prerequisite violation).
+        3. Fetch parent Raw via direct lookup. ``None`` triggers
+           :class:`Pass2ParentRawMissingError` with the A1/A2/B
+           discrimination via in-memory ``course_nodes`` +
+           ``in_scope_ids`` (Q-3b ratify); caught locally, recorded
+           into ``run_state.errors[]`` + ``pass2[node]=ERROR``,
+           ``update_source_hash(None)`` is NEVER called.
+        4. Composite-key memo check via 3.2.1
+           ``compute_source_hash_for(raw)``; equal to stored
+           ``raw.enclosing_context_source_hash`` → ``SKIPPED_MEMO`` +
+           commit; return. **Pass 2 skeleton does not write
+           ``Final.enclosing_context_updated_at``** — the third
+           channel that touches that timestamp lives in Phase 3.2.4
+           (KD11 lines 1060-1066); acceptance #7 is closed
+           by-construction here.
+        5. Invoke ``MethodistGenerator.generate_topdown(node, raw,
+           parent_raw)`` (no-op default in skeleton; Phase 3.2.3 fills
+           it in). ``parent_raw`` is guaranteed non-None at this point
+           by the discriminator above.
+        6. Materialise ``raw.enclosing_context_source_hash`` via the
+           3.2.1 service ``update_source_hash`` (mirror Pass 1 timing —
+           write after the hook returns, even when the hook is no-op).
+        7. ``DONE`` status + persist + commit.
+
+        Error contract (K2 dual): same as Pass 1. Per-node error
+        records into ``errors[]`` + ``pass2[node]=ERROR``, the walk
+        continues. A child's Pass 2 visit may then see its parent in
+        ERROR state (parent's enclosing_context unchanged from its
+        previous value — possibly NULL on first ever run); skeleton's
+        deterministic-key formula keeps the child's hash stable across
+        runs in that case (parent.enclosing_context coalesces to "" in
+        the 3.2.1 service).
+        """
+        # Step 1 — course-root structural exemption.
+        if node.parent_id is None:
+            run_state.pass2[node.id] = NodeSummaryNodeStatus.NOT_APPLICABLE
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        # Step 2 — own Raw must exist (Pass 1 ensure-Raw).
+        raw = await self._fetch_raw_for_node(node.id)
+        if raw is None:
+            run_state.errors.append(
+                NodeSummaryRunError(
+                    node_id=node.id,
+                    stage="topdown",
+                    reason=(
+                        "Pass 2 prerequisite: own NodeSummaryRaw row is missing "
+                        "(Pass 1 must run successfully before Pass 2 visits a node)"
+                    ),
+                )
+            )
+            run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        # Step 3 — fetch parent Raw with None-contract discrimination.
+        parent_course_node_id = node.parent_id
+        parent_raw = await self._fetch_raw_for_node(parent_course_node_id)
+        if parent_raw is None:
+            parent_present = parent_course_node_id in course_nodes
+            parent_in_scope = parent_present and parent_course_node_id in in_scope_ids
+            exc = Pass2ParentRawMissingError(
+                node_id=node.id,
+                parent_course_node_id=parent_course_node_id,
+                parent_course_node_present=parent_present,
+                parent_in_scope=parent_in_scope,
+            )
+            run_state.errors.append(
+                NodeSummaryRunError(
+                    node_id=node.id,
+                    stage="topdown",
+                    reason=str(exc),
+                )
+            )
+            run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        # Step 4 — composite-key memo via 3.2.1.
+        computed_hash = await self._encl_hash.compute_source_hash_for(raw)
+        if computed_hash is None:  # pragma: no cover — 3.2.1 contract drift guard
+            msg = (
+                f"compute_source_hash_for returned None despite parent_raw "
+                f"being present for node {node.id}"
+            )
+            raise RuntimeError(msg)
+
+        if computed_hash == raw.enclosing_context_source_hash:
+            run_state.pass2[node.id] = NodeSummaryNodeStatus.SKIPPED_MEMO
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        # Step 5 — invoke the hook.
+        try:
+            await self._methodist.generate_topdown(node, raw, parent_raw)
+        except Exception as exc:
+            run_state.errors.append(
+                NodeSummaryRunError(
+                    node_id=node.id,
+                    stage="topdown",
+                    reason=str(exc),
+                )
+            )
+            run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
+            run_state.updated_at = datetime.now(UTC)
+            await self._persist_run_state(job_id, run_state)
+            await self._session.commit()
+            return
+
+        # Step 6 — materialise via 3.2.1 (mirror Pass 1 timing).
+        await self._encl_hash.update_source_hash(raw, computed_hash)
+
+        # Step 7 — DONE.
+        run_state.pass2[node.id] = NodeSummaryNodeStatus.DONE
         run_state.updated_at = datetime.now(UTC)
         await self._persist_run_state(job_id, run_state)
         await self._session.commit()

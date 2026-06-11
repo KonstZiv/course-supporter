@@ -47,7 +47,25 @@ class NodeSummaryNodeStatus(StrEnum):
     """LLM hook executed and node was committed (canonical fields written)."""
 
     SKIPPED_MEMO = "skipped_memo"
-    """Memoization short-circuit fired; LLM hook was NOT invoked."""
+    """Memoization short-circuit fired; LLM hook was NOT invoked.
+
+    Semantic: "we computed the cache key and it matched the stored value
+    — the work is already fresh". Distinct from ``NOT_APPLICABLE`` which
+    means the pass does not apply by construction.
+    """
+
+    NOT_APPLICABLE = "not_applicable"
+    """The pass does not apply to this node by construction.
+
+    Pass 2 (top-down) on the **course root** (``CourseNode.parent_id IS
+    NULL``) uses this status: vision §3 KD10 line 1001 — "top-down
+    пропускається (немає охоплюючого контексту)". The root has no
+    parent to read ``enclosing_context`` from; the key is undefined by
+    construction, not "empty" or "fresh". Distinct from
+    ``SKIPPED_MEMO`` so UI / resume diagnostics can tell apart "no
+    work needed because already fresh" from "no work could be done
+    because the pass is structurally exempt here".
+    """
 
     ERROR = "error"
     """A raise inside the visit was caught; see ``errors[]`` for the entry."""

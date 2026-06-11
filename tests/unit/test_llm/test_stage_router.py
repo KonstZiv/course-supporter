@@ -1294,17 +1294,14 @@ class TestInputBudgetSkipBlock:
         # small max_context so the budget check skips it before
         # provider.complete is called; the second rung's model has a huge
         # max_context and the call proceeds.
-        provider = AsyncMock(spec=LLMProvider)
-        provider.enabled = True
-        provider.complete = AsyncMock(return_value=_ok_response("from-big"))
-        provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+        provider = _ok_provider("from-big")
 
         # ratio=0.1: 0.1 * 100 = 10-token budget < 20-token estimate
         # -> skip first rung.
         # Second rung: 0.1 * 1_000_000 = 100_000 >> 20 -> passes.
         router = StageRouter(
             _budget_config(input_budget_ratio=0.1),
-            {"anthropic": provider},  # type: ignore[dict-item]
+            {"anthropic": provider},
             registry=_two_rung_registry(
                 first_max_context=100, second_max_context=1_000_000
             ),

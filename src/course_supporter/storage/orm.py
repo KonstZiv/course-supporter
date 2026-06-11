@@ -1244,6 +1244,15 @@ class NodeSummaryRaw(SoftDeleteMixin, Base):
         "enclosing_context. Raw-only — Final does not carry this key. "
         "NULL until first top-down walk populates it (walker — Phase 3.2).",
     )
+    source_content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Bottom-up memoization key (KD10 line 1011) = "
+        "CourseNode.content_hash at the time Pass 1 last completed. "
+        "Distinct from self ``content_hash`` (which hashes own "
+        "generated fields per KD9 line 729). NULL until first Pass 1 "
+        "lands; written by the Phase 3.2.2 orchestrator after the LLM "
+        "hook commits per-node.",
+    )
 
     # ─── Timestamps ──────────────────────────────
     created_at: Mapped[datetime] = mapped_column(

@@ -1290,21 +1290,17 @@ class TestInputBudgetSkipBlock:
         # Prompt: 35 + 35 = 70 chars → estimate 70/3.5 = 20 tokens.
         _mock_load_prompt_with_size(monkeypatch, system_chars=35, user_chars=35)
 
-        first_provider = _ok_provider("from-small")
-        second_provider = _ok_provider("from-big")
-        # Single provider dict — both rungs hit the same provider, but the
-        # first rung's model has a small max_context so the budget check
-        # skips it; the second rung's model has a huge max_context and the
-        # call proceeds.
+        # Single provider services both rungs; first rung's model has a
+        # small max_context so the budget check skips it before
+        # provider.complete is called; the second rung's model has a huge
+        # max_context and the call proceeds.
         provider = AsyncMock(spec=LLMProvider)
         provider.enabled = True
         provider.complete = AsyncMock(return_value=_ok_response("from-big"))
         provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
 
-        # ratio=0.5 * max_context=100 -> budget = 50 tokens.
-        # Estimated input = 20 tokens -> fits -> passes (the WRONG result
-        # if we want to skip). For SKIP we need estimate > budget; use
-        # ratio=0.1: 0.1 * 100 = 10 < 20 -> skip first rung.
+        # ratio=0.1: 0.1 * 100 = 10-token budget < 20-token estimate
+        # -> skip first rung.
         # Second rung: 0.1 * 1_000_000 = 100_000 >> 20 -> passes.
         router = StageRouter(
             _budget_config(input_budget_ratio=0.1),
@@ -1322,10 +1318,6 @@ class TestInputBudgetSkipBlock:
         request = provider.complete.await_args.args[0]
         assert request.model == "big-context"
         assert result.model_used == "big-context"
-
-        # silence unused builder
-        del first_provider
-        del second_provider
 
     async def test_all_rungs_skipped_raises_ladder_exhausted_with_reasons(
         self,

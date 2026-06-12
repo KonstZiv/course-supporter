@@ -289,8 +289,9 @@ class TestRealConfigs:
         # are unique across them (covers the canonical "example_stage"
         # asked for by the acceptance criteria).
         assert "example_stage" in config.stages
-        # Other example stages from the methodist/mentor files load too.
-        assert "methodist_example" in config.stages
+        # Methodist stage 3.2.3a-onwards: methodist_bottomup is the real
+        # Pass 1 stage; methodist_topdown lands in 3.2.3b.
+        assert "methodist_bottomup" in config.stages
         assert "mentor_example" in config.stages
 
         for stage in config.stages.values():

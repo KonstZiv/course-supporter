@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock
@@ -129,7 +130,7 @@ class _FakeStageRouter:
         self,
         stage_name: str,
         *,
-        response_validator: Any = None,
+        response_validator: Callable[[str], None] | None = None,
         expects_json: bool = False,
         **render_context: Any,
     ) -> Any:

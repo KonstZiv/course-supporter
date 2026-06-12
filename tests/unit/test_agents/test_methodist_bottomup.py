@@ -727,3 +727,46 @@ class TestRootResolutionDepthCap:
         assert course_title == "Real Course"
         # display_name('ukr') resolves to a human-readable Ukrainian label.
         assert language is not None and len(language) > 0
+
+
+# ── R4-followup: error propagation through generate_bottomup ─────
+
+
+class _RaisingResolutionStubAgent(_StubAgent):
+    """``_resolve_course_context`` raises ``MethodistRootResolutionError``."""
+
+    async def _resolve_course_context(self, node: Any) -> tuple[str, str | None]:
+        raise MethodistRootResolutionError(
+            node_id=getattr(node, "id", uuid.uuid4()),
+            last_mid_chain_node_id=uuid.uuid4(),
+            depth_cap=25,
+        )
+
+
+class TestRootResolutionErrorPropagation:
+    """generate_bottomup must propagate MethodistRootResolutionError without
+    swallowing it. K2-catch in the orchestrator records it as ERROR; if the
+    agent silently swallowed it, the orchestrator would mark the node DONE
+    with empty canonical fields — exactly the silent-DONE risk R1 closed
+    for the LLM-empty-response path.
+    """
+
+    async def test_resolution_error_propagates_to_caller(self) -> None:
+        router = _FakeStageRouter(canned_response=_llm_json())
+        agent = _RaisingResolutionStubAgent(
+            router,
+            own_docs=[],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        with pytest.raises(MethodistRootResolutionError):
+            await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+        # The stage router was never reached — agent failed before
+        # producing render context.
+        assert router.last_stage_name is None
+        # Raw was NOT mutated — silent DONE is impossible.
+        assert raw.title is None
+        assert raw.compressed_summary is None

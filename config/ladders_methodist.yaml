@@ -25,7 +25,7 @@
 # ``max_context`` from the registry. The runtime check in StageRouter
 # (Phase 3.2.3-pre) skips a rung when the estimated input exceeds
 # ratio * max_context. Note: chars/3.5 estimator is empirically
-# inaccurate for Ukrainian content (see DD-spike-3.2.3-1); for now
+# inaccurate for Ukrainian content (see DD-3.2.3-pre-B); for now
 # the 0.5 ratio + universal estimator is the production baseline,
 # with a tighter ratio or a tokenizer upgrade tracked separately.
 stages:

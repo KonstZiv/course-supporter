@@ -35,8 +35,13 @@ import pytest
 from course_supporter.agents.methodist import (
     MethodistAgent,
     MethodistInputBudgetExhaustedError,
+    MethodistRootResolutionError,
+    Pass1ChildRawMissingError,
 )
-from course_supporter.llm.error_categories import LadderExhaustedError
+from course_supporter.llm.error_categories import (
+    LadderExhaustedError,
+    StructuralRetryError,
+)
 
 # ── Fake DB rows (no ORM required for unit tests) ────────────────
 
@@ -294,8 +299,6 @@ class TestConceptUnionDeterministicByCode:
         # the validator MUST trigger a StructuralRetryError (which the
         # router would retry; the test triggers it via _FakeStageRouter
         # invoking the validator once and propagating its raise).
-        from course_supporter.llm.error_categories import StructuralRetryError
-
         body = dict(_FULL_BODY)
         body["main_concepts"] = ["should-not-be-here"]
         router = _FakeStageRouter(canned_response=json.dumps(body))
@@ -489,3 +492,238 @@ class TestGenerateTopdownIsNoOp:
         # Raw is unchanged; the LLM was never called.
         assert raw.title == "pre-existing"
         assert router.last_stage_name is None
+
+
+# ── R1: semantic minimum (closure-aware validator) ───────────────
+
+
+class TestSemanticMinimumOnContentBearingNode:
+    """Empty title/description/compressed_summary must NOT pass on a
+    node that carries any input. Empty IS allowed on a structurally
+    trivial node (no own_docs AND no children) per KD10 line 845.
+    """
+
+    async def test_empty_dict_response_with_inputs_raises_retry(self) -> None:
+        # has_inputs = True (own_doc present) + LLM returns empty {}.
+        own = _FakeDocumentSummary(
+            title="lec", description="d", main_concepts=["x"], content_char_count=100
+        )
+        router = _FakeStageRouter(canned_response=json.dumps({}))
+        agent = _StubAgent(
+            router,
+            own_docs=[own],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        with pytest.raises(StructuralRetryError) as exc_info:
+            await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+        # All three required fields surface in the feedback so the LLM
+        # knows exactly what to fix on retry.
+        msg = str(exc_info.value)
+        assert "title" in msg
+        assert "description" in msg
+        assert "compressed_summary" in msg
+
+    async def test_only_compressed_summary_empty_with_inputs_raises(self) -> None:
+        # Title and description present, compressed_summary empty.
+        body = dict(_FULL_BODY)
+        body["compressed_summary"] = ""
+        own = _FakeDocumentSummary(title="lec", description="d", content_char_count=10)
+        router = _FakeStageRouter(canned_response=json.dumps(body))
+        agent = _StubAgent(
+            router,
+            own_docs=[own],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        with pytest.raises(StructuralRetryError) as exc_info:
+            await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+        msg = str(exc_info.value)
+        # The missing-fields list is rendered as ['compressed_summary'] —
+        # the prose mentions title/description as part of the schema
+        # explanation but the actionable list is just compressed_summary.
+        assert "['compressed_summary']" in msg
+
+    async def test_only_whitespace_treated_as_empty(self) -> None:
+        # Whitespace-only fields must not pass; agent strips before check.
+        body = dict(_FULL_BODY)
+        body["title"] = "   "
+        body["description"] = "\n\t "
+        own = _FakeDocumentSummary(title="lec", description="d", content_char_count=5)
+        router = _FakeStageRouter(canned_response=json.dumps(body))
+        agent = _StubAgent(
+            router,
+            own_docs=[own],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        with pytest.raises(StructuralRetryError) as exc_info:
+            await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+        msg = str(exc_info.value)
+        assert "title" in msg
+        assert "description" in msg
+
+    async def test_empty_dict_on_trivial_node_allowed(self) -> None:
+        # has_inputs = False (no own_doc, no children) — the empty
+        # response is the LEGITIMATE shape for a structurally trivial
+        # node. Validator MUST NOT raise.
+        router = _FakeStageRouter(canned_response=json.dumps({}))
+        agent = _StubAgent(
+            router,
+            own_docs=[],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        # Should NOT raise.
+        await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+        # All canonical fields default to empty; counters are zero.
+        assert raw.title == ""
+        assert raw.description == ""
+        assert raw.compressed_summary == ""
+        assert raw.own_documents_count == 0
+        assert raw.cumulative_documents_count == 0
+
+
+# ── R2: child Raw missing → loud raise ───────────────────────────
+
+
+class TestChildRawMissingRaises:
+    """KD10 leaf→root ordering guarantees child Raws are committed.
+    A missing child Raw at parent visit time is a read-contract
+    violation; the agent raises so K2 catches → ERROR + continue walk.
+    """
+
+    async def test_fetch_children_raws_raises_when_child_raw_missing(self) -> None:
+        # Drive the real _fetch_children_raws path with a stubbed session
+        # that returns one child CourseNode but zero NodeSummaryRaw rows
+        # — exactly the read-contract violation R2 guards against.
+        from unittest.mock import MagicMock
+
+        parent_id = uuid.uuid4()
+        child_id = uuid.uuid4()
+        child_node = _FakeNode(id=child_id, title="orphan-child", parent_id=parent_id)
+
+        children_result = MagicMock()
+        children_result.scalars.return_value.all.return_value = [child_node]
+        raws_result = MagicMock()
+        raws_result.scalars.return_value.all.return_value = []
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[children_result, raws_result])
+
+        from course_supporter.llm.stage_router import StageRouter
+
+        agent = MethodistAgent(
+            session=session,
+            stage_router=AsyncMock(spec=StageRouter),
+        )
+        with pytest.raises(Pass1ChildRawMissingError) as exc_info:
+            await agent._fetch_children_raws(parent_id)
+        assert exc_info.value.parent_node_id == parent_id
+        assert exc_info.value.child_node_id == child_id
+        msg = str(exc_info.value)
+        assert "KD10 leaf→root" in msg
+
+    async def test_present_raw_with_empty_compressed_summary_passes(self) -> None:
+        # Confirms the carve-out: child Raw EXISTS but compressed_summary
+        # is empty → legitimate, agent passes empty through unchanged.
+        children = [_FakeChildRaw(title="leaf", compressed_summary="")]
+        router = _FakeStageRouter(canned_response=_llm_json())
+        agent = _StubAgent(
+            router,
+            own_docs=[],
+            child_raws=children,
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        await agent.generate_bottomup(_FakeNode(id=uuid.uuid4(), title="t"), raw)  # type: ignore[arg-type]
+        ctx = router.last_kwargs or {}
+        assert ctx["children_compressed"][0]["compressed_summary"] == ""
+
+
+# ── R3: depth-cap silent fallback removed ────────────────────────
+
+
+class TestRootResolutionDepthCap:
+    """When the parent_id walk-up hits the 25-depth cap without
+    reaching a real root, the agent raises instead of using a
+    mid-chain node as if it were the course root.
+    """
+
+    async def test_depth_cap_with_remaining_parent_raises(self) -> None:
+        # The real implementation reads via session.get; stub a session
+        # that returns a synthetic parent for every walk step, never
+        # reaching parent_id IS NULL.
+        chain_parent_id = uuid.uuid4()
+
+        class _CyclingNode:
+            def __init__(self, _id: uuid.UUID) -> None:
+                self.id = _id
+                self.parent_id: uuid.UUID | None = chain_parent_id
+                self.deleted_at = None
+                self.title = "mid-chain"
+                self.default_language = None
+
+        class _AgentOverSession(MethodistAgent):
+            def __init__(self) -> None:
+                super().__init__(session=AsyncMock(), stage_router=AsyncMock())  # type: ignore[arg-type]
+
+                async def _fake_get(_cls: Any, _pk: uuid.UUID) -> Any:
+                    return _CyclingNode(_pk)
+
+                self._session.get = _fake_get  # type: ignore[method-assign]
+
+        agent = _AgentOverSession()
+        start = _CyclingNode(uuid.uuid4())
+        with pytest.raises(MethodistRootResolutionError) as exc_info:
+            await agent._resolve_course_context(start)  # type: ignore[arg-type]
+        assert exc_info.value.depth_cap == 25
+        assert exc_info.value.node_id == start.id
+
+    async def test_reaches_root_normally(self) -> None:
+        # A normal walk-up does NOT raise — agent uses the root for
+        # title + language. This is the regression-pin for the cap.
+        class _Root:
+            id = uuid.uuid4()
+            parent_id = None
+            deleted_at = None
+            title = "Real Course"
+            default_language = "ukr"
+
+        class _Mid:
+            id = uuid.uuid4()
+            parent_id = _Root.id
+            deleted_at = None
+            title = "mid"
+            default_language = None
+
+        class _AgentOverSession(MethodistAgent):
+            def __init__(self) -> None:
+                super().__init__(session=AsyncMock(), stage_router=AsyncMock())  # type: ignore[arg-type]
+                # Two-step chain: mid → root.
+
+                async def _fake_get(_cls: Any, _pk: uuid.UUID) -> Any:
+                    if _pk == _Root.id:
+                        return _Root()
+                    return _Mid()
+
+                self._session.get = _fake_get  # type: ignore[method-assign]
+
+        agent = _AgentOverSession()
+        course_title, language = await agent._resolve_course_context(_Mid())  # type: ignore[arg-type]
+        assert course_title == "Real Course"
+        # display_name('ukr') resolves to a human-readable Ukrainian label.
+        assert language is not None and len(language) > 0

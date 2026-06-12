@@ -67,9 +67,12 @@ DB state contract (live mode)
   - All ``pass1`` statuses = ``SKIPPED_MEMO`` (axis 1 fresh).
   - All non-root ``pass2`` statuses = ``SKIPPED_MEMO`` (axis 2
     fresh); root stays ``NOT_APPLICABLE``.
-  - **Zero** new ``ExternalServiceCall`` rows compared to the count
-    after the first run (the structural memo-skip guarantee from
-    probe P5).
+  - **Zero** ``ExternalServiceCall`` rows attributed to the second
+    job (``count(ESC where job_id == job_id_second) == 0``). Per
+    KD5 the ``job_id`` FK is the only mandatory scope on ESC; the
+    second run's LLM-call count is therefore an exact integer
+    rather than a delta against the first-run count (probe P5
+    structural memo-skip guarantee).
 """
 
 from __future__ import annotations
@@ -272,11 +275,21 @@ async def _read_run_state(
     return NodeSummaryRunState.model_validate(job.stage_progress)
 
 
-async def _count_esc_rows(session: AsyncSession, vertex_tenant_id: uuid.UUID) -> int:
-    """Count tenant-scoped ESC rows (smoke session has its own tenant)."""
+async def _count_esc_rows_for_job(session: AsyncSession, job_id: uuid.UUID) -> int:
+    """Count ExternalServiceCall rows attributed to a single Job.
+
+    Per KD5 (``storage/orm.py`` ``ExternalServiceCall``), the table's
+    only mandatory FK is ``job_id``; tenant_id and course_node_id
+    resolve through the Job and its input_params and are NOT columns
+    on ESC. The memo-skip evidence after the second run is therefore
+    expressed as ``count(ESC where job_id == job_id_second)`` — exactly
+    the rows the second run was responsible for, which MUST be zero
+    when every visit short-circuited via SKIPPED_MEMO / NOT_APPLICABLE
+    BEFORE invoking the LLM hook.
+    """
     result = await session.execute(
         select(func.count(ExternalServiceCall.id)).where(
-            ExternalServiceCall.tenant_id == vertex_tenant_id
+            ExternalServiceCall.job_id == job_id
         )
     )
     return int(result.scalar_one())
@@ -285,22 +298,22 @@ async def _count_esc_rows(session: AsyncSession, vertex_tenant_id: uuid.UUID) ->
 async def _verify_memo_skip(
     *,
     session: AsyncSession,
-    vertex_node_id: uuid.UUID,
     job_id_second: uuid.UUID,
-    esc_before_second: int,
 ) -> dict[str, Any]:
-    """After the second run: pin SKIPPED_MEMO + zero new ESC rows."""
-    vertex_row = await session.get(CourseNode, vertex_node_id)
-    if vertex_row is None:
-        msg = f"vertex CourseNode {vertex_node_id} vanished post-second-run"
-        raise RuntimeError(msg)
+    """After the second run: pin SKIPPED_MEMO statuses + zero ESC rows.
+
+    The memo-skip check no longer needs an esc_before / esc_after
+    delta. Because ESC rows carry ``job_id`` directly, the second run's
+    LLM-call count is simply the count of ESC rows belonging to the
+    second job — zero when the structural memo-skip held.
+    """
     run_state = await _read_run_state(session, job_id_second)
     if run_state is None:
         msg = "run-state missing after second run — orchestrator did not persist"
         raise RuntimeError(msg)
     pass1_statuses = list(run_state.pass1.values())
     pass2_statuses = list(run_state.pass2.values())
-    esc_after = await _count_esc_rows(session, vertex_row.tenant_id)
+    esc_from_second = await _count_esc_rows_for_job(session, job_id_second)
     return {
         "pass1_all_skipped_memo": all(
             s == NodeSummaryNodeStatus.SKIPPED_MEMO for s in pass1_statuses
@@ -312,7 +325,7 @@ async def _verify_memo_skip(
             if s != NodeSummaryNodeStatus.NOT_APPLICABLE
         ),
         "pass2_status_counts": _count_statuses(pass2_statuses),
-        "esc_rows_added_by_second_run": esc_after - esc_before_second,
+        "esc_rows_from_second_run": esc_from_second,
     }
 
 
@@ -376,11 +389,9 @@ async def main(args: argparse.Namespace) -> int:
 
     async with session_factory() as session:
         first = await _verify_first_run(session, fixture_root)
-        vertex_row = await session.get(CourseNode, fixture_root)
-        assert vertex_row is not None, "vertex vanished mid-run"
-        esc_after_first = await _count_esc_rows(session, vertex_row.tenant_id)
+        esc_from_first = await _count_esc_rows_for_job(session, job_id_first)
     print(f"[live-smoke] run 1 evidence: {first}")
-    print(f"[live-smoke] run 1 ESC rows: {esc_after_first}")
+    print(f"[live-smoke] run 1 ESC rows: {esc_from_first}")
 
     first_ok = (
         first["with_source_content_hash"] == first["raw_count"]
@@ -413,16 +424,14 @@ async def main(args: argparse.Namespace) -> int:
     async with session_factory() as session:
         memo = await _verify_memo_skip(
             session=session,
-            vertex_node_id=fixture_root,
             job_id_second=job_id_second,
-            esc_before_second=esc_after_first,
         )
     print(f"[live-smoke] run 2 memo-skip evidence: {memo}")
 
     memo_ok = (
         memo["pass1_all_skipped_memo"]
         and memo["pass2_non_root_all_skipped_memo"]
-        and memo["esc_rows_added_by_second_run"] == 0
+        and memo["esc_rows_from_second_run"] == 0
     )
     if not memo_ok:
         print(

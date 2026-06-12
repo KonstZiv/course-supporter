@@ -17,6 +17,7 @@ from arq.connections import RedisSettings
 from course_supporter.api.tasks import (
     arq_ingest_material,
     arq_process_homework,
+    arq_regenerate_node_summary,
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
@@ -130,6 +131,7 @@ class WorkerSettings:
     )
     functions: ClassVar[list[Any]] = [
         arq_ingest_material,
+        arq_regenerate_node_summary,
         s3_cleanup_task,
     ]
     on_startup = startup

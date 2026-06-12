@@ -24,6 +24,7 @@ from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.documents import router as documents_router
 from course_supporter.api.routes.homework import router as homework_router
 from course_supporter.api.routes.jobs import router as jobs_router
+from course_supporter.api.routes.node_summaries import router as node_summaries_router
 from course_supporter.api.routes.nodes import router as nodes_router
 from course_supporter.api.routes.storage import router as storage_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -257,6 +258,7 @@ async def unhandled_exception_handler(
 
 
 app.include_router(nodes_router, prefix="/api/v1")
+app.include_router(node_summaries_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(homework_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")

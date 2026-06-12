@@ -650,3 +650,185 @@ class StorageUsageResponse(BaseModel):
 
     total_bytes: int = Field(description="Total storage used in bytes.")
     file_count: int = Field(description="Number of files in storage.")
+
+
+# --- NodeSummaryFinal — methodist layer HTTP surface (Phase 3.2.4 c2) ---
+
+
+class NodeSummaryGenerateRequest(BaseModel):
+    """Request body for ``POST /api/v1/nodes/{node_id}/summary/generate``.
+
+    Triggers the two-pass methodist run via ARQ (orchestrator runs in
+    the worker; the route returns immediately with the queued Job).
+
+    ``force`` widens scope only for the API's 422 decision on
+    ``uncovered_stale_node_ids`` — memo-skip on both axes is
+    unconditional inside the orchestrator (K1 ratify, Phase 3.2.2).
+    """
+
+    force: bool = Field(
+        default=False,
+        description=(
+            "When true, the run proceeds even if scope-validation flags "
+            "ancestors as uncovered_stale. Memo-skip on both hash axes "
+            "is unconditional; force only widens what the API accepts."
+        ),
+    )
+
+
+class NodeSummaryFinalResponse(BaseModel):
+    """Response shape for ``GET /api/v1/nodes/{node_id}/summary`` (P6, 200 branch).
+
+    Full ``NodeSummaryFinal`` contract per KD11 §1043-1071. Read-only
+    on enclosing_context (refreshed by the third channel — top-down,
+    NOT author-editable). The approval pair (``approved_at``,
+    ``enclosing_context_updated_at``) is two timestamps, not one
+    derived field — downstream MUST NOT assume the whole Final was
+    approved in a single moment (KD11 line 1069).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Unique NodeSummaryFinal identifier (UUIDv7).")
+    course_node_id: uuid.UUID = Field(
+        description="The CourseNode this Final summarises (1:1, UNIQUE)."
+    )
+
+    # Editable family (KD11 §1043-1054).
+    title: str | None = Field(description="Methodist-canonical title.")
+    description: str | None = Field(description="Methodist-canonical description.")
+    learning_objectives: list[str] = Field(
+        default_factory=list,
+        description="Bloom-taxonomy outcome statements (3-7 typical).",
+    )
+    knowledge: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "LearningOutcomeItem[]: {name, description} — what student will know."
+        ),
+    )
+    skills: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "LearningOutcomeItem[]: {name, description} — what student will do."
+        ),
+    )
+    success_criteria: list[str] = Field(default_factory=list)
+    assessment_approach: str | None = Field(default=None)
+    teaching_approach: str | None = Field(default=None)
+    key_activities: list[str] = Field(default_factory=list)
+    common_mistakes: list[str] = Field(default_factory=list)
+
+    # Read-only — copied from Raw (KD11).
+    main_concepts: list[str] = Field(default_factory=list)
+    secondary_concepts: list[str] = Field(default_factory=list)
+    enclosing_context: str | None = Field(
+        default=None,
+        description=(
+            "Read-only on Final. Top-down refresh updates it WITHOUT "
+            "resetting approved_at (KD11 §1066 third channel)."
+        ),
+    )
+
+    # Empty-leaf author flow placeholder (Phase 3.1 MVP).
+    is_manual: bool = Field(
+        description=(
+            "Forward-compat marker for the empty-leaf author-create flow. "
+            "In Phase 3.2.4 no HTTP API sets this — always ``false`` for "
+            "Finals created by the channel-1 automatic overwrite."
+        ),
+    )
+    manual_description: str | None = Field(default=None)
+
+    # Size metrics.
+    own_documents_count: int = Field(default=0)
+    own_chars_count: int = Field(default=0)
+    cumulative_documents_count: int = Field(default=0)
+    cumulative_chars_count: int = Field(default=0)
+
+    # Hash + approval pair (KD11).
+    content_hash: str | None = Field(
+        description=(
+            "Materialised SHA-256 hex over content fields EXCEPT "
+            "``enclosing_context`` (KD9 line 729 invariant)."
+        ),
+    )
+    approved_at: datetime | None = Field(
+        default=None,
+        description=(
+            "NULL after every automatic Raw-overwrite; set by explicit "
+            "approve. The third channel (top-down) does NOT reset this."
+        ),
+    )
+    enclosing_context_updated_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When top-down last refreshed ``enclosing_context``. NULL on "
+            "root (top-down skipped) and until the first top-down lands."
+        ),
+    )
+
+    created_at: datetime
+    updated_at: datetime
+
+
+class NodeSummaryFinalUpdateRequest(BaseModel):
+    """Request body for ``PATCH /api/v1/node-summaries/{node_id}/final``.
+
+    Editable family per KD11 §1043-1054 (Identity + Learning outcomes
+    + Assessment + Methodology). Pydantic rejects unknown keys via
+    ``extra='forbid'`` — concepts / ``enclosing_context`` / hash /
+    timestamps / ``is_manual`` / ``manual_description`` all 422 at the
+    request-parsing boundary. The repository's deep ``ValueError`` gate
+    is the defence-in-depth fallback.
+
+    All fields are optional — only present keys land on the row.
+    ``approved_at`` is NOT touched by PATCH (KD11: author edit does
+    not auto-invalidate a prior approval; explicit approve is a
+    separate action).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=10_000)
+    learning_objectives: list[str] | None = Field(default=None)
+    knowledge: list[dict[str, str]] | None = Field(default=None)
+    skills: list[dict[str, str]] | None = Field(default=None)
+    success_criteria: list[str] | None = Field(default=None)
+    assessment_approach: str | None = Field(default=None, max_length=10_000)
+    teaching_approach: str | None = Field(default=None, max_length=10_000)
+    key_activities: list[str] | None = Field(default=None)
+    common_mistakes: list[str] | None = Field(default=None)
+
+
+class NodeSummaryEditViewResponse(BaseModel):
+    """Response shape for ``GET /api/v1/node-summaries/{node_id}/edit-view``.
+
+    Combined view per KD11 §1086-1101: editable Final + Raw's
+    ``methodist_observations`` (renamed to ``raw_observations`` at the
+    API boundary per operator-ratified Phase 3.2.4 pre-flight question
+    (в) — ORM column name unchanged) + the optional single-version
+    snapshot.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    final: NodeSummaryFinalResponse
+    raw_observations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Methodist observations from both passes (API-side alias "
+            "for ``NodeSummaryRaw.methodist_observations``). Shown to "
+            "the author before approve."
+        ),
+    )
+    previous_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Snapshot of the prior Final state captured at the last "
+            "automatic overwrite. ``null`` when no overwrite has "
+            "occurred yet (the very first run produced the current "
+            "Final via INSERT)."
+        ),
+    )

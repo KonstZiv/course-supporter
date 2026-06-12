@@ -40,6 +40,9 @@ from course_supporter.storage.enclosing_context_hash import (
     EnclosingContextHashService,
 )
 from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.node_summary_final_repository import (
+    NodeSummaryFinalRepository,
+)
 from course_supporter.storage.node_summary_run_state import (
     NodeSummaryNodeStatus,
     NodeSummaryRunError,
@@ -58,6 +61,35 @@ logger = structlog.get_logger(__name__)
 # (same defensive intent, separate concern: content_hash walks the hash chain;
 # this walks the CourseNode parent chain).
 _MAX_COURSE_DEPTH = 25
+
+
+def _classify_pass2_parent_missing(
+    *, parent_present: bool, parent_in_scope: bool
+) -> tuple[str, str]:
+    """Map the :class:`Pass2ParentRawMissingError` discriminators to
+    ``(severity, error_class)`` strings consumed by
+    :class:`NodeSummaryRunError`.
+
+    Branch mapping (historical sub-cases preserved as inline aliases):
+
+    * ``not parent_present`` → ``(ERROR, parent_node_missing_from_database)``
+      (historical alias **B**).
+    * ``parent_present and parent_in_scope`` →
+      ``(ERROR, parent_summary_missing_within_scope)`` (historical
+      alias **A1**).
+    * ``parent_present and not parent_in_scope`` →
+      ``(WARNING, parent_intentionally_out_of_run_scope)``
+      (historical alias **A2** — operator-driven ``force=True``
+      bypass of ``uncovered_stale``).
+
+    Helper is pure (no I/O). Returns strings rather than Literal
+    members to keep the import surface minimal at the call site.
+    """
+    if not parent_present:
+        return ("ERROR", "parent_node_missing_from_database")
+    if parent_in_scope:
+        return ("ERROR", "parent_summary_missing_within_scope")
+    return ("WARNING", "parent_intentionally_out_of_run_scope")
 
 
 class Pass2ParentRawMissingError(RuntimeError):
@@ -231,6 +263,7 @@ class NodeSummaryGenerationOrchestrator:
         self._session = session
         self._methodist: MethodistGenerator = methodist or _NoOpMethodistGenerator()
         self._encl_hash = EnclosingContextHashService(session)
+        self._final_repo = NodeSummaryFinalRepository(session)
 
     async def validate_scope(
         self, vertex_node_id: uuid.UUID, force: bool
@@ -655,6 +688,8 @@ class NodeSummaryGenerationOrchestrator:
                     node_id=node.id,
                     stage="bottomup",
                     reason=str(exc),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass1[node.id] = NodeSummaryNodeStatus.ERROR
@@ -664,6 +699,13 @@ class NodeSummaryGenerationOrchestrator:
             return
 
         raw.source_content_hash = node.content_hash
+
+        # Channel 1 (KD11 §1055-1062): write Final from Raw + snapshot
+        # prior version. Memo-skip branch above does NOT reach this
+        # point — Final is left untouched whenever Pass 1 skipped LLM
+        # work, by structural exclusion.
+        await self._final_repo.write_from_raw_with_snapshot(raw)
+
         run_state.pass1[node.id] = NodeSummaryNodeStatus.DONE
         run_state.updated_at = datetime.now(UTC)
         await self._persist_run_state(job_id, run_state)
@@ -741,6 +783,8 @@ class NodeSummaryGenerationOrchestrator:
                         "Pass 2 prerequisite: own NodeSummaryRaw row is missing "
                         "(Pass 1 must run successfully before Pass 2 visits a node)"
                     ),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
@@ -761,11 +805,20 @@ class NodeSummaryGenerationOrchestrator:
                 parent_course_node_present=parent_present,
                 parent_in_scope=parent_in_scope,
             )
+            # Phase 3.2.4 c3 — machine-readable mapping of the three
+            # historical sub-cases (A1 / A2 / B) onto the public
+            # severity + error_class enum. Operators / UI never parse
+            # ``reason``; the discrimination lives here.
+            severity, error_class = _classify_pass2_parent_missing(
+                parent_present=parent_present, parent_in_scope=parent_in_scope
+            )
             run_state.errors.append(
                 NodeSummaryRunError(
                     node_id=node.id,
                     stage="topdown",
                     reason=str(exc),
+                    severity=severity,
+                    error_class=error_class,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
@@ -799,6 +852,8 @@ class NodeSummaryGenerationOrchestrator:
                     node_id=node.id,
                     stage="topdown",
                     reason=str(exc),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
@@ -809,6 +864,13 @@ class NodeSummaryGenerationOrchestrator:
 
         # Step 6 — materialise via 3.2.1 (mirror Pass 1 timing).
         await self._encl_hash.update_source_hash(raw, computed_hash)
+
+        # Channel 3 (KD11 §1064-1071): point-refresh Final.enclosing_
+        # context + bump enclosing_context_updated_at. Does NOT reset
+        # approved_at (explicit KD11 exception). Memo-skip branch
+        # above does NOT reach this point — Final is left untouched
+        # whenever Pass 2 skipped LLM work, by structural exclusion.
+        await self._final_repo.refresh_enclosing_context(raw)
 
         # Step 7 — DONE.
         run_state.pass2[node.id] = NodeSummaryNodeStatus.DONE

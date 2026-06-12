@@ -113,3 +113,181 @@ class TestExtraForbidden:
 
         with pytest.raises(ValueError):
             NodeSummaryRunState.from_jsonb(payload)
+
+
+class TestRunErrorMachineReadableFields:
+    """Phase 3.2.4 c3 — ``severity`` + ``error_class`` round-trip."""
+
+    def test_explicit_warning_a2_round_trips(self) -> None:
+        nid = uuid.uuid4()
+        err = NodeSummaryRunError(
+            node_id=nid,
+            stage="topdown",
+            reason="A2 (out-of-scope parent without Raw — uncovered_stale "
+            "bypassed by force=True)",
+            severity="WARNING",
+            error_class="parent_intentionally_out_of_run_scope",
+        )
+        state = NodeSummaryRunState(vertex_node_id=uuid.uuid4(), errors=[err])
+        restored = NodeSummaryRunState.from_jsonb(state.to_jsonb())
+        assert len(restored.errors) == 1
+        assert restored.errors[0].severity == "WARNING"
+        assert restored.errors[0].error_class == "parent_intentionally_out_of_run_scope"
+
+    def test_explicit_error_a1_round_trips(self) -> None:
+        err = NodeSummaryRunError(
+            node_id=uuid.uuid4(),
+            stage="topdown",
+            reason="A1 (in-scope parent without Raw — Pass 1 ordering violation)",
+            severity="ERROR",
+            error_class="parent_summary_missing_within_scope",
+        )
+        state = NodeSummaryRunState(vertex_node_id=uuid.uuid4(), errors=[err])
+        restored = NodeSummaryRunState.from_jsonb(state.to_jsonb())
+        assert restored.errors[0].severity == "ERROR"
+        assert restored.errors[0].error_class == "parent_summary_missing_within_scope"
+
+    def test_explicit_error_b_round_trips(self) -> None:
+        err = NodeSummaryRunError(
+            node_id=uuid.uuid4(),
+            stage="topdown",
+            reason="B (missing parent CourseNode — soft-delete race or "
+            "structural inconsistency)",
+            severity="ERROR",
+            error_class="parent_node_missing_from_database",
+        )
+        state = NodeSummaryRunState(vertex_node_id=uuid.uuid4(), errors=[err])
+        restored = NodeSummaryRunState.from_jsonb(state.to_jsonb())
+        assert restored.errors[0].severity == "ERROR"
+        assert restored.errors[0].error_class == "parent_node_missing_from_database"
+
+    def test_other_exception_path_yields_error_none(self) -> None:
+        """All catch sites other than Pass 2 parent-missing emit
+        ``(ERROR, None)`` — the constructor default for non-specialised
+        failures."""
+        err = NodeSummaryRunError(
+            node_id=uuid.uuid4(),
+            stage="bottomup",
+            reason="LLM provider timeout",
+            severity="ERROR",
+            error_class=None,
+        )
+        state = NodeSummaryRunState(vertex_node_id=uuid.uuid4(), errors=[err])
+        restored = NodeSummaryRunState.from_jsonb(state.to_jsonb())
+        assert restored.errors[0].severity == "ERROR"
+        assert restored.errors[0].error_class is None
+
+
+class TestRunErrorBackwardTolerance:
+    """Pre-3.2.4 records (no ``severity`` / ``error_class`` keys) parse
+    cleanly with defaults — the JSONB persistence channel needs no
+    migration (ratified pre-flight rule §3.2.4 c3)."""
+
+    def test_old_shape_without_new_fields_defaults_to_error_none(self) -> None:
+        nid = uuid.uuid4()
+        old_payload = {
+            "vertex_node_id": str(uuid.uuid4()),
+            "force": False,
+            "scope": {"in_scope_node_ids": [], "uncovered_stale_node_ids": []},
+            "pass1": {},
+            "pass2": {},
+            "errors": [
+                {
+                    "node_id": str(nid),
+                    "stage": "bottomup",
+                    "reason": "historical-shape failure",
+                    "at": "2026-06-01T12:00:00+00:00",
+                    # NB: no severity, no error_class — pre-3.2.4 shape.
+                }
+            ],
+            "started_at": "2026-06-01T12:00:00+00:00",
+            "updated_at": "2026-06-01T12:00:00+00:00",
+        }
+        restored = NodeSummaryRunState.from_jsonb(old_payload)
+        assert len(restored.errors) == 1
+        # Defaults applied: severity=ERROR (safer assumption),
+        # error_class=None (unspecialised).
+        assert restored.errors[0].severity == "ERROR"
+        assert restored.errors[0].error_class is None
+        # Original fields preserved verbatim.
+        assert restored.errors[0].node_id == nid
+        assert restored.errors[0].stage == "bottomup"
+        assert restored.errors[0].reason == "historical-shape failure"
+
+    def test_forward_extra_field_in_error_does_not_raise(self) -> None:
+        """``NodeSummaryRunError.model_config['extra']='allow'`` — a
+        future-task addition on the error entry survives resume-replay."""
+        payload = {
+            "vertex_node_id": str(uuid.uuid4()),
+            "scope": {"in_scope_node_ids": [], "uncovered_stale_node_ids": []},
+            "pass1": {},
+            "pass2": {},
+            "errors": [
+                {
+                    "node_id": str(uuid.uuid4()),
+                    "stage": "topdown",
+                    "reason": "future-task added a new key",
+                    "at": "2026-06-01T12:00:00+00:00",
+                    "future_field_we_dont_understand": {"hello": "world"},
+                }
+            ],
+            "started_at": "2026-06-01T12:00:00+00:00",
+            "updated_at": "2026-06-01T12:00:00+00:00",
+        }
+        # Must not raise.
+        restored = NodeSummaryRunState.from_jsonb(payload)
+        assert len(restored.errors) == 1
+
+
+class TestClassifyPass2ParentMissingHelper:
+    """Pure-function mapping of the two-bool discriminator onto the
+    public severity + error_class enum (Phase 3.2.4 c3)."""
+
+    def test_branch_b_missing_parent_course_node(self) -> None:
+        from course_supporter.storage.node_summary_orchestrator import (
+            _classify_pass2_parent_missing,
+        )
+
+        severity, error_class = _classify_pass2_parent_missing(
+            parent_present=False, parent_in_scope=False
+        )
+        assert (severity, error_class) == (
+            "ERROR",
+            "parent_node_missing_from_database",
+        )
+        # parent_in_scope is force-coerced False when parent absent;
+        # the helper must reach the B branch even on a logically
+        # nonsensical (False, True) combo, defensively.
+        severity, error_class = _classify_pass2_parent_missing(
+            parent_present=False, parent_in_scope=True
+        )
+        assert (severity, error_class) == (
+            "ERROR",
+            "parent_node_missing_from_database",
+        )
+
+    def test_branch_a1_in_scope_parent_without_raw(self) -> None:
+        from course_supporter.storage.node_summary_orchestrator import (
+            _classify_pass2_parent_missing,
+        )
+
+        severity, error_class = _classify_pass2_parent_missing(
+            parent_present=True, parent_in_scope=True
+        )
+        assert (severity, error_class) == (
+            "ERROR",
+            "parent_summary_missing_within_scope",
+        )
+
+    def test_branch_a2_out_of_scope_parent_force_bypass(self) -> None:
+        from course_supporter.storage.node_summary_orchestrator import (
+            _classify_pass2_parent_missing,
+        )
+
+        severity, error_class = _classify_pass2_parent_missing(
+            parent_present=True, parent_in_scope=False
+        )
+        assert (severity, error_class) == (
+            "WARNING",
+            "parent_intentionally_out_of_run_scope",
+        )

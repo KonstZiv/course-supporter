@@ -401,39 +401,118 @@ class TestNoneContractDiscrimination:
         finally:
             await _cleanup_course(session_factory, ids["tenant_id"])
 
+    async def test_a2_path_records_machine_readable_severity_and_class(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Phase 3.2.4 c3 — A2 sub-case writes
+        ``severity='WARNING'`` + ``error_class='parent_intentionally_out_of_run_scope'``
+        into ``Job.stage_progress.errors[]``.
+
+        Same fixture as the sibling A2 reason-string test above
+        (``test_force_bypasses_uncovered_then_pass2_errors_on_vertex``);
+        this one pins the public machine-readable channel UI / monitors
+        consume instead of the free-text ``reason``.
+        """
+        ids = await _setup_course_with_job(session_factory)
+        try:
+
+            class _ObservedMethodist:
+                async def generate_bottomup(
+                    self, node: CourseNode, raw: NodeSummaryRaw
+                ) -> None:
+                    pass
+
+                async def generate_topdown(
+                    self,
+                    node: CourseNode,
+                    raw: NodeSummaryRaw,
+                    parent_raw: NodeSummaryRaw,
+                ) -> None:
+                    pass
+
+            async with session_factory() as session:
+                orch = NodeSummaryGenerationOrchestrator(
+                    session, methodist=_ObservedMethodist()
+                )
+                # vertex='a' (inner node), root is uncovered (no Raw),
+                # force=True bypasses the would-be 422.
+                await orch.run(
+                    job_id=ids["job_id"],
+                    vertex_node_id=ids["a"],
+                    force=True,
+                )
+
+            async with session_factory() as session:
+                job = await session.get(Job, ids["job_id"])
+                assert job is not None
+                state = NodeSummaryRunState.from_jsonb(job.stage_progress or {})
+
+                a_errors = [
+                    e
+                    for e in state.errors
+                    if e.node_id == ids["a"] and e.stage == "topdown"
+                ]
+                assert len(a_errors) == 1
+                # The c3 contract: severity + error_class encode the
+                # expected-by-design A2 outcome without any reason
+                # parsing.
+                assert a_errors[0].severity == "WARNING"
+                assert (
+                    a_errors[0].error_class == "parent_intentionally_out_of_run_scope"
+                )
+        finally:
+            await _cleanup_course(session_factory, ids["tenant_id"])
+
 
 # ── #7 inverted pin — Final.enclosing_context_updated_at untouched ─
 
 
 class TestFinalUpdatedAtUntouched:
-    """Skeleton 3.2.2 does not write Final; pre-seeded timestamp survives."""
+    """Pass 2 memo-skip never touches ``Final.enclosing_context_updated_at``.
+
+    Phase 3.2.4 c1 landed the third write channel — Final now exists
+    after the first run (channel 1 at Pass 1) and carries a non-NULL
+    ``enclosing_context_updated_at`` on non-root nodes (channel 3 at
+    Pass 2). The original 3.2.2-skeleton phrasing of this test
+    ("skeleton does not write Final; pre-seeded row survives") is
+    inverted by construction: Final EXISTS, channel 3 EXISTS, and the
+    invariant is that an idempotent second run leaves the channel-3
+    timestamp frozen because both axes memo-skip every node.
+    """
 
     async def test_pass2_memo_skip_does_not_touch_final_timestamp(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         ids = await _setup_course_with_job(session_factory)
         try:
-            # First run — populate everything axis-1 + axis-2 fresh.
+            # First run — populate Raws + Finals on every in-scope node;
+            # channel 3 sets ``enclosing_context_updated_at`` on every
+            # non-root Final.
             async with session_factory() as session:
                 orch = NodeSummaryGenerationOrchestrator(
                     session, methodist=_RecordingMethodist()
                 )
                 await orch.run(job_id=ids["job_id"], vertex_node_id=ids["root"])
 
-            # Seed a NodeSummaryFinal with a pre-existing timestamp on the
-            # non-root inner node 'a' (any Final-bearing node would do).
-            sentinel = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+            # Capture the channel-3 timestamp + manually bump
+            # ``approved_at`` out-of-band so we have two timestamps to
+            # pin frozen across the memo-skip second run.
+            sentinel_approved_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
             async with session_factory() as session:
-                final = NodeSummaryFinal(
-                    course_node_id=ids["a"],
-                    enclosing_context_updated_at=sentinel,
-                    approved_at=sentinel,
-                )
-                session.add(final)
+                final = (
+                    await session.execute(
+                        select(NodeSummaryFinal).where(
+                            NodeSummaryFinal.course_node_id == ids["a"]
+                        )
+                    )
+                ).scalar_one()
+                first_run_encl_updated_at = final.enclosing_context_updated_at
+                assert first_run_encl_updated_at is not None
+                final.approved_at = sentinel_approved_at
                 await session.commit()
 
-            # Second run — every Pass 2 should memo-skip (no work),
-            # in particular not touching Final.
+            # Second run — every Pass 1 + Pass 2 memo-skip; channels
+            # 1+3 never fire on the path, Final stays byte-identical.
             methodist_second = _RecordingMethodist()
             async with session_factory() as session:
                 orch = NodeSummaryGenerationOrchestrator(
@@ -441,17 +520,24 @@ class TestFinalUpdatedAtUntouched:
                 )
                 await orch.run(job_id=ids["job_id"], vertex_node_id=ids["root"])
             assert methodist_second.topdown_calls == []
+            assert methodist_second.bottomup_calls == []
 
-            # Assert Final timestamp untouched.
             async with session_factory() as session:
-                result = await session.execute(
-                    select(NodeSummaryFinal).where(
-                        NodeSummaryFinal.course_node_id == ids["a"]
+                final_after = (
+                    await session.execute(
+                        select(NodeSummaryFinal).where(
+                            NodeSummaryFinal.course_node_id == ids["a"]
+                        )
                     )
+                ).scalar_one()
+                # Channel 3 timestamp frozen — memo-skip did not refresh.
+                assert (
+                    final_after.enclosing_context_updated_at
+                    == first_run_encl_updated_at
                 )
-                final_after = result.scalar_one()
-                assert final_after.enclosing_context_updated_at == sentinel
-                assert final_after.approved_at == sentinel
+                # Out-of-band approval also preserved — channel 1
+                # would have reset it, channel 1 also memo-skipped.
+                assert final_after.approved_at == sentinel_approved_at
         finally:
             await _cleanup_course(session_factory, ids["tenant_id"])
 

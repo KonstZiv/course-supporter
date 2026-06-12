@@ -1,12 +1,42 @@
 # Methodist agent stage ladders (KD16).
 #
-# Phase 1+ tasks add real stages here as they rewrite the
-# Methodist pipeline: methodist_bottomup, methodist_topdown.
+# Phase 3.2.3a lands the first real stage: ``methodist_bottomup``.
+# Phase 3.2.3b will add ``methodist_topdown``.
+#
+# Ladder rationale (ratified per SPIKE-3-2-3-results.md, 2026-06-11):
+#
+# * deepseek-v4-pro thinking — primary; spike median $0.022/call,
+#   53s latency, hits 1-2k chars compressed_summary cleanly. Best
+#   cost/quality on the methodist synthesis workload.
+# * qwen3.7-max — fallback; spike median $0.054/call, 104s latency,
+#   ~17% longer output than primary. Slower but provides extra
+#   methodist depth when primary degrades.
+# * gemini-2.5-flash control intentionally NOT registered as a third
+#   rung — spike empirically showed it under-shoots the synthesis depth
+#   target (median 1894 tokens out vs 4813 / 5651 for the two reasoning
+#   tiers); a silent terminal-rung fallback to flash would degrade
+#   methodist content quality without surfacing a failure signal.
+#   Ladder exhaustion on this two-rung set is the loud signal that the
+#   methodist call cannot proceed; the agent translates it into a
+#   domain-level "restructure your course" message at the call site
+#   (Phase 3.2.3a §5 contract).
+#
+# Input budget per KD10: 0.5 ratio applied to each rung's
+# ``max_context`` from the registry. The runtime check in StageRouter
+# (Phase 3.2.3-pre) skips a rung when the estimated input exceeds
+# ratio * max_context. Note: chars/3.5 estimator is empirically
+# inaccurate for Ukrainian content (see DD-spike-3.2.3-1); for now
+# the 0.5 ratio + universal estimator is the production baseline,
+# with a tighter ratio or a tokenizer upgrade tracked separately.
 stages:
-  methodist_example:
-    prompt_ref: "prompts/example/v1.md"
+  methodist_bottomup:
+    prompt_ref: "prompts/methodist_bottomup/v1.md"
+    requires: [structured_output, long_context]
+    input_budget_ratio: 0.5
     ladder:
-      - provider: anthropic
-        model: claude-sonnet-4-20250514
-      - provider: gemini
-        model: gemini-2.5-pro
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 16384
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 16384

@@ -9,6 +9,7 @@ from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.job_priority import JobPriority
+from course_supporter.jobs import JobType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -140,6 +141,64 @@ async def enqueue_homework(
 
     log.info(
         "homework_job_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
+async def enqueue_node_summary_regeneration(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    vertex_node_id: uuid.UUID,
+    force: bool = False,
+    priority: JobPriority = JobPriority.NORMAL,
+) -> Job:
+    """Create a Job + enqueue the methodist two-pass regeneration task.
+
+    Single source of truth for the
+    ``node_summary_regeneration`` enqueue path (KD13 + Phase 3.2.4).
+    Mirrors :func:`enqueue_ingestion` shape: persist the Job row +
+    enqueue the ARQ task + record ``arq_job_id``. The caller commits.
+
+    Args:
+        redis: ARQ Redis pool.
+        session: Active DB session (caller controls the transaction
+            boundary; this helper does NOT commit).
+        tenant_id: Owning tenant.
+        vertex_node_id: Vertex CourseNode for the run.
+        force: Whether the run bypasses the API's 422 on uncovered_stale
+            ancestors. Recorded into ``input_params`` so reactivate can
+            replay the same call shape.
+        priority: Job priority (NORMAL respects the work window).
+    """
+    log = structlog.get_logger().bind(vertex_node_id=str(vertex_node_id), force=force)
+    repo = JobRepository(session)
+    job = await repo.create(
+        tenant_id=tenant_id,
+        course_node_id=vertex_node_id,
+        job_type=JobType.NODE_SUMMARY_REGENERATION,
+        priority=priority.value,
+        input_params={
+            "vertex_node_id": str(vertex_node_id),
+            "force": force,
+        },
+    )
+
+    arq_job = await redis.enqueue_job(
+        "arq_regenerate_node_summary",
+        str(job.id),
+        str(vertex_node_id),
+        force,
+    )
+
+    if arq_job is not None:
+        await repo.set_arq_job_id(job.id, arq_job.job_id)
+
+    log.info(
+        "node_summary_job_enqueued",
         job_id=str(job.id),
         arq_job_id=arq_job.job_id if arq_job else None,
     )

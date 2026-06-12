@@ -1,22 +1,17 @@
 """Methodist factory — wires :class:`MethodistAgent` into the orchestrator.
 
-Phase 3.2.3a is the first task that builds
-:class:`NodeSummaryGenerationOrchestrator` in production scope. There
-is no HTTP endpoint, no ARQ task wiring, and no background-job
-enqueue yet — those land in Phase 3.2.4. This module ships the
-minimum: a helper that constructs the orchestrator with the
-methodist agent injected via the DI seam established in Phase 3.2.2.
+Single DI shape consumed by both production callers landed in Phase
+3.2.4:
 
-Consumers in the 3.2.3a delta:
+* The ARQ worker task ``arq_regenerate_node_summary`` (api/tasks.py)
+  — driven by ``POST /api/v1/nodes/{node_id}/summary/generate``.
+* Integration tests that drive ``orch.run()`` directly with synthetic
+  methodist stubs.
 
-* ``tools/methodist_live_smoke.py`` — operator-gated diagnostic that
-  imports :func:`build_node_summary_orchestrator` and drives Pass 1
-  on a dev fixture.
-
-Future consumers in Phase 3.2.4:
-
-* ARQ worker task ``arq_regenerate_node_summary`` (Phase 3.2.4).
-* FastAPI POST endpoint for the methodist-regenerate trigger.
+The orchestrator's session and the methodist agent's session are
+shared (Phase 3.2.3 S5 ratify) — reads in the agent see the same view
+as the orchestrator's transaction; writes from the agent flush onto
+the orchestrator's session.
 """
 
 from __future__ import annotations

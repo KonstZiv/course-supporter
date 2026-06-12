@@ -92,13 +92,29 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         "job_id": jid,
                     },
                 )
+            case "node_summary_regeneration":
+                # Phase 3.2.4 — the methodist two-pass orchestrator
+                # job. ``vertex_node_id`` + ``force`` are recorded on
+                # original enqueue (``enqueue_node_summary_regeneration``)
+                # and replayed verbatim here so reactivate resumes the
+                # same scope; ``stage_progress`` is preserved by
+                # ``reactivate`` so the orchestrator picks up from
+                # KD4a checkpoint via memo-skip on already-fresh nodes.
+                return _ReenqueueDispatch(
+                    arq_function="arq_regenerate_node_summary",
+                    args=[
+                        jid,
+                        p["vertex_node_id"],
+                        p.get("force", False),
+                    ],
+                )
             case _:
                 raise HTTPException(
                     status_code=422,
                     detail=(
                         f"Reactivate not supported for job_type="
                         f"{job.job_type!r}. Supported types: ingest, "
-                        f"homework, s3_cleanup."
+                        f"homework, s3_cleanup, node_summary_regeneration."
                     ),
                 )
     except KeyError as exc:

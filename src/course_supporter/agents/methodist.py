@@ -139,7 +139,7 @@ class MethodistRootResolutionError(RuntimeError):
 
 
 class MethodistInputBudgetExhaustedError(Exception):
-    """Raised when Pass 1 ladder exhaustion is driven by input-budget skips.
+    """Raised when methodist ladder exhaustion is driven by input-budget skips.
 
     Domain-level signal: the node's input is too large for every rung's
     declared ``input_budget_ratio * max_context``. Recovery is for the
@@ -149,9 +149,17 @@ class MethodistInputBudgetExhaustedError(Exception):
     ERROR with this message; operators inspect ``errors[]`` in
     ``Job.stage_progress`` to triage.
 
+    Parameterised on the pass: Phase 3.2.3a covers ``methodist_bottomup``,
+    Phase 3.2.3b adds ``methodist_topdown``. The error message labels
+    the pass via ``pass_label`` ("Pass 1" / "Pass 2") so operators can
+    triage without first looking up which stage_name belongs to which
+    leg.
+
     Attributes:
         node_id: CourseNode that triggered the exhaustion.
-        stage_name: Methodist stage that exhausted (``methodist_bottomup``).
+        stage_name: Methodist stage that exhausted
+            (``methodist_bottomup`` / ``methodist_topdown``).
+        pass_label: Human-readable pass label ("Pass 1" / "Pass 2").
         attempts: ``(provider, model, reason)`` triples preserved from
             the underlying :class:`LadderExhaustedError`.
     """
@@ -161,19 +169,23 @@ class MethodistInputBudgetExhaustedError(Exception):
         node_id: Any,
         stage_name: str,
         attempts: list[tuple[str, str, str]],
+        *,
+        pass_label: str,
     ) -> None:
         self.node_id = node_id
         self.stage_name = stage_name
+        self.pass_label = pass_label
         self.attempts = attempts
         details = "; ".join(f"{p}/{m}: {r}" for p, m, r in attempts)
         super().__init__(
-            f"Pass 1 input budget exhausted on node {node_id} for stage "
-            f"'{stage_name}'. The node carries more authored material "
-            f"than any methodist model in the ladder can fit inside "
-            f"its safe-input window. Restructure the course: split this "
-            f"node into smaller subtopics, reduce the number of attached "
-            f"documents, or reorganise the children so the methodist "
-            f"can synthesise per-node. Underlying ladder attempts: {details}"
+            f"{pass_label} input budget exhausted on node {node_id} for "
+            f"stage '{stage_name}'. The node carries more authored "
+            f"material than any methodist model in the ladder can fit "
+            f"inside its safe-input window. Restructure the course: "
+            f"split this node into smaller subtopics, reduce the number "
+            f"of attached documents, or reorganise the children so the "
+            f"methodist can synthesise per-node. Underlying ladder "
+            f"attempts: {details}"
         )
 
 
@@ -210,6 +222,26 @@ class _MethodistBottomupResult(BaseModel):
     common_mistakes: list[str] = Field(default_factory=list)
     compressed_summary: str = ""
     methodist_observations: list[str] = Field(default_factory=list)
+
+
+class _MethodistTopdownResult(BaseModel):
+    """Strict shape of ``methodist_topdown`` LLM output.
+
+    Schema is intentionally minimal: top-down emits ONLY the framing
+    text (``enclosing_context``) plus new methodist observations to
+    append to the bottom-up list (KD11; semantics ratified APPEND, not
+    pass-tag, per probe P1). Canonical fields are owned by Pass 1 and
+    NOT in this schema — the closure-aware validator in
+    :meth:`MethodistAgent.generate_topdown` enforces semantic
+    minimum (non-empty ``enclosing_context``); the appended
+    ``observations`` may legitimately be ``[]`` when the node fits
+    its enclosing layer cleanly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enclosing_context: str = ""
+    observations: list[str] = Field(default_factory=list)
 
 
 # ── MethodistAgent ────────────────────────────────────────────────
@@ -360,6 +392,7 @@ class MethodistAgent:
                     node_id=node.id,
                     stage_name=exc.stage_name,
                     attempts=exc.attempts,
+                    pass_label="Pass 1",  # noqa: S106  (pedagogical pass label, not a credential)
                 ) from exc
             raise
 
@@ -407,25 +440,157 @@ class MethodistAgent:
         raw: NodeSummaryRaw,
         parent_raw: NodeSummaryRaw,
     ) -> None:
-        """Pass 2 hook — DELIBERATELY NO-OP until Phase 3.2.3b.
+        """Pass 2: synthesise ``enclosing_context`` and append observations.
 
-        The orchestrator invokes this method for every non-root in-scope
-        node on Pass 2. While 3.2.3a is the only methodist agent in the
-        repo, returning without mutating ``raw`` keeps the orchestrator's
-        traversal valid AND triggers
-        ``orchestrator._encl_hash.update_source_hash(...)`` after this
-        method returns — meaning ``enclosing_context_source_hash`` WILL
-        be materialised even though ``enclosing_context`` stays NULL.
+        Read inputs strictly per S3 (probe-ratified, vision.md:992-997):
 
-        That is a Phase 3.2.3a process risk (extension of DD-3.2.2-A
-        to axis 2): once axis-2 source-hash is materialised on a Raw
-        row, a future real Pass 2 invocation in 3.2.3b will memo-skip
-        that node silently. The task spec §Архітектурні інваріанти
-        therefore forbids any production-data orchestrator run that
-        reaches Pass 2 before 3.2.3b merges. Live-smoke during 3.2.3a
-        must call Pass 1 only (see ``tools/methodist_live_smoke.py``).
+        * ``raw`` — this node's own canonical methodist state (already
+          materialised by Pass 1).
+        * Six framing fields from ``parent_raw``: ``title``,
+          ``description``, ``learning_objectives``, ``main_concepts``,
+          ``secondary_concepts``, ``teaching_approach``. The fuller
+          parent canonical (knowledge / skills / success_criteria /
+          assessment_approach / key_activities / common_mistakes /
+          compressed_summary) is deliberately NOT read — those fields
+          describe the parent's own teaching mechanics, not the
+          child's position. The ``compressed_summary`` exclusion is
+          load-bearing: it encodes the parent's children (this node's
+          siblings) and reading it would create a horizontal
+          dependency between siblings.
+        * ``parent_raw.enclosing_context`` — the parent's framing in
+          ITS parent (KD10 transitivity). ``None`` is legitimate for
+          children of the course root (the root has no parent and
+          therefore no enclosing context); the prompt renders an
+          explicit branch in that case.
+
+        Hook contract:
+
+        * MUTATES ``raw.enclosing_context`` in place with the LLM's
+          1000-2000 chars synthesis.
+        * EXTENDS ``raw.methodist_observations`` with the LLM's new
+          observations (KD11 ratify Q1 — APPEND semantics, no
+          pass-tagging; the bottom-up list and top-down list live as
+          one flat ``list[str]`` because KD11 line 1059 strips
+          ``methodist_observations`` from Final entirely so downstream
+          consumers never need to disambiguate origin).
+        * Does NOT touch canonical fields (Pass 1 owns them); the
+          ``_MethodistTopdownResult`` schema doesn't include them so
+          a misbehaving LLM cannot accidentally regress canonical
+          state through this method.
+        * Does NOT write hashes — ``enclosing_context_source_hash`` is
+          orchestrator territory (materialised AFTER this method
+          returns successfully via
+          ``EnclosingContextHashService.update_source_hash``).
+
+        Semantic minimum (mirror Pass 1 R1): non-empty
+        ``enclosing_context`` is REQUIRED. Pass 2 is invoked only on
+        non-root nodes (the orchestrator's ``_visit_pass2`` step 1
+        short-circuits the course root to ``NOT_APPLICABLE`` before
+        getting here), so part 1 of the parent is always present —
+        there is no legitimate empty-input branch to carve out, unlike
+        Pass 1's structurally-trivial-leaf case. Empty
+        ``enclosing_context`` ⇒ :class:`StructuralRetryError` →
+        existing instructor-style retry + ladder-fallback machinery.
+
+        Budget exhaustion: same translation contract as Pass 1 —
+        when EVERY ladder rung was skipped because the estimated
+        input exceeded its budget, raise
+        :class:`MethodistInputBudgetExhaustedError` with
+        ``pass_label="Pass 2"`` so operator triage can read the
+        domain message directly out of ``errors[]``. Mixed-cause
+        exhaustion (some rungs failed for structural / provider
+        reasons) re-raises the original :class:`LadderExhaustedError`
+        unchanged.
         """
-        del node, raw, parent_raw  # explicit no-op
+        course_title, language = await self._resolve_course_context(node)
+
+        node_payload = {
+            "title": raw.title or "",
+            "description": raw.description or "",
+            "learning_objectives": list(raw.learning_objectives or []),
+            "main_concepts": list(raw.main_concepts or []),
+            "secondary_concepts": list(raw.secondary_concepts or []),
+            "key_activities": list(raw.key_activities or []),
+            "teaching_approach": raw.teaching_approach or "",
+            "assessment_approach": raw.assessment_approach or "",
+        }
+        parent_payload = {
+            "title": parent_raw.title or "",
+            "description": parent_raw.description or "",
+            "learning_objectives": list(parent_raw.learning_objectives or []),
+            "main_concepts": list(parent_raw.main_concepts or []),
+            "secondary_concepts": list(parent_raw.secondary_concepts or []),
+            "teaching_approach": parent_raw.teaching_approach or "",
+        }
+        parent_enclosing_context = parent_raw.enclosing_context  # nullable
+
+        parsed: dict[str, _MethodistTopdownResult] = {}
+
+        def _validator(content: str) -> None:
+            try:
+                result = _MethodistTopdownResult.model_validate_json(content)
+            except ValidationError as exc:
+                first = exc.errors()[0]
+                loc = ".".join(str(x) for x in first.get("loc", []))
+                logger.warning(
+                    "methodist_topdown_validation_failed",
+                    node_id=str(node.id),
+                    error_type=first.get("type", "unknown"),
+                    error_msg=first.get("msg", ""),
+                    error_loc=loc,
+                )
+                feedback = (
+                    f"{first.get('msg', 'validation error')} "
+                    f"(field: {loc or '<root>'}). "
+                    "Regenerate the response with valid JSON matching the schema."
+                )
+                raise StructuralRetryError(feedback) from exc
+            if not result.enclosing_context.strip():
+                logger.warning(
+                    "methodist_topdown_semantic_minimum_violated",
+                    node_id=str(node.id),
+                )
+                raise StructuralRetryError(
+                    "Required field is empty: enclosing_context. "
+                    "Pass 2 is invoked only on non-root nodes where "
+                    "the parent's framing is always available; the "
+                    "enclosing_context MUST contain a 1000-2000 chars "
+                    "synthesis of this node's position within the "
+                    "parent. Regenerate with a non-empty value."
+                )
+            parsed["result"] = result
+
+        try:
+            await self._stage_router.execute_for_stage(
+                "methodist_topdown",
+                response_validator=_validator,
+                expects_json=True,
+                course_title=course_title,
+                language=language,
+                node=node_payload,
+                parent=parent_payload,
+                parent_enclosing_context=parent_enclosing_context,
+            )
+        except LadderExhaustedError as exc:
+            if self._all_attempts_are_input_budget(exc.attempts):
+                raise MethodistInputBudgetExhaustedError(
+                    node_id=node.id,
+                    stage_name=exc.stage_name,
+                    attempts=exc.attempts,
+                    pass_label="Pass 2",  # noqa: S106  (pedagogical pass label, not a credential)
+                ) from exc
+            raise
+
+        result = parsed["result"]
+
+        # Mutate Pass 2 fields in place. APPEND semantics on
+        # methodist_observations per Q1 ratify: extend the Pass 1 list
+        # rather than replace it; downstream Final strips this list
+        # entirely so pass-tagging is unnecessary.
+        raw.enclosing_context = result.enclosing_context
+        existing_observations = list(raw.methodist_observations or [])
+        existing_observations.extend(result.observations)
+        raw.methodist_observations = existing_observations
 
     # ── Internal helpers ───────────────────────────────────────────
 

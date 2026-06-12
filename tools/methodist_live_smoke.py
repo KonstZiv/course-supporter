@@ -1,40 +1,43 @@
-"""Methodist Pass 1 live-smoke (Phase 3.2.3a, operator-gated).
+"""Methodist live-smoke (Phase 3.2.3b, operator-gated).
 
 This script drives the production methodist agent + orchestrator
-helpers against a dev course fixture for a SINGLE Pass 1 prowalk —
-nothing else. It exists as a one-shot diagnostic confirming the
-production wiring before the Phase 3.2.4 endpoint lands.
+against a dev course fixture for a SINGLE full two-pass run plus an
+immediate repeated run that verifies memo-skip on both axes. It exists
+as a one-shot diagnostic confirming the production wiring before the
+Phase 3.2.4 endpoint lands.
 
-WARNING — DELIBERATE ENCAPSULATION BREAK
-========================================
+History — encapsulation-break removal (Phase 3.2.3b)
+====================================================
 
-This tool calls private methods on
-:class:`NodeSummaryGenerationOrchestrator`
-(``validate_scope`` is public; ``_collect_course_nodes``,
-``_compute_leaf_to_root_order`` and ``_visit_pass1`` are private).
-Reasoning: the orchestrator's public ``run()`` runs Pass 1 + Pass 2
-back-to-back with no opt-out — calling it from this tool would let
-the no-op :meth:`MethodistAgent.generate_topdown` materialise
-``enclosing_context_source_hash`` on every visited Raw, breaking
-the DD-3.2.2-A discipline at the axis-2 boundary (task 3.2.3a §
-Архітектурні інваріанти процесне правило). Pass 1 alone is what
-3.2.3a needs to validate; private-method invocation is the cleanest
-way to honor that constraint without touching the orchestrator's
-public surface.
+Phase 3.2.3a's predecessor of this tool called the orchestrator's
+PRIVATE Pass 1 helpers in a loop because the public ``run()`` would
+have triggered the deliberate no-op ``generate_topdown`` and
+materialised ``enclosing_context_source_hash`` on every Raw — a
+DD-3.2.2-A axis-2 hazard that would let a future real Pass 2
+silently memo-skip every node. Phase 3.2.3b ships the real
+``generate_topdown``, so the hazard is gone; the inline note in the
+3.2.3a tool docstring promised this exact replacement. From now on
+the tool calls the public ``orch.run(...)`` end-to-end.
 
-The encapsulation break is **deliberate** and **scoped to this
-tool**. Replace with a proper public API in Phase 3.2.4 when the
-production endpoint materialises — the endpoint can either:
+Cost + plumbing (Phase 3.2.3b)
+==============================
 
-* expose a ``pass_filter`` parameter on ``run()`` (orchestrator
-  refactor — Phase 3.2.4 ratify),
-* or call a public ``run_pass1_only()`` method added at that time.
+* ContextVar plumbing — Phase 3.2.3a observed that smoke-run ESC
+  rows were skipped because the tool did not set ``_current_job_id``
+  / ``_current_tenant_id`` before invoking the StageRouter. Fixed
+  here: ``set_job_from_arq`` + ``set_tenant_from_job`` wrap the
+  orchestrator call so every LLM attempt persists ESC.
+* Cost envelope at spike rates (per SPIKE-3-2-3-results.md):
+  python_start 4 nodes — Pass 1 ~$0.09 (deepseek-v4-pro-thinking
+  bottomup median $0.022) + Pass 2 ~$0.04 (deepseek-v4-pro-thinking
+  topdown median $0.013, run on 3 non-root nodes) = ~$0.13 worst
+  case per smoke session.
 
 Usage
 =====
 
 By default this script runs in ``--dry-run`` mode: it loads the
-fixture, validates scope, prints what Pass 1 WOULD do, and exits
+fixture, validates scope, prints what the run WOULD do, and exits
 without touching the LLM or the DB beyond reads. Live execution
 requires the explicit ``--live`` flag, which the operator passes
 on the command line after merge review.
@@ -45,17 +48,28 @@ on the command line after merge review.
     # Live (operator-gated; spends LLM tokens and writes DB rows):
     uv run python tools/methodist_live_smoke.py --course python_start --live
 
-Cost envelope at spike rates (per SPIKE-3-2-3-results.md): python_start
-4 nodes x deepseek-v4-pro thinking ≈ $0.09 worst case.
+DB state contract (live mode)
+=============================
 
-DB state contract (live mode):
-* Pre: ``node_summaries_raw`` must be 0 rows (DD-3.2.2-A invariant).
-* Post: ``node_summaries_raw`` has exactly len(in_scope) rows; every
-  row has ``source_content_hash`` written by the orchestrator
-  (canonical-fields-via-agent + source-hash-via-orchestrator
-  contract). ``enclosing_context`` and
-  ``enclosing_context_source_hash`` MUST be NULL on every row
-  (Pass 2 never ran — verify with psql after the script returns).
+* Pre: ``node_summaries_raw`` must be 0 rows (DD-3.2.2-A invariant
+  closed by TRUNCATE 2026-06-12; restored before every smoke).
+* After the FIRST run:
+  - ``node_summaries_raw`` has exactly ``len(in_scope)`` rows.
+  - Every row has ``source_content_hash`` written.
+  - 3 non-root rows have non-NULL ``enclosing_context`` (Ukrainian
+    framing for the python_start fixture per Phase 2.4.14).
+  - 3 non-root rows have non-NULL ``enclosing_context_source_hash``.
+  - The root row has ``enclosing_context = NULL`` (Pass 2 skips the
+    course root with NOT_APPLICABLE) and
+    ``enclosing_context_source_hash = NULL`` (set by 3.2.1 service
+    only when Pass 2 actually fires).
+* After the SECOND immediate run:
+  - All ``pass1`` statuses = ``SKIPPED_MEMO`` (axis 1 fresh).
+  - All non-root ``pass2`` statuses = ``SKIPPED_MEMO`` (axis 2
+    fresh); root stays ``NOT_APPLICABLE``.
+  - **Zero** new ``ExternalServiceCall`` rows compared to the count
+    after the first run (the structural memo-skip guarantee from
+    probe P5).
 """
 
 from __future__ import annotations
@@ -68,7 +82,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Tool runs from the backend repo root; ``src/`` is on the path via
@@ -86,13 +100,22 @@ from course_supporter.llm.ladder_config import (
 )
 from course_supporter.llm.registry import load_registry
 from course_supporter.llm.stage_router import StageRouter
+from course_supporter.service_logging import (
+    set_job_from_arq,
+    set_tenant_from_job,
+)
 from course_supporter.storage.node_summary_run_state import (
+    NodeSummaryNodeStatus,
     NodeSummaryRunState,
 )
-from course_supporter.storage.orm import CourseNode, Job, NodeSummaryRaw
+from course_supporter.storage.orm import (
+    CourseNode,
+    ExternalServiceCall,
+    Job,
+    NodeSummaryRaw,
+)
 
-# Fixture map (ratified for 3.2.3a live-smoke). Other roots from the
-# dev DB are commented out for clarity; uncomment to extend.
+# Fixture map (ratified for 3.2.3a/b live-smoke).
 FIXTURES: dict[str, uuid.UUID] = {
     "python_start": uuid.UUID("019e5a58-5e31-7d21-9345-b9e8950c0831"),
     # "making_science": uuid.UUID("019e9210-27d2-7bc3-8dc4-b722920bb46e"),
@@ -173,110 +196,133 @@ async def _create_smoke_job(
     return job.id
 
 
-async def _run_pass1_only(
+async def _run_full_pipeline(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     stage_router: StageRouter,
     vertex_node_id: uuid.UUID,
     job_id: uuid.UUID,
 ) -> None:
-    """Drive Pass 1 by inlining the orchestrator's bottom-up leg.
+    """Drive a full Pass 1 + Pass 2 run via the public orchestrator API.
 
-    DELIBERATE ENCAPSULATION BREAK (see module docstring). The
-    sequence below mirrors :meth:`NodeSummaryGenerationOrchestrator.run`
-    lines that drive Pass 1, but stops BEFORE
-    ``Job.current_stage='topdown'`` so axis-2 source-hash is never
-    materialised on these rows.
+    ContextVar plumbing closes the 3.2.3a ESC-skip observation: the
+    StageRouter persists ``ExternalServiceCall`` rows only when
+    ``_current_job_id`` and ``_current_tenant_id`` are set on the
+    calling task's contextvars (per ``service_logging._persist``).
     """
-    # Step 1: validate_scope + seed pass1 PENDING using the public
-    # validate_scope, then manually persist via the orchestrator's
-    # private helper. We construct one orchestrator and drive it.
+    set_job_from_arq(job_id)
+    await set_tenant_from_job(session_factory, job_id)
+
     async with session_factory() as session:
         orch = build_node_summary_orchestrator(session, stage_router)
-        from course_supporter.storage.job_repository import JobRepository
-        from course_supporter.storage.node_summary_run_state import (
-            NodeSummaryNodeStatus,
-        )
-
-        # Mirror run() lines 343-370 (Pass 1 leg only).
-        vertex = await session.get(CourseNode, vertex_node_id)
-        if vertex is None or vertex.deleted_at is not None:
-            msg = f"vertex CourseNode {vertex_node_id} not found or soft-deleted"
-            raise RuntimeError(msg)
-
-        preserved_errors = await orch._read_back_preserved_errors(job_id)
-        job_repo = JobRepository(session)
-        await job_repo.update_stage(job_id, "bottomup")
-        scope = await orch.validate_scope(vertex_node_id, force=False)
-        run_state = NodeSummaryRunState(
+        await orch.run(
+            job_id=job_id,
             vertex_node_id=vertex_node_id,
             force=False,
-            scope=scope,
-            pass1={
-                nid: NodeSummaryNodeStatus.PENDING for nid in scope.in_scope_node_ids
-            },
-            errors=preserved_errors,
-        )
-        await orch._persist_run_state(job_id, run_state)
-        await session.commit()
-
-        course_nodes = await orch._collect_course_nodes(vertex)
-        in_scope_set = set(scope.in_scope_node_ids)
-        pass1_order = orch._compute_leaf_to_root_order(
-            vertex_node_id, in_scope_set, course_nodes
-        )
-        print(
-            f"[live-smoke] Pass 1 walk order ({len(pass1_order)} nodes): "
-            + " → ".join(course_nodes[nid].title[:30] for nid in pass1_order)
-        )
-        for nid in pass1_order:
-            # K3 ratify: strictly sequential.
-            print(
-                f"[live-smoke]   visiting node {course_nodes[nid].title!r} (id={nid})"
-            )
-            await orch._visit_pass1(course_nodes[nid], run_state, job_id)
-        print(
-            "[live-smoke] Pass 1 complete; NOT triggering Pass 2 leg per "
-            "task 3.2.3a §Архітектурні інваріанти процесне правило."
         )
 
 
-async def _verify_post_state(
+async def _verify_first_run(
     session: AsyncSession, vertex_node_id: uuid.UUID
 ) -> dict[str, Any]:
-    """Read back Pass 1 evidence + axis-2 invariant for the operator."""
+    """Read back Pass 1 + Pass 2 evidence for the operator after run 1."""
     vertex_row = await session.get(CourseNode, vertex_node_id)
     if vertex_row is None:
         msg = f"vertex CourseNode {vertex_node_id} vanished post-run"
         raise RuntimeError(msg)
     raws = (
-        (
-            await session.execute(
-                select(NodeSummaryRaw)
-                .join(CourseNode, CourseNode.id == NodeSummaryRaw.course_node_id)
-                .where(CourseNode.tenant_id == vertex_row.tenant_id)
-                .where(NodeSummaryRaw.deleted_at.is_(None))
-            )
+        await session.execute(
+            select(NodeSummaryRaw, CourseNode.parent_id)
+            .join(CourseNode, CourseNode.id == NodeSummaryRaw.course_node_id)
+            .where(CourseNode.tenant_id == vertex_row.tenant_id)
+            .where(NodeSummaryRaw.deleted_at.is_(None))
         )
-        .scalars()
-        .all()
-    )
+    ).all()
+    non_root = [(r, pid) for r, pid in raws if pid is not None]
+    root = [(r, pid) for r, pid in raws if pid is None]
     return {
         "raw_count": len(raws),
+        "non_root_count": len(non_root),
+        "root_count": len(root),
         "with_source_content_hash": sum(
-            1 for r in raws if r.source_content_hash is not None
+            1 for r, _ in raws if r.source_content_hash is not None
         ),
-        "axis_2_invariant_holds": all(
-            r.enclosing_context is None and r.enclosing_context_source_hash is None
-            for r in raws
+        "non_root_with_enclosing_context": sum(
+            1 for r, _ in non_root if r.enclosing_context is not None
         ),
-        "axis_2_violators": [
-            str(r.course_node_id)
-            for r in raws
-            if r.enclosing_context_source_hash is not None
-            or r.enclosing_context is not None
-        ],
+        "non_root_with_enclosing_context_source_hash": sum(
+            1 for r, _ in non_root if r.enclosing_context_source_hash is not None
+        ),
+        "root_enclosing_context_is_null": all(
+            r.enclosing_context is None for r, _ in root
+        ),
+        "root_enclosing_context_source_hash_is_null": all(
+            r.enclosing_context_source_hash is None for r, _ in root
+        ),
     }
+
+
+async def _read_run_state(
+    session: AsyncSession, job_id: uuid.UUID
+) -> NodeSummaryRunState | None:
+    """Decode the orchestrator's run-state JSON off Job.stage_progress."""
+    job = await session.get(Job, job_id)
+    if job is None or job.stage_progress is None:
+        return None
+    return NodeSummaryRunState.model_validate(job.stage_progress)
+
+
+async def _count_esc_rows(session: AsyncSession, vertex_tenant_id: uuid.UUID) -> int:
+    """Count tenant-scoped ESC rows (smoke session has its own tenant)."""
+    result = await session.execute(
+        select(func.count(ExternalServiceCall.id)).where(
+            ExternalServiceCall.tenant_id == vertex_tenant_id
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def _verify_memo_skip(
+    *,
+    session: AsyncSession,
+    vertex_node_id: uuid.UUID,
+    job_id_second: uuid.UUID,
+    esc_before_second: int,
+) -> dict[str, Any]:
+    """After the second run: pin SKIPPED_MEMO + zero new ESC rows."""
+    vertex_row = await session.get(CourseNode, vertex_node_id)
+    if vertex_row is None:
+        msg = f"vertex CourseNode {vertex_node_id} vanished post-second-run"
+        raise RuntimeError(msg)
+    run_state = await _read_run_state(session, job_id_second)
+    if run_state is None:
+        msg = "run-state missing after second run — orchestrator did not persist"
+        raise RuntimeError(msg)
+    pass1_statuses = list(run_state.pass1.values())
+    pass2_statuses = list(run_state.pass2.values())
+    esc_after = await _count_esc_rows(session, vertex_row.tenant_id)
+    return {
+        "pass1_all_skipped_memo": all(
+            s == NodeSummaryNodeStatus.SKIPPED_MEMO for s in pass1_statuses
+        ),
+        "pass1_status_counts": _count_statuses(pass1_statuses),
+        "pass2_non_root_all_skipped_memo": all(
+            s == NodeSummaryNodeStatus.SKIPPED_MEMO
+            for s in pass2_statuses
+            if s != NodeSummaryNodeStatus.NOT_APPLICABLE
+        ),
+        "pass2_status_counts": _count_statuses(pass2_statuses),
+        "esc_rows_added_by_second_run": esc_after - esc_before_second,
+    }
+
+
+def _count_statuses(
+    statuses: list[NodeSummaryNodeStatus],
+) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for s in statuses:
+        out[s.value] = out.get(s.value, 0) + 1
+    return out
 
 
 async def main(args: argparse.Namespace) -> int:
@@ -316,27 +362,76 @@ async def main(args: argparse.Namespace) -> int:
     print("[live-smoke] LIVE MODE — spending tokens and writing DB rows.")
     stage_router = await _build_stage_router(session_factory)
 
+    # ── First run: full two-pass against a clean fixture ──────────
     async with session_factory() as session:
-        job_id = await _create_smoke_job(session, fixture_root)
-    print(f"[live-smoke] created job_id={job_id}")
+        job_id_first = await _create_smoke_job(session, fixture_root)
+    print(f"[live-smoke] run 1: created job_id={job_id_first}")
 
-    await _run_pass1_only(
+    await _run_full_pipeline(
         session_factory=session_factory,
         stage_router=stage_router,
         vertex_node_id=fixture_root,
-        job_id=job_id,
+        job_id=job_id_first,
     )
 
     async with session_factory() as session:
-        post = await _verify_post_state(session, fixture_root)
-    print(f"[live-smoke] post-state: {post}")
-    if not post["axis_2_invariant_holds"]:
+        first = await _verify_first_run(session, fixture_root)
+        vertex_row = await session.get(CourseNode, fixture_root)
+        assert vertex_row is not None, "vertex vanished mid-run"
+        esc_after_first = await _count_esc_rows(session, vertex_row.tenant_id)
+    print(f"[live-smoke] run 1 evidence: {first}")
+    print(f"[live-smoke] run 1 ESC rows: {esc_after_first}")
+
+    first_ok = (
+        first["with_source_content_hash"] == first["raw_count"]
+        and first["non_root_with_enclosing_context"] == first["non_root_count"]
+        and first["non_root_with_enclosing_context_source_hash"]
+        == first["non_root_count"]
+        and first["root_enclosing_context_is_null"]
+        and first["root_enclosing_context_source_hash_is_null"]
+    )
+    if not first_ok:
         print(
-            f"[live-smoke] FAIL — axis-2 invariant violated on "
-            f"{post['axis_2_violators']}. Investigate before merging 3.2.3b.",
+            "[live-smoke] FAIL — first run evidence missed an invariant.",
             file=sys.stderr,
         )
+        await engine.dispose()
         return 3
+
+    # ── Second run: memo-skip on both axes, zero new LLM calls ────
+    async with session_factory() as session:
+        job_id_second = await _create_smoke_job(session, fixture_root)
+    print(f"[live-smoke] run 2: created job_id={job_id_second}")
+
+    await _run_full_pipeline(
+        session_factory=session_factory,
+        stage_router=stage_router,
+        vertex_node_id=fixture_root,
+        job_id=job_id_second,
+    )
+
+    async with session_factory() as session:
+        memo = await _verify_memo_skip(
+            session=session,
+            vertex_node_id=fixture_root,
+            job_id_second=job_id_second,
+            esc_before_second=esc_after_first,
+        )
+    print(f"[live-smoke] run 2 memo-skip evidence: {memo}")
+
+    memo_ok = (
+        memo["pass1_all_skipped_memo"]
+        and memo["pass2_non_root_all_skipped_memo"]
+        and memo["esc_rows_added_by_second_run"] == 0
+    )
+    if not memo_ok:
+        print(
+            "[live-smoke] FAIL — second run did NOT achieve full memo-skip "
+            "or wrote new ESC rows (memoization regression).",
+            file=sys.stderr,
+        )
+        await engine.dispose()
+        return 4
 
     await engine.dispose()
     print("[live-smoke] OK")
@@ -363,9 +458,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         action="store_false",
         help=(
-            "Operator-gated live run: spends LLM tokens, writes "
-            "Pass 1 canonical fields on NodeSummaryRaw. Use after "
-            "task 3.2.3a is merge-ready."
+            "Operator-gated live run: spends LLM tokens, writes Pass 1 "
+            "canonical + Pass 2 enclosing_context fields on NodeSummaryRaw, "
+            "then immediately re-runs to verify memo-skip on both axes. "
+            "Use after task 3.2.3b is merge-ready."
         ),
     )
     return p

@@ -476,25 +476,6 @@ class TestBudgetExhaustionDomainTranslation:
             await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
 
 
-class TestGenerateTopdownIsNoOp:
-    async def test_topdown_returns_without_mutating_raw(self) -> None:
-        router = _FakeStageRouter(canned_response="never-called")
-        agent = _StubAgent(
-            router,
-            own_docs=[],
-            child_raws=[],
-            course_title="x",
-            language="English",
-        )
-        raw = _FakeRaw(title="pre-existing")
-        parent_raw = _FakeRaw()
-        node = _FakeNode(id=uuid.uuid4(), title="t")
-        await agent.generate_topdown(node, raw, parent_raw)  # type: ignore[arg-type]
-        # Raw is unchanged; the LLM was never called.
-        assert raw.title == "pre-existing"
-        assert router.last_stage_name is None
-
-
 # ── R1: semantic minimum (closure-aware validator) ───────────────
 
 

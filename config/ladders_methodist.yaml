@@ -1,9 +1,11 @@
 # Methodist agent stage ladders (KD16).
 #
-# Phase 3.2.3a lands the first real stage: ``methodist_bottomup``.
-# Phase 3.2.3b will add ``methodist_topdown``.
+# Phase 3.2.3a landed ``methodist_bottomup``; Phase 3.2.3b adds
+# ``methodist_topdown`` for the second pass (enclosing_context +
+# observations append).
 #
-# Ladder rationale (ratified per SPIKE-3-2-3-results.md, 2026-06-11):
+# ── methodist_bottomup ladder rationale ─────────────────────────
+# Ratified per SPIKE-3-2-3-results.md (2026-06-11):
 #
 # * deepseek-v4-pro thinking — primary; spike median $0.022/call,
 #   53s latency, hits 1-2k chars compressed_summary cleanly. Best
@@ -21,6 +23,34 @@
 #   domain-level "restructure your course" message at the call site
 #   (Phase 3.2.3a §5 contract).
 #
+# ── methodist_topdown ladder rationale ──────────────────────────
+# Ratified per SPIKE-3-2-3-results.md §5 (2026-06-11):
+#
+# * deepseek-v4-pro thinking — primary; spike median $0.013/call,
+#   26s latency, output 1878 tokens (1189 reasoning) — sits cleanly
+#   in the KD10 1-2k tokens enclosing_context band. Best cost/quality
+#   for the framing workload.
+# * qwen3.7-max — premium fallback; spike median $0.043/call,
+#   70s latency, output 3787 tokens (2972 reasoning) — over-shoots
+#   the spec at ~5k chars enclosing_context but still legible; used
+#   when primary degrades.
+# * deepseek-v4-flash — control; spike median $0.001/call,
+#   18s latency, output 1203 tokens (737 reasoning) — surprisingly
+#   competent honest methodist context. Cheap floor for deeper
+#   subtrees where the top-down has already stabilised and the
+#   call is mostly a refresh.
+#
+# gemini-2.5-pro thinking deliberately NOT included as a rung:
+# DD-3.2.3-pre-C — empirical spike showed median output 346 tokens
+# (~1200 chars) — well under the KD10 1-2k tokens spec. The OpenAI-
+# compat endpoint does NOT expose Gemini's "extended thinking" mode
+# the same way DeepSeek / Qwen do (reasoning_tokens=0 in usage
+# breakdown), so the model effectively runs without budget for
+# methodist reasoning. Until a native-Gemini path with explicit
+# thinking_config lands, including gemini-2.5-pro here would silently
+# down-shift enclosing_context quality on every rung-fallback case.
+#
+# ── Token-budget policy (shared) ────────────────────────────────
 # Input budget per KD10: 0.5 ratio applied to each rung's
 # ``max_context`` from the registry. The runtime check in StageRouter
 # (Phase 3.2.3-pre) skips a rung when the estimated input exceeds
@@ -40,3 +70,27 @@ stages:
       - provider: dashscope
         model: qwen3.7-max
         max_output_tokens: 16384
+
+  # ``requires: [structured_output]`` — deliberately NOT ``[..., long_context]``.
+  # Top-down input is small by construction: this node's own canonical state
+  # plus six fields of the parent's canonical state plus the parent's
+  # enclosing_context. Spike §3 measured ~3-8k chars on the stretch fixture,
+  # which any rung's max_context comfortably fits. ``long_context`` is the
+  # bottom-up requirement (it integrates every child's compressed_summary up
+  # to the root, which DOES grow); applying it here would falsely exclude
+  # legitimate rungs like deepseek-v4-flash (128k context) without changing
+  # what the stage actually needs.
+  methodist_topdown:
+    prompt_ref: "prompts/methodist_topdown/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 8192
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192

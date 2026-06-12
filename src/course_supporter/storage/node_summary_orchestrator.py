@@ -63,6 +63,35 @@ logger = structlog.get_logger(__name__)
 _MAX_COURSE_DEPTH = 25
 
 
+def _classify_pass2_parent_missing(
+    *, parent_present: bool, parent_in_scope: bool
+) -> tuple[str, str]:
+    """Map the :class:`Pass2ParentRawMissingError` discriminators to
+    ``(severity, error_class)`` strings consumed by
+    :class:`NodeSummaryRunError`.
+
+    Branch mapping (historical sub-cases preserved as inline aliases):
+
+    * ``not parent_present`` → ``(ERROR, parent_node_missing_from_database)``
+      (historical alias **B**).
+    * ``parent_present and parent_in_scope`` →
+      ``(ERROR, parent_summary_missing_within_scope)`` (historical
+      alias **A1**).
+    * ``parent_present and not parent_in_scope`` →
+      ``(WARNING, parent_intentionally_out_of_run_scope)``
+      (historical alias **A2** — operator-driven ``force=True``
+      bypass of ``uncovered_stale``).
+
+    Helper is pure (no I/O). Returns strings rather than Literal
+    members to keep the import surface minimal at the call site.
+    """
+    if not parent_present:
+        return ("ERROR", "parent_node_missing_from_database")
+    if parent_in_scope:
+        return ("ERROR", "parent_summary_missing_within_scope")
+    return ("WARNING", "parent_intentionally_out_of_run_scope")
+
+
 class Pass2ParentRawMissingError(RuntimeError):
     """Pass 2 None-contract violation: non-root node lost its parent Raw.
 
@@ -659,6 +688,8 @@ class NodeSummaryGenerationOrchestrator:
                     node_id=node.id,
                     stage="bottomup",
                     reason=str(exc),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass1[node.id] = NodeSummaryNodeStatus.ERROR
@@ -752,6 +783,8 @@ class NodeSummaryGenerationOrchestrator:
                         "Pass 2 prerequisite: own NodeSummaryRaw row is missing "
                         "(Pass 1 must run successfully before Pass 2 visits a node)"
                     ),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
@@ -772,11 +805,20 @@ class NodeSummaryGenerationOrchestrator:
                 parent_course_node_present=parent_present,
                 parent_in_scope=parent_in_scope,
             )
+            # Phase 3.2.4 c3 — machine-readable mapping of the three
+            # historical sub-cases (A1 / A2 / B) onto the public
+            # severity + error_class enum. Operators / UI never parse
+            # ``reason``; the discrimination lives here.
+            severity, error_class = _classify_pass2_parent_missing(
+                parent_present=parent_present, parent_in_scope=parent_in_scope
+            )
             run_state.errors.append(
                 NodeSummaryRunError(
                     node_id=node.id,
                     stage="topdown",
                     reason=str(exc),
+                    severity=severity,
+                    error_class=error_class,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR
@@ -810,6 +852,8 @@ class NodeSummaryGenerationOrchestrator:
                     node_id=node.id,
                     stage="topdown",
                     reason=str(exc),
+                    severity="ERROR",
+                    error_class=None,
                 )
             )
             run_state.pass2[node.id] = NodeSummaryNodeStatus.ERROR

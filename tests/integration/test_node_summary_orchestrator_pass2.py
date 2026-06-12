@@ -401,6 +401,68 @@ class TestNoneContractDiscrimination:
         finally:
             await _cleanup_course(session_factory, ids["tenant_id"])
 
+    async def test_a2_path_records_machine_readable_severity_and_class(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Phase 3.2.4 c3 — A2 sub-case writes
+        ``severity='WARNING'`` + ``error_class='parent_intentionally_out_of_run_scope'``
+        into ``Job.stage_progress.errors[]``.
+
+        Same fixture as the sibling A2 reason-string test above
+        (``test_force_bypasses_uncovered_then_pass2_errors_on_vertex``);
+        this one pins the public machine-readable channel UI / monitors
+        consume instead of the free-text ``reason``.
+        """
+        ids = await _setup_course_with_job(session_factory)
+        try:
+
+            class _ObservedMethodist:
+                async def generate_bottomup(
+                    self, node: CourseNode, raw: NodeSummaryRaw
+                ) -> None:
+                    pass
+
+                async def generate_topdown(
+                    self,
+                    node: CourseNode,
+                    raw: NodeSummaryRaw,
+                    parent_raw: NodeSummaryRaw,
+                ) -> None:
+                    pass
+
+            async with session_factory() as session:
+                orch = NodeSummaryGenerationOrchestrator(
+                    session, methodist=_ObservedMethodist()
+                )
+                # vertex='a' (inner node), root is uncovered (no Raw),
+                # force=True bypasses the would-be 422.
+                await orch.run(
+                    job_id=ids["job_id"],
+                    vertex_node_id=ids["a"],
+                    force=True,
+                )
+
+            async with session_factory() as session:
+                job = await session.get(Job, ids["job_id"])
+                assert job is not None
+                state = NodeSummaryRunState.from_jsonb(job.stage_progress or {})
+
+                a_errors = [
+                    e
+                    for e in state.errors
+                    if e.node_id == ids["a"] and e.stage == "topdown"
+                ]
+                assert len(a_errors) == 1
+                # The c3 contract: severity + error_class encode the
+                # expected-by-design A2 outcome without any reason
+                # parsing.
+                assert a_errors[0].severity == "WARNING"
+                assert (
+                    a_errors[0].error_class == "parent_intentionally_out_of_run_scope"
+                )
+        finally:
+            await _cleanup_course(session_factory, ids["tenant_id"])
+
 
 # ── #7 inverted pin — Final.enclosing_context_updated_at untouched ─
 

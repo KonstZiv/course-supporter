@@ -32,7 +32,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -87,16 +87,85 @@ class NodeSummaryRunScope(BaseModel):
 
 
 class NodeSummaryRunError(BaseModel):
-    """A single error observed during a per-node visit (append-only)."""
+    """A single error observed during a per-node visit (append-only).
 
-    model_config = ConfigDict(extra="forbid")
+    Phase 3.2.4 c3 added two machine-readable fields so UI / monitors
+    can discriminate severity + category without parsing ``reason``
+    (operator-ratified TZ invariant: ``reason`` stays free text for
+    humans; programmatic logic uses ``severity`` + ``error_class``).
+
+    Backward tolerance: both fields are optional with defaults, so
+    deserializing pre-3.2.4 records — written without these keys —
+    succeeds and silently fills in ``("ERROR", None)``. No DB
+    migration is required (the persistence channel is JSONB).
+    """
+
+    # ``extra='allow'`` (NOT 'forbid') so forward-schema additions on
+    # future tasks don't break replay-on-resume of old records. The
+    # parent ``NodeSummaryRunState.from_jsonb`` keeps 'forbid' at the
+    # top level; per-entry tolerance is the load-bearing property here
+    # (a single quirky historical error[] entry should not abort the
+    # entire run state read on the resume path).
+    model_config = ConfigDict(extra="allow")
 
     node_id: uuid.UUID
     stage: str
     """``'bottomup'`` / ``'topdown'`` (matches Job.current_stage values)."""
     reason: str
-    """Short operator-facing diagnostic; full stack trace stays in logs."""
+    """Short operator-facing diagnostic; full stack trace stays in logs.
+
+    Free text for humans only. Programmatic logic MUST NOT parse this
+    field — discrimination lives in ``severity`` + ``error_class``.
+    """
     at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    severity: Literal["WARNING", "ERROR"] = "ERROR"
+    """Machine-readable severity (added Phase 3.2.4 c3).
+
+    * ``ERROR`` — operator intervention warranted; the run-as-a-whole
+      cannot be considered fully successful for the affected node.
+    * ``WARNING`` — expected-by-design outcome that operators should
+      acknowledge but does NOT signal an aborted unit of work. Today
+      the only case is the A2 sub-case of
+      ``Pass2ParentRawMissingError`` (ratified ``force=True`` flow
+      bypassing ``uncovered_stale``); future force-driven expected
+      misses can join the same bucket.
+
+    Default is ``ERROR`` so deserializing pre-3.2.4 records (which
+    have no ``severity`` key) yields the safer assumption and never
+    silently downgrades historical failures.
+    """
+
+    error_class: (
+        Literal[
+            "parent_intentionally_out_of_run_scope",
+            "parent_summary_missing_within_scope",
+            "parent_node_missing_from_database",
+        ]
+        | None
+    ) = None
+    """Machine-readable category (added Phase 3.2.4 c3).
+
+    Specialised for Pass 2 parent-Raw discriminators (historically
+    A1/A2/B inside :class:`Pass2ParentRawMissingError`):
+
+    * ``parent_intentionally_out_of_run_scope`` (WARNING) —
+      operator-driven ``force=True`` run where the vertex's parent
+      sits outside scope without a Raw; KD10's
+      ``uncovered_stale_node_ids`` flagged this on validate_scope and
+      the operator chose to proceed regardless. **Historical alias:
+      A2.**
+    * ``parent_summary_missing_within_scope`` (ERROR) — Pass 1
+      ordering violation: an in-scope parent should have produced
+      Raw before any child Pass 2 visit, but did not. **Historical
+      alias: A1.**
+    * ``parent_node_missing_from_database`` (ERROR) — structural
+      inconsistency: the parent CourseNode itself is not in the
+      orchestrator's in-memory course tree. **Historical alias: B.**
+
+    Other catch sites set ``error_class = None``. ``None`` is also
+    the default on pre-3.2.4 records.
+    """
 
 
 class NodeSummaryRunState(BaseModel):

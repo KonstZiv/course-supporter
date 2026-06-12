@@ -169,9 +169,13 @@ async def enqueue_node_summary_regeneration(
             boundary; this helper does NOT commit).
         tenant_id: Owning tenant.
         vertex_node_id: Vertex CourseNode for the run.
-        force: Whether the run bypasses the API's 422 on uncovered_stale
-            ancestors. Recorded into ``input_params`` so reactivate can
-            replay the same call shape.
+        force: Persisted into ``input_params`` so reactivate replays
+            the same shape. The 422 decision on
+            ``uncovered_stale_node_ids`` lives in the calling route
+            (``POST /nodes/{node_id}/summary/generate``) per K1
+            ratify; the orchestrator + this helper are
+            force-agnostic, and memo-skip on both axes is
+            unconditional inside the run.
         priority: Job priority (NORMAL respects the work window).
     """
     log = structlog.get_logger().bind(vertex_node_id=str(vertex_node_id), force=force)

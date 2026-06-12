@@ -26,13 +26,18 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_arq_redis, get_current_tenant
+from course_supporter.api.deps import (
+    get_arq_redis,
+    get_current_tenant,
+    get_stage_router,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
+from course_supporter.storage.node_summary_run_state import NodeSummaryRunScope
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -124,16 +129,56 @@ def mock_arq() -> AsyncMock:
 
 
 @pytest.fixture()
-async def client(mock_session: AsyncMock, mock_arq: AsyncMock) -> AsyncClient:
+def mock_stage_router() -> MagicMock:
+    """Stub StageRouter for routes that need the dep resolved.
+
+    The route's read-only ``validate_scope`` instantiates the
+    orchestrator with this object but never invokes any LLM hook —
+    ``MagicMock`` is sufficient. Tests that exercise the scope gate
+    additionally ``patch`` ``build_node_summary_orchestrator`` to
+    control the returned scope shape.
+    """
+    return MagicMock()
+
+
+@pytest.fixture()
+async def client(
+    mock_session: AsyncMock,
+    mock_arq: AsyncMock,
+    mock_stage_router: MagicMock,
+) -> AsyncClient:
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     app.dependency_overrides[get_arq_redis] = lambda: mock_arq
+    app.dependency_overrides[get_stage_router] = lambda: mock_stage_router
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as ac:
         yield ac  # type: ignore[misc]
     app.dependency_overrides.clear()
+
+
+def _orch_with_scope(
+    *,
+    uncovered: list[uuid.UUID] | None = None,
+    in_scope: list[uuid.UUID] | None = None,
+) -> MagicMock:
+    """Patch target for ``build_node_summary_orchestrator``.
+
+    Returns a MagicMock orch whose ``validate_scope`` is an AsyncMock
+    returning the requested scope. ``run`` is also an AsyncMock so
+    tests can assert it is NEVER awaited (inv #4 sharper form).
+    """
+    orch = MagicMock()
+    orch.validate_scope = AsyncMock(
+        return_value=NodeSummaryRunScope(
+            in_scope_node_ids=in_scope or [],
+            uncovered_stale_node_ids=uncovered or [],
+        )
+    )
+    orch.run = AsyncMock()
+    return orch
 
 
 # ── Tenant-gate — byte-identical 404 for foreign + nonexistent ──
@@ -202,14 +247,20 @@ class TestTenantGateGeneric404:
 
 
 class TestGenerateEnqueuesJob:
-    async def test_returns_202_with_job_response(
+    async def test_returns_202_with_job_response_when_scope_clean(
         self, client: AsyncClient, mock_session: AsyncMock
     ) -> None:
+        """Clean scope (no uncovered_stale) + force=false → 202 + Job."""
         nid = uuid.uuid4()
         node = _mock_node(node_id=nid)
         job = _mock_job(course_node_id=nid)
         with (
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch(
+                "course_supporter.api.routes.node_summaries"
+                ".build_node_summary_orchestrator",
+                return_value=_orch_with_scope(uncovered=[], in_scope=[nid]),
+            ),
             patch(
                 "course_supporter.api.routes.node_summaries"
                 ".enqueue_node_summary_regeneration",
@@ -239,6 +290,11 @@ class TestGenerateEnqueuesJob:
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch(
                 "course_supporter.api.routes.node_summaries"
+                ".build_node_summary_orchestrator",
+                return_value=_orch_with_scope(uncovered=[], in_scope=[nid]),
+            ),
+            patch(
+                "course_supporter.api.routes.node_summaries"
                 ".enqueue_node_summary_regeneration",
                 return_value=job,
             ) as mock_enqueue,
@@ -250,28 +306,112 @@ class TestGenerateEnqueuesJob:
         assert resp.status_code == 202
         assert mock_enqueue.call_args.kwargs["force"] is True
 
-    async def test_orchestrator_never_invoked_synchronously(
+    async def test_uncovered_stale_without_force_returns_422(
         self, client: AsyncClient
     ) -> None:
-        """Invariant #4: routes never call ``orch.run()`` directly."""
+        """K1 ratify: uncovered_stale_node_ids non-empty + force=false → 422.
+
+        Body shape — machine-readable ``detail`` with ``reason`` discriminator,
+        the list of uncovered ids, and a human hint. No new error envelope
+        is introduced (operator-ratified pre-flight rule #1).
+        """
         nid = uuid.uuid4()
+        uncovered_a = uuid.uuid4()
+        uncovered_b = uuid.uuid4()
+        node = _mock_node(node_id=nid)
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch(
+                "course_supporter.api.routes.node_summaries"
+                ".build_node_summary_orchestrator",
+                return_value=_orch_with_scope(
+                    uncovered=[uncovered_a, uncovered_b],
+                    in_scope=[nid],
+                ),
+            ),
+            patch(
+                "course_supporter.api.routes.node_summaries"
+                ".enqueue_node_summary_regeneration",
+            ) as mock_enqueue,
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{nid}/summary/generate",
+                json={"force": False},
+            )
+        assert resp.status_code == 422
+        body = resp.json()
+        detail = body["detail"]
+        assert detail["reason"] == "uncovered_stale_nodes"
+        assert set(detail["uncovered_stale_node_ids"]) == {
+            str(uncovered_a),
+            str(uncovered_b),
+        }
+        # No enqueue when the gate triggers — Job row not persisted.
+        mock_enqueue.assert_not_called()
+
+    async def test_uncovered_stale_with_force_true_returns_202(
+        self, client: AsyncClient
+    ) -> None:
+        """K1 ratify: force=true bypasses the 422 even with uncovered ids."""
+        nid = uuid.uuid4()
+        uncovered_a = uuid.uuid4()
         node = _mock_node(node_id=nid)
         job = _mock_job(course_node_id=nid)
         with (
             patch.object(CourseNodeRepository, "get_by_id", return_value=node),
             patch(
                 "course_supporter.api.routes.node_summaries"
+                ".build_node_summary_orchestrator",
+                return_value=_orch_with_scope(uncovered=[uncovered_a], in_scope=[nid]),
+            ),
+            patch(
+                "course_supporter.api.routes.node_summaries"
+                ".enqueue_node_summary_regeneration",
+                return_value=job,
+            ) as mock_enqueue,
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{nid}/summary/generate",
+                json={"force": True},
+            )
+        assert resp.status_code == 202
+        mock_enqueue.assert_called_once()
+        assert mock_enqueue.call_args.kwargs["force"] is True
+
+    async def test_orchestrator_run_never_invoked_synchronously(
+        self, client: AsyncClient
+    ) -> None:
+        """Sharper inv #4: ``orch.run()`` NEVER awaited from the route.
+
+        Read-only ``validate_scope`` IS permitted from the route (K1
+        ratify — the explicit 422 API surface). The hard line is the
+        generation method ``run``, which must only fire inside the
+        ARQ worker. This test pins both sides at once: validate_scope
+        IS called, run is NOT.
+        """
+        nid = uuid.uuid4()
+        node = _mock_node(node_id=nid)
+        job = _mock_job(course_node_id=nid)
+        orch_mock = _orch_with_scope(uncovered=[], in_scope=[nid])
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch(
+                "course_supporter.api.routes.node_summaries"
+                ".build_node_summary_orchestrator",
+                return_value=orch_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.node_summaries"
                 ".enqueue_node_summary_regeneration",
                 return_value=job,
             ),
-            patch(
-                "course_supporter.agents.methodist_factory"
-                ".build_node_summary_orchestrator"
-            ) as mock_build,
         ):
             resp = await client.post(f"/api/v1/nodes/{nid}/summary/generate", json={})
         assert resp.status_code == 202
-        mock_build.assert_not_called()
+        # validate_scope IS called (the K1 422 surface).
+        orch_mock.validate_scope.assert_awaited_once()
+        # ``run`` is NEVER called from the route — inv #4 hard line.
+        orch_mock.run.assert_not_awaited()
 
 
 # ── GET /summary — P6 two-step contract ─────────────────────────

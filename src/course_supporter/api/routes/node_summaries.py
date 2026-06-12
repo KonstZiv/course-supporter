@@ -40,7 +40,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_arq_redis, get_session
+from course_supporter.agents.methodist_factory import (
+    build_node_summary_orchestrator,
+)
+from course_supporter.api.deps import get_arq_redis, get_session, get_stage_router
 from course_supporter.api.schemas import (
     JobResponse,
     NodeSummaryEditViewResponse,
@@ -52,6 +55,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_node_summary_regeneration
+from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
@@ -64,6 +68,7 @@ router = APIRouter(tags=["node-summaries"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
+StageRouterDep = Annotated[StageRouter, Depends(get_stage_router)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
@@ -112,18 +117,56 @@ async def generate_node_summary(
     tenant: PrepDep,
     session: SessionDep,
     arq: ArqDep,
+    stage_router: StageRouterDep,
 ) -> JobResponse:
     """Trigger the methodist two-pass regeneration via ARQ (KD10 + KD13).
 
-    Mirrors ``enqueue_ingestion``: persists a ``node_summary_regeneration``
-    Job, enqueues the ARQ task, records ``arq_job_id``, commits, and
-    returns the queued Job. The orchestrator runs in the worker (inv #4
-    — routes never call ``orch.run()`` synchronously).
+    Two-step path:
 
-    Errors: 404 generic when the node is missing or belongs to another
-    tenant.
+    1. **Read-only scope validation (K1 ratify — the 422 API surface).**
+       Constructs the orchestrator via the shared
+       :func:`build_node_summary_orchestrator` DI helper and calls
+       :meth:`validate_scope` (purely read-only — selects + hash
+       comparison; no LLM hook invoked). When the run would leave
+       ``uncovered_stale_node_ids`` outside the vertex's subtree and
+       ``force = false``, returns 422 with the list of uncovered ids
+       so the caller can either narrow scope or retry with
+       ``force = true``.
+    2. **Enqueue.** Mirrors ``enqueue_ingestion``: persists a
+       ``node_summary_regeneration`` Job, enqueues the ARQ task,
+       records ``arq_job_id``, commits, returns the queued Job.
+
+    Inv #4 (clarified): routes never call the orchestrator's
+    **generation** (``orch.run()``); the read-only ``validate_scope``
+    is the explicit K1-ratified 422 surface and IS permitted here.
+    The orchestrator's session is the route's request-scoped session,
+    so the scope check participates in the same transaction view as
+    the subsequent enqueue.
+
+    Errors:
+    * 404 generic — node missing or owned by another tenant.
+    * 422 — ``uncovered_stale_node_ids`` non-empty and ``force=false``.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+
+    orch = build_node_summary_orchestrator(session, stage_router)
+    scope = await orch.validate_scope(node_id, body.force)
+    if scope.uncovered_stale_node_ids and not body.force:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "uncovered_stale_nodes",
+                "uncovered_stale_node_ids": [
+                    str(nid) for nid in scope.uncovered_stale_node_ids
+                ],
+                "hint": (
+                    "Stale CourseNodes exist outside the requested "
+                    "vertex's subtree. Retry with force=true to "
+                    "proceed regardless, or move the vertex up the "
+                    "tree so the stale ancestors fall in scope."
+                ),
+            },
+        )
 
     job = await enqueue_node_summary_regeneration(
         redis=arq,
@@ -139,6 +182,7 @@ async def generate_node_summary(
         job_id=str(job.id),
         node_id=str(node_id),
         force=body.force,
+        uncovered_stale_count=len(scope.uncovered_stale_node_ids),
     )
     return JobResponse.model_validate(job)
 

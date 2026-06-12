@@ -761,8 +761,13 @@ async def arq_regenerate_node_summary(
         job_id: Job UUID as string (ARQ serialises via JSON).
         vertex_node_id: Vertex CourseNode UUID as string — the root of
             the subtree the run will visit.
-        force: Whether to bypass the API's 422 on uncovered_stale
-            ancestors. Memo-skip is unconditional regardless.
+        force: The K1-ratified meaning here is informational only —
+            the 422 decision on ``uncovered_stale_node_ids`` lives
+            in the calling route. By the time this task runs the
+            decision has already been made (route either raised
+            422 or accepted), so the task carries ``force`` through
+            to ``orch.run()`` purely for diagnostic / resume-replay
+            symmetry. Memo-skip on both axes is unconditional.
     """
     from course_supporter.agents.methodist_factory import (
         build_node_summary_orchestrator,

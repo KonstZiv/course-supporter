@@ -40,6 +40,9 @@ from course_supporter.storage.enclosing_context_hash import (
     EnclosingContextHashService,
 )
 from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.node_summary_final_repository import (
+    NodeSummaryFinalRepository,
+)
 from course_supporter.storage.node_summary_run_state import (
     NodeSummaryNodeStatus,
     NodeSummaryRunError,
@@ -231,6 +234,7 @@ class NodeSummaryGenerationOrchestrator:
         self._session = session
         self._methodist: MethodistGenerator = methodist or _NoOpMethodistGenerator()
         self._encl_hash = EnclosingContextHashService(session)
+        self._final_repo = NodeSummaryFinalRepository(session)
 
     async def validate_scope(
         self, vertex_node_id: uuid.UUID, force: bool
@@ -664,6 +668,13 @@ class NodeSummaryGenerationOrchestrator:
             return
 
         raw.source_content_hash = node.content_hash
+
+        # Channel 1 (KD11 §1055-1062): write Final from Raw + snapshot
+        # prior version. Memo-skip branch above does NOT reach this
+        # point — Final is left untouched whenever Pass 1 skipped LLM
+        # work, by structural exclusion.
+        await self._final_repo.write_from_raw_with_snapshot(raw)
+
         run_state.pass1[node.id] = NodeSummaryNodeStatus.DONE
         run_state.updated_at = datetime.now(UTC)
         await self._persist_run_state(job_id, run_state)
@@ -809,6 +820,13 @@ class NodeSummaryGenerationOrchestrator:
 
         # Step 6 — materialise via 3.2.1 (mirror Pass 1 timing).
         await self._encl_hash.update_source_hash(raw, computed_hash)
+
+        # Channel 3 (KD11 §1064-1071): point-refresh Final.enclosing_
+        # context + bump enclosing_context_updated_at. Does NOT reset
+        # approved_at (explicit KD11 exception). Memo-skip branch
+        # above does NOT reach this point — Final is left untouched
+        # whenever Pass 2 skipped LLM work, by structural exclusion.
+        await self._final_repo.refresh_enclosing_context(raw)
 
         # Step 7 — DONE.
         run_state.pass2[node.id] = NodeSummaryNodeStatus.DONE

@@ -366,6 +366,16 @@ class NodeWithDocumentsResponse(BaseModel):
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
+    default_language: str | None = Field(
+        default=None,
+        description=(
+            "Canonical ISO 639-3 language for materials under this subtree. "
+            "Root nodes (``parent_id`` is null) are guaranteed non-null by "
+            "the ``course_nodes_root_language_required`` CHECK constraint; "
+            "child nodes may be null (inheritance is resolved at ingestion "
+            "from the root, not stored)."
+        ),
+    )
     order: int = Field(description="0-based position among siblings.")
     content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."

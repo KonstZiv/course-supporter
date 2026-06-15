@@ -126,3 +126,53 @@ async def test_create_root_node_returns_serializable_response(
         f"created_at must be non-empty ISO string: {payload!r}"
     )
     datetime.fromisoformat(created_at)
+
+
+async def test_detail_serializes_default_language(
+    node_client: AsyncClient,
+) -> None:
+    """GET /nodes/{id}/detail carries ``default_language`` (Task 3.2.5b commit-0).
+
+    The tree-feed (``NodeWithDocumentsResponse``) previously omitted
+    ``default_language``, so the UI language badge fell back to "auto"
+    on initial load even for a course with a stored language. The field
+    is now serialized from ``CourseNode.default_language`` via
+    ``from_attributes``.
+
+    Asserts:
+    * Root node serializes the stored, normalized language (``"ukr"``) —
+      roots are guaranteed non-null by the
+      ``course_nodes_root_language_required`` CHECK constraint.
+    * A child node created without an explicit language serializes
+      ``default_language = null`` (inheritance is resolved at ingestion
+      from the root, not stored) — tolerated, not an error.
+    """
+    root_resp = await node_client.post(
+        "/api/v1/nodes",
+        json={"title": "Lang detail root", "default_language": "ukr"},
+    )
+    assert root_resp.status_code == 201, root_resp.text
+    root_id = root_resp.json()["id"]
+
+    child_resp = await node_client.post(
+        f"/api/v1/nodes/{root_id}/children",
+        json={"title": "Lang detail child"},
+    )
+    assert child_resp.status_code == 201, child_resp.text
+    child_id = child_resp.json()["id"]
+
+    detail_resp = await node_client.get(f"/api/v1/nodes/{root_id}/detail")
+    assert detail_resp.status_code == 200, detail_resp.text
+    detail = detail_resp.json()
+
+    assert detail["default_language"] == "ukr", (
+        f"root must serialize stored language, got: {detail!r}"
+    )
+
+    children = detail["children"]
+    assert len(children) == 1, f"expected one child, got: {children!r}"
+    child = children[0]
+    assert child["id"] == child_id
+    assert child["default_language"] is None, (
+        f"child without explicit language must serialize null, got: {child!r}"
+    )

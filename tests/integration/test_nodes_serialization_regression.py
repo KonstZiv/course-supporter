@@ -176,3 +176,11 @@ async def test_detail_serializes_default_language(
     assert child["default_language"] is None, (
         f"child without explicit language must serialize null, got: {child!r}"
     )
+
+    # Task 3.2.5b commit-1: the tree-feed carries summary badge state.
+    # These nodes have no Raw (never generated) → ``none`` / ``false`` at
+    # the route boundary, on both root and child (recursive composition).
+    assert detail["summary_status"] == "none", detail
+    assert detail["materials_changed"] is False, detail
+    assert child["summary_status"] == "none", child
+    assert child["materials_changed"] is False, child

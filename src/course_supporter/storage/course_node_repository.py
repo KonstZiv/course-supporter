@@ -3,15 +3,59 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from enum import Enum, auto
+from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.storage.content_hash import ContentHashService
-from course_supporter.storage.orm import AuthoredDocument, CourseNode
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    NodeSummaryFinal,
+    NodeSummaryRaw,
+)
+
+# Methodist summary badge state surfaced on the tree-feed (Task 3.2.5b).
+# Lives in the storage layer (computation owner); api/schemas imports it
+# up — storage never imports api.
+SummaryStatus = Literal["none", "draft", "approved"]
+
+
+def compute_node_summary_state(
+    *,
+    raw_exists: bool,
+    final_approved: bool,
+    source_content_hash: str | None,
+    node_content_hash: str | None,
+) -> tuple[SummaryStatus, bool]:
+    """Pure derivation of a CourseNode's summary badge state (Task 3.2.5b).
+
+    DB-free so the three-state matrix + axis-1 ``materials_changed`` are
+    unit-testable without a session.
+
+    * ``summary_status`` — ``none`` (no active Raw) / ``draft`` (Raw
+      present, Final not yet approved) / ``approved`` (Final approved).
+    * ``materials_changed`` — axis-1 staleness ONLY (the node's stored
+      ``Raw.source_content_hash`` differs from the live
+      ``CourseNode.content_hash``). Computed strictly when a Raw exists
+      (no Raw → nothing to compare → ``False``, explicit guard, never a
+      leaked SQL ``NULL != ...``). INDEPENDENT of approval: an approved
+      node whose materials changed stays ``materials_changed=True`` (the
+      useful "approved but stale" signal) — the two fields are
+      orthogonal, neither masks the other (Ratified #8). This is NOT the
+      generate-route's two-axis ``uncovered_stale`` (axis-2 excluded by
+      design).
+    """
+    if not raw_exists:
+        return ("none", False)
+    status: SummaryStatus = "approved" if final_approved else "draft"
+    materials_changed = source_content_hash != node_content_hash
+    return (status, materials_changed)
 
 
 class _Unset(Enum):
@@ -472,6 +516,62 @@ class CourseNodeRepository:
                         node.parent = parent
 
         return roots
+
+    async def fetch_summary_states(
+        self, node_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[SummaryStatus, bool]]:
+        """Batch-compute the summary badge state for a set of CourseNodes.
+
+        ONE statement (Task 3.2.5b, Ratified #11 — no new
+        ``CourseNode→summary`` relationship): anchor on ``CourseNode``,
+        LEFT JOIN the active ``NodeSummaryRaw`` + active
+        ``NodeSummaryFinal``. ``deleted_at IS NULL`` is filtered on BOTH
+        join sides — a soft-deleted Raw/Final counts as absent (the 1:1
+        UNIQUE on ``course_node_id`` makes fan-out impossible, but the
+        filter is required for correctness regardless: a soft-deleted
+        Final must not read as ``approved``). Each row is reduced via
+        :func:`compute_node_summary_state`.
+
+        No N+1, no per-node query, no orchestrator. Nodes absent from the
+        result map keep the response defaults (``"none"`` / ``False``).
+        """
+        if not node_ids:
+            return {}
+        stmt = (
+            select(
+                CourseNode.id,
+                NodeSummaryRaw.id,
+                NodeSummaryRaw.source_content_hash,
+                CourseNode.content_hash,
+                NodeSummaryFinal.approved_at,
+            )
+            .select_from(CourseNode)
+            .outerjoin(
+                NodeSummaryRaw,
+                and_(
+                    NodeSummaryRaw.course_node_id == CourseNode.id,
+                    NodeSummaryRaw.deleted_at.is_(None),
+                ),
+            )
+            .outerjoin(
+                NodeSummaryFinal,
+                and_(
+                    NodeSummaryFinal.course_node_id == CourseNode.id,
+                    NodeSummaryFinal.deleted_at.is_(None),
+                ),
+            )
+            .where(CourseNode.id.in_(node_ids))
+        )
+        result = await self._session.execute(stmt)
+        states: dict[uuid.UUID, tuple[SummaryStatus, bool]] = {}
+        for node_id, raw_id, source_hash, node_hash, approved_at in result:
+            states[node_id] = compute_node_summary_state(
+                raw_exists=raw_id is not None,
+                final_approved=approved_at is not None,
+                source_content_hash=source_hash,
+                node_content_hash=node_hash,
+            )
+        return states
 
     async def move(
         self,

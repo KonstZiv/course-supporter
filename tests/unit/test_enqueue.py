@@ -200,10 +200,10 @@ class TestEnqueueIngestion:
                 source_url="https://example.com/doc",
             )
 
-        # First event is the durable commit; the ARQ dispatch comes strictly
-        # after it. (events == ["commit", "enqueue", "commit"].)
-        assert events[0] == "commit"
-        assert events.index("commit") < events.index("enqueue")
+        # Lock the FULL QQ5 flow: durable commit → ARQ dispatch → second
+        # commit for arq_job_id. Asserting the exact sequence (not just
+        # commit-before-enqueue) also locks the post-dispatch commit.
+        assert events == ["commit", "enqueue", "commit"]
 
     async def test_none_arq_leaves_durable_job_without_second_commit(self) -> None:
         """Inverse failure mode (operator awareness note): if the durable
@@ -279,8 +279,8 @@ class TestEnqueueNodeSummaryRegeneration:
                 force=False,
             )
 
-        assert events[0] == "commit"
-        assert events.index("commit") < events.index("enqueue")
+        # Full QQ5 sequence (same as the ingestion path).
+        assert events == ["commit", "enqueue", "commit"]
         redis.enqueue_job.assert_awaited_once()
         regen_args = redis.enqueue_job.call_args.args
         assert regen_args[0] == "arq_regenerate_node_summary"

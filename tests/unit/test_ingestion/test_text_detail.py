@@ -117,6 +117,35 @@ class TestTextProcessorProcessDetail:
         assert [s.order for s in result] == [0, 1, 2]
 
     @pytest.mark.asyncio
+    async def test_sets_paragraph_anchors_skipping_headings(self) -> None:
+        """Phase 3.3a: process_detail fills start/end_paragraph; HEADING
+        chunks do not advance the paragraph ordinal.
+        """
+        processor = TextProcessor()
+        # "alpha\n\nHeading\n\nbeta" — alpha[0,7) Heading[7,16) beta[16,20)
+        doc = SourceDocument(
+            source_type=SourceType.TEXT,
+            source_url="file:///fixture",
+            chunks=[
+                ContentChunk(chunk_type=ChunkType.PARAGRAPH, text="alpha", index=0),
+                ContentChunk(chunk_type=ChunkType.HEADING, text="Heading", index=1),
+                ContentChunk(chunk_type=ChunkType.PARAGRAPH, text="beta", index=2),
+            ],
+        )
+        text = doc.assemble_text()
+        assert text == "alpha\n\nHeading\n\nbeta"
+        drafts = [
+            _draft(order=0, start_pos=0, end_pos=16),  # alpha + Heading
+            _draft(order=1, start_pos=16, end_pos=len(text)),  # beta
+        ]
+
+        result = await processor.process_detail(doc, _summary(drafts))
+
+        # alpha = paragraph 0 (Heading skipped); beta = paragraph 1.
+        assert (result[0].start_paragraph, result[0].end_paragraph) == (0, 0)
+        assert (result[1].start_paragraph, result[1].end_paragraph) == (1, 1)
+
+    @pytest.mark.asyncio
     async def test_draft_with_non_none_content_passes_through(self) -> None:
         """Defensive: pre-filled content is not re-sliced."""
         processor = TextProcessor()

@@ -179,6 +179,25 @@ class DocumentSegmentDraft(BaseModel):
             "``None`` for audio/text/web/video."
         ),
     )
+    start_paragraph: int | None = Field(
+        default=None,
+        description=(
+            "Optional 0-indexed inclusive paragraph ordinal where the "
+            "segment begins (Phase 3.3a). Populated for text/web via the "
+            "Pass 2b paragraph-boundary bridge; counts only "
+            "PARAGRAPH (text) / WEB_CONTENT (web) chunks — headings are "
+            "skipped. ``None`` for audio/video/presentation."
+        ),
+    )
+    end_paragraph: int | None = Field(
+        default=None,
+        description=(
+            "Optional 0-indexed inclusive paragraph ordinal where the "
+            "segment ends (Phase 3.3a). Populated for text/web via the "
+            "Pass 2b paragraph-boundary bridge; ``None`` for "
+            "audio/video/presentation."
+        ),
+    )
     noisy: bool = Field(
         default=False,
         description=(

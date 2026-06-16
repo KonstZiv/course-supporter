@@ -14,6 +14,7 @@ from course_supporter.ingestion.base import (
     ProcessingError,
     UnsupportedFormatError,
 )
+from course_supporter.ingestion.paragraph_anchors import compute_paragraph_anchors
 from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
@@ -35,6 +36,10 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".docx", ".html", ".htm", ".txt"}
+
+# Chunk types that count as paragraphs for the Phase 3.3a anchor (HEADING
+# chunks are skipped — they do not advance the paragraph ordinal).
+_TEXT_PARAGRAPH_TYPES = frozenset({ChunkType.PARAGRAPH})
 
 
 class TextProcessor(MaterialProcessor):
@@ -373,11 +378,20 @@ class TextProcessor(MaterialProcessor):
         downstream so a single source of truth handles boundary errors.
         """
         reference_text = doc.assemble_text()
+        # Paragraph anchors (Phase 3.3a): the emitted chunks line up with
+        # assemble_text; PARAGRAPH chunks carry the ordinal, HEADING chunks
+        # are skipped.
+        emitted = [c for c in doc.chunks if c.text]
         filled: list[DocumentSegmentDraft] = []
         for draft in summary_draft.segments:
-            if draft.content is not None:
-                filled.append(draft)
-                continue
-            sliced = reference_text[draft.start_pos : draft.end_pos]
-            filled.append(draft.model_copy(update={"content": sliced}))
+            start_para, end_para = compute_paragraph_anchors(
+                emitted, _TEXT_PARAGRAPH_TYPES, draft.start_pos, draft.end_pos
+            )
+            update: dict[str, object] = {
+                "start_paragraph": start_para,
+                "end_paragraph": end_para,
+            }
+            if draft.content is None:
+                update["content"] = reference_text[draft.start_pos : draft.end_pos]
+            filled.append(draft.model_copy(update=update))
         return filled

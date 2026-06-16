@@ -384,7 +384,8 @@ async def create_document(
         source_type=source_type,
         source_url=actual_url,
     )
-    await session.commit()
+    # enqueue_ingestion owns the commit (QQ5 helper-owns-commit) — it has
+    # already durably committed the document INSERT + Job before dispatch.
 
     logger.info(
         "document_created",
@@ -564,7 +565,7 @@ async def confirm_upload(
         source_type=body.source_type,
         source_url=s3_url,
     )
-    await session.commit()
+    # enqueue_ingestion owns the commit (QQ5 helper-owns-commit).
 
     logger.info(
         "presigned_upload_confirmed",
@@ -850,8 +851,9 @@ async def retry_document(
         source_type=document.source_type,
         source_url=document.source_url,
     )
-    # enqueue_ingestion already flipped the document to PENDING synchronously.
-    await session.commit()
+    # enqueue_ingestion flipped the document to PENDING and owns the commit
+    # (QQ5 helper-owns-commit) — the error_message reset + Job are already
+    # durable before the ARQ dispatch.
 
     logger.info(
         "document_retry",

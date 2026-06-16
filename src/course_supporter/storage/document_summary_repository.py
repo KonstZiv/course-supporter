@@ -23,6 +23,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.storage.cascade import (
+    CascadeDeleteService,
+    build_cascade_map,
+)
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, DocumentSummary
 
@@ -48,14 +52,20 @@ class DocumentSummaryRepository:
     async def get_by_authored_document_id(
         self, authored_document_id: uuid.UUID
     ) -> DocumentSummary | None:
-        """Fetch the DocumentSummary attached to a given AuthoredDocument.
+        """Fetch the ACTIVE DocumentSummary attached to a given AuthoredDocument.
 
-        Leverages the UNIQUE constraint on
-        ``document_summaries.authored_document_id`` (KD-theta.2 1:1
-        invariant): at most one row per AuthoredDocument.
+        Filters ``deleted_at IS NULL`` (Task 3.2.6 Finding 2): the 1:1
+        invariant is now an ACTIVE-only invariant enforced by a PARTIAL
+        unique index (one active summary per document), so soft-deleted
+        history may coexist with the live row. ``scalar_one_or_none`` would
+        otherwise raise ``MultipleResultsFound`` once a reprocess leaves a
+        soft-deleted predecessor behind. Both consumers — the on_failure
+        orphan-observer and the reprocess release-lookup — want the active
+        row, never the soft-deleted history.
         """
         stmt = select(DocumentSummary).where(
-            DocumentSummary.authored_document_id == authored_document_id
+            DocumentSummary.authored_document_id == authored_document_id,
+            DocumentSummary.deleted_at.is_(None),
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
@@ -93,6 +103,35 @@ class DocumentSummaryRepository:
         if parent is None:
             msg = f"AuthoredDocument not found: {authored_document_id}"
             raise ValueError(msg)
+
+        # Task 3.2.6 Finding 2: release any ACTIVE prior summary before the
+        # INSERT so the partial-active unique (one active summary per
+        # document) holds on reprocess. Owned-by-repo (mirrors the
+        # cascade-invalidate discipline below). The soft-delete cascades to
+        # the old segments via DocumentSummary.__cascades_soft_delete_to__.
+        # No hash hook here: the post-INSERT invalidate_up recomputes the
+        # parent chain from the now-active new summary, and the hash-walk
+        # excludes soft-deleted children (content_hash.py:381-383), so a
+        # single correct invalidation flows from the post-release state.
+        # First-time create has no active prior → release is skipped.
+        #
+        # FLUSH-ORDERING IS LOAD-BEARING. The release must soft-delete AND
+        # flush the old row BEFORE the new INSERT. SQLAlchemy's unit of work,
+        # left to itself, flushes INSERTs ahead of UPDATEs of the same class
+        # — so if the soft-delete UPDATE and the new INSERT shared one
+        # uninterrupted flush, the INSERT would fire while the old row is
+        # still active (deleted_at IS NULL), yielding two active rows and a
+        # UniqueViolation on the partial-active index. The ordering holds
+        # ONLY because CascadeDeleteService.soft_delete_with_cascade flushes
+        # the soft-delete here, before the create-INSERT below. Do NOT move
+        # this release after ``session.add(summary)``; do NOT make the
+        # cascade flush lazy. Locked by the reprocess no-UniqueViolation
+        # integration test (test_reprocess_soft_deletes_old_and_inserts_new).
+        old = await self.get_by_authored_document_id(authored_document_id)
+        if old is not None:
+            await CascadeDeleteService(self._session).soft_delete_with_cascade(
+                old, build_cascade_map(DocumentSummary)
+            )
 
         summary = DocumentSummary(
             authored_document_id=authored_document_id,

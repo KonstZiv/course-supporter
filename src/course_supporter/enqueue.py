@@ -30,7 +30,14 @@ async def enqueue_ingestion(
 ) -> Job:
     """Create a Job record, enqueue ingestion to ARQ, flip entry to PENDING.
 
-    The caller is responsible for committing the session.
+    Transaction-completing call (QQ5 ordering, mirrors
+    :func:`enqueue_s3_cleanup`): the helper takes ownership of the commit.
+    The caller STAGES its work in ``session`` (e.g. the document INSERT on
+    create/confirm, the ``error_message`` reset on retry) but does NOT
+    commit — this helper folds that staged work + the Job + the PENDING
+    flip into one atomic commit, THEN enqueues the ARQ task post-commit,
+    THEN a second commit records ``arq_job_id``. The caller must not commit
+    again.
 
     Single source of truth for the RAW/READY/ERROR → PENDING transition:
     this helper is the one place where a material entry acquires a
@@ -72,6 +79,16 @@ async def enqueue_ingestion(
         },
     )
 
+    # Stage the PENDING transition into the same transaction as the Job so
+    # the UI reflects it atomically with the durable Job row.
+    await entry_repo.set_pending(material_id, job.id)
+
+    # QQ5 boundary (mirrors enqueue_s3_cleanup): commit the caller's staged
+    # work + Job + PENDING BEFORE issuing the ARQ side-effect, so a hot
+    # worker can never read a Job row that does not yet exist (the
+    # "Job not found" race). The helper takes ownership of the commit.
+    await session.commit()
+
     arq_job = await redis.enqueue_job(
         "arq_ingest_material",
         str(job.id),
@@ -83,10 +100,7 @@ async def enqueue_ingestion(
 
     if arq_job is not None:
         await job_repo.set_arq_job_id(job.id, arq_job.job_id)
-
-    # Synchronously mark the entry as PENDING so the UI reflects the
-    # transition immediately upon return.
-    await entry_repo.set_pending(material_id, job.id)
+        await session.commit()
 
     log.info(
         "job_enqueued",
@@ -160,13 +174,15 @@ async def enqueue_node_summary_regeneration(
 
     Single source of truth for the
     ``node_summary_regeneration`` enqueue path (KD13 + Phase 3.2.4).
-    Mirrors :func:`enqueue_ingestion` shape: persist the Job row +
-    enqueue the ARQ task + record ``arq_job_id``. The caller commits.
+    Mirrors :func:`enqueue_ingestion` shape (QQ5, helper-owns-commit):
+    durable-commit the Job row, THEN enqueue the ARQ task, THEN a second
+    commit records ``arq_job_id``. The caller stages its work but must not
+    commit again.
 
     Args:
         redis: ARQ Redis pool.
-        session: Active DB session (caller controls the transaction
-            boundary; this helper does NOT commit).
+        session: Active DB session; the caller stages work but the helper
+            takes ownership of the commit (does NOT leave it to the caller).
         tenant_id: Owning tenant.
         vertex_node_id: Vertex CourseNode for the run.
         force: Persisted into ``input_params`` so reactivate replays
@@ -191,6 +207,11 @@ async def enqueue_node_summary_regeneration(
         },
     )
 
+    # QQ5 boundary (mirrors enqueue_s3_cleanup): durable-commit the Job
+    # BEFORE the ARQ dispatch so the hot worker never reads a Job row that
+    # does not yet exist. The helper takes ownership of the commit.
+    await session.commit()
+
     arq_job = await redis.enqueue_job(
         "arq_regenerate_node_summary",
         str(job.id),
@@ -200,6 +221,7 @@ async def enqueue_node_summary_regeneration(
 
     if arq_job is not None:
         await repo.set_arq_job_id(job.id, arq_job.job_id)
+        await session.commit()
 
     log.info(
         "node_summary_job_enqueued",

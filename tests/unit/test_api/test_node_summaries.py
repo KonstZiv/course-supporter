@@ -280,7 +280,10 @@ class TestGenerateEnqueuesJob:
         assert call_kwargs["tenant_id"] == STUB_TENANT.tenant_id
         assert call_kwargs["vertex_node_id"] == nid
         assert call_kwargs["force"] is False
-        mock_session.commit.assert_awaited()
+        # Task 3.2.6 Finding 1: commit ownership moved into
+        # ``enqueue_node_summary_regeneration`` (mocked here), so the route no
+        # longer commits. The helper's commit-before-dispatch ordering is
+        # covered in tests/unit/test_enqueue.py.
 
     async def test_force_true_propagated_to_enqueue(self, client: AsyncClient) -> None:
         nid = uuid.uuid4()

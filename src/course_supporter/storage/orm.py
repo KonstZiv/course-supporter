@@ -506,10 +506,13 @@ class AuthoredDocument(SoftDeleteMixin, Base):
 class DocumentSummary(SoftDeleteMixin, Base):
     """1:1 summary of an AuthoredDocument (vision §1.3).
 
-    One row per AuthoredDocument (UNIQUE on authored_document_id, KD-theta.2).
-    Produced by Pass 2a of the ingestion pipeline — LLM call for
+    One ACTIVE row per AuthoredDocument (PARTIAL unique on
+    authored_document_id WHERE deleted_at IS NULL, KD-theta.2). Produced by
+    Pass 2a of the ingestion pipeline — LLM call for
     video/audio/presentation or deterministic ladder for text/web.
-    Immutable after status=ready; regeneration replaces the row.
+    Regeneration soft-deletes the prior active summary (cascading its
+    segments) and inserts a fresh one; soft-deleted history coexists with
+    the single active row (Task 3.2.6 Finding 2).
     """
 
     __tablename__ = "document_summaries"
@@ -524,6 +527,17 @@ class DocumentSummary(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Active-only 1:1 invariant (Task 3.2.6): at most one summary per
+        # AuthoredDocument among non-soft-deleted rows. Replaces the former
+        # full column-level unique so reprocess (soft-delete old + insert
+        # new) does not collide. Distinct from ix_document_summaries_active
+        # (that one is a non-unique deleted_at index).
+        Index(
+            "uq_document_summaries_authored_document_id_active",
+            "authored_document_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         {
             "comment": (
                 "1:1 summary entity per AuthoredDocument "
@@ -535,9 +549,10 @@ class DocumentSummary(SoftDeleteMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     authored_document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("authored_documents.id", ondelete="CASCADE"),
-        unique=True,
         index=True,
-        comment="FK to parent AuthoredDocument (UNIQUE — 1:1 invariant per KD-theta.2)",
+        comment="FK to parent AuthoredDocument (active-only 1:1 invariant per "
+        "KD-theta.2 — enforced by partial unique index "
+        "uq_document_summaries_authored_document_id_active)",
     )
     course_root_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,

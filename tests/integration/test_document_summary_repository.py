@@ -20,12 +20,18 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
-from course_supporter.storage.orm import AuthoredDocument, CourseNode
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    DocumentSegment,
+    DocumentSummary,
+)
 
 pytestmark = pytest.mark.requires_db
 
@@ -156,3 +162,116 @@ class TestGetByIdAndAuthoredDocument:
         fetched = await repo.get_by_authored_document_id(seed_material_entry.id)
         assert fetched is not None
         assert fetched.id == created.id
+
+
+class TestReprocessActiveUniqueness:
+    """Task 3.2.6 Finding 2: reprocess soft-deletes the old summary + cascades
+    its segments, the new one persists, and the partial-active unique lets the
+    soft-deleted predecessor coexist with the single live row.
+    """
+
+    async def test_reprocess_soft_deletes_old_and_inserts_new(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        repo = DocumentSummaryRepository(db_session)
+
+        old = await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="legacy",
+            description="d",
+            main_concepts=["змінна"],
+            secondary_concepts=[],
+            content_char_count=10,
+        )
+        # Reprocess — must NOT raise UniqueViolation; releases the old slot.
+        new = await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="reprocessed",
+            description="d",
+            main_concepts=["variable", "змінна"],
+            secondary_concepts=[],
+            content_char_count=20,
+        )
+
+        await db_session.refresh(old)
+        assert old.deleted_at is not None, "old summary must be soft-deleted"
+        assert new.deleted_at is None, "new summary must be active"
+        assert new.id != old.id
+
+        # get_by_authored_document_id returns the active one only.
+        active = await repo.get_by_authored_document_id(seed_material_entry.id)
+        assert active is not None
+        assert active.id == new.id
+
+        # Both rows coexist: one active + one soft-deleted (partial unique).
+        total = await db_session.scalar(
+            select(func.count())
+            .select_from(DocumentSummary)
+            .where(DocumentSummary.authored_document_id == seed_material_entry.id)
+        )
+        assert total == 2
+
+    async def test_reprocess_cascades_old_segments(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        repo = DocumentSummaryRepository(db_session)
+
+        old = await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="legacy",
+            description="d",
+            main_concepts=[],
+            secondary_concepts=[],
+            content_char_count=10,
+        )
+        segment = DocumentSegment(
+            document_summary_id=old.id,
+            course_root_id=old.course_root_id,
+            order=0,
+            start_pos=0,
+            end_pos=5,
+            content="hello",
+        )
+        db_session.add(segment)
+        await db_session.flush()
+
+        # Reprocess — the release cascades the old summary's segments.
+        await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="reprocessed",
+            description="d",
+            main_concepts=[],
+            secondary_concepts=[],
+            content_char_count=20,
+        )
+
+        await db_session.refresh(segment)
+        assert segment.deleted_at is not None, (
+            "old segment must be soft-deleted via the cascade"
+        )
+
+    async def test_first_create_skips_release_no_op(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """First-time create has no active prior summary — release is skipped
+        (no crash on the None lookup).
+        """
+        repo = DocumentSummaryRepository(db_session)
+        created = await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="first",
+            description="d",
+            main_concepts=[],
+            secondary_concepts=[],
+            content_char_count=10,
+        )
+        assert created.deleted_at is None

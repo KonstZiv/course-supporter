@@ -130,6 +130,16 @@ class DocumentSegmentRepository:
                     visual_content=[
                         ref.model_dump() for ref in (draft.visual_content or [])
                     ],
+                    # Positional anchors (Phase 3.3a) — the source-type-specific
+                    # position the pipeline already computed on the draft, now
+                    # persisted (previously dropped here). Exactly one pair is
+                    # non-None per source_type; the rest stay None. The
+                    # paragraph pair (text/web) is wired with its computation
+                    # in commit-2.
+                    start_time_sec=draft.start_time_sec,
+                    end_time_sec=draft.end_time_sec,
+                    start_slide=draft.start_slide,
+                    end_slide=draft.end_slide,
                 )
             )
 

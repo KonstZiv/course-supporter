@@ -737,6 +737,45 @@ class DocumentSegment(SoftDeleteMixin, Base):
         "Mirrors the main_concepts JSONB+server_default mechanics; included "
         "in content_hash (KD-2.1-F) only when non-empty (task 2.4.6 D1).",
     )
+    # ─── Positional anchors (Phase 3.3a) ─────────
+    # Raw machine anchors for concept-navigation (vision §4) — the
+    # source-type-specific position the pipeline already computes. Each
+    # row fills exactly ONE pair per source_type; the rest stay NULL.
+    # Deliberately NOT in content_hash (compute_local_hash allowlist):
+    # navigational metadata, not content identity — including them would
+    # spuriously trigger NodeSummary cascade regeneration.
+    start_time_sec: Mapped[float | None] = mapped_column(
+        Float,
+        comment="Audio/video segment start, seconds (KD-2.2-F). NULL for "
+        "text/web/presentation. Transient transcript timecode — not in "
+        "content_hash; no backfill (forward-only, re-derived on reprocess).",
+    )
+    end_time_sec: Mapped[float | None] = mapped_column(
+        Float,
+        comment="Audio/video segment end, seconds (KD-2.2-F). NULL for "
+        "text/web/presentation.",
+    )
+    start_slide: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Presentation segment first slide number (KD-2.3-Q). NULL "
+        "for text/web/audio/video.",
+    )
+    end_slide: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Presentation segment last slide number (KD-2.3-Q). NULL "
+        "for text/web/audio/video.",
+    )
+    start_paragraph: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Text/web segment first paragraph ordinal (Phase 3.3a; "
+        "counts only PARAGRAPH/WEB_CONTENT chunks, headings excluded). NULL "
+        "for audio/video/presentation.",
+    )
+    end_paragraph: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Text/web segment last paragraph ordinal (Phase 3.3a). NULL "
+        "for audio/video/presentation.",
+    )
     content_char_count: Mapped[int | None] = mapped_column(
         Integer,
         comment="Char count of content (size-metric for weighting per vision "

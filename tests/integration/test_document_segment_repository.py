@@ -81,6 +81,10 @@ def _draft(
     secondary: list[str] | None = None,
     content: str | None = None,
     visual: list[VisualSceneRef] | None = None,
+    start_time_sec: float | None = None,
+    end_time_sec: float | None = None,
+    start_slide: int | None = None,
+    end_slide: int | None = None,
 ) -> DocumentSegmentDraft:
     return DocumentSegmentDraft(
         order=order,
@@ -92,6 +96,10 @@ def _draft(
         secondary_concepts=secondary or [],
         content=content,
         visual_content=visual,
+        start_time_sec=start_time_sec,
+        end_time_sec=end_time_sec,
+        start_slide=start_slide,
+        end_slide=end_slide,
     )
 
 
@@ -167,6 +175,55 @@ class TestCreateBatch:
 
         assert segments[0].title == "Lorem Section"
         assert segments[0].description == "Walks through lorem ipsum framing."
+
+    async def test_persists_positional_anchors_from_draft(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """Phase 3.3a: time/slide anchors computed upstream are persisted
+        (previously dropped on the draft→ORM boundary). One pair per row;
+        the other anchor columns stay NULL.
+        """
+        summary = await _make_summary(db_session, seed_material_entry)
+        text = "alpha block.\n\nbeta block."
+        doc = _source_doc(text)
+        drafts = [
+            # Audio/video-shaped draft — time anchors set, slide/paragraph NULL.
+            _draft(
+                order=0,
+                start_pos=0,
+                end_pos=14,
+                content="alpha block.\n\n",
+                start_time_sec=12.5,
+                end_time_sec=47.0,
+            ),
+            # Presentation-shaped draft — slide anchors set, time/paragraph NULL.
+            _draft(
+                order=1,
+                start_pos=14,
+                end_pos=len(text),
+                content="beta block.",
+                start_slide=3,
+                end_slide=5,
+            ),
+        ]
+
+        repo = DocumentSegmentRepository(db_session)
+        segments = await repo.create_batch(summary.id, drafts, source_doc=doc)
+
+        time_seg, slide_seg = segments[0], segments[1]
+        assert time_seg.start_time_sec == 12.5
+        assert time_seg.end_time_sec == 47.0
+        assert time_seg.start_slide is None
+        assert time_seg.end_slide is None
+        assert time_seg.start_paragraph is None  # not yet computed (commit-2)
+
+        assert slide_seg.start_slide == 3
+        assert slide_seg.end_slide == 5
+        assert slide_seg.start_time_sec is None
+        assert slide_seg.end_time_sec is None
 
     async def test_draft_with_non_none_content_passes_through(
         self,

@@ -18,6 +18,7 @@ from course_supporter.ingestion.heavy_steps import (
     ScrapeWebFunc,
     ScrapeWebParams,
 )
+from course_supporter.ingestion.paragraph_anchors import compute_paragraph_anchors
 from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
@@ -37,6 +38,9 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import AuthoredDocument
 
 logger = structlog.get_logger()
+
+# Web chunks are all paragraphs (WEB_CONTENT); no headings to skip.
+_WEB_PARAGRAPH_TYPES = frozenset({ChunkType.WEB_CONTENT})
 
 
 class WebProcessor(MaterialProcessor):
@@ -236,11 +240,20 @@ class WebProcessor(MaterialProcessor):
         ``draft.content`` is passed through verbatim (defensive).
         """
         reference_text = doc.assemble_text()
+        # Paragraph anchors (Phase 3.3a): every WEB_CONTENT chunk is a
+        # paragraph (no headings to skip), so each emitted chunk advances
+        # the ordinal.
+        emitted = [c for c in doc.chunks if c.text]
         filled: list[DocumentSegmentDraft] = []
         for draft in summary_draft.segments:
-            if draft.content is not None:
-                filled.append(draft)
-                continue
-            sliced = reference_text[draft.start_pos : draft.end_pos]
-            filled.append(draft.model_copy(update={"content": sliced}))
+            start_para, end_para = compute_paragraph_anchors(
+                emitted, _WEB_PARAGRAPH_TYPES, draft.start_pos, draft.end_pos
+            )
+            update: dict[str, object] = {
+                "start_paragraph": start_para,
+                "end_paragraph": end_para,
+            }
+            if draft.content is None:
+                update["content"] = reference_text[draft.start_pos : draft.end_pos]
+            filled.append(draft.model_copy(update=update))
         return filled

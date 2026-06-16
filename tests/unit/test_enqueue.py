@@ -3,7 +3,10 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.enqueue import (
+    enqueue_ingestion,
+    enqueue_node_summary_regeneration,
+)
 from course_supporter.job_priority import JobPriority
 
 
@@ -162,3 +165,122 @@ class TestEnqueueIngestion:
 
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
         assert create_kwargs["priority"] == "immediate"
+
+    async def test_durable_commit_precedes_arq_dispatch(self) -> None:
+        """QQ5 (Task 3.2.6 Finding 1): the durable Job commit happens BEFORE
+        the ARQ dispatch — a hot worker can never read a not-yet-committed
+        Job. The helper owns the commit (mirrors enqueue_s3_cleanup).
+        """
+        session = _mock_session()
+        redis = _mock_redis()
+        mock_job = _mock_job()
+        events: list[str] = []
+        session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        arq_job = MagicMock()
+        arq_job.job_id = "arq:test:1"
+
+        async def _enqueue(*_args: object, **_kwargs: object) -> MagicMock:
+            events.append("enqueue")
+            return arq_job
+
+        redis.enqueue_job = AsyncMock(side_effect=_enqueue)
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_ingestion(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                source_type="text",
+                source_url="https://example.com/doc",
+            )
+
+        # First event is the durable commit; the ARQ dispatch comes strictly
+        # after it. (events == ["commit", "enqueue", "commit"].)
+        assert events[0] == "commit"
+        assert events.index("commit") < events.index("enqueue")
+
+    async def test_none_arq_leaves_durable_job_without_second_commit(self) -> None:
+        """Inverse failure mode (operator awareness note): if the durable
+        commit succeeds but ARQ dispatch returns None (Redis down /
+        duplicate-id), the Job stays durably committed without ``arq_job_id``
+        and there is NO second commit — an orphan-queued Job that is
+        reactivate-eligible. Strictly better than the old orphan-ARQ-task
+        outcome (hard "Job not found" crashing the worker).
+        """
+        session = _mock_session()
+        commit_count = 0
+
+        async def _commit() -> None:
+            nonlocal commit_count
+            commit_count += 1
+
+        session.commit = AsyncMock(side_effect=_commit)
+        redis = AsyncMock()
+        redis.enqueue_job = AsyncMock(return_value=None)
+        mock_job = _mock_job()
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            result = await enqueue_ingestion(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                source_type="web",
+                source_url="https://example.com",
+            )
+
+        assert result is mock_job
+        repo_cls.return_value.set_arq_job_id.assert_not_awaited()
+        # Only the durable commit — no second (arq_job_id) commit.
+        assert commit_count == 1
+
+
+class TestEnqueueNodeSummaryRegeneration:
+    """Finding 1 covers the methodist enqueue path too (Ratified #5)."""
+
+    async def test_durable_commit_precedes_arq_dispatch(self) -> None:
+        """Methodist regeneration: durable Job commit strictly before the
+        ARQ dispatch (same QQ5 helper-owns-commit ordering).
+        """
+        session = _mock_session()
+        mock_job = _mock_job()
+        events: list[str] = []
+        session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        arq_job = MagicMock()
+        arq_job.job_id = "arq:test:regen"
+        redis = AsyncMock()
+
+        async def _enqueue(*_args: object, **_kwargs: object) -> MagicMock:
+            events.append("enqueue")
+            return arq_job
+
+        redis.enqueue_job = AsyncMock(side_effect=_enqueue)
+
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+            repo_cls.return_value.set_arq_job_id = AsyncMock()
+
+            await enqueue_node_summary_regeneration(
+                redis=redis,
+                session=session,
+                tenant_id=uuid.uuid4(),
+                vertex_node_id=uuid.uuid4(),
+                force=False,
+            )
+
+        assert events[0] == "commit"
+        assert events.index("commit") < events.index("enqueue")
+        redis.enqueue_job.assert_awaited_once()
+        regen_args = redis.enqueue_job.call_args.args
+        assert regen_args[0] == "arq_regenerate_node_summary"

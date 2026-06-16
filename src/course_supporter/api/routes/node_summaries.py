@@ -175,7 +175,7 @@ async def generate_node_summary(
         vertex_node_id=node_id,
         force=body.force,
     )
-    await session.commit()
+    # enqueue_node_summary_regeneration owns the commit (QQ5 helper-owns-commit).
 
     logger.info(
         "node_summary_regeneration_enqueued",

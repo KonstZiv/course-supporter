@@ -23,6 +23,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.storage.cascade import (
+    CascadeDeleteService,
+    build_cascade_map,
+)
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, DocumentSummary
 
@@ -110,13 +114,21 @@ class DocumentSummaryRepository:
         # excludes soft-deleted children (content_hash.py:381-383), so a
         # single correct invalidation flows from the post-release state.
         # First-time create has no active prior → release is skipped.
+        #
+        # FLUSH-ORDERING IS LOAD-BEARING. The release must soft-delete AND
+        # flush the old row BEFORE the new INSERT. SQLAlchemy's unit of work,
+        # left to itself, flushes INSERTs ahead of UPDATEs of the same class
+        # — so if the soft-delete UPDATE and the new INSERT shared one
+        # uninterrupted flush, the INSERT would fire while the old row is
+        # still active (deleted_at IS NULL), yielding two active rows and a
+        # UniqueViolation on the partial-active index. The ordering holds
+        # ONLY because CascadeDeleteService.soft_delete_with_cascade flushes
+        # the soft-delete here, before the create-INSERT below. Do NOT move
+        # this release after ``session.add(summary)``; do NOT make the
+        # cascade flush lazy. Locked by the reprocess no-UniqueViolation
+        # integration test (test_reprocess_soft_deletes_old_and_inserts_new).
         old = await self.get_by_authored_document_id(authored_document_id)
         if old is not None:
-            from course_supporter.storage.cascade import (
-                CascadeDeleteService,
-                build_cascade_map,
-            )
-
             await CascadeDeleteService(self._session).soft_delete_with_cascade(
                 old, build_cascade_map(DocumentSummary)
             )

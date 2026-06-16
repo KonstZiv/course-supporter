@@ -1516,9 +1516,16 @@ Student.__cascades_soft_delete_to__ = [HomeworkSubmission]
 # dispatch semantics. Tenant deliberately has no class-level
 # declaration: KD-β ``webhook_url`` scrub is route-specific (per-
 # call ``scrub_callable=`` on the Tenant-rooted cascade) rather than
-# a class invariant. DocumentSummary + DocumentSegment scrub
-# callables deferred to Phase 2.x first pipeline writes — Phase 1
-# tables stay empty, cascade traversal through them is no-op.
+# a class invariant. DocumentSummary + DocumentSegment have NO scrub
+# callable BY DESIGN, not by deferral: the pipeline does populate these
+# tables, and regeneration (Task 3.2.6) makes their soft-delete an
+# active path — the prior summary + its segments are soft-deleted to
+# PRESERVE them as audit history (the soft-delete-over-hard-delete
+# rationale, KD3), so scrubbing their content fields would defeat the
+# purpose. Consequence: soft-deleted rows accumulate on every reprocess
+# — retention/cleanup of that history is a separate concern (DD, not
+# this fix). KD3 content-scrub on a genuine user-initiated document
+# delete stays deferred (pre-existing, out of 3.2.6 scope).
 CourseNode.__scrub_callable__ = scrub_course_node
 AuthoredDocument.__scrub_callable__ = scrub_authored_document
 NodeSummaryRaw.__scrub_callable__ = scrub_node_summary_raw

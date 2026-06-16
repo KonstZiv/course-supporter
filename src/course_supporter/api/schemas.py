@@ -15,6 +15,7 @@ from course_supporter.language import (
     normalize_and_validate,
 )
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
+from course_supporter.storage.course_node_repository import SummaryStatus
 
 # --- Material Tree Nodes ---
 
@@ -366,9 +367,39 @@ class NodeWithDocumentsResponse(BaseModel):
     id: uuid.UUID = Field(description="Unique node identifier (UUIDv7).")
     title: str = Field(description="Node title.")
     description: str | None = Field(description="Optional node description.")
+    default_language: str | None = Field(
+        default=None,
+        description=(
+            "Canonical ISO 639-3 language for materials under this subtree. "
+            "Root nodes (``parent_id`` is null) are guaranteed non-null by "
+            "the ``course_nodes_root_language_required`` CHECK constraint; "
+            "child nodes may be null (inheritance is resolved at ingestion "
+            "from the root, not stored)."
+        ),
+    )
     order: int = Field(description="0-based position among siblings.")
     content_hash: str | None = Field(
         description="Merkle hash of this node's content. ``null`` if not computed."
+    )
+    summary_status: SummaryStatus = Field(
+        default="none",
+        description=(
+            "Methodist summary badge state (Task 3.2.5b): ``none`` (no "
+            "summary generated), ``draft`` (generated, not yet approved), "
+            "``approved`` (author-approved). Computed per-node in the "
+            "tree-feed — orthogonal to ``materials_changed``."
+        ),
+    )
+    materials_changed: bool = Field(
+        default=False,
+        description=(
+            "Axis-1 staleness ONLY: the node's materials changed after the "
+            "summary was generated (``Raw.source_content_hash`` differs from "
+            "the live ``CourseNode.content_hash``). NOT the generate-route's "
+            'two-axis ``uncovered_stale`` — the label is "materials changed", '
+            'not "needs regeneration". Independent of ``summary_status`` (an '
+            "approved node can still be ``materials_changed``)."
+        ),
     )
     authored_documents: list[AuthoredDocumentSummaryResponse] = Field(
         default_factory=list,

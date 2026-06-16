@@ -48,7 +48,10 @@ from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
 from course_supporter.storage.content_hash import ContentHashService
-from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.course_node_repository import (
+    CourseNodeRepository,
+    SummaryStatus,
+)
 from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.s3 import S3Client
 
@@ -76,6 +79,32 @@ def _node_response(node: CourseNode) -> NodeResponse:
     )
     resp.authored_documents_count = len(active_documents)
     return resp
+
+
+def _collect_node_ids(node: NodeWithDocumentsResponse) -> list[uuid.UUID]:
+    """Flatten the response tree to its CourseNode ids (Task 3.2.5b)."""
+    ids = [node.id]
+    for child in node.children:
+        ids.extend(_collect_node_ids(child))
+    return ids
+
+
+def _apply_summary_states(
+    node: NodeWithDocumentsResponse,
+    states: dict[uuid.UUID, tuple[SummaryStatus, bool]],
+) -> None:
+    """Assign the batch-computed summary badge state onto the response tree.
+
+    Mirrors the post-``model_validate`` field-set pattern of
+    :func:`_node_response`, extended recursively. Pure Python O(n) walk —
+    no per-node query (the single batch ``SELECT`` already ran). Nodes
+    absent from ``states`` keep the schema defaults.
+    """
+    state = states.get(node.id)
+    if state is not None:
+        node.summary_status, node.materials_changed = state
+    for child in node.children:
+        _apply_summary_states(child, states)
 
 
 async def _require_node_for_tenant(
@@ -251,7 +280,14 @@ async def get_node_detail(
     tree_roots = await repo.get_subtree_with_active_documents(node_id)
     if not tree_roots:
         raise HTTPException(status_code=404, detail="Node not found")
-    return NodeWithDocumentsResponse.model_validate(tree_roots[0])
+    response = NodeWithDocumentsResponse.model_validate(tree_roots[0])
+
+    # Summary badge state (Task 3.2.5b): one batch query for the whole
+    # subtree, then a pure recursive walk to attach it — no N+1.
+    node_ids = _collect_node_ids(response)
+    states = await repo.fetch_summary_states(node_ids)
+    _apply_summary_states(response, states)
+    return response
 
 
 # ── Single node operations ──

@@ -366,9 +366,12 @@ class DocumentSegmentRepository:
                 filename=row.filename,
                 source_type=row.source_type,
                 anchor=_resolve_anchor(row.source_type, row),
-                main_concepts=list(row.main_concepts),
+                # JSONB columns deserialize straight to Python lists; the Row
+                # projection yields a fresh per-row object (not a shared ORM
+                # attribute), so no defensive copy is needed (reviewer 3.3b).
+                main_concepts=row.main_concepts,
                 secondary_concepts=(
-                    list(row.secondary_concepts) if include_secondary else []
+                    row.secondary_concepts if include_secondary else []
                 ),
                 char_count=row.char_count,
                 # content column is present only when include_content widened

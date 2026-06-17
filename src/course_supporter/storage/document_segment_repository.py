@@ -10,6 +10,13 @@ cascade-invalidation discipline of KD-2.1-F symmetric to
 ``DocumentSummary`` -> ``AuthoredDocument`` -> ``CourseNode`` chain to
 the root.
 
+Phase 3.3b adds the read side: :meth:`DocumentSegmentRepository
+.search_by_concepts` answers "where in the course is concept X
+explained?" (vision §4) via JSONB ``@>`` containment over the
+GIN-indexed concept columns (KD-gamma), resolving each hit's lineage
+(material + node names) in a single JOIN so the Mentor agent does not
+dereference names one-by-one.
+
 Standalone class (not a SoftDeleteRepository subclass) per the existing
 repository convention (matches ``DocumentSummaryRepository`` shape).
 """
@@ -17,17 +24,96 @@ repository convention (matches ``DocumentSummaryRepository`` shape).
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
+from sqlalchemy import Row, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.storage.content_hash import ContentHashService
-from course_supporter.storage.orm import DocumentSegment, DocumentSummary
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    DocumentSegment,
+    DocumentSummary,
+)
 
 if TYPE_CHECKING:
     from course_supporter.ingestion.schemas import DocumentSegmentDraft
     from course_supporter.models.source import SourceDocument
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentAnchor:
+    """Positional anchor of a segment within its source material (Phase 3.3a).
+
+    ``kind`` is derived from the material's ``source_type`` (not from which
+    numeric column pair happens to be populated), so it is *always* defined:
+
+    - ``"time"`` — video/audio, seconds (``float``): ``start_time_sec`` /
+      ``end_time_sec``.
+    - ``"slide"`` — presentation, slide numbers (``int``): ``start_slide`` /
+      ``end_slide``.
+    - ``"paragraph"`` — text/web, paragraph ordinals (``int``; chunk-level
+      coarse address per DD-3.3a-A): ``start_paragraph`` / ``end_paragraph``.
+
+    ``start`` / ``end`` may still be ``None`` -- notably for a text/web
+    segment whose paragraph ordinal could not be computed (KD-C empty
+    anchor): the anchor is ``("paragraph", None, None)``, so the consumer
+    still knows it is a text material even without exact bounds.
+    """
+
+    kind: Literal["time", "slide", "paragraph"]
+    start: float | int | None
+    end: float | int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConceptSearchHit:
+    """One pointer-hit of a DocumentSegment matching a concept query (§4).
+
+    A pointer projection -- segment identity + lineage (material + node) +
+    source_type + position anchor + concepts + size -- so the Mentor agent
+    can answer "where in the course is concept X explained?" without
+    dereferencing names one-by-one (the lineage fields are resolved in a
+    single JOIN by :meth:`DocumentSegmentRepository.search_by_concepts`).
+
+    The raw ``content`` is opt-in (``include_content``); the default hit is
+    a pointer without segment text. ``secondary_concepts`` is populated
+    only when ``include_secondary`` widened the query, else an empty list.
+    """
+
+    segment_id: uuid.UUID
+    document_summary_id: uuid.UUID
+    authored_document_id: uuid.UUID
+    course_node_id: uuid.UUID
+    node_title: str
+    material_title: str
+    filename: str | None
+    source_type: str
+    anchor: SegmentAnchor
+    main_concepts: list[str]
+    secondary_concepts: list[str]
+    char_count: int | None
+    content: str | None
+
+
+def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
+    """Build the SegmentAnchor for a result row from its ``source_type``.
+
+    ``kind`` follows ``source_type`` (always defined); the matching bound
+    pair is then read off the projected row (the six anchor scalars are
+    always in the SELECT). For a text/web segment whose paragraph ordinal
+    was never computed (KD-C), the pair is ``(None, None)`` but ``kind``
+    stays ``"paragraph"``.
+    """
+    if source_type in ("video", "audio"):
+        return SegmentAnchor("time", row.start_time_sec, row.end_time_sec)
+    if source_type == "presentation":
+        return SegmentAnchor("slide", row.start_slide, row.end_slide)
+    # text / web — paragraph ordinals (may be None at the KD-C edge).
+    return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
 
 
 class DocumentSegmentRepository:
@@ -154,3 +240,140 @@ class DocumentSegmentRepository:
             await hash_service.invalidate_up(seg)
 
         return segments
+
+    async def search_by_concepts(
+        self,
+        *,
+        course_root_id: uuid.UUID,
+        concepts: list[str],
+        include_secondary: bool = False,
+        include_content: bool = False,
+    ) -> list[ConceptSearchHit]:
+        """Find segments teaching every concept in ``concepts`` (vision §4).
+
+        Concept-navigation primitive for the Mentor agent: "where in the
+        course is concept X explained?". Matches via JSONB ``@>``
+        containment over the GIN-indexed concept columns (KD-gamma), so
+        every term in ``concepts`` must be present in the segment (AND
+        semantics; a single-term query is a list of one).
+
+        The query JOINs up the lineage chain
+        (``DocumentSegment`` -> ``DocumentSummary`` -> ``AuthoredDocument``
+        -> ``CourseNode``) and projects names + source_type + anchor into
+        each :class:`ConceptSearchHit`, so the caller never N+1-dereferences
+        for display.
+
+        Args:
+            course_root_id: Denormalised root scope handle (KD-delta). The
+                mandatory ``course_root_id = :root`` predicate prevents
+                cross-course leakage.
+            concepts: Concept terms, AND-combined via array containment.
+                Bilingual-key aware -- a term matches the exact stored
+                string with no query expansion (§4 amendment v0.20.10). An
+                empty list returns ``[]`` (it does NOT scan the course).
+            include_secondary: When ``True``, broaden the match to
+                ``secondary_concepts`` as well (``main @> arr OR secondary
+                @> arr``). Known limitation: a query split across columns
+                (one term in main, another in secondary of the same
+                segment) will not hit -- forward-note, acceptable for MVP.
+                Also populates each hit's ``secondary_concepts``.
+            include_content: When ``True``, add the raw segment ``content``
+                column to the SELECT and project it; otherwise the heavy
+                text column is never read from the DB and each hit's
+                ``content`` is ``None``.
+
+        Returns:
+            Hits in course reading order: ``CourseNode.order`` (NULLS LAST)
+            -> ``CourseNode.created_at`` -> ``AuthoredDocument.order`` ->
+            ``DocumentSegment.order``. No relevance score (Phase 3.3b is
+            position-ordered; relevance is the FD4/pgvector axis).
+        """
+        if not concepts:
+            return []
+
+        main_match = DocumentSegment.main_concepts.contains(concepts)
+        match_predicate = (
+            or_(main_match, DocumentSegment.secondary_concepts.contains(concepts))
+            if include_secondary
+            else main_match
+        )
+
+        # Narrow projection: exactly the columns ConceptSearchHit needs, never
+        # whole entities. Whole-entity SELECT would pull the heavy
+        # DocumentSegment.content / visual_content and the unused
+        # material/node text columns on every hit -- wasted work on the hot
+        # homework-review path. content is opt-in at the SELECT level so the
+        # default (pointer) mode stays light on the wire, not just in the hit.
+        stmt = select(
+            DocumentSegment.id.label("segment_id"),
+            DocumentSegment.document_summary_id.label("document_summary_id"),
+            DocumentSummary.authored_document_id.label("authored_document_id"),
+            AuthoredDocument.course_node_id.label("course_node_id"),
+            CourseNode.title.label("node_title"),
+            DocumentSummary.title.label("material_title"),
+            AuthoredDocument.filename.label("filename"),
+            AuthoredDocument.source_type.label("source_type"),
+            DocumentSegment.main_concepts.label("main_concepts"),
+            DocumentSegment.secondary_concepts.label("secondary_concepts"),
+            DocumentSegment.content_char_count.label("char_count"),
+            # Six anchor scalars are always selected (cheap); _resolve_anchor
+            # reads the pair matching the source_type-derived kind.
+            DocumentSegment.start_time_sec.label("start_time_sec"),
+            DocumentSegment.end_time_sec.label("end_time_sec"),
+            DocumentSegment.start_slide.label("start_slide"),
+            DocumentSegment.end_slide.label("end_slide"),
+            DocumentSegment.start_paragraph.label("start_paragraph"),
+            DocumentSegment.end_paragraph.label("end_paragraph"),
+        )
+        if include_content:
+            stmt = stmt.add_columns(DocumentSegment.content.label("content"))
+        stmt = (
+            stmt.join(
+                DocumentSummary,
+                DocumentSegment.document_summary_id == DocumentSummary.id,
+            )
+            .join(
+                AuthoredDocument,
+                DocumentSummary.authored_document_id == AuthoredDocument.id,
+            )
+            .join(CourseNode, AuthoredDocument.course_node_id == CourseNode.id)
+            .where(
+                DocumentSegment.course_root_id == course_root_id,
+                # Active segments only. A soft-deleted summary/material
+                # cascade-soft-deletes its segments (CascadeDeleteService),
+                # so this single predicate also excludes reprocess history
+                # without joining deleted_at on every ancestor.
+                DocumentSegment.deleted_at.is_(None),
+                match_predicate,
+            )
+            .order_by(
+                CourseNode.order.asc().nulls_last(),
+                CourseNode.created_at.asc(),
+                AuthoredDocument.order.asc(),
+                DocumentSegment.order.asc(),
+            )
+        )
+
+        result = await self._session.execute(stmt)
+        return [
+            ConceptSearchHit(
+                segment_id=row.segment_id,
+                document_summary_id=row.document_summary_id,
+                authored_document_id=row.authored_document_id,
+                course_node_id=row.course_node_id,
+                node_title=row.node_title,
+                material_title=row.material_title,
+                filename=row.filename,
+                source_type=row.source_type,
+                anchor=_resolve_anchor(row.source_type, row),
+                main_concepts=list(row.main_concepts),
+                secondary_concepts=(
+                    list(row.secondary_concepts) if include_secondary else []
+                ),
+                char_count=row.char_count,
+                # content column is present only when include_content widened
+                # the SELECT; guard the attribute access accordingly.
+                content=row.content if include_content else None,
+            )
+            for row in result.all()
+        ]

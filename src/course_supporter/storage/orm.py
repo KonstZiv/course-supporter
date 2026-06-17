@@ -662,6 +662,24 @@ class DocumentSegment(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # KD-gamma concept-search indexes (Phase 3.3b). Declared here to
+        # match the DB created by raw SQL in the phase-1 baseline migration
+        # (a1b2c3d4e5f6) -- closes the autogenerate drift where the model
+        # did not describe these GIN indexes. ``jsonb_path_ops`` accelerates
+        # the ``@>`` containment used by search_by_concepts (NOT key
+        # existence ?|/?&).
+        Index(
+            "ix_document_segments_main_concepts_gin",
+            "main_concepts",
+            postgresql_using="gin",
+            postgresql_ops={"main_concepts": "jsonb_path_ops"},
+        ),
+        Index(
+            "ix_document_segments_secondary_concepts_gin",
+            "secondary_concepts",
+            postgresql_using="gin",
+            postgresql_ops={"secondary_concepts": "jsonb_path_ops"},
+        ),
         CheckConstraint("start_pos >= 0", name="ck_segment_start_pos_nonneg"),
         CheckConstraint("end_pos > start_pos", name="ck_segment_end_pos_gt_start"),
         {

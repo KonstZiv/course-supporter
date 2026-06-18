@@ -50,15 +50,73 @@ _MAX_VIDEO_SIZE_BYTES: int = (
     AUTHORED_POLICY.max_video_size_bytes or 5 * 1024 * 1024 * 1024
 )
 
-_DOWNLOAD_TIMEOUT_SEC = 600.0
+# yt-dlp download (URL path). No per-video duration/size is known before the
+# download (ffprobe runs *after* it), so the budget is worst-case: the 5 GB
+# size cap at a conservatively low 1 MiB/s, clamped to ``[FLOOR, CAP]``. A
+# large file over a slow link then finishes instead of dying at the
+# dev-calibrated flat 600 s (task 3.3c-B). CAP stays below
+# ``worker_job_timeout`` (21600 s) so the download alone cannot consume the
+# whole job budget.
+_DOWNLOAD_TIMEOUT_FLOOR_SEC = 600.0
+_DOWNLOAD_MIN_THROUGHPUT_BPS = 1024 * 1024  # 1 MiB/s assumed worst-case bandwidth
+_DOWNLOAD_TIMEOUT_CAP_SEC = 10800.0
+_DOWNLOAD_TIMEOUT_SEC = min(
+    max(
+        _DOWNLOAD_TIMEOUT_FLOOR_SEC,
+        _MAX_VIDEO_SIZE_BYTES / _DOWNLOAD_MIN_THROUGHPUT_BPS,
+    ),
+    _DOWNLOAD_TIMEOUT_CAP_SEC,
+)
 _PROBE_TIMEOUT_SEC = 30.0
 _EXTRACT_TIMEOUT_SEC = 600.0
-_FRAME_EXTRACT_TIMEOUT_SEC = 900.0
+
+# Frame extraction (Krok 3). The original flat 900 s was calibrated on dev
+# hardware (M2) and times long videos out on the 2-vCPU prod worker before
+# the full-resolution decode — whose wall-clock scales ~linearly with video
+# duration — can finish. The timeout is now duration-proportional via
+# :func:`frame_extract_timeout_for`: FLOOR preserves fail-fast for a
+# genuinely-stuck short video; CAP keeps the step under half of
+# ``worker_job_timeout`` so the rest of the pipeline (STT, cv2 dedup, Pass 1/2
+# LLM) still has budget for any in-contract (<=150 min) video. The CAP is a
+# ceiling for pathological out-of-contract inputs only — an in-contract video
+# stays far below it (task 3.3c-B).
+_FRAME_EXTRACT_TIMEOUT_FLOOR_SEC = 900.0
+_FRAME_EXTRACT_REALTIME_BUDGET = 1.0  # wall-clock budget per second of video
+_FRAME_EXTRACT_TIMEOUT_CAP_SEC = 10800.0
 _SINGLE_FRAME_TIMEOUT_SEC = 30.0
 
 # Bytes of stderr surfaced in error messages — the *tail*, since ffmpeg /
 # yt-dlp print version/config banners first and the actual error last.
 _ERR_TAIL = 1024
+
+
+def frame_extract_timeout_for(duration_sec: float) -> float:
+    """Return a duration-proportional frame-extraction timeout (task 3.3c-B).
+
+    Scales the ffmpeg frame-extraction budget with the video duration,
+    clamped to ``[FLOOR, CAP]``. ``FLOOR`` (900 s) keeps fail-fast for a
+    genuinely-stuck short video; ``CAP`` (10800 s, half of
+    ``worker_job_timeout``) bounds pathological out-of-contract inputs so
+    the remaining pipeline retains budget.
+
+    Args:
+        duration_sec: Source video duration in seconds (from ffprobe).
+
+    Returns:
+        Timeout in seconds for the bulk ``ffmpeg -vf fps=...`` extraction.
+
+    >>> frame_extract_timeout_for(60.0)  # 1-min video clamps to FLOOR
+    900.0
+    >>> frame_extract_timeout_for(9000.0)  # 150-min video: linear budget
+    9000.0
+    >>> frame_extract_timeout_for(36000.0)  # 10-h video clamps to CAP
+    10800.0
+    """
+    budgeted = duration_sec * _FRAME_EXTRACT_REALTIME_BUDGET
+    return min(
+        max(_FRAME_EXTRACT_TIMEOUT_FLOOR_SEC, budgeted),
+        _FRAME_EXTRACT_TIMEOUT_CAP_SEC,
+    )
 
 
 async def _run(cmd: list[str], *, timeout_sec: float) -> tuple[int, bytes, bytes]:
@@ -253,12 +311,24 @@ async def extract_frames_fps(
     video_path: Path,
     fps: float,
     dest_dir: Path,
+    *,
+    timeout_sec: float = _FRAME_EXTRACT_TIMEOUT_FLOOR_SEC,
 ) -> list[Path]:
     """Extract frames at a fixed ``fps`` into ``dest_dir`` as JPEGs (Krok 3).
 
     Returns the sorted JPEG paths. ffmpeg failure or zero frames →
     ``ProcessingError`` (operational; an undecodable stream yields no
     frames). Filesystem inspection runs off the event loop (ASYNC240).
+
+    Args:
+        video_path: Source video file.
+        fps: Output sampling rate (frames per second).
+        dest_dir: Target directory for the JPEG sequence.
+        timeout_sec: Wall-clock ceiling for the bulk ffmpeg decode. The
+            caller passes a duration-proportional value via
+            :func:`frame_extract_timeout_for`; the default keeps the
+            historical fail-fast FLOOR for callers without a duration
+            (task 3.3c-B).
     """
     await asyncio.to_thread(dest_dir.mkdir, parents=True, exist_ok=True)
     pattern = str(dest_dir / "frame_%06d.jpg")
@@ -274,7 +344,7 @@ async def extract_frames_fps(
             "2",
             pattern,
         ],
-        timeout_sec=_FRAME_EXTRACT_TIMEOUT_SEC,
+        timeout_sec=timeout_sec,
     )
     if rc != 0:
         raise ProcessingError(

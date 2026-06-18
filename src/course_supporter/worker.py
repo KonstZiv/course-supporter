@@ -9,10 +9,12 @@ Or in Docker::
     python -m arq course_supporter.worker.WorkerSettings
 """
 
-from typing import Any, ClassVar
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
-from arq.connections import RedisSettings
+from arq.connections import ArqRedis, RedisSettings
 
 from course_supporter.api.tasks import (
     arq_ingest_material,
@@ -23,7 +25,73 @@ from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 WorkerCtx = dict[str, Any]
+
+
+async def _reconcile_orphaned_active_jobs(
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: ArqRedis,
+) -> None:
+    """Fail Jobs stranded in ``active`` by a dead previous worker (task 3.3c-B).
+
+    Runs once at worker startup, before this worker polls any job — so every
+    ``active`` Job belongs to a *previous* instance. For each, consult ARQ for
+    the liveness of its ``arq_job_id``:
+
+    * ``not_found`` / ``complete`` (or no ``arq_job_id``) → ARQ has no live
+      handle that will (re)run it → transition the Job to ``failed`` so the
+      single-worker queue is unblocked and the failure becomes visible
+      (covers a hard-kill mid-task with ``max_tries`` exhausted).
+    * ``in_progress`` / ``queued`` / ``deferred`` → ARQ will (re)run it →
+      leave it; the rerun terminates it normally (race-safe).
+
+    ``arq.jobs.Job`` is queried on the default queue. An ``active`` Job maps to
+    ARQ ``in_progress`` — a global key, queue-agnostic — so the default-queue
+    assumption only affects the ``queued`` branch, which never applies to an
+    already-running job.
+    """
+    from arq.jobs import Job as ArqJob
+    from arq.jobs import JobStatus
+
+    from course_supporter.storage.job_repository import JobRepository
+
+    log = structlog.get_logger()
+    arq_live = {JobStatus.in_progress, JobStatus.queued, JobStatus.deferred}
+
+    async with session_factory() as session:
+        job_repo = JobRepository(session)
+        active = await job_repo.get_active_jobs()
+        if not active:
+            return
+
+        reconciled = 0
+        for job in active:
+            if job.arq_job_id is not None:
+                arq_status = await ArqJob(job.arq_job_id, redis).status()
+                if arq_status in arq_live:
+                    continue
+            # No arq_job_id, or ARQ reports not_found / complete → orphaned.
+            try:
+                await job_repo.update_status(
+                    job.id,
+                    "failed",
+                    error_message=(
+                        "Reconciled at worker startup: stranded in 'active' "
+                        "with no live ARQ job (previous worker died mid-task)."
+                    ),
+                )
+                reconciled += 1
+            except ValueError as exc:
+                log.warning(
+                    "reconcile_status_skipped", job_id=str(job.id), reason=str(exc)
+                )
+
+        if reconciled:
+            await session.commit()
+            log.info("orphaned_active_jobs_reconciled", count=reconciled)
 
 
 async def startup(ctx: WorkerCtx) -> None:
@@ -103,6 +171,19 @@ async def startup(ctx: WorkerCtx) -> None:
     ctx["s3_client"] = s3
 
     log = structlog.get_logger()
+
+    # Reconcile Jobs stranded in `active` by a previously-killed worker
+    # (task 3.3c-B, Vector 3). Best-effort and guarded: a reconcile failure
+    # must not stop the worker from starting to process new jobs. ARQ sets
+    # ctx['redis'] before invoking on_startup; ``.get`` keeps direct-call
+    # tests (which pass a bare ctx) from tripping over a missing pool.
+    redis = ctx.get("redis")
+    if isinstance(redis, ArqRedis):
+        try:
+            await _reconcile_orphaned_active_jobs(session_factory, redis)
+        except Exception:
+            log.exception("orphaned_active_jobs_reconcile_failed")
+
     log.info("worker_started", redis_url=s.redis_url, max_jobs=s.worker_max_jobs)
 
 

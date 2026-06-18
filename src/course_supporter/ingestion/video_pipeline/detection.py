@@ -594,7 +594,14 @@ async def detect(
     ``asyncio.to_thread``; gap fill is async (ffmpeg single-frame).
     """
     p = params or _DEFAULT_PARAMS
-    raw_paths = await media.extract_frames_fps(video_path, p.fps, frames_dir / "frames")
+    # Duration-proportional ffmpeg timeout (task 3.3c-B): the bulk decode's
+    # wall-clock scales ~linearly with the source duration, so a flat ceiling
+    # times long videos out on the 2-vCPU prod worker. ffprobe guarantees a
+    # positive duration upstream (UnsupportedFormatError otherwise).
+    frame_timeout = media.frame_extract_timeout_for(file_metadata.duration_ms / 1000)
+    raw_paths = await media.extract_frames_fps(
+        video_path, p.fps, frames_dir / "frames", timeout_sec=frame_timeout
+    )
     width, height = _resolution(file_metadata, raw_paths[0])
     interval = 1.0 / p.fps
 

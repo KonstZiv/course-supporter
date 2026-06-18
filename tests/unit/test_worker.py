@@ -1,11 +1,50 @@
 """Tests for ARQ worker configuration."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import uuid
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from arq.connections import RedisSettings
+from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_ingest_material
-from course_supporter.worker import WorkerSettings, shutdown, startup
+from course_supporter.worker import (
+    WorkerSettings,
+    _reconcile_orphaned_active_jobs,
+    shutdown,
+    startup,
+)
+
+
+def _fake_active_job(arq_job_id: str | None) -> MagicMock:
+    """Build a stand-in for an ``active`` Job row."""
+    job = MagicMock()
+    job.id = uuid.uuid4()
+    job.arq_job_id = arq_job_id
+    return job
+
+
+def _reconcile_harness(
+    jobs: list[MagicMock],
+    status_by_arq_id: dict[str, object],
+) -> tuple[AsyncMock, MagicMock, MagicMock, object]:
+    """Wire a mock session_factory + JobRepository + ArqJob.status factory."""
+    session = AsyncMock()
+    session.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=cm)
+
+    repo = MagicMock()
+    repo.get_active_jobs = AsyncMock(return_value=jobs)
+    repo.update_status = AsyncMock()
+
+    def _arq_job(arq_job_id: str, _redis: object) -> MagicMock:
+        handle = MagicMock()
+        handle.status = AsyncMock(return_value=status_by_arq_id[arq_job_id])
+        return handle
+
+    return session, factory, repo, _arq_job
 
 
 class TestWorkerSettings:
@@ -159,3 +198,105 @@ class TestWorkerLifecycle:
         with patch("course_supporter.worker.structlog"):
             await shutdown(ctx)
         mock_s3.close.assert_awaited_once()
+
+
+class TestReconcileOrphanedActiveJobs:
+    """Startup reconcile of orphaned active jobs (task 3.3c-B, Vector 3)."""
+
+    _JOB_REPO = "course_supporter.storage.job_repository.JobRepository"
+    _ARQ_JOB = "arq.jobs.Job"
+
+    async def test_orphaned_failed_and_live_left(self) -> None:
+        """not_found/complete → failed; in_progress/queued/deferred → left."""
+        from arq.jobs import JobStatus
+
+        not_found = _fake_active_job("a")
+        complete = _fake_active_job("b")
+        in_progress = _fake_active_job("c")
+        queued = _fake_active_job("d")
+        deferred = _fake_active_job("e")
+        status = {
+            "a": JobStatus.not_found,
+            "b": JobStatus.complete,
+            "c": JobStatus.in_progress,
+            "d": JobStatus.queued,
+            "e": JobStatus.deferred,
+        }
+        session, factory, repo, arq_job = _reconcile_harness(
+            [not_found, complete, in_progress, queued, deferred], status
+        )
+
+        with (
+            patch(self._JOB_REPO, return_value=repo),
+            patch(self._ARQ_JOB, side_effect=arq_job),
+        ):
+            await _reconcile_orphaned_active_jobs(factory, MagicMock())
+
+        failed_ids = {call.args[0] for call in repo.update_status.call_args_list}
+        assert failed_ids == {not_found.id, complete.id}
+        assert repo.update_status.await_count == 2
+        session.commit.assert_awaited_once()
+
+    async def test_missing_arq_job_id_is_reconciled_without_arq_call(self) -> None:
+        """A None arq_job_id is treated as orphaned (no ARQ lookup)."""
+        job = _fake_active_job(None)
+        session, factory, repo, arq_job = _reconcile_harness([job], {})
+
+        with (
+            patch(self._JOB_REPO, return_value=repo),
+            patch(self._ARQ_JOB, side_effect=arq_job) as arq_patch,
+        ):
+            await _reconcile_orphaned_active_jobs(factory, MagicMock())
+
+        repo.update_status.assert_awaited_once_with(job.id, "failed", error_message=ANY)
+        arq_patch.assert_not_called()
+        session.commit.assert_awaited_once()
+
+    async def test_no_active_jobs_is_noop(self) -> None:
+        """Empty active set: no status writes, no commit."""
+        session, factory, repo, _ = _reconcile_harness([], {})
+
+        with patch(self._JOB_REPO, return_value=repo):
+            await _reconcile_orphaned_active_jobs(factory, MagicMock())
+
+        repo.update_status.assert_not_awaited()
+        session.commit.assert_not_awaited()
+
+    async def test_all_live_does_not_commit(self) -> None:
+        """When every active job is still live in ARQ, nothing is written."""
+        from arq.jobs import JobStatus
+
+        job = _fake_active_job("x")
+        session, factory, repo, arq_job = _reconcile_harness(
+            [job], {"x": JobStatus.in_progress}
+        )
+
+        with (
+            patch(self._JOB_REPO, return_value=repo),
+            patch(self._ARQ_JOB, side_effect=arq_job),
+        ):
+            await _reconcile_orphaned_active_jobs(factory, MagicMock())
+
+        repo.update_status.assert_not_awaited()
+        session.commit.assert_not_awaited()
+
+    async def test_transition_error_is_swallowed_and_others_continue(self) -> None:
+        """A ValueError on one transition is logged; the sweep continues."""
+        from arq.jobs import JobStatus
+
+        bad = _fake_active_job("a")
+        good = _fake_active_job("b")
+        status = {"a": JobStatus.not_found, "b": JobStatus.not_found}
+        session, factory, repo, arq_job = _reconcile_harness([bad, good], status)
+        repo.update_status = AsyncMock(side_effect=[ValueError("race"), None])
+
+        with (
+            patch(self._JOB_REPO, return_value=repo),
+            patch(self._ARQ_JOB, side_effect=arq_job),
+            capture_logs() as logs,
+        ):
+            await _reconcile_orphaned_active_jobs(factory, MagicMock())
+
+        assert repo.update_status.await_count == 2
+        session.commit.assert_awaited_once()  # the second (good) one reconciled
+        assert [e for e in logs if e["event"] == "reconcile_status_skipped"]

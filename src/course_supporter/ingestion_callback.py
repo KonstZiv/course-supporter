@@ -113,50 +113,105 @@ class IngestionCallback:
         async with self._session_factory() as session:
             job_repo = JobRepository(session)
 
-            await job_repo.update_status(job_id, "failed", error_message=error_message)
-            cascaded = await job_repo.propagate_failure(job_id)
-            if cascaded:
-                log.info("cascading_failure_propagated", failed_count=len(cascaded))
+            # Terminal-first (task 3.3c-B, Vector 2): persist Job → failed +
+            # error_message and COMMIT it before any secondary step. A later
+            # exception in propagate_failure / fail_processing / the orphan
+            # observer / the cascade soft-delete must never roll back the
+            # terminal write and strand the Job in `active` — on the single
+            # prod worker a stranded `active` blocks the whole queue behind
+            # it. Mirrors the homework failure path (api/tasks.py), where the
+            # Job-failed update is unconditional and only the secondary status
+            # update is guarded.
+            try:
+                await job_repo.update_status(
+                    job_id, "failed", error_message=error_message
+                )
+                await session.commit()
+            except ValueError as exc:
+                # Invalid transition (e.g. a race already moved the Job to a
+                # terminal state) — nothing is stranded. Roll back and fall
+                # through to best-effort secondaries on a clean session.
+                await session.rollback()
+                log.warning("ingestion_failure_status_skipped", reason=str(exc))
 
+            # Material visibility (task 3.3c-B, Vector 2): mark the
+            # AuthoredDocument ERROR + persist its error_message in its OWN
+            # guarded sub-step with its OWN commit, BEFORE the dependent-job
+            # cascade. Both halves of "do not lose it" — Job terminality
+            # (above) and material visibility (here) — must be durable
+            # independently: a failure in the best-effort cascade below must
+            # not leave the material in an invisible `pending` state (the UI
+            # would still show it as processing). NOT folded into the Job →
+            # failed commit — a fail_processing exception there would roll back
+            # the terminal write and reintroduce the queue-blocking hang.
             from course_supporter.storage.authored_document_repository import (
                 AuthoredDocumentRepository,
             )
 
-            entry_repo = AuthoredDocumentRepository(session)
-            await entry_repo.fail_processing(material_id, error_message=error_message)
-
-            # Orphan-Summary observer (task 2.4.6, Q4 / DD-2.4-G). Pass 2a
-            # commits the DocumentSummary before process_detail runs
-            # (api/tasks.py), so a later Pass 2b/2c failure leaves that
-            # summary committed under a now-ERROR document. This is a
-            # pre-existing cross-source_type window (Phase 2.1+); here we
-            # only OBSERVE it (read-only warning in this already-open failure
-            # session) so the condition is visible before task 2.4.7's Pass 2c
-            # introduces a real process_detail failure surface. Resolution
-            # (single-commit / rollback / accept) is deferred to DD-2.4-G; the
-            # orchestrator commit sequence is NOT touched.
-            from course_supporter.storage.document_summary_repository import (
-                DocumentSummaryRepository,
-            )
-
-            orphan = await DocumentSummaryRepository(
-                session
-            ).get_by_authored_document_id(material_id)
-            if orphan is not None:
-                log.warning(
-                    "ingestion_orphan_summary_detected",
-                    summary_id=str(orphan.id),
-                    error=error_message,
+            try:
+                entry_repo = AuthoredDocumentRepository(session)
+                await entry_repo.fail_processing(
+                    material_id, error_message=error_message
+                )
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                # log.exception preserves the traceback: this catch-all guards
+                # an *unexpected* secondary failure (a bug we want to debug, not
+                # swallow blind) — task 3.3c-B reviewer 💡-A.
+                log.exception(
+                    "ingestion_failure_material_visibility_skipped", error=str(exc)
                 )
 
-            from course_supporter.security.exceptions import ErrorCategory
+            # Best-effort cleanup (dependent-job cascade, orphan observer,
+            # Stage 2 reject soft-delete). Guarded so a failure here can
+            # neither re-raise into the already-returning ARQ task nor undo
+            # the durable terminal + visibility writes above (task 3.3c-B,
+            # Vector 2). Only genuinely-secondary bookkeeping lives here.
+            try:
+                cascaded = await job_repo.propagate_failure(job_id)
+                if cascaded:
+                    log.info("cascading_failure_propagated", failed_count=len(cascaded))
 
-            if error_category == ErrorCategory.STAGE2_REJECTED:
-                await self._soft_delete_rejected_document(
-                    session, material_id=material_id, log=log
+                # Orphan-Summary observer (task 2.4.6, Q4 / DD-2.4-G). Pass 2a
+                # commits the DocumentSummary before process_detail runs
+                # (api/tasks.py), so a later Pass 2b/2c failure leaves that
+                # summary committed under a now-ERROR document. This is a
+                # pre-existing cross-source_type window (Phase 2.1+); here we
+                # only OBSERVE it (read-only warning in this already-open
+                # failure session) so the condition is visible before task
+                # 2.4.7's Pass 2c introduces a real process_detail failure
+                # surface. Resolution (single-commit / rollback / accept) is
+                # deferred to DD-2.4-G; the orchestrator commit sequence is
+                # NOT touched.
+                from course_supporter.storage.document_summary_repository import (
+                    DocumentSummaryRepository,
                 )
 
-            await session.commit()
+                orphan = await DocumentSummaryRepository(
+                    session
+                ).get_by_authored_document_id(material_id)
+                if orphan is not None:
+                    log.warning(
+                        "ingestion_orphan_summary_detected",
+                        summary_id=str(orphan.id),
+                        error=error_message,
+                    )
+
+                from course_supporter.security.exceptions import ErrorCategory
+
+                if error_category == ErrorCategory.STAGE2_REJECTED:
+                    await self._soft_delete_rejected_document(
+                        session, material_id=material_id, log=log
+                    )
+
+                await session.commit()
+            except Exception as exc:
+                # The terminal + visibility writes are already durable; secondary
+                # bookkeeping is best-effort and must not propagate. log.exception
+                # keeps the traceback for debugging (task 3.3c-B reviewer 💡-A).
+                await session.rollback()
+                log.exception("ingestion_failure_secondary_skipped", error=str(exc))
 
         log.info(
             "ingestion_callback_failure",

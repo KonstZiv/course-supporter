@@ -15,8 +15,9 @@ Each gnízdo lives in :mod:`course_supporter.ingestion.video_pipeline.steps`.
 Krok 1-2 are real as of task 2.4.2 (ingestion + STT); Krok 3-7 remain
 stubs (tasks 2.4.3-2.4.7). Data flows in-memory between steps; the STT
 carrier is *additionally* written to Redis (``video_stt_result:{job_id}``,
-TTL 3600 s) as the producer side of the inter-stage transport for the
-future Pass 2a consumer (Krok 5, task 2.4.5) — mirroring the audio
+TTL = ``worker_job_timeout``) as the producer side of the inter-stage
+transport for the future Pass 2a consumer (Krok 5, task 2.4.5) — mirroring
+the audio
 word-cache, NOT the deadlocking ``jobs`` row (rule #12). The namespace
 never imported the ``course_supporter.vd`` module (isolation per task 2.4.1
 acceptance #3; ``vd/`` itself was removed in task 2.4.9A).
@@ -43,6 +44,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from course_supporter.config import get_settings
 from course_supporter.ingestion.base import MaterialProcessor, ProcessingError
 from course_supporter.ingestion.video_pipeline import steps
 from course_supporter.ingestion.video_pipeline.schemas import STT_RESULT_KEY_TMPL
@@ -71,8 +73,6 @@ if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.stt.router import STTRouter
-
-_STT_RESULT_TTL_SEC = 3600
 
 logger = structlog.get_logger()
 
@@ -190,12 +190,19 @@ class VideoProcessor(MaterialProcessor):
 
         Producer side of the inter-stage transport (task 2.4.2); the
         consumer (Krok 5, Pass 2a) lands in task 2.4.5. Key
-        ``video_stt_result:{job_id}``, TTL 3600 s, payload
-        ``SttResult.model_dump_json()`` — the audio word-cache pattern,
-        NOT the ``jobs`` row (rule #12 deadlock).
+        ``video_stt_result:{job_id}``, payload ``SttResult.model_dump_json()``
+        — the audio word-cache pattern, NOT the ``jobs`` row (rule #12
+        deadlock).
+
+        TTL is bound to ``worker_job_timeout`` (DD-3.3c-G): the carrier
+        must outlive the whole job because Pass 2a reads near job end,
+        after the duration-proportional frame-decode (3.3c-B). The job
+        ceiling ``>=`` any internal write→read span, so the survival
+        invariant holds by construction without a per-stage CPU estimate.
         """
         key = STT_RESULT_KEY_TMPL.format(job_id=job_id)
-        await self._redis.set(key, stt.model_dump_json(), ex=_STT_RESULT_TTL_SEC)
+        ttl = get_settings().worker_job_timeout
+        await self._redis.set(key, stt.model_dump_json(), ex=ttl)
 
     @staticmethod
     def _assemble_source_document(

@@ -97,6 +97,51 @@ class TestSceneSegmentation:
         assert scenes[0].frames[0].frame_path == a
 
 
+class TestDetectTimeoutWiring:
+    """``detect`` threads a duration-proportional ffmpeg timeout (task 3.3c-B)."""
+
+    async def test_passes_duration_proportional_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The frame-extract timeout is derived from the probed duration.
+
+        Stubs ``extract_frames_fps`` to capture the timeout and abort before
+        the cv2 chain — the only behaviour under test is the wiring of
+        ``duration_ms / 1000`` through ``frame_extract_timeout_for``.
+        """
+        from course_supporter.ingestion.video_pipeline.media import (
+            frame_extract_timeout_for,
+        )
+
+        captured: dict[str, float] = {}
+
+        class _StopExtractError(Exception):
+            pass
+
+        async def _fake_extract(
+            video_path: Path,
+            fps: float,
+            dest_dir: Path,
+            *,
+            timeout_sec: float,
+        ) -> list[Path]:
+            captured["timeout_sec"] = timeout_sec
+            raise _StopExtractError
+
+        monkeypatch.setattr(detection.media, "extract_frames_fps", _fake_extract)
+
+        # 54-min patient-zero video → proportional budget (not the FLOOR).
+        meta = VideoFileMetadata(
+            duration_ms=3_263_000, codec="h264", resolution="1920x1080"
+        )
+        with pytest.raises(_StopExtractError):
+            await detection.detect(tmp_path / "lesson.mp4", meta, tmp_path)
+
+        assert captured["timeout_sec"] == frame_extract_timeout_for(3263.0)
+
+
 class TestMetricsAndPip:
     def test_compare_identical_low_change(self, tmp_path: Path) -> None:
         a = _write_noise(tmp_path / "a.jpg", 1)

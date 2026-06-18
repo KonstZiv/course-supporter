@@ -389,3 +389,19 @@ class JobRepository:
         stmt = select(func.count()).select_from(Job).where(Job.status == "queued")
         result = await self._session.execute(stmt)
         return result.scalar_one()
+
+    async def get_active_jobs(self) -> list[Job]:
+        """Return all live Jobs currently in the ``active`` status.
+
+        Global (not tenant-scoped) and soft-delete-aware. Consumed by the
+        worker startup reconcile sweep (task 3.3c-B): on the single prod
+        worker a Job stranded in ``active`` by a previous instance that died
+        mid-task blocks the whole queue behind it, so startup must find and
+        terminalise such jobs.
+        """
+        stmt = select(Job).where(
+            Job.status == "active",
+            Job.deleted_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())

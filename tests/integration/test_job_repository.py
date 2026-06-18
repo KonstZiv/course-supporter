@@ -548,3 +548,45 @@ class TestUpdateStage:
         fetched = await repo.get_by_id(job.id)
         assert fetched is not None
         assert fetched.current_stage == "checking_safety"
+
+
+class TestGetActiveJobs:
+    """get_active_jobs — global live-active sweep (task 3.3c-B, Vector 3)."""
+
+    async def test_returns_only_live_active_jobs(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Returns active, non-deleted jobs; excludes queued and soft-deleted."""
+        repo = JobRepository(db_session)
+        tid = seed_root_node.tenant_id
+        nid = seed_root_node.id
+
+        active_one = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest"
+        )
+        await repo.update_status(active_one.id, "active")
+        active_two = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest"
+        )
+        await repo.update_status(active_two.id, "active")
+
+        # Stays queued — must be excluded.
+        queued = await repo.create(tenant_id=tid, course_node_id=nid, job_type="ingest")
+
+        # Active but soft-deleted — must be excluded.
+        deleted = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest"
+        )
+        await repo.update_status(deleted.id, "active")
+        deleted_row = await repo.get_by_id(deleted.id)
+        assert deleted_row is not None
+        deleted_row.deleted_at = datetime.now(UTC)
+        await db_session.flush()
+
+        result = await repo.get_active_jobs()
+        ids = {job.id for job in result}
+
+        assert active_one.id in ids
+        assert active_two.id in ids
+        assert queued.id not in ids
+        assert deleted.id not in ids

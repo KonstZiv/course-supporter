@@ -119,7 +119,12 @@ async def _intake_video_duration_sec(
             return await media.probe_intake_duration_from_bytes(
                 content, filename=filename
             )
-        assert url is not None  # one of content/url is always supplied
+        if url is None:
+            # Programmer error — every callsite supplies content or url. An
+            # explicit raise (not assert, which -O strips) turns a missing
+            # invariant into a loud failure instead of a silent None probe.
+            msg = "video intake probe requires either content or url"
+            raise ValueError(msg)
         return await media.probe_intake_duration_sec(url)
     except UnsupportedFormatError as exc:
         raise HTTPException(

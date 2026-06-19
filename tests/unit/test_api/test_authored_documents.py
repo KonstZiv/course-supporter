@@ -1493,6 +1493,11 @@ class TestIntakeVideoDurationErrorMapping:
         # No probe patched — a probe call would raise; None proves it's skipped.
         assert await _intake_video_duration_sec(SourceType.TEXT, url="x") is None
 
+    async def test_video_without_content_or_url_raises(self) -> None:
+        """Defensive invariant: a video probe with neither input is a hard error."""
+        with pytest.raises(ValueError, match="content or url"):
+            await _intake_video_duration_sec(SourceType.VIDEO)
+
     async def test_url_processing_error_maps_to_503(self) -> None:
         with (
             patch(

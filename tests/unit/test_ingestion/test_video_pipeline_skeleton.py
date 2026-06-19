@@ -234,6 +234,18 @@ class TestStep2Stt:
             9_000_000 / 1000
         )
 
+    async def test_transcribe_gets_probed_duration(self) -> None:
+        """Krok 2 passes the ffprobe duration to STT for the M1 timeout."""
+        meta = _meta(9_000_000)  # 150-min module
+        router = _stt_router([("Hello", 0.0, 0.5)])
+
+        with patch(_EXTRACT, new=AsyncMock(return_value=Path("/tmp/x/audio.mp3"))):
+            await steps.step_2_stt(
+                Path("/tmp/x/source.mp4"), meta, stt_router=router, tmp=Path("/tmp/x")
+            )
+
+        assert router.transcribe.await_args.kwargs["duration_sec"] == 9_000_000 / 1000
+
 
 class TestProcessRawPipeline:
     """process_raw chains Krok 1-4 + writes the Redis STT carrier."""

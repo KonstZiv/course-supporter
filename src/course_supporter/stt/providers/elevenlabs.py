@@ -10,7 +10,12 @@ import structlog
 
 from course_supporter.stt.providers.base import STTProvider
 from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment, STTWord
-from course_supporter.stt.utils import guess_content_type, iso639_1_to_3, iso639_3_to_1
+from course_supporter.stt.utils import (
+    guess_content_type,
+    iso639_1_to_3,
+    iso639_3_to_1,
+    stt_timeout_for,
+)
 
 logger = structlog.get_logger()
 
@@ -59,11 +64,16 @@ class ElevenLabsSTTProvider(STTProvider):
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
 
         client = self._next_client()
+        # Per-request duration-proportional timeout (task M1) overrides the
+        # client-level flat default — a long module's synchronous transcription
+        # must not die on the dev-calibrated 120 s.
+        timeout = httpx.Timeout(stt_timeout_for(request.duration_sec), connect=30.0)
         with self._measure_latency() as timer:
             resp = await client.post(
                 "/v1/speech-to-text",
                 files={"file": (audio_path.name, audio_bytes, content_type)},
                 data=data,
+                timeout=timeout,
             )
 
         resp.raise_for_status()

@@ -72,13 +72,20 @@ class STTRouter:
         *,
         language: str | None = None,
         strategy: str = "default",
+        duration_sec: float | None = None,
     ) -> STTResult:
-        """Transcribe an audio file using the configured fallback chain."""
+        """Transcribe an audio file using the configured fallback chain.
+
+        ``duration_sec`` (when the caller probed it — the video path) drives
+        the provider's duration-proportional request timeout (task M1);
+        ``None`` leaves the provider on its conservative timeout cap.
+        """
         request = STTRequest(
             audio_path=audio_path,
             language=language,
             action=action,
             strategy=strategy,
+            duration_sec=duration_sec,
         )
         return await self._execute_with_fallback(action, strategy, request)
 

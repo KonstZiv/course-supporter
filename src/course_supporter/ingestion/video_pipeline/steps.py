@@ -185,6 +185,7 @@ async def step_2_stt(
         "transcribe",
         str(audio_path),
         language=None,
+        duration_sec=file_metadata.duration_ms / 1000,
     )
 
     words = [

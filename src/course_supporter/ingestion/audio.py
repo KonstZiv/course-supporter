@@ -270,6 +270,10 @@ class AudioProcessor(MaterialProcessor):
                 "before invocation."
             )
 
+        # duration_sec is omitted (-> None): the pure-audio duration is only
+        # known post-STT (result.audio_duration_sec), so the provider falls
+        # back to the conservative STT timeout cap rather than the dev-flat
+        # floor (task M1, audio leg). The video path passes a probed duration.
         result = await self._stt_router.transcribe(
             "transcribe",
             source.source_url,

@@ -50,6 +50,18 @@ class TestSTTRouterHappyPath:
         assert result.text == "transcript"
         provider.transcribe.assert_awaited_once()
 
+    async def test_threads_duration_sec_into_request(self) -> None:
+        """duration_sec is passed through to the provider request (task M1)."""
+        provider = _make_provider()
+        cfg = _make_model_cfg()
+        registry = _make_registry([cfg])
+
+        router = STTRouter({"test": provider}, registry)
+        await router.transcribe("transcribe", "/tmp/a.mp3", duration_sec=9000.0)
+
+        request = provider.transcribe.await_args.args[0]
+        assert request.duration_sec == 9000.0
+
     async def test_enriches_action_and_strategy(self) -> None:
         provider = _make_provider()
         cfg = _make_model_cfg()

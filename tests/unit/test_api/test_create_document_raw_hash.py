@@ -147,6 +147,7 @@ def app_with_overrides(
         doc.updated_at = fixed_now
         doc.job_id = None
         doc.warnings = []
+        doc.processing_estimate = None
         return doc
 
     monkeypatch.setattr(AuthoredDocumentRepository, "create", _spy_create)

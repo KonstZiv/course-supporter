@@ -6,8 +6,10 @@ import uuid
 
 import structlog
 from arq.connections import ArqRedis
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.config import get_settings
 from course_supporter.job_priority import JobPriority
 from course_supporter.jobs import JobType
 from course_supporter.storage.authored_document_repository import (
@@ -27,6 +29,7 @@ async def enqueue_ingestion(
     source_type: str,
     source_url: str,
     priority: JobPriority = JobPriority.NORMAL,
+    duration_sec: float | None = None,
 ) -> Job:
     """Create a Job record, enqueue ingestion to ARQ, flip entry to PENDING.
 
@@ -57,15 +60,51 @@ async def enqueue_ingestion(
         source_type: One of 'video', 'presentation', 'text', 'web'.
         source_url: URL or S3 path to the source file.
         priority: Job priority (NORMAL respects work window).
+        duration_sec: Intake-probed source video duration (DD-3.3c-I-B);
+            ``None`` for non-video ingests. Stored on the Job and summed by
+            the admission gate; does not affect this call's own gate
+            decision (the gate checks the EXISTING queue).
 
     Returns:
         The created Job with ``arq_job_id`` set.
+
+    Raises:
+        HTTPException: 503 ``INTAKE_OVERLOADED`` when the queue already holds
+            at least ``intake_admission_max_pending_video_hours`` of pending
+            video — the admission gate (DD-3.3c-I-B). Raised before any Job
+            is created, so the caller's staged work rolls back uncommitted.
     """
     log = structlog.get_logger().bind(
         node_id=str(node_id), material_id=str(material_id)
     )
     job_repo = JobRepository(session)
     entry_repo = AuthoredDocumentRepository(session)
+
+    # DD-3.3c-I-B admission gate (root-cause cap for intake > drain). The
+    # single serial worker drains ~1.4x real-time, so an unbounded queue
+    # grows forever under sustained itvdn intake; I-A's expires-bump only
+    # deferred the symptom. Refuse intake when the EXISTING queue is at/over
+    # the video-hours ceiling (the incoming item's own duration is NOT added
+    # — we gate on what is already queued). First check, before any Job row.
+    settings = get_settings()
+    pending_hours = (await job_repo.sum_active_ingest_duration_sec()) / 3600
+    if pending_hours >= settings.intake_admission_max_pending_video_hours:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "INTAKE_OVERLOADED",
+                "category": "queue_capacity",
+                "details": (
+                    f"Ingestion queue holds {pending_hours:.1f}h of pending "
+                    f"video, at or above the "
+                    f"{settings.intake_admission_max_pending_video_hours:.0f}h "
+                    f"capacity ceiling. Retry in a few hours."
+                ),
+            },
+            headers={
+                "Retry-After": str(int(settings.intake_hint_check_after_hours * 3600))
+            },
+        )
 
     job = await job_repo.create(
         tenant_id=tenant_id,
@@ -77,6 +116,7 @@ async def enqueue_ingestion(
             "source_type": source_type,
             "source_url": source_url,
         },
+        duration_sec=duration_sec,
     )
 
     # Stage the PENDING transition into the same transaction as the Job so

@@ -38,12 +38,16 @@ from course_supporter.api.schemas import (
     ConfirmUploadRequest,
     PresignedUrlRequest,
     PresignedUrlResponse,
+    ProcessingEstimate,
 )
 from course_supporter.api.upload_validation import check_platform
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.config import get_settings
 from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.ingestion.base import UnsupportedFormatError
+from course_supporter.ingestion.video_pipeline import media
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.language import (
     InvalidLanguageError,
@@ -65,12 +69,58 @@ from course_supporter.storage.authored_document_repository import (
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import AuthoredDocument
 from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_chunks
 
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["documents"])
+
+
+def _processing_estimate() -> ProcessingEstimate:
+    """Build the DD-3.3c-I-B queue-wait hint from operator-tuned settings."""
+    s = get_settings()
+    return ProcessingEstimate(
+        max_hours=s.intake_hint_max_hours,
+        check_after_hours=s.intake_hint_check_after_hours,
+    )
+
+
+async def _intake_video_duration_sec(
+    source_type: SourceType,
+    *,
+    content: bytes | None = None,
+    url: str | None = None,
+    filename: str = "upload",
+) -> float | None:
+    """Probe a video's duration at intake (DD-3.3c-I-B), else ``None``.
+
+    Returns ``None`` for non-video source types (they carry no video-hours
+    and so never gate). For video, ffprobes the already-local upload
+    ``content`` or resolves the remote ``url`` via yt-dlp metadata. A probe
+    failure (unavailable/private/corrupt/undeterminable duration) is mapped
+    to a clear 422 rather than bubbling as a 500.
+    """
+    if source_type != SourceType.VIDEO:
+        return None
+    try:
+        if content is not None:
+            return await media.probe_intake_duration_from_bytes(
+                content, filename=filename
+            )
+        assert url is not None  # one of content/url is always supplied
+        return await media.probe_intake_duration_sec(url)
+    except UnsupportedFormatError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INTAKE_DURATION_UNAVAILABLE",
+                "category": "duration_probe",
+                "details": str(exc),
+            },
+        ) from exc
+
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
@@ -336,6 +386,7 @@ async def create_document(
 
     raw_hash: str | None = None
     raw_size_bytes: int | None = None
+    duration_sec: float | None = None
     if file is not None:
         # KD-2.1-E — Strategy A: SHA-256 from the bytes already loaded
         # for Stage 1 (line ~217 above). No streaming wrapper needed --
@@ -359,8 +410,16 @@ async def create_document(
             file_size=file.size,
         )
         logger.info("file_uploaded", key=key, size=uploaded_bytes)
+        # DD-3.3c-I-B: probe video duration at intake (ffprobe on the
+        # already-in-memory upload bytes) for the admission gate.
+        duration_sec = await _intake_video_duration_sec(
+            source_type, content=upload_content, filename=upload_filename
+        )
     elif source_url is not None:
         actual_url = source_url
+        # DD-3.3c-I-B: resolve video duration via yt-dlp metadata (no
+        # download) for the admission gate.
+        duration_sec = await _intake_video_duration_sec(source_type, url=actual_url)
 
     document_repo = AuthoredDocumentRepository(session)
     document = await document_repo.create(
@@ -383,6 +442,7 @@ async def create_document(
         material_id=document.id,
         source_type=source_type,
         source_url=actual_url,
+        duration_sec=duration_sec,
     )
     # enqueue_ingestion owns the commit (QQ5 helper-owns-commit) — it has
     # already durably committed the document INSERT + Job before dispatch.
@@ -396,6 +456,7 @@ async def create_document(
     )
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
+    response.processing_estimate = _processing_estimate()
 
     warning = check_platform(source_type, actual_url)
     if warning:
@@ -543,6 +604,12 @@ async def confirm_upload(
 
     s3_url = s3.get_object_url(body.key)
 
+    # DD-3.3c-I-B: probe video duration at intake (ffprobe on the fetched
+    # S3 bytes) for the admission gate.
+    duration_sec = await _intake_video_duration_sec(
+        body.source_type, content=body_bytes, filename=actual_filename
+    )
+
     document_repo = AuthoredDocumentRepository(session)
     document = await document_repo.create(
         node_id=node_id,
@@ -564,6 +631,7 @@ async def confirm_upload(
         material_id=document.id,
         source_type=body.source_type,
         source_url=s3_url,
+        duration_sec=duration_sec,
     )
     # enqueue_ingestion owns the commit (QQ5 helper-owns-commit).
 
@@ -576,6 +644,7 @@ async def confirm_upload(
     )
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
+    response.processing_estimate = _processing_estimate()
     return response
 
 
@@ -842,6 +911,12 @@ async def retry_document(
     document.error_message = None
     await session.flush()
 
+    # DD-3.3c-I-B: reuse the duration the original create/confirm probed,
+    # rather than re-running the (network-heavy for URL) intake probe. None
+    # for legacy documents with no prior probed job — a mild under-count.
+    job_repo = JobRepository(session)
+    duration_sec = await job_repo.get_latest_ingest_duration_for_material(document.id)
+
     job = await enqueue_ingestion(
         redis=arq,
         session=session,
@@ -850,6 +925,7 @@ async def retry_document(
         material_id=document.id,
         source_type=document.source_type,
         source_url=document.source_url,
+        duration_sec=duration_sec,
     )
     # enqueue_ingestion flipped the document to PENDING and owns the commit
     # (QQ5 helper-owns-commit) — the error_message reset + Job are already
@@ -862,4 +938,5 @@ async def retry_document(
     )
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
+    response.processing_estimate = _processing_estimate()
     return response

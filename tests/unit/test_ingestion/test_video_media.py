@@ -8,6 +8,9 @@ orchestration (download / probe / extract) runs in the
 
 from __future__ import annotations
 
+import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from course_supporter.config import settings
@@ -22,7 +25,11 @@ from course_supporter.ingestion.video_pipeline.media import (
     _parse_probe,
     audio_extract_timeout_for,
     frame_extract_timeout_for,
+    probe_intake_duration_from_bytes,
+    probe_intake_duration_sec,
 )
+
+_RUN_TARGET = "course_supporter.ingestion.video_pipeline.media._run"
 
 _PROBE_OK = {
     "format": {"duration": "61.5"},
@@ -161,3 +168,60 @@ class TestDownloadTimeoutBudget:
     def test_budget_matches_size_cap_over_min_throughput(self) -> None:
         # 5 GiB / 1 MiB/s = 5120 s (between FLOOR and CAP → operative value).
         assert pytest.approx(5120.0) == _DOWNLOAD_TIMEOUT_SEC
+
+
+def _run_returning(rc: int, out: bytes, err: bytes = b"") -> AsyncMock:
+    """An AsyncMock standing in for media._run -> (returncode, stdout, stderr)."""
+    return AsyncMock(return_value=(rc, out, err))
+
+
+class TestProbeIntakeDurationUrl:
+    """yt-dlp metadata-only intake probe (DD-3.3c-I-B URL path)."""
+
+    async def test_reads_duration_field(self) -> None:
+        payload = json.dumps({"duration": 9000, "title": "lecture"}).encode()
+        with patch(_RUN_TARGET, _run_returning(0, payload)):
+            assert await probe_intake_duration_sec("https://youtu.be/x") == 9000.0
+
+    async def test_nonzero_exit_raises(self) -> None:
+        """Private/unavailable URL (yt-dlp non-zero exit) → clear error."""
+        with (
+            patch(_RUN_TARGET, _run_returning(1, b"", b"Private video")),
+            pytest.raises(UnsupportedFormatError, match="metadata probe failed"),
+        ):
+            await probe_intake_duration_sec("https://youtu.be/private")
+
+    async def test_invalid_json_raises(self) -> None:
+        with (
+            patch(_RUN_TARGET, _run_returning(0, b"not json")),
+            pytest.raises(UnsupportedFormatError, match="invalid metadata JSON"),
+        ):
+            await probe_intake_duration_sec("https://youtu.be/x")
+
+    async def test_missing_duration_raises(self) -> None:
+        """A response without a numeric duration (e.g. live) → clear error."""
+        payload = json.dumps({"title": "live", "duration": None}).encode()
+        with (
+            patch(_RUN_TARGET, _run_returning(0, payload)),
+            pytest.raises(UnsupportedFormatError, match="could not determine"),
+        ):
+            await probe_intake_duration_sec("https://youtu.be/live")
+
+
+class TestProbeIntakeDurationBytes:
+    """ffprobe-on-bytes intake probe (DD-3.3c-I-B upload/presigned path)."""
+
+    async def test_returns_duration_seconds(self) -> None:
+        payload = json.dumps(_PROBE_OK).encode()
+        with patch(_RUN_TARGET, _run_returning(0, payload)):
+            # _PROBE_OK duration is 61.5 s.
+            result = await probe_intake_duration_from_bytes(b"fake", filename="a.mp4")
+        assert result == pytest.approx(61.5)
+
+    async def test_corrupt_container_raises(self) -> None:
+        payload = json.dumps({"streams": [], "format": {}}).encode()
+        with (
+            patch(_RUN_TARGET, _run_returning(0, payload)),
+            pytest.raises(UnsupportedFormatError, match="No video stream"),
+        ):
+            await probe_intake_duration_from_bytes(b"fake", filename="a.mp4")

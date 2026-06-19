@@ -18,6 +18,7 @@ from course_supporter.api.routes.documents import (
     _presentation_slide_count,
 )
 from course_supporter.auth.context import TenantContext
+from course_supporter.ingestion.base import UnsupportedFormatError
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.models.source import SourceType
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
@@ -38,6 +39,9 @@ STUB_TENANT = TenantContext(
 ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
 RUN_STAGE1 = "course_supporter.api.routes.documents.run_stage1"
 GET_MAX_SIZE = "course_supporter.api.routes.documents.get_max_size_for_extension"
+PROBE_URL_FUNC = (
+    "course_supporter.ingestion.video_pipeline.media.probe_intake_duration_sec"
+)
 
 
 def _make_pdf_bytes(n_pages: int) -> bytes:
@@ -107,6 +111,7 @@ def _mock_entry(
     entry.state = state
     entry.error_message = error_message
     entry.job_id = job_id
+    entry.processing_estimate = None
     entry.deleted_at = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
@@ -1360,3 +1365,90 @@ class TestUpdateDocument:
                 json={"material_role": "methodological"},
             )
         assert resp.status_code == 404
+
+
+class TestIntakeAdmissionWiring:
+    """DD-3.3c-I-B route wiring: hint on success, video duration probe, 422."""
+
+    async def test_processing_estimate_attached_on_success(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """A successful create carries the queue-wait hint from settings."""
+        from course_supporter.config import get_settings
+
+        s = get_settings()
+        entry = _mock_entry(node_id=node_id)
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/doc.md",
+                },
+            )
+        assert resp.status_code == 201
+        estimate = resp.json()["processing_estimate"]
+        assert estimate["max_hours"] == s.intake_hint_max_hours
+        assert estimate["check_after_hours"] == s.intake_hint_check_after_hours
+
+    async def test_video_url_probe_failure_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """An unresolvable video URL yields a clear 422, not a 500."""
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                PROBE_URL_FUNC,
+                new_callable=AsyncMock,
+                side_effect=UnsupportedFormatError("video unavailable"),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "video",
+                    "source_url": "https://youtu.be/private",
+                },
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "INTAKE_DURATION_UNAVAILABLE"
+
+    async def test_video_url_probed_duration_threaded_to_enqueue(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """The probed video duration reaches enqueue_ingestion."""
+        entry = _mock_entry(node_id=node_id, source_type="video")
+        job = _mock_job()
+        enqueue_mock = AsyncMock(return_value=job)
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(PROBE_URL_FUNC, new_callable=AsyncMock, return_value=7200.0),
+            patch(ENQUEUE_FUNC, enqueue_mock),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "video",
+                    "source_url": "https://youtu.be/lecture",
+                },
+            )
+        assert resp.status_code == 201
+        assert enqueue_mock.call_args.kwargs["duration_sec"] == 7200.0

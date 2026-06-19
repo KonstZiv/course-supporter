@@ -24,17 +24,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
-from typing import TYPE_CHECKING, Any
+import tempfile
+from pathlib import Path
+from typing import Any
 
 import structlog
 
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
 from course_supporter.security.policies import AUTHORED_POLICY
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = structlog.get_logger()
 
@@ -330,6 +330,83 @@ def _parse_probe(data: dict[str, Any], *, source_name: str) -> VideoFileMetadata
         codec=codec,
         resolution=resolution,
     )
+
+
+# DD-3.3c-I-B intake duration probes. Run BEFORE enqueue so the admission
+# gate can sum pending video-hours already in the queue. Metadata-only: the
+# full video download still happens later in ``step_1_ingest``; these only
+# resolve the duration cheaply (ffprobe over the already-local upload bytes;
+# yt-dlp resolving the URL's metadata WITHOUT downloading the stream).
+_INTAKE_METADATA_TIMEOUT_SEC = 60.0
+
+
+async def probe_intake_duration_sec(url: str) -> float:
+    """Resolve a remote video's duration (seconds) via yt-dlp, no download.
+
+    Runs ``yt-dlp --dump-json --skip-download`` and reads the ``duration``
+    field. A private / unavailable / unsupported URL (yt-dlp non-zero exit),
+    invalid JSON, or a response without a numeric duration (e.g. a live
+    stream) raises :class:`UnsupportedFormatError` so the caller surfaces a
+    clear intake rejection instead of a 500.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--dump-json",
+        "--skip-download",
+        "--no-playlist",
+        "--quiet",
+        "--no-warnings",
+        url,
+    ]
+    rc, out, err = await _run(cmd, timeout_sec=_INTAKE_METADATA_TIMEOUT_SEC)
+    if rc != 0:
+        raise UnsupportedFormatError(
+            f"yt-dlp metadata probe failed (code {rc}) for {url}: "
+            f"{err.decode(errors='replace')[-_ERR_TAIL:]}"
+        )
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise UnsupportedFormatError(
+            f"yt-dlp returned invalid metadata JSON for {url}: {exc}."
+        ) from exc
+    duration = data.get("duration")
+    if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+        raise UnsupportedFormatError(
+            f"yt-dlp could not determine a duration for {url} "
+            f"(live stream or unsupported)."
+        )
+    return float(duration)
+
+
+async def probe_intake_duration_from_bytes(
+    content: bytes, *, filename: str = "upload"
+) -> float:
+    """Resolve an uploaded video's duration (seconds) via ffprobe on bytes.
+
+    ffprobe needs a seekable input to read the container index, so the
+    already-in-memory upload bytes are written to a temp file and handed to
+    :func:`probe_metadata` (reusing its corrupt/non-video handling). The
+    temp file is removed afterwards. Filesystem work runs off the event loop
+    (ASYNC240). Raises :class:`UnsupportedFormatError` on a corrupt or
+    non-video container.
+    """
+    suffix = Path(filename).suffix or ".bin"
+
+    def _write_temp() -> Path:
+        fd, name = tempfile.mkstemp(suffix=suffix)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        return Path(name)
+
+    tmp = await asyncio.to_thread(_write_temp)
+    try:
+        metadata = await probe_metadata(tmp)
+    finally:
+        await asyncio.to_thread(tmp.unlink, missing_ok=True)
+    return metadata.duration_ms / 1000
 
 
 async def extract_audio(

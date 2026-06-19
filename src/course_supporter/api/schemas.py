@@ -479,6 +479,23 @@ class AuthoredDocumentResponse(BaseModel):
     updated_at: datetime = Field(description="When this entry was last modified.")
 
 
+class ProcessingEstimate(BaseModel):
+    """Informational ingestion queue-wait hint (DD-3.3c-I-B).
+
+    Returned on successful intake so the client can set expectations: the
+    single serial worker drains the queue slowly on modest hardware. Both
+    values are operator-tuned settings (``intake_hint_*``). The UI localizes
+    the surrounding copy; this carries only the numbers.
+    """
+
+    max_hours: float = Field(
+        description="Upper-bound processing time before the document is ready, hours."
+    )
+    check_after_hours: float = Field(
+        description="Suggested delay before re-checking job status, hours."
+    )
+
+
 class AuthoredDocumentCreateResponse(BaseModel):
     """Response for authored document creation.
 
@@ -522,6 +539,13 @@ class AuthoredDocumentCreateResponse(BaseModel):
     warnings: list[str] = Field(
         default_factory=list,
         description="Non-fatal warnings (e.g. unverified platform).",
+    )
+    processing_estimate: ProcessingEstimate | None = Field(
+        default=None,
+        description=(
+            "Informational queue-wait hint (DD-3.3c-I-B); ``null`` until the "
+            "route attaches it on successful intake."
+        ),
     )
     created_at: datetime = Field(description="When this entry was created.")
 

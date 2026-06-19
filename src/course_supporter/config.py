@@ -121,6 +121,18 @@ class Settings(BaseSettings):
     intake_hint_max_hours: float = 84.0
     intake_hint_check_after_hours: float = 12.0
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def intake_job_expires_ms(self) -> int:
+        """ARQ ``expires_extra_ms`` (milliseconds) for the pending-job TTL.
+
+        Single source for the hours->ms conversion consumed by both enqueue
+        pools (``api/app.py`` and ``WorkerSettings``). See
+        ``_validate_intake_expires_covers_tail`` for the safety invariant the
+        underlying ``intake_job_expires_hours`` must satisfy.
+        """
+        return int(self.intake_job_expires_hours * 3_600_000)
+
     @field_validator("worker_heavy_window_tz")
     @classmethod
     def _validate_timezone(cls, v: str) -> str:

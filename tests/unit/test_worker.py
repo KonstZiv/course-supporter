@@ -88,13 +88,12 @@ class TestWorkerSettings:
 
     def test_expires_extra_ms_overrides_arq_default(self) -> None:
         """expires_extra_ms binds the worker-side pool TTL to settings (ms)."""
-        expected = int(get_settings().intake_job_expires_hours * 3_600_000)
-        assert WorkerSettings.expires_extra_ms == expected
+        assert WorkerSettings.expires_extra_ms == get_settings().intake_job_expires_ms
         assert WorkerSettings.expires_extra_ms == 345_600_000
 
     def test_homework_worker_expires_extra_ms_matches(self) -> None:
         """The homework worker pool gets the same override (symmetry)."""
-        expected = int(get_settings().intake_job_expires_hours * 3_600_000)
+        expected = get_settings().intake_job_expires_ms
         assert HomeworkWorkerSettings.expires_extra_ms == expected
         assert (
             HomeworkWorkerSettings.expires_extra_ms == WorkerSettings.expires_extra_ms

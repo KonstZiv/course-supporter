@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # it; WorkerSettings wires the worker-side pool symmetrically.
     arq_redis = await create_pool(
         RedisSettings.from_dsn(settings.redis_url),
-        expires_extra_ms=int(settings.intake_job_expires_hours * 3_600_000),
+        expires_extra_ms=settings.intake_job_expires_ms,
     )
     app.state.arq_redis = arq_redis
 

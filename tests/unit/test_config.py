@@ -160,7 +160,8 @@ class TestIntakeSettings:
     def test_expires_extra_ms_conversion(self) -> None:
         """Default expiry converts to the ARQ expires_extra_ms (ms) we wire."""
         s = Settings(_env_file=None)
-        assert int(s.intake_job_expires_hours * 3_600_000) == 345_600_000
+        assert s.intake_job_expires_ms == 345_600_000
+        assert s.intake_job_expires_ms == int(s.intake_job_expires_hours * 3_600_000)
 
     def test_invariant_passes_with_defaults(self) -> None:
         """Defaults satisfy expires (96) >= admission (60) x drain (1.4) = 84."""

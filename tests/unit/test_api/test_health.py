@@ -292,7 +292,7 @@ class TestLifespan:
         """API-side pool is created with the DD-3.3c-I expires_extra_ms (ms)."""
         from course_supporter.config import get_settings
 
-        expected_ms = int(get_settings().intake_job_expires_hours * 3_600_000)
+        expected_ms = get_settings().intake_job_expires_ms
         mock_arq = AsyncMock()
         with (
             patch("course_supporter.api.app.create_model_router"),

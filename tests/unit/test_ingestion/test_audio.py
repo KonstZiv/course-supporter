@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from course_supporter.config import get_settings
 from course_supporter.ingestion.audio import (
     AudioProcessor,
     chars_per_word_cumsum,
@@ -218,8 +219,8 @@ class TestWordCache:
         proc = AudioProcessor(stt_router=AsyncMock(), redis=redis)
         await proc._store_words(uuid.uuid4(), [_word("x", 0.0, 0.1)])
 
-        # _set side_effect was async; verify Redis was called with ex=3600
-        assert redis.set.call_args.kwargs.get("ex") == 3600
+        # Carrier TTL is bound to the job ceiling (DD-3.3c-G), not a magic 3600.
+        assert redis.set.call_args.kwargs.get("ex") == get_settings().worker_job_timeout
 
 
 # ──────────────────────────────────────────────────────────────────────

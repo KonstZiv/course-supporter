@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from course_supporter.config import get_settings
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
@@ -273,7 +274,8 @@ class TestProcessRawPipeline:
         redis.set.assert_awaited_once()
         call = redis.set.await_args
         assert call.args[0] == f"video_stt_result:{_JOB_ID}"
-        assert call.kwargs["ex"] == 3600
+        # Carrier TTL is bound to the job ceiling (DD-3.3c-G), not a magic 3600.
+        assert call.kwargs["ex"] == get_settings().worker_job_timeout
         carrier = SttResult.model_validate_json(call.args[1])
         assert [w.text for w in carrier.words] == ["Hello", "world"]
         assert carrier.duration_ms == 60_000

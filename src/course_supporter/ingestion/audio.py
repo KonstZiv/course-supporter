@@ -59,7 +59,8 @@ influence only the ``_subsegments_cover_parent`` validator and
 the LLM's hierarchical reasoning — they do not affect routing.
 
 Cache (KD-2.2-D): inline ``_store_words`` / ``_fetch_words``
-Redis-backed methods; TTL 3600 s; key
+Redis-backed methods; TTL = ``worker_job_timeout`` (DD-3.3c-G,
+lockstep with the video STT carrier); key
 ``audio_transcription:{job_id}``. Partial-result discipline —
 ``_store_words`` is called only on successful STT completion;
 partial provider output raises ``ProcessingError`` before the
@@ -87,6 +88,7 @@ import structlog
 from arq.connections import ArqRedis
 from pydantic import ValidationError
 
+from course_supporter.config import get_settings
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     ProcessingError,
@@ -116,7 +118,6 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-_WORD_CACHE_TTL_SEC = 3600
 _WORD_CACHE_KEY_TMPL = "audio_transcription:{job_id}"
 
 _PASS_2A_STAGE_NAME = "audio_pass_2a_mapping"  # noqa: S105
@@ -216,7 +217,8 @@ class AudioProcessor(MaterialProcessor):
         """
         key = _WORD_CACHE_KEY_TMPL.format(job_id=job_id)
         payload = json.dumps([w.model_dump() for w in words], separators=(",", ":"))
-        await self._redis.set(key, payload, ex=_WORD_CACHE_TTL_SEC)
+        ttl = get_settings().worker_job_timeout
+        await self._redis.set(key, payload, ex=ttl)
 
     async def _fetch_words(self, job_id: uuid.UUID) -> list[STTWord] | None:
         """Fetch cached STT words from Redis (KD-2.2-D inline cache).

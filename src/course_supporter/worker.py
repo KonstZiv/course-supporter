@@ -222,6 +222,13 @@ class WorkerSettings:
     job_timeout: int = _settings.worker_job_timeout
     max_tries: int = _settings.worker_max_tries
 
+    # DD-3.3c-I: override ARQ's 24h default pending-job TTL. ARQ's
+    # ``get_kwargs`` maps this class attribute onto the worker-side pool
+    # (``ctx['redis']``, used by cascade S3-cleanup enqueues per KD13); the
+    # API-side pool is wired symmetrically in ``api/app.py``. Unit is
+    # milliseconds (centralized hours->ms conversion on Settings).
+    expires_extra_ms: int = _settings.intake_job_expires_ms
+
     keep_result: int = 3600
     poll_delay: float = 0.5
 
@@ -256,6 +263,10 @@ class HomeworkWorkerSettings:
     max_jobs: int = _settings.worker_max_jobs
     job_timeout: int = _settings.worker_job_timeout
     max_tries: int = _settings.worker_max_tries
+
+    # DD-3.3c-I: mirror WorkerSettings — override ARQ's 24h default
+    # pending-job TTL on the homework worker-side pool too.
+    expires_extra_ms: int = _settings.intake_job_expires_ms
 
     keep_result: int = 3600
     poll_delay: float = 0.5

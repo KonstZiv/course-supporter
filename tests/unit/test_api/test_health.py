@@ -286,3 +286,33 @@ class TestLifespan:
             async with lifespan(app):
                 pass
             mock_engine.dispose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lifespan_pool_overrides_expires_extra_ms(self) -> None:
+        """API-side pool is created with the DD-3.3c-I expires_extra_ms (ms)."""
+        from course_supporter.config import get_settings
+
+        expected_ms = get_settings().intake_job_expires_ms
+        mock_arq = AsyncMock()
+        with (
+            patch("course_supporter.api.app.create_model_router"),
+            patch("course_supporter.api.app.engine") as mock_engine,
+            patch("course_supporter.api.app.S3Client") as mock_s3_cls,
+            patch(
+                "course_supporter.api.app.create_pool",
+                new_callable=AsyncMock,
+                return_value=mock_arq,
+            ) as mock_create_pool,
+        ):
+            mock_engine.dispose = AsyncMock()
+            mock_s3 = AsyncMock()
+            mock_s3_cls.return_value = mock_s3
+
+            from course_supporter.api.app import lifespan
+
+            async with lifespan(app):
+                pass
+
+        mock_create_pool.assert_awaited_once()
+        assert mock_create_pool.await_args.kwargs["expires_extra_ms"] == expected_ms
+        assert mock_create_pool.await_args.kwargs["expires_extra_ms"] == 345_600_000

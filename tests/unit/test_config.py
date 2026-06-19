@@ -134,3 +134,73 @@ class TestWorkerSettings:
         monkeypatch.setenv("REDIS_URL", "redis://redis:6379/1")
         s = Settings(_env_file=None)
         assert s.redis_url == "redis://redis:6379/1"
+
+
+class TestIntakeSettings:
+    """Intake admission / queue-lifetime knobs (DD-3.3c-I)."""
+
+    def test_intake_defaults(self) -> None:
+        """All five intake knobs default to the 2-vCPU profile values."""
+        s = Settings(_env_file=None)
+        assert s.intake_admission_max_pending_video_hours == 60.0
+        assert s.intake_drain_coefficient == 1.4
+        assert s.intake_job_expires_hours == 96.0
+        assert s.intake_hint_max_hours == 84.0
+        assert s.intake_hint_check_after_hours == 12.0
+
+    def test_intake_knobs_are_float(self) -> None:
+        """Intake knobs are floats so capacity tuning needs no code change."""
+        s = Settings(_env_file=None)
+        assert isinstance(s.intake_admission_max_pending_video_hours, float)
+        assert isinstance(s.intake_drain_coefficient, float)
+        assert isinstance(s.intake_job_expires_hours, float)
+        assert isinstance(s.intake_hint_max_hours, float)
+        assert isinstance(s.intake_hint_check_after_hours, float)
+
+    def test_expires_extra_ms_conversion(self) -> None:
+        """Default expiry converts to the ARQ expires_extra_ms (ms) we wire."""
+        s = Settings(_env_file=None)
+        assert s.intake_job_expires_ms == 345_600_000
+        assert s.intake_job_expires_ms == int(s.intake_job_expires_hours * 3_600_000)
+
+    def test_invariant_passes_with_defaults(self) -> None:
+        """Defaults satisfy expires (96) >= admission (60) x drain (1.4) = 84."""
+        s = Settings(_env_file=None)
+        worst_case = (
+            s.intake_admission_max_pending_video_hours * s.intake_drain_coefficient
+        )
+        assert s.intake_job_expires_hours >= worst_case
+
+    def test_invariant_violation_raises_at_load(self) -> None:
+        """expires below admission x drain fails fast at settings load."""
+        with pytest.raises(ValidationError, match="intake_job_expires_hours"):
+            Settings(
+                intake_admission_max_pending_video_hours=60.0,
+                intake_drain_coefficient=1.4,
+                intake_job_expires_hours=10.0,  # 10 < 60 * 1.4 = 84
+                _env_file=None,
+            )
+
+    def test_invariant_error_names_both_numbers(self) -> None:
+        """The fail-fast message names both knobs so the operator knows them."""
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                intake_admission_max_pending_video_hours=100.0,
+                intake_drain_coefficient=1.4,
+                intake_job_expires_hours=96.0,  # 96 < 100 * 1.4 = 140
+                _env_file=None,
+            )
+        message = str(exc_info.value)
+        assert "intake_job_expires_hours" in message
+        assert "intake_admission_max_pending_video_hours" in message
+        assert "intake_drain_coefficient" in message
+
+    def test_invariant_boundary_equal_passes(self) -> None:
+        """Exactly meeting the bound (expires == admission x drain) is valid."""
+        s = Settings(
+            intake_admission_max_pending_video_hours=60.0,
+            intake_drain_coefficient=1.4,
+            intake_job_expires_hours=84.0,  # 84 == 60 * 1.4
+            _env_file=None,
+        )
+        assert s.intake_job_expires_hours == 84.0

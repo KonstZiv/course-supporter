@@ -99,8 +99,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         session_factory=async_session,
     )
 
-    # ARQ Redis pool for job enqueue
-    arq_redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    # ARQ Redis pool for job enqueue. expires_extra_ms overrides ARQ's 24h
+    # default pending-job TTL so an admitted queue tail is not silently failed
+    # ("job expired") before this single worker reaches it (DD-3.3c-I). This
+    # is the critical pool — the entire ingestion backlog is enqueued through
+    # it; WorkerSettings wires the worker-side pool symmetrically.
+    arq_redis = await create_pool(
+        RedisSettings.from_dsn(settings.redis_url),
+        expires_extra_ms=settings.intake_job_expires_ms,
+    )
     app.state.arq_redis = arq_redis
 
     # Start rate limiter cleanup loop

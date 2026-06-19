@@ -7,7 +7,9 @@ from arq.connections import RedisSettings
 from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_ingest_material
+from course_supporter.config import get_settings
 from course_supporter.worker import (
+    HomeworkWorkerSettings,
     WorkerSettings,
     _reconcile_orphaned_active_jobs,
     shutdown,
@@ -83,6 +85,19 @@ class TestWorkerSettings:
 
     def test_poll_delay(self) -> None:
         assert WorkerSettings.poll_delay == 0.5
+
+    def test_expires_extra_ms_overrides_arq_default(self) -> None:
+        """expires_extra_ms binds the worker-side pool TTL to settings (ms)."""
+        assert WorkerSettings.expires_extra_ms == get_settings().intake_job_expires_ms
+        assert WorkerSettings.expires_extra_ms == 345_600_000
+
+    def test_homework_worker_expires_extra_ms_matches(self) -> None:
+        """The homework worker pool gets the same override (symmetry)."""
+        expected = get_settings().intake_job_expires_ms
+        assert HomeworkWorkerSettings.expires_extra_ms == expected
+        assert (
+            HomeworkWorkerSettings.expires_extra_ms == WorkerSettings.expires_extra_ms
+        )
 
 
 class TestWorkerLifecycle:

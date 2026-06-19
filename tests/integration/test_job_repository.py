@@ -590,3 +590,158 @@ class TestGetActiveJobs:
         assert active_two.id in ids
         assert queued.id not in ids
         assert deleted.id not in ids
+
+
+class TestAdmissionAggregate:
+    """DD-3.3c-I-B intake-duration column, queue aggregate, retry reuse."""
+
+    async def test_create_stores_duration_sec(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """duration_sec round-trips through create + reload."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+            duration_sec=5400.0,
+        )
+
+        fetched = await repo.get_by_id(job.id)
+        assert fetched is not None
+        assert fetched.duration_sec == 5400.0
+
+    async def test_create_duration_defaults_null(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """duration_sec is NULL when omitted (non-video / pre-feature rows)."""
+        repo = JobRepository(db_session)
+        job = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+        )
+        fetched = await repo.get_by_id(job.id)
+        assert fetched is not None
+        assert fetched.duration_sec is None
+
+    async def test_sum_empty_queue_is_zero(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """COALESCE returns 0.0 for an empty queue (no ingest jobs)."""
+        repo = JobRepository(db_session)
+        assert await repo.sum_active_ingest_duration_sec() == 0.0
+
+    async def test_sum_counts_queued_and_active_only(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """SUM covers queued + active ingest durations; terminal states excluded."""
+        repo = JobRepository(db_session)
+        tid = seed_root_node.tenant_id
+        nid = seed_root_node.id
+
+        # queued (counts) + active (counts)
+        await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=1000.0
+        )
+        active = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=2000.0
+        )
+        await repo.update_status(active.id, "active")
+
+        # complete / failed / cancelled — must NOT count.
+        complete = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+        )
+        await repo.update_status(complete.id, "active")
+        await repo.update_status(complete.id, "complete")
+        failed = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+        )
+        await repo.update_status(failed.id, "failed")
+        cancelled = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+        )
+        await repo.update_status(cancelled.id, "cancelled")
+
+        assert await repo.sum_active_ingest_duration_sec() == 3000.0
+
+    async def test_sum_excludes_non_ingest_and_null(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Non-ingest job_type and NULL durations are excluded from the sum."""
+        repo = JobRepository(db_session)
+        tid = seed_root_node.tenant_id
+        nid = seed_root_node.id
+
+        await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=1500.0
+        )
+        # Non-ingest job with a duration — excluded by job_type filter.
+        await repo.create(
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="homework",
+            duration_sec=9999.0,
+        )
+        # Ingest job with NULL duration (non-video) — ignored by SUM.
+        await repo.create(tenant_id=tid, course_node_id=nid, job_type="ingest")
+
+        assert await repo.sum_active_ingest_duration_sec() == 1500.0
+
+    async def test_sum_excludes_soft_deleted(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Soft-deleted ingest jobs do not contribute to the queue sum."""
+        repo = JobRepository(db_session)
+        tid = seed_root_node.tenant_id
+        nid = seed_root_node.id
+
+        deleted = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=4000.0
+        )
+        row = await repo.get_by_id(deleted.id)
+        assert row is not None
+        row.deleted_at = datetime.now(UTC)
+        await db_session.flush()
+
+        assert await repo.sum_active_ingest_duration_sec() == 0.0
+
+    async def test_latest_duration_for_material_reuses_prior(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Retry lookup returns the most recent non-NULL duration for a material."""
+        repo = JobRepository(db_session)
+        tid = seed_root_node.tenant_id
+        nid = seed_root_node.id
+        mid = uuid.uuid4()
+        params = {
+            "material_id": str(mid),
+            "source_type": "video",
+            "source_url": "https://youtu.be/x",
+        }
+
+        await repo.create(
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="ingest",
+            input_params=params,
+            duration_sec=3300.0,
+        )
+
+        assert await repo.get_latest_ingest_duration_for_material(mid) == 3300.0
+
+    async def test_latest_duration_for_material_none_when_absent(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Lookup returns None when no prior job carried a duration (legacy)."""
+        repo = JobRepository(db_session)
+        mid = uuid.uuid4()
+        # A prior job for the material but with NULL duration — skipped.
+        await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="ingest",
+            input_params={"material_id": str(mid), "source_type": "video"},
+        )
+        assert await repo.get_latest_ingest_duration_for_material(mid) is None

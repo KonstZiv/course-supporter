@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs import JobType, validate_job_type
@@ -47,6 +47,7 @@ class JobRepository:
         arq_job_id: str | None = None,
         input_params: dict[str, object] | None = None,
         depends_on: list[str] | None = None,
+        duration_sec: float | None = None,
     ) -> Job:
         """Create a new job record.
 
@@ -57,6 +58,10 @@ class JobRepository:
         distinct value via :func:`validate_job_type`. The strict
         DB CHECK constraint that would reject legacy values is
         deferred to Phase 2.x along with the call-site migration.
+
+        ``duration_sec`` is the intake-probed source video duration
+        (DD-3.3c-I-B); NULL for non-video ingests and non-ingest jobs.
+        It feeds :meth:`sum_active_ingest_duration_sec`.
         """
         job = Job(
             tenant_id=tenant_id,
@@ -66,6 +71,7 @@ class JobRepository:
             arq_job_id=arq_job_id,
             input_params=input_params,
             depends_on=depends_on,
+            duration_sec=duration_sec,
         )
         self._session.add(job)
         await self._session.flush()
@@ -384,8 +390,6 @@ class JobRepository:
 
     async def count_pending(self) -> int:
         """Count all queued jobs (for queue estimates)."""
-        from sqlalchemy import func
-
         stmt = select(func.count()).select_from(Job).where(Job.status == "queued")
         result = await self._session.execute(stmt)
         return result.scalar_one()
@@ -405,3 +409,53 @@ class JobRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def sum_active_ingest_duration_sec(self) -> float:
+        """Sum intake-probed video duration over in-flight ingest jobs.
+
+        Feeds the DD-3.3c-I-B admission gate, which compares the returned
+        seconds against ``intake_admission_max_pending_video_hours``.
+        Scope: ``job_type='ingest'`` jobs whose status is ``queued`` (the
+        document shows ``pending``) or ``active`` (processing), excluding
+        soft-deleted rows. NULL durations (non-video ingests, pre-DD-3.3c-I-B
+        rows) are ignored by ``SUM``; ``COALESCE`` returns ``0.0`` for an
+        empty queue.
+
+        Note the status set is ``('queued','active')`` — there is no
+        ``'pending'`` Job status (that is the AuthoredDocument state); the
+        queued Job is what the worker has not yet picked up.
+        """
+        stmt = select(func.coalesce(func.sum(Job.duration_sec), 0.0)).where(
+            Job.job_type == "ingest",
+            Job.status.in_(["queued", "active"]),
+            Job.deleted_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL at runtime; ``or 0.0`` satisfies mypy
+        # (the summed column's static type stays float | None).
+        return float(result.scalar_one() or 0.0)
+
+    async def get_latest_ingest_duration_for_material(
+        self, material_id: uuid.UUID
+    ) -> float | None:
+        """Return the most recent non-NULL ingest ``duration_sec`` for a material.
+
+        Retry creates a fresh Job; rather than re-running the (network-heavy
+        for URL) intake probe, it reuses the duration already probed by the
+        original create/confirm. Matches on the ``material_id`` carried in
+        ``input_params`` via JSONB containment (``@>``; no dedicated column).
+        Returns ``None`` when no prior job carried a duration (legacy rows) —
+        the caller accepts a mild under-count over a re-probe.
+        """
+        stmt = (
+            select(Job.duration_sec)
+            .where(
+                Job.job_type == "ingest",
+                Job.input_params.contains({"material_id": str(material_id)}),
+                Job.duration_sec.is_not(None),
+            )
+            .order_by(Job.queued_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()

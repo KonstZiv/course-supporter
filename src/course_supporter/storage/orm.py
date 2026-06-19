@@ -868,6 +868,16 @@ class Job(SoftDeleteMixin, Base):
     input_params: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="JSONB of task-specific parameters"
     )
+    duration_sec: Mapped[float | None] = mapped_column(
+        Float,
+        comment="Source video duration in seconds, probed at intake "
+        "(ffprobe for upload/presigned, yt-dlp metadata for URL) BEFORE "
+        "enqueue, for the DD-3.3c-I-B admission gate. Summed over "
+        "status IN ('queued','active') to cap pending video-hours in the "
+        "queue. NULL for non-video ingests and pre-DD-3.3c-I-B rows "
+        "(ignored by SUM). Gate-only — step_1_ingest re-probes "
+        "independently for codec/resolution.",
+    )
     current_stage: Mapped[str | None] = mapped_column(
         String(50),
         comment="Internal pipeline stage marker per vision §3 KD13. "

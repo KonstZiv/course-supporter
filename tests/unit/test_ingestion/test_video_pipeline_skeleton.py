@@ -24,6 +24,7 @@ from course_supporter.ingestion.schemas import (
     DocumentSummaryDraft,
 )
 from course_supporter.ingestion.video_pipeline import VideoProcessor, steps
+from course_supporter.ingestion.video_pipeline.media import audio_extract_timeout_for
 from course_supporter.ingestion.video_pipeline.schemas import (
     ChangeClass,
     DetectionResult,
@@ -217,6 +218,21 @@ class TestStep2Stt:
             )
 
         assert result.pauses == []
+
+    async def test_extract_audio_gets_duration_proportional_timeout(self) -> None:
+        """Krok 2 derives the audio-extract timeout from the probed duration."""
+        meta = _meta(9_000_000)  # 150-min module
+        router = _stt_router([("Hello", 0.0, 0.5)])
+        extract = AsyncMock(return_value=Path("/tmp/x/audio.mp3"))
+
+        with patch(_EXTRACT, new=extract):
+            await steps.step_2_stt(
+                Path("/tmp/x/source.mp4"), meta, stt_router=router, tmp=Path("/tmp/x")
+            )
+
+        assert extract.await_args.kwargs["timeout_sec"] == audio_extract_timeout_for(
+            9_000_000 / 1000
+        )
 
 
 class TestProcessRawPipeline:

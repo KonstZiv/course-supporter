@@ -68,7 +68,18 @@ _DOWNLOAD_TIMEOUT_SEC = min(
     _DOWNLOAD_TIMEOUT_CAP_SEC,
 )
 _PROBE_TIMEOUT_SEC = 30.0
-_EXTRACT_TIMEOUT_SEC = 600.0
+
+# Audio extraction (Krok 2). The original flat 600 s was dev-calibrated and
+# runs thin on the 2-vCPU prod worker for a 150-min module: the full mp3
+# re-encode (``-vn``, audio-only — no video decode) is ~15-25x realtime, so
+# ~360-600 s wall-clock at the 150-min cap. The timeout is now duration-
+# proportional via :func:`audio_extract_timeout_for` (same shape as
+# frame-extract, ``_proportional_timeout``): FLOOR preserves fail-fast for a
+# stuck short clip; BUDGET (0.2 s wall per 1 s audio) allots ~3x the conservative
+# worst-case; CAP is the 150-min budget and stays far below ``worker_job_timeout``.
+_AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC = 600.0
+_AUDIO_EXTRACT_REALTIME_BUDGET = 0.2  # wall-clock budget per second of audio
+_AUDIO_EXTRACT_TIMEOUT_CAP_SEC = 1800.0
 
 # Frame extraction (Krok 3). The original flat 900 s was calibrated on dev
 # hardware (M2) and times long videos out on the 2-vCPU prod worker before
@@ -88,6 +99,26 @@ _SINGLE_FRAME_TIMEOUT_SEC = 30.0
 # Bytes of stderr surfaced in error messages — the *tail*, since ffmpeg /
 # yt-dlp print version/config banners first and the actual error last.
 _ERR_TAIL = 1024
+
+
+def _proportional_timeout(
+    duration_sec: float, *, floor: float, budget: float, cap: float
+) -> float:
+    """Duration-proportional wall-clock timeout, clamped to ``[floor, cap]``.
+
+    The shared shape for the ffmpeg media-stage timeouts (frame extraction,
+    audio extraction): scale the budget with the source duration so a stage
+    that runs longer on slower hardware is not killed mid-work, while
+    ``floor`` keeps fail-fast for a stuck short input and ``cap`` bounds
+    pathological out-of-contract durations. Per-stage constants differ; the
+    formula is one.
+
+    >>> _proportional_timeout(60.0, floor=900.0, budget=1.0, cap=10800.0)
+    900.0
+    >>> _proportional_timeout(9000.0, floor=900.0, budget=1.0, cap=10800.0)
+    9000.0
+    """
+    return min(max(floor, duration_sec * budget), cap)
 
 
 def frame_extract_timeout_for(duration_sec: float) -> float:
@@ -112,10 +143,41 @@ def frame_extract_timeout_for(duration_sec: float) -> float:
     >>> frame_extract_timeout_for(36000.0)  # 10-h video clamps to CAP
     10800.0
     """
-    budgeted = duration_sec * _FRAME_EXTRACT_REALTIME_BUDGET
-    return min(
-        max(_FRAME_EXTRACT_TIMEOUT_FLOOR_SEC, budgeted),
-        _FRAME_EXTRACT_TIMEOUT_CAP_SEC,
+    return _proportional_timeout(
+        duration_sec,
+        floor=_FRAME_EXTRACT_TIMEOUT_FLOOR_SEC,
+        budget=_FRAME_EXTRACT_REALTIME_BUDGET,
+        cap=_FRAME_EXTRACT_TIMEOUT_CAP_SEC,
+    )
+
+
+def audio_extract_timeout_for(duration_sec: float) -> float:
+    """Return a duration-proportional audio-extraction timeout (task M1+M2).
+
+    Sibling of :func:`frame_extract_timeout_for` for the ``-vn`` mp3
+    re-encode. Audio-only encode is ~15-25x realtime, so ``BUDGET`` (0.2 s
+    wall per 1 s audio) allots ~3x the conservative worst-case; ``FLOOR``
+    (600 s) preserves fail-fast for a short clip; ``CAP`` (1800 s) is the
+    150-min budget and stays far below ``worker_job_timeout``.
+
+    Args:
+        duration_sec: Source video duration in seconds (from ffprobe).
+
+    Returns:
+        Timeout in seconds for the ``ffmpeg -vn`` audio extraction.
+
+    >>> audio_extract_timeout_for(60.0)  # 1-min clamps to FLOOR
+    600.0
+    >>> audio_extract_timeout_for(3240.0)  # 54-min: proportional budget
+    648.0
+    >>> audio_extract_timeout_for(9000.0)  # 150-min clamps to CAP
+    1800.0
+    """
+    return _proportional_timeout(
+        duration_sec,
+        floor=_AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC,
+        budget=_AUDIO_EXTRACT_REALTIME_BUDGET,
+        cap=_AUDIO_EXTRACT_TIMEOUT_CAP_SEC,
     )
 
 
@@ -270,7 +332,12 @@ def _parse_probe(data: dict[str, Any], *, source_name: str) -> VideoFileMetadata
     )
 
 
-async def extract_audio(video_path: Path, dest_dir: Path) -> Path:
+async def extract_audio(
+    video_path: Path,
+    dest_dir: Path,
+    *,
+    timeout_sec: float = _AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC,
+) -> Path:
     """Extract the audio track to mono 16 kHz mp3 via ffmpeg (Krok 2).
 
     Output format aligns with the ElevenLabs Scribe core: the provider
@@ -278,6 +345,14 @@ async def extract_audio(video_path: Path, dest_dir: Path) -> Path:
     (``guess_content_type`` → ``.mp3`` = ``audio/mpeg``); mono/16 kHz is
     a free, Scribe-compatible STT canonical (the core imposes no
     sample-rate constraint). Failure → ``ProcessingError`` (operational).
+
+    Args:
+        video_path: Local source video.
+        dest_dir: Processor-owned tempdir for the extracted mp3.
+        timeout_sec: Wall-clock ceiling for the ``-vn`` re-encode. The
+            caller derives a duration-proportional value via
+            :func:`audio_extract_timeout_for`; the default keeps the
+            dev-flat FLOOR for callers without a probed duration.
     """
     audio_path = dest_dir / "audio.mp3"
     rc, _out, err = await _run(
@@ -295,7 +370,7 @@ async def extract_audio(video_path: Path, dest_dir: Path) -> Path:
             "mp3",
             str(audio_path),
         ],
-        timeout_sec=_EXTRACT_TIMEOUT_SEC,
+        timeout_sec=timeout_sec,
     )
     if rc != 0:
         raise ProcessingError(

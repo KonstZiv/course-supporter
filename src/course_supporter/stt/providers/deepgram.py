@@ -10,7 +10,7 @@ import structlog
 
 from course_supporter.stt.providers.base import STTProvider
 from course_supporter.stt.schemas import STTRequest, STTResult, STTSegment
-from course_supporter.stt.utils import guess_content_type
+from course_supporter.stt.utils import guess_content_type, stt_timeout_for
 
 logger = structlog.get_logger()
 
@@ -65,12 +65,16 @@ class DeepgramSTTProvider(STTProvider):
 
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         client = self._next_client()
+        # Per-request duration-proportional timeout (task M1) overrides the
+        # client-level flat default for a long synchronous transcription.
+        timeout = httpx.Timeout(stt_timeout_for(request.duration_sec), connect=30.0)
         with self._measure_latency() as timer:
             resp = await client.post(
                 "/v1/listen",
                 headers={"Content-Type": content_type},
                 params=params,
                 content=audio_bytes,
+                timeout=timeout,
             )
 
         resp.raise_for_status()

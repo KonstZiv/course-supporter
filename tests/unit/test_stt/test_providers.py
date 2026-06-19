@@ -185,3 +185,113 @@ class TestDeepgramLanguageAutoDetect:
         assert "detect_language" not in params
         assert result.detected_language is None
         assert result.language == "en"
+
+
+class TestSttTimeoutFor:
+    """Duration-proportional STT request timeout helper (task M1)."""
+
+    def test_short_clip_clamps_to_floor(self) -> None:
+        from course_supporter.stt.utils import _STT_TIMEOUT_FLOOR_SEC, stt_timeout_for
+
+        # 1-min clip: budget 0.1 -> 6 s < FLOOR -> fail-fast preserved.
+        assert stt_timeout_for(60.0) == _STT_TIMEOUT_FLOOR_SEC
+
+    def test_contract_150min_scales_under_cap(self) -> None:
+        from course_supporter.stt.utils import _STT_TIMEOUT_CAP_SEC, stt_timeout_for
+
+        # 150-min (9000 s) x 0.1 = 900 s -> proportional, below CAP.
+        result = stt_timeout_for(9000.0)
+        assert result == pytest.approx(900.0)
+        assert result < _STT_TIMEOUT_CAP_SEC
+
+    def test_none_duration_falls_back_to_cap(self) -> None:
+        from course_supporter.stt.utils import _STT_TIMEOUT_CAP_SEC, stt_timeout_for
+
+        # Pure-audio path: duration unknown pre-STT -> conservative CAP.
+        assert stt_timeout_for(None) == _STT_TIMEOUT_CAP_SEC
+
+
+class TestSTTRequestTimeout:
+    """Providers apply a per-request duration-proportional timeout (task M1)."""
+
+    @pytest.fixture()
+    def fake_audio(self, tmp_path: Path) -> Path:
+        p = tmp_path / "sample.mp3"
+        p.write_bytes(b"\xff\xfb\x00\x00")
+        return p
+
+    async def test_deepgram_passes_duration_proportional_timeout(
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+        from course_supporter.stt.utils import stt_timeout_for
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]},
+            "metadata": {"duration": 1.0},
+        }
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), duration_sec=9000.0)
+        )
+
+        timeout = post_mock.await_args.kwargs["timeout"]
+        assert timeout.read == stt_timeout_for(9000.0)
+
+    async def test_deepgram_none_duration_uses_cap(
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+        from course_supporter.stt.utils import stt_timeout_for
+
+        provider = DeepgramSTTProvider(api_keys=["k"])
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]},
+            "metadata": {"duration": 1.0},
+        }
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        await provider.transcribe(STTRequest(audio_path=str(fake_audio)))
+
+        assert post_mock.await_args.kwargs["timeout"].read == stt_timeout_for(None)
+
+    async def test_elevenlabs_passes_duration_proportional_timeout(
+        self, fake_audio: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.stt.providers.elevenlabs import ElevenLabsSTTProvider
+        from course_supporter.stt.schemas import STTRequest
+        from course_supporter.stt.utils import stt_timeout_for
+
+        provider = ElevenLabsSTTProvider(api_keys=["k"])
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "text": "hi",
+            "language_code": "eng",
+            "words": [{"text": "hi", "start": 0.0, "end": 0.5}],
+        }
+        post_mock = AsyncMock(return_value=mock_resp)
+        monkeypatch.setattr(provider._clients[0], "post", post_mock)
+
+        await provider.transcribe(
+            STTRequest(audio_path=str(fake_audio), duration_sec=9000.0)
+        )
+
+        timeout = post_mock.await_args.kwargs["timeout"]
+        assert timeout.read == stt_timeout_for(9000.0)

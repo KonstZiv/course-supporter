@@ -14,6 +14,11 @@ class TestSTTRequest:
         assert req.language is None
         assert req.action == "transcribe"
         assert req.strategy == "default"
+        assert req.duration_sec is None
+
+    def test_with_duration_sec(self) -> None:
+        req = STTRequest(audio_path="/tmp/a.mp3", duration_sec=9000.0)
+        assert req.duration_sec == 9000.0
 
     def test_with_language(self) -> None:
         req = STTRequest(audio_path="/tmp/a.wav", language="uk")

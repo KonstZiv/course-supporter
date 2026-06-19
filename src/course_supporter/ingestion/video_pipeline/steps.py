@@ -173,7 +173,11 @@ async def step_2_stt(
     surfaces them). ``duration_ms`` comes from ffprobe (Krok 1), not STT
     word-ends.
     """
-    audio_path = await media.extract_audio(video_path, tmp)
+    audio_path = await media.extract_audio(
+        video_path,
+        tmp,
+        timeout_sec=media.audio_extract_timeout_for(file_metadata.duration_ms / 1000),
+    )
 
     # language=None mirrors AudioProcessor: always auto-detect; the
     # orchestrator caches the detected language back onto the entry.
@@ -181,6 +185,7 @@ async def step_2_stt(
         "transcribe",
         str(audio_path),
         language=None,
+        duration_sec=file_metadata.duration_ms / 1000,
     )
 
     words = [

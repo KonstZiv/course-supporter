@@ -13,11 +13,14 @@ import pytest
 from course_supporter.config import settings
 from course_supporter.ingestion.base import UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline.media import (
+    _AUDIO_EXTRACT_TIMEOUT_CAP_SEC,
+    _AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC,
     _DOWNLOAD_TIMEOUT_FLOOR_SEC,
     _DOWNLOAD_TIMEOUT_SEC,
     _FRAME_EXTRACT_TIMEOUT_CAP_SEC,
     _FRAME_EXTRACT_TIMEOUT_FLOOR_SEC,
     _parse_probe,
+    audio_extract_timeout_for,
     frame_extract_timeout_for,
 )
 
@@ -115,6 +118,33 @@ class TestFrameExtractTimeout:
         # Invariant: CAP + worst-case downstream must fit inside the ARQ
         # job_timeout. The CAP alone is half the budget (task 3.3c-B GO).
         assert settings.worker_job_timeout > _FRAME_EXTRACT_TIMEOUT_CAP_SEC
+
+
+class TestAudioExtractTimeout:
+    """Duration-proportional audio-extraction timeout (task M1+M2, Krok 2)."""
+
+    def test_short_clip_clamps_to_floor(self) -> None:
+        # 1-min clip: budget 0.2 → 12 s < FLOOR → fail-fast preserved.
+        assert audio_extract_timeout_for(60.0) == _AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC
+
+    def test_mid_length_scales_proportionally(self) -> None:
+        # 54-min (3240 s) x 0.2 = 648 s -> between FLOOR and CAP.
+        result = audio_extract_timeout_for(3240.0)
+        assert result == pytest.approx(648.0)
+        assert result > _AUDIO_EXTRACT_TIMEOUT_FLOOR_SEC
+        assert result < _AUDIO_EXTRACT_TIMEOUT_CAP_SEC
+
+    def test_contract_150min_clamps_to_cap(self) -> None:
+        # 150-min worst case (9000 s) x 0.2 = 1800 s == CAP (the 150-min budget).
+        assert audio_extract_timeout_for(9000.0) == _AUDIO_EXTRACT_TIMEOUT_CAP_SEC
+
+    def test_pathological_long_clamps_to_cap(self) -> None:
+        # Out-of-contract duration is clamped, never unbounded.
+        assert audio_extract_timeout_for(36000.0) == _AUDIO_EXTRACT_TIMEOUT_CAP_SEC
+
+    def test_cap_stays_under_job_timeout(self) -> None:
+        # Invariant: audio-extract CAP must fit well inside the ARQ job_timeout.
+        assert settings.worker_job_timeout > _AUDIO_EXTRACT_TIMEOUT_CAP_SEC
 
 
 class TestDownloadTimeoutBudget:

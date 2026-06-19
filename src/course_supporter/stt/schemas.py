@@ -13,6 +13,11 @@ class STTRequest(BaseModel):
         language: ISO 639-1 language code. None = auto-detect.
         action: Routing key for strategy selection (mirrors LLMRequest).
         strategy: Strategy name for fallback chain selection.
+        duration_sec: Source audio duration in seconds, when known to the
+            caller (the video path probes it via ffprobe). Drives the
+            duration-proportional request timeout (task M1). ``None`` when
+            the caller cannot probe it pre-STT (pure-audio path) → the
+            provider falls back to the conservative timeout cap.
     """
 
     audio_path: str
@@ -23,6 +28,10 @@ class STTRequest(BaseModel):
     )
     action: str = "transcribe"
     strategy: str = "default"
+    duration_sec: float | None = Field(
+        default=None,
+        description="Source audio duration (s), when probed by the caller.",
+    )
 
 
 class STTSegment(BaseModel):

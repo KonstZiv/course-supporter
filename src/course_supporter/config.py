@@ -5,9 +5,16 @@ from datetime import time
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
-from pydantic import Field, PrivateAttr, SecretStr, computed_field, field_validator
+from pydantic import (
+    Field,
+    PrivateAttr,
+    SecretStr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from course_supporter.key_pool import KeyPool
@@ -98,6 +105,22 @@ class Settings(BaseSettings):
     webhook_timeout_seconds: int = 30
     webhook_max_retries: int = 3
 
+    # --- Intake admission / queue lifetime (DD-3.3c-I) ---
+    # These five knobs parametrize the slow-hardware intake policy so a
+    # capacity upgrade is a config change, not a code change. Defaults are
+    # tuned for the current 2-vCPU profile (worker_max_jobs=1, serial drain
+    # at ~1.4x video wall-clock). The admission/hint knobs are *consumed* by
+    # the separate admission-gate task; here they exist only so the
+    # expires-vs-tail invariant below can be enforced as a unit.
+    intake_admission_max_pending_video_hours: float = 60.0
+    intake_drain_coefficient: float = 1.4
+    # ARQ pending-job TTL we set on both pools (api/app.py + WorkerSettings),
+    # overriding ARQ's 24h default so an admitted queue tail is not silently
+    # failed ("job expired") before this single worker reaches it.
+    intake_job_expires_hours: float = 96.0
+    intake_hint_max_hours: float = 84.0
+    intake_hint_check_after_hours: float = 12.0
+
     @field_validator("worker_heavy_window_tz")
     @classmethod
     def _validate_timezone(cls, v: str) -> str:
@@ -107,6 +130,38 @@ class Settings(BaseSettings):
             msg = f"Invalid timezone: {v!r}"
             raise ValueError(msg) from err
         return v
+
+    @model_validator(mode="after")
+    def _validate_intake_expires_covers_tail(self) -> Self:
+        """Ensure the pending-job TTL outlives the worst-case admitted tail.
+
+        DD-3.3c-I invariant: a job admitted when the queue sits at the
+        admission ceiling waits ``intake_admission_max_pending_video_hours x
+        intake_drain_coefficient`` hours before the single worker reaches it.
+        ``intake_job_expires_hours`` (the ARQ ``expires_extra_ms`` we set on
+        both pools) MUST be at least that long, or the tail's payload key
+        expires before pickup and ARQ silently fails it as "job expired" --
+        the exact DD-3.3c-I regression this wiring guards against. Enforced at
+        settings-load time (fail-fast, mirrors ``_validate_timezone`` and the
+        ladder-registry startup check) so retuning one knob without the other
+        surfaces at boot, not as a vanished job days later.
+        """
+        worst_case_tail_hours = (
+            self.intake_admission_max_pending_video_hours
+            * self.intake_drain_coefficient
+        )
+        if self.intake_job_expires_hours < worst_case_tail_hours:
+            msg = (
+                f"intake_job_expires_hours ({self.intake_job_expires_hours}) "
+                f"must be >= intake_admission_max_pending_video_hours "
+                f"({self.intake_admission_max_pending_video_hours}) x "
+                f"intake_drain_coefficient ({self.intake_drain_coefficient}) = "
+                f"{worst_case_tail_hours}; otherwise a queue tail admitted at "
+                f"the ceiling expires before the worker reaches it "
+                f'(DD-3.3c-I "job expired").'
+            )
+            raise ValueError(msg)
+        return self
 
     # --- Safety Checker ---
     safety_archive_max_uncompressed_mb: int = 50

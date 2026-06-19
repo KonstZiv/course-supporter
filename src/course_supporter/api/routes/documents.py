@@ -46,7 +46,7 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.config import get_settings
 from course_supporter.enqueue import enqueue_ingestion
-from course_supporter.ingestion.base import UnsupportedFormatError
+from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline import media
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.language import (
@@ -98,9 +98,19 @@ async def _intake_video_duration_sec(
 
     Returns ``None`` for non-video source types (they carry no video-hours
     and so never gate). For video, ffprobes the already-local upload
-    ``content`` or resolves the remote ``url`` via yt-dlp metadata. A probe
-    failure (unavailable/private/corrupt/undeterminable duration) is mapped
-    to a clear 422 rather than bubbling as a 500.
+    ``content`` or resolves the remote ``url`` via yt-dlp metadata.
+
+    Probe failure maps to a clear status, never a bare 500:
+
+    * :class:`UnsupportedFormatError` — the input itself is bad
+      (private/unavailable/corrupt/non-video/no derivable duration). 422
+      ``INTAKE_DURATION_UNAVAILABLE``; retrying the same input won't help.
+    * :class:`ProcessingError` — the probe operation failed transiently
+      (yt-dlp / ffprobe timeout, or missing binary; both raised by
+      ``media._run``). 503 ``INTAKE_PROBE_UNAVAILABLE`` + ``Retry-After``;
+      retrying makes sense. Mirrors the gate's 503. Ordered AFTER the
+      ``UnsupportedFormatError`` clause — it is a subclass, so the specific
+      input-error case must match first.
     """
     if source_type != SourceType.VIDEO:
         return None
@@ -118,6 +128,24 @@ async def _intake_video_duration_sec(
                 "code": "INTAKE_DURATION_UNAVAILABLE",
                 "category": "duration_probe",
                 "details": str(exc),
+            },
+        ) from exc
+    except ProcessingError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "INTAKE_PROBE_UNAVAILABLE",
+                "category": "duration_probe",
+                "details": (
+                    f"Could not reach the video source to determine its "
+                    f"duration ({exc}). This is usually transient — please "
+                    f"try again."
+                ),
+            },
+            headers={
+                "Retry-After": str(
+                    int(get_settings().intake_hint_check_after_hours * 3600)
+                )
             },
         ) from exc
 

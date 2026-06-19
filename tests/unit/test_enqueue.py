@@ -3,6 +3,10 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
+
+from course_supporter.config import get_settings
 from course_supporter.enqueue import (
     enqueue_ingestion,
     enqueue_node_summary_regeneration,
@@ -44,6 +48,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             result = await enqueue_ingestion(
                 redis=redis,
@@ -73,6 +80,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             await enqueue_ingestion(
                 redis=redis,
@@ -103,6 +113,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             await enqueue_ingestion(
                 redis=redis,
@@ -128,6 +141,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             result = await enqueue_ingestion(
                 redis=redis,
@@ -151,6 +167,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             await enqueue_ingestion(
                 redis=redis,
@@ -189,6 +208,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             await enqueue_ingestion(
                 redis=redis,
@@ -228,6 +250,9 @@ class TestEnqueueIngestion:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             result = await enqueue_ingestion(
                 redis=redis,
@@ -270,6 +295,9 @@ class TestEnqueueNodeSummaryRegeneration:
         with patch("course_supporter.enqueue.JobRepository") as repo_cls:
             repo_cls.return_value.create = AsyncMock(return_value=mock_job)
             repo_cls.return_value.set_arq_job_id = AsyncMock()
+            repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+                return_value=0.0
+            )
 
             await enqueue_node_summary_regeneration(
                 redis=redis,
@@ -284,3 +312,100 @@ class TestEnqueueNodeSummaryRegeneration:
         redis.enqueue_job.assert_awaited_once()
         regen_args = redis.enqueue_job.call_args.args
         assert regen_args[0] == "arq_regenerate_node_summary"
+
+
+class TestEnqueueIngestionAdmissionGate:
+    """DD-3.3c-I-B admission gate (first check inside enqueue_ingestion)."""
+
+    @staticmethod
+    def _patch_repo(repo_cls: MagicMock, *, pending_sec: float) -> MagicMock:
+        repo_cls.return_value.create = AsyncMock(return_value=_mock_job())
+        repo_cls.return_value.set_arq_job_id = AsyncMock()
+        repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+            return_value=pending_sec
+        )
+        return repo_cls
+
+    async def _enqueue(
+        self, redis: AsyncMock, session: AsyncMock, **extra: object
+    ) -> object:
+        return await enqueue_ingestion(
+            redis=redis,
+            session=session,
+            tenant_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
+            material_id=uuid.uuid4(),
+            source_type="video",
+            source_url="https://youtu.be/x",
+            **extra,
+        )
+
+    async def test_rejects_at_capacity(self) -> None:
+        """Existing queue exactly at the ceiling (>=) → 503, no Job created."""
+        ceiling_sec = get_settings().intake_admission_max_pending_video_hours * 3600
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=ceiling_sec)
+            with pytest.raises(HTTPException) as exc_info:
+                await self._enqueue(redis, session)
+
+        exc = exc_info.value
+        assert exc.status_code == 503
+        assert isinstance(exc.detail, dict)
+        assert exc.detail["code"] == "INTAKE_OVERLOADED"
+        assert exc.detail["category"] == "queue_capacity"
+        assert exc.headers is not None and "Retry-After" in exc.headers
+        # No Job created, nothing enqueued — rejection precedes both.
+        repo_cls.return_value.create.assert_not_awaited()
+        redis.enqueue_job.assert_not_awaited()
+
+    async def test_rejects_above_capacity(self) -> None:
+        """Existing queue above the ceiling → 503."""
+        over_sec = get_settings().intake_admission_max_pending_video_hours * 3600 + 1
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=over_sec)
+            with pytest.raises(HTTPException) as exc_info:
+                await self._enqueue(redis, session)
+        assert exc_info.value.status_code == 503
+
+    async def test_admits_just_below_capacity(self) -> None:
+        """Existing queue just below the ceiling → admits, creates, enqueues."""
+        under_sec = get_settings().intake_admission_max_pending_video_hours * 3600 - 1
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=under_sec)
+            result = await self._enqueue(redis, session)
+        assert result is not None
+        repo_cls.return_value.create.assert_awaited_once()
+        redis.enqueue_job.assert_awaited_once()
+
+    async def test_admits_empty_queue(self) -> None:
+        """Empty queue (0.0) admits."""
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=0.0)
+            await self._enqueue(redis, session)
+        repo_cls.return_value.create.assert_awaited_once()
+
+    async def test_duration_sec_threaded_to_create(self) -> None:
+        """The probed duration_sec is stored on the new Job."""
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=0.0)
+            await self._enqueue(redis, session, duration_sec=5400.0)
+        assert repo_cls.return_value.create.call_args.kwargs["duration_sec"] == 5400.0
+
+    async def test_gate_checks_before_create(self) -> None:
+        """The queue sum is read before any Job is created (gate is first)."""
+        session = _mock_session()
+        redis = _mock_redis()
+        with patch("course_supporter.enqueue.JobRepository") as repo_cls:
+            self._patch_repo(repo_cls, pending_sec=0.0)
+            await self._enqueue(redis, session)
+        repo_cls.return_value.sum_active_ingest_duration_sec.assert_awaited_once()

@@ -77,7 +77,7 @@ def _mock_entry(
     entry.state = state
     entry.error_message = None
     entry.job_id = None
-    entry.job_id = None
+    entry.processing_estimate = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
     return entry

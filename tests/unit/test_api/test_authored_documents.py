@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from structlog.testing import capture_logs
 
@@ -15,9 +16,11 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.api.routes.documents import (
     _enforce_presentation_slide_cap,
+    _intake_video_duration_sec,
     _presentation_slide_count,
 )
 from course_supporter.auth.context import TenantContext
+from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.models.source import SourceType
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
@@ -38,6 +41,12 @@ STUB_TENANT = TenantContext(
 ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
 RUN_STAGE1 = "course_supporter.api.routes.documents.run_stage1"
 GET_MAX_SIZE = "course_supporter.api.routes.documents.get_max_size_for_extension"
+PROBE_URL_FUNC = (
+    "course_supporter.ingestion.video_pipeline.media.probe_intake_duration_sec"
+)
+PROBE_BYTES_FUNC = (
+    "course_supporter.ingestion.video_pipeline.media.probe_intake_duration_from_bytes"
+)
 
 
 def _make_pdf_bytes(n_pages: int) -> bytes:
@@ -107,6 +116,7 @@ def _mock_entry(
     entry.state = state
     entry.error_message = error_message
     entry.job_id = job_id
+    entry.processing_estimate = None
     entry.deleted_at = None
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
@@ -1360,3 +1370,177 @@ class TestUpdateDocument:
                 json={"material_role": "methodological"},
             )
         assert resp.status_code == 404
+
+
+class TestIntakeAdmissionWiring:
+    """DD-3.3c-I-B route wiring: hint on success, video duration probe, 422."""
+
+    async def test_processing_estimate_attached_on_success(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """A successful create carries the queue-wait hint from settings."""
+        from course_supporter.config import get_settings
+
+        s = get_settings()
+        entry = _mock_entry(node_id=node_id)
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "text",
+                    "source_url": "https://example.com/doc.md",
+                },
+            )
+        assert resp.status_code == 201
+        estimate = resp.json()["processing_estimate"]
+        assert estimate["max_hours"] == s.intake_hint_max_hours
+        assert estimate["check_after_hours"] == s.intake_hint_check_after_hours
+
+    async def test_video_url_probe_failure_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """An unresolvable video URL yields a clear 422, not a 500."""
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                PROBE_URL_FUNC,
+                new_callable=AsyncMock,
+                side_effect=UnsupportedFormatError("video unavailable"),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "video",
+                    "source_url": "https://youtu.be/private",
+                },
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "INTAKE_DURATION_UNAVAILABLE"
+
+    async def test_video_url_probe_processing_error_returns_503(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """A transient probe failure (timeout/missing binary) → 503, not 500."""
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                PROBE_URL_FUNC,
+                new_callable=AsyncMock,
+                side_effect=ProcessingError("yt-dlp metadata timed out"),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "video",
+                    "source_url": "https://youtu.be/slow",
+                },
+            )
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["code"] == "INTAKE_PROBE_UNAVAILABLE"
+        assert "retry-after" in {k.lower() for k in resp.headers}
+
+    async def test_video_url_probed_duration_threaded_to_enqueue(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """The probed video duration reaches enqueue_ingestion."""
+        entry = _mock_entry(node_id=node_id, source_type="video")
+        job = _mock_job()
+        enqueue_mock = AsyncMock(return_value=job)
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(PROBE_URL_FUNC, new_callable=AsyncMock, return_value=7200.0),
+            patch(ENQUEUE_FUNC, enqueue_mock),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={
+                    "source_type": "video",
+                    "source_url": "https://youtu.be/lecture",
+                },
+            )
+        assert resp.status_code == 201
+        assert enqueue_mock.call_args.kwargs["duration_sec"] == 7200.0
+
+
+class TestIntakeVideoDurationErrorMapping:
+    """`_intake_video_duration_sec` maps probe failures to clean statuses."""
+
+    async def test_non_video_skips_probe_returns_none(self) -> None:
+        # No probe patched — a probe call would raise; None proves it's skipped.
+        assert await _intake_video_duration_sec(SourceType.TEXT, url="x") is None
+
+    async def test_video_without_content_or_url_raises(self) -> None:
+        """Defensive invariant: a video probe with neither input is a hard error."""
+        with pytest.raises(ValueError, match="content or url"):
+            await _intake_video_duration_sec(SourceType.VIDEO)
+
+    async def test_url_processing_error_maps_to_503(self) -> None:
+        with (
+            patch(
+                PROBE_URL_FUNC,
+                new_callable=AsyncMock,
+                side_effect=ProcessingError("yt-dlp timed out"),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _intake_video_duration_sec(SourceType.VIDEO, url="https://youtu.be/x")
+        exc = exc_info.value
+        assert exc.status_code == 503
+        assert isinstance(exc.detail, dict)
+        assert exc.detail["code"] == "INTAKE_PROBE_UNAVAILABLE"
+        assert exc.headers is not None and "Retry-After" in exc.headers
+
+    async def test_bytes_processing_error_maps_to_503(self) -> None:
+        with (
+            patch(
+                PROBE_BYTES_FUNC,
+                new_callable=AsyncMock,
+                side_effect=ProcessingError("ffprobe binary not found"),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _intake_video_duration_sec(
+                SourceType.VIDEO, content=b"fake", filename="a.mp4"
+            )
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail["code"] == "INTAKE_PROBE_UNAVAILABLE"
+
+    async def test_unsupported_format_still_maps_to_422(self) -> None:
+        """The input-error branch is unchanged (subclass matched first)."""
+        with (
+            patch(
+                PROBE_URL_FUNC,
+                new_callable=AsyncMock,
+                side_effect=UnsupportedFormatError("private video"),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _intake_video_duration_sec(
+                SourceType.VIDEO, url="https://youtu.be/private"
+            )
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "INTAKE_DURATION_UNAVAILABLE"

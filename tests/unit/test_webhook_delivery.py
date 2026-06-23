@@ -10,15 +10,11 @@ import httpx
 import pytest
 
 from course_supporter.homework.webhook import (
-    build_matched_payload,
     build_reviewed_payload,
     deliver_webhook,
     resolve_webhook_url,
 )
-from course_supporter.models.webhook import (
-    WebhookMatchedPayload,
-    WebhookReviewedPayload,
-)
+from course_supporter.models.webhook import WebhookReviewedPayload
 
 # --- Helpers ---
 
@@ -90,29 +86,6 @@ class TestResolveWebhookUrl:
 # --- Payload builders ---
 
 
-class TestBuildMatchedPayload:
-    def test_builds_correct_payload(self) -> None:
-        sub = _make_submission()
-        student = _make_student("ext-123")
-        task_id = uuid.uuid4()
-
-        payload = build_matched_payload(
-            sub,
-            student,
-            matched_task_id=task_id,
-            matched_task_title="Loop exercise",
-            matched_task_type="exercise",
-        )
-
-        assert payload.event == "matched"
-        assert payload.submission_id == str(sub.id)
-        assert payload.student_external_id == "ext-123"
-        assert payload.matched_task.id == str(task_id)
-        assert payload.matched_task.title == "Loop exercise"
-        assert payload.matched_task.node_type == "exercise"
-        assert isinstance(payload.timestamp, datetime)
-
-
 class TestBuildReviewedPayload:
     def test_builds_from_review_result(self) -> None:
         sub = _make_submission(
@@ -158,11 +131,17 @@ class TestDeliverWebhook:
         return MagicMock()
 
     @pytest.fixture()
-    def payload(self) -> WebhookMatchedPayload:
-        return WebhookMatchedPayload(
+    def payload(self) -> WebhookReviewedPayload:
+        return WebhookReviewedPayload(
             submission_id="sub-1",
             student_external_id="stu-1",
-            matched_task={"id": "task-1", "title": "Test", "node_type": "exercise"},
+            review={
+                "passed": True,
+                "score": 80,
+                "correctness": "correct",
+                "review_text": "OK.",
+                "response_language": "en",
+            },
             timestamp=datetime.now(UTC),
         )
 
@@ -175,7 +154,7 @@ class TestDeliverWebhook:
         mock_client_cls: MagicMock,
         mock_validate: AsyncMock,
         mock_session: MagicMock,
-        payload: WebhookMatchedPayload,
+        payload: WebhookReviewedPayload,
     ) -> None:
         mock_validate.return_value = "https://example.com/hook"
         mock_response = MagicMock()
@@ -198,7 +177,7 @@ class TestDeliverWebhook:
         mock_session.add.assert_called_once()
         esc = mock_session.add.call_args[0][0]
         assert esc.success is True
-        assert esc.action == "webhook_matched"
+        assert esc.action == "webhook_reviewed"
 
     @patch(
         "course_supporter.homework.webhook.validate_webhook_url", new_callable=AsyncMock
@@ -207,7 +186,7 @@ class TestDeliverWebhook:
         self,
         mock_validate: AsyncMock,
         mock_session: MagicMock,
-        payload: WebhookMatchedPayload,
+        payload: WebhookReviewedPayload,
     ) -> None:
         from fastapi import HTTPException
 
@@ -235,7 +214,7 @@ class TestDeliverWebhook:
         mock_client_cls: MagicMock,
         mock_validate: AsyncMock,
         mock_session: MagicMock,
-        payload: WebhookMatchedPayload,
+        payload: WebhookReviewedPayload,
     ) -> None:
         mock_validate.return_value = "https://example.com/hook"
 
@@ -273,7 +252,7 @@ class TestDeliverWebhook:
         mock_client_cls: MagicMock,
         mock_validate: AsyncMock,
         mock_session: MagicMock,
-        payload: WebhookMatchedPayload,
+        payload: WebhookReviewedPayload,
     ) -> None:
         mock_validate.return_value = "https://example.com/hook"
 
@@ -306,7 +285,7 @@ class TestDeliverWebhook:
         mock_client_cls: MagicMock,
         mock_validate: AsyncMock,
         mock_session: MagicMock,
-        payload: WebhookMatchedPayload,
+        payload: WebhookReviewedPayload,
     ) -> None:
         mock_validate.return_value = "https://example.com/hook"
 

@@ -35,7 +35,6 @@ class TestHomeworkSubmissionModel:
         assert sub.task_hint_id is None
         assert sub.matched_task_id is None
         assert sub.safety_result is None
-        assert sub.match_result is None
         assert sub.review_result is None
         assert sub.review_markdown is None
         assert sub.webhook_url is None
@@ -65,7 +64,6 @@ class TestHomeworkSubmissionModel:
     def test_jsonb_fields_round_trip(self) -> None:
         """JSONB result fields accept and return dicts."""
         safety = {"safe": True, "flags": []}
-        match = {"matched_node_id": "abc", "confidence": 0.95}
         review = {"score": 85, "passed": True, "sections": ["good"]}
         sub = HomeworkSubmission(
             tenant_id=_uuid7(),
@@ -75,11 +73,9 @@ class TestHomeworkSubmissionModel:
             file_url="s3://bucket/file.py",
             file_type="text/x-python",
             safety_result=safety,
-            match_result=match,
             review_result=review,
         )
         assert sub.safety_result == safety
-        assert sub.match_result == match
         assert sub.review_result == review
 
     def test_file_url_max_length(self) -> None:

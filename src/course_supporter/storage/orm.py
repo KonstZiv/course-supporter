@@ -978,8 +978,6 @@ class HomeworkStatus(StrEnum):
 
     RECEIVED = "received"
     SAFETY_CHECK = "safety_check"
-    MATCHING = "matching"
-    MATCHED = "matched"
     REVIEWING = "reviewing"
     COMPLETED = "completed"
     DELIVERED = "delivered"
@@ -1106,17 +1104,13 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         String(30),
         default="received",
         index=True,
-        comment="Lifecycle: received → safety_check → matching → matched "
-        "→ reviewing → completed → delivered | rejected | failed",
+        comment="Lifecycle: received → safety_check → reviewing "
+        "→ completed → delivered | rejected | failed",
     )
 
     # Results (JSONB)
     safety_result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="Safety check result (safe, reason, flags)"
-    )
-    match_result: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB,
-        comment="Task matching result (matched_node_id, task_type, confidence)",
     )
     review_result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,

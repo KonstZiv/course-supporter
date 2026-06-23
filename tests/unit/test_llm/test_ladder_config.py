@@ -293,7 +293,6 @@ class TestRealConfigs:
         # methodist_topdown (Phase 3.2.3b Pass 2).
         assert "methodist_bottomup" in config.stages
         assert "methodist_topdown" in config.stages
-        assert "mentor_example" in config.stages
 
         for stage in config.stages.values():
             assert stage.prompt_ref

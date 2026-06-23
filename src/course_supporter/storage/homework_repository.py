@@ -15,11 +15,12 @@ from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger()
 
+# Task matching was removed in sprint-mentor T1 (KD15: a submission is
+# anchored to its task, so the matching/matched states are gone). The
+# safety check now hands off straight to review.
 HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
     "received": {"safety_check", "failed"},
-    "safety_check": {"matching", "rejected", "failed"},
-    "matching": {"matched", "failed"},
-    "matched": {"reviewing", "failed"},
+    "safety_check": {"reviewing", "rejected", "failed"},
     "reviewing": {"completed", "failed"},
     "completed": {"delivered", "failed"},
     "delivered": set(),
@@ -237,25 +238,6 @@ class HomeworkRepository:
             update(HomeworkSubmission)
             .where(HomeworkSubmission.id == submission_id)
             .values(safety_result=result)
-        )
-        await self._session.execute(stmt)
-        await self._session.flush()
-
-    async def store_match_result(
-        self,
-        submission_id: uuid.UUID,
-        *,
-        result: dict[str, Any],
-        matched_task_id: uuid.UUID | None = None,
-    ) -> None:
-        """Store task matching result and optional matched task FK."""
-        values: dict[str, object] = {"match_result": result}
-        if matched_task_id is not None:
-            values["matched_task_id"] = matched_task_id
-        stmt = (
-            update(HomeworkSubmission)
-            .where(HomeworkSubmission.id == submission_id)
-            .values(**values)
         )
         await self._session.execute(stmt)
         await self._session.flush()

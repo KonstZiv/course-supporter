@@ -1,7 +1,6 @@
 """Webhook delivery for the homework pipeline.
 
-Delivers two event types to external systems:
-- matched: after task matching (tells which task was identified)
+Delivers one event type to external systems:
 - reviewed: after Mentor review (delivers score and feedback)
 
 Retry strategy: inline exponential backoff, non-blocking on failure.
@@ -11,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -21,9 +19,7 @@ import structlog
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.config import get_settings
 from course_supporter.models.webhook import (
-    MatchedTaskInfo,
     ReviewSummary,
-    WebhookMatchedPayload,
     WebhookReviewedPayload,
 )
 from course_supporter.service_logging import get_current_job_id
@@ -43,26 +39,6 @@ def resolve_webhook_url(
 ) -> str | None:
     """Return the webhook URL for this submission (per-submission or tenant default)."""
     return submission.webhook_url or (tenant.webhook_url if tenant else None)
-
-
-def build_matched_payload(
-    submission: HomeworkSubmission,
-    student: Student,
-    matched_task_id: uuid.UUID,
-    matched_task_title: str,
-    matched_task_type: str,
-) -> WebhookMatchedPayload:
-    """Build the 'matched' webhook payload from pipeline state."""
-    return WebhookMatchedPayload(
-        submission_id=str(submission.id),
-        student_external_id=student.external_id,
-        matched_task=MatchedTaskInfo(
-            id=str(matched_task_id),
-            title=matched_task_title,
-            node_type=matched_task_type,
-        ),
-        timestamp=datetime.now(UTC),
-    )
 
 
 def build_reviewed_payload(
@@ -90,7 +66,7 @@ def build_reviewed_payload(
 async def deliver_webhook(
     *,
     url: str,
-    payload: WebhookMatchedPayload | WebhookReviewedPayload,
+    payload: WebhookReviewedPayload,
     session: AsyncSession,
 ) -> bool:
     """Deliver a webhook payload with retry and audit logging.

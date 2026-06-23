@@ -128,6 +128,15 @@ async def submit_homework(
             "(e.g. uk, en). Auto-detected if omitted.",
         ),
     ] = None,
+    student_note: Annotated[
+        str | None,
+        Form(
+            description="D7-local: the student's comment or question for this "
+            "submission (free text). Steers the Mentor review of this one "
+            "attempt; distinct from the student's standing mentor_preferences "
+            "(D7-global), which is not a submission field.",
+        ),
+    ] = None,
 ) -> HomeworkSubmitResponse:
     """Submit homework for review.
 
@@ -284,6 +293,7 @@ async def submit_homework(
             webhook_url=webhook_url,
             file_hash=file_hash,
             response_language=response_language,
+            student_note=student_note,
         )
 
         # Enqueue processing

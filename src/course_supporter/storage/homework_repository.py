@@ -53,6 +53,7 @@ class HomeworkRepository:
         webhook_url: str | None = None,
         file_hash: str | None = None,
         response_language: str | None = None,
+        student_note: str | None = None,
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -69,6 +70,8 @@ class HomeworkRepository:
             webhook_url: Per-submission webhook URL override.
             file_hash: SHA-256 hex digest of the uploaded file.
             response_language: Requested ISO 639-1 language for review.
+            student_note: D7-local free-text note the student attached to this
+                submission (steers the Mentor review of this attempt).
 
         Returns:
             The newly created HomeworkSubmission.
@@ -85,6 +88,7 @@ class HomeworkRepository:
             webhook_url=webhook_url,
             file_hash=file_hash,
             response_language=response_language,
+            student_note=student_note,
         )
         self._session.add(submission)
         await self._session.flush()

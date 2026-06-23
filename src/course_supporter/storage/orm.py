@@ -1067,22 +1067,14 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         index=True,
         comment="Specific course node the submission targets",
     )
-    task_hint_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
-        comment="Optional task ID hint from the caller (not FK, validated in app)",
-    )
-    matched_task_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="RESTRICT"),
         index=True,
-        comment=(
-            "Orphan column post-C9.3 — FK to structure_nodes_editable "
-            "dropped together with the table in C9.4. Writer is the "
-            "HW-005 task-matching block (deleted in C9.3); reader is "
-            "the webhook payload (always None post-C9.3). Column "
-            "retained per DD-2.1-AG for Phase 4 reroute on "
-            "NodeSummaryFinal; drop_column deferred to natural "
-            "cleanup cycle."
-        ),
+        comment="FK → AuthoredDocument (the task). Single submission↔task "
+        "anchor (KD15): tenant, course, and task_type derive through it. "
+        "RESTRICT — AuthoredDocument soft-delete does not cascade to "
+        "submissions (D3: submissions are student history, not task "
+        "derivatives).",
     )
 
     # File
@@ -1154,6 +1146,7 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     student: Mapped["Student"] = relationship(back_populates="submissions")
     course_node: Mapped["CourseNode"] = relationship(foreign_keys=[course_node_id])
     node: Mapped["CourseNode"] = relationship(foreign_keys=[node_id])
+    authored_document: Mapped["AuthoredDocument"] = relationship()
     job: Mapped["Job | None"] = relationship()
 
     def __repr__(self) -> str:

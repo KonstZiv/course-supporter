@@ -29,6 +29,9 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_homework
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
@@ -103,10 +106,14 @@ async def submit_homework(
         UploadFile,
         File(description="Homework file (code, text, or archive)."),
     ],
-    task_id: Annotated[
-        uuid.UUID | None,
-        Form(description="Optional task ID hint for matching."),
-    ] = None,
+    authored_document_id: Annotated[
+        uuid.UUID,
+        Form(
+            description="AuthoredDocument (task) the submission answers — the "
+            "single submission↔task anchor (KD15). Must be a task "
+            "(task_type set), belong to this course, and not be deleted.",
+        ),
+    ],
     webhook_url: Annotated[
         str | None,
         Form(
@@ -171,6 +178,25 @@ async def submit_homework(
     if target_node is None or target_node.tenant_id != tenant.tenant_id:
         raise HTTPException(status_code=404, detail="Node not found.")
 
+    # --- Verify the anchor: authored_document_id is a real task in this course
+    # (KD15 referential validation — structural, not the T7 sanity classifier). ---
+    doc_repo = AuthoredDocumentRepository(session)
+    task_doc = await doc_repo.get_by_id(authored_document_id)
+    if (
+        task_doc is None
+        or task_doc.deleted_at is not None
+        or task_doc.course_root_id != course_node_id
+    ):
+        # Unknown, soft-deleted, or belongs to another course/tenant —
+        # do not leak existence across the tenant boundary.
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if task_doc.task_type is None:
+        raise HTTPException(
+            status_code=422,
+            detail="authored_document_id must reference a task "
+            "(an AuthoredDocument with task_type set).",
+        )
+
     # --- Upload file to S3 (streaming SHA-256) ---
     submission_id = uuid.uuid4()
     filename = file.filename or "upload"
@@ -224,7 +250,7 @@ async def submit_homework(
         hw_repo = HomeworkRepository(session)
         existing = await hw_repo.find_duplicate(
             student_id=student.id,
-            node_id=node_id,
+            authored_document_id=authored_document_id,
             file_hash=file_hash,
         )
         if existing is not None:
@@ -251,10 +277,10 @@ async def submit_homework(
             student_id=student.id,
             course_node_id=course_node_id,
             node_id=node_id,
+            authored_document_id=authored_document_id,
             file_url=s3_url,
             file_type=content_type,
             original_filename=file.filename,
-            task_hint_id=task_id,
             webhook_url=webhook_url,
             file_hash=file_hash,
             response_language=response_language,

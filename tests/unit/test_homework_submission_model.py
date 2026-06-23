@@ -6,6 +6,7 @@ import pytest
 
 from course_supporter.storage.homework_repository import HOMEWORK_TRANSITIONS
 from course_supporter.storage.orm import (
+    AuthoredDocument,
     CourseNode,
     HomeworkStatus,
     HomeworkSubmission,
@@ -26,14 +27,13 @@ class TestHomeworkSubmissionModel:
             student_id=_uuid7(),
             course_node_id=_uuid7(),
             node_id=_uuid7(),
+            authored_document_id=_uuid7(),
             file_url="s3://bucket/homework/file.py",
             file_type="text/x-python",
         )
         assert sub.file_url == "s3://bucket/homework/file.py"
         assert sub.file_type == "text/x-python"
         assert sub.original_filename is None
-        assert sub.task_hint_id is None
-        assert sub.matched_task_id is None
         assert sub.safety_result is None
         assert sub.review_result is None
         assert sub.review_markdown is None
@@ -44,21 +44,21 @@ class TestHomeworkSubmissionModel:
 
     def test_create_with_all_fields(self) -> None:
         """HomeworkSubmission with all optional fields populated."""
-        task_hint = _uuid7()
+        authored_document = _uuid7()
         webhook = "https://example.com/webhook"
         sub = HomeworkSubmission(
             tenant_id=_uuid7(),
             student_id=_uuid7(),
             course_node_id=_uuid7(),
             node_id=_uuid7(),
+            authored_document_id=authored_document,
             file_url="s3://bucket/homework/archive.zip",
             file_type="application/zip",
             original_filename="homework-1.zip",
-            task_hint_id=task_hint,
             webhook_url=webhook,
         )
         assert sub.original_filename == "homework-1.zip"
-        assert sub.task_hint_id == task_hint
+        assert sub.authored_document_id == authored_document
         assert sub.webhook_url == webhook
 
     def test_jsonb_fields_round_trip(self) -> None:
@@ -70,6 +70,7 @@ class TestHomeworkSubmissionModel:
             student_id=_uuid7(),
             course_node_id=_uuid7(),
             node_id=_uuid7(),
+            authored_document_id=_uuid7(),
             file_url="s3://bucket/file.py",
             file_type="text/x-python",
             safety_result=safety,
@@ -107,6 +108,7 @@ class TestHomeworkSubmissionModel:
             student_id=sid,
             course_node_id=_uuid7(),
             node_id=_uuid7(),
+            authored_document_id=_uuid7(),
             file_url="s3://bucket/file.py",
             file_type="text/x-python",
             status="received",
@@ -148,13 +150,12 @@ class TestHomeworkSubmissionForeignKeys:
         assert fk.target_fullname == "course_nodes.id"
         assert fk.ondelete == "CASCADE"
 
-    def test_matched_task_id_no_fk_post_c9_4(self) -> None:
-        """matched_task_id has no FK post-C9.4 (orphan column per DD-2.1-AG)."""
-        col = HomeworkSubmission.__table__.c.matched_task_id
-        assert not col.foreign_keys, (
-            "matched_task_id FK to structure_nodes_editable dropped in C9.4 "
-            "with the table; column retained per DD-2.1-AG for Phase 4 reroute."
-        )
+    def test_authored_document_id_fk(self) -> None:
+        """authored_document_id FK points to authored_documents.id with RESTRICT."""
+        col = HomeworkSubmission.__table__.c.authored_document_id
+        fk = next(iter(col.foreign_keys))
+        assert fk.target_fullname == "authored_documents.id"
+        assert fk.ondelete == "RESTRICT"
 
     def test_job_id_fk(self) -> None:
         """job_id FK with SET NULL."""
@@ -163,10 +164,10 @@ class TestHomeworkSubmissionForeignKeys:
         assert fk.target_fullname == "jobs.id"
         assert fk.ondelete == "SET NULL"
 
-    def test_matched_task_id_nullable(self) -> None:
-        """matched_task_id is nullable."""
-        col = HomeworkSubmission.__table__.c.matched_task_id
-        assert col.nullable is True
+    def test_authored_document_id_not_nullable(self) -> None:
+        """authored_document_id is the required anchor (NOT NULL)."""
+        col = HomeworkSubmission.__table__.c.authored_document_id
+        assert col.nullable is False
 
     def test_job_id_nullable(self) -> None:
         """job_id is nullable."""
@@ -184,7 +185,7 @@ class TestHomeworkSubmissionIndexes:
             "student_id",
             "course_node_id",
             "node_id",
-            "matched_task_id",
+            "authored_document_id",
             "status",
             "job_id",
         ],
@@ -218,6 +219,11 @@ class TestHomeworkSubmissionRelationships:
         """node relationship to CourseNode."""
         rel = HomeworkSubmission.__mapper__.relationships["node"]
         assert rel.mapper.class_ is CourseNode
+
+    def test_authored_document_relationship(self) -> None:
+        """authored_document relationship to AuthoredDocument (the task anchor)."""
+        rel = HomeworkSubmission.__mapper__.relationships["authored_document"]
+        assert rel.mapper.class_ is AuthoredDocument
 
     def test_job_relationship(self) -> None:
         """job relationship to Job."""

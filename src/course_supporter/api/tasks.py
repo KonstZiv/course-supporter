@@ -387,10 +387,10 @@ async def arq_process_homework(
     """ARQ task: process a homework submission.
 
     Orchestrates the full homework pipeline:
-    safety check → task matching → Mentor review → webhook delivery.
+    safety check → review (T6 stub) → webhook delivery.
 
     Args:
-        ctx: ARQ worker context (session_factory, model_router, s3_client).
+        ctx: ARQ worker context (session_factory, stage_router, s3_client).
         job_id: Job UUID as string.
         submission_id: HomeworkSubmission UUID as string.
     """
@@ -421,7 +421,6 @@ async def arq_process_homework(
     from course_supporter.llm.stage_router import StageRouter
 
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
-    model_router: ModelRouter = ctx["model_router"]
     stage_router: StageRouter = ctx["stage_router"]
     s3 = ctx["s3_client"]
 
@@ -477,7 +476,7 @@ async def arq_process_homework(
             file_path = await s3.download_file(s3_key)
             log.info("homework_file_downloaded", path=str(file_path))
             try:
-                # Build course context for safety + matching
+                # Build course context for the safety check
                 course_node = await node_repo.get_by_id(submission.course_node_id)
                 target_node = await node_repo.get_by_id(submission.node_id)
 
@@ -602,64 +601,37 @@ async def arq_process_homework(
                     )
                     return
 
-                # --- HW-006: Mentor review ---
-                # HW-005 task matching block + HW-007a matched-notification
-                # webhook removed in C9.3 (DD-2.1-AG). Phase 5 editable storage
-                # ORM dropped; reroute on NodeSummaryFinal deferred to Phase 4.
-                # ORM columns submission.task_hint_id + submission.matched_task_id
-                # become orphan (writer dies, reader webhook payload always None);
-                # drop_column deferred to natural cleanup cycle.
+                # --- review stage — T6 STUB ---
+                # The old two-step MentorAgent was removed in sprint-mentor
+                # T1 (green-field rewrite, vision D12). The three-layer
+                # Mentor review graph (vision §"Mentor review як граф")
+                # replaces this placeholder in sprint-mentor T6.
+                #
+                # Until then the stage records a marked placeholder so the
+                # pipeline stays end-to-end testable: review_result is
+                # non-NULL, so the downstream reviewed webhook still builds
+                # (with default summary fields). task matching was already
+                # dropped in C9.3 — submission is anchored to its task, no
+                # search needed (KD15, sanity replaces match in T7).
                 await hw_repo.update_status(sid, "reviewing")
                 await session.commit()
 
-                from course_supporter.homework.mentor import MentorAgent
-                from course_supporter.homework.mentor_context import (
-                    build_mentor_context,
-                )
-
-                mentor_ctx = await build_mentor_context(
-                    submission_content=content,
-                    submission=submission,
-                    session=session,
-                )
-                mentor = MentorAgent()
-                review = await mentor.review(mentor_ctx, model_router)
-
+                # TODO(sprint-mentor T6): replace with the real review graph.
+                placeholder_review = {
+                    "_stub": "sprint-mentor-T6",
+                    "note": (
+                        "Mentor review not yet implemented — three-layer "
+                        "graph lands in sprint-mentor T6."
+                    ),
+                }
                 await hw_repo.store_review_result(
                     sid,
-                    result=review.model_dump(mode="json"),
-                    review_markdown=review.review_text,
-                )
-                # Update submission language + student preference
-                from sqlalchemy import update as sa_update
-
-                from course_supporter.storage.orm import (
-                    HomeworkSubmission as HWModel,
-                )
-                from course_supporter.storage.orm import (
-                    Student as StudentModel,
-                )
-
-                await session.execute(
-                    sa_update(HWModel)
-                    .where(HWModel.id == sid)
-                    .values(response_language=review.response_language)
-                )
-                await session.execute(
-                    sa_update(StudentModel)
-                    .where(StudentModel.id == submission.student_id)
-                    .values(preferred_language=review.response_language)
+                    result=placeholder_review,
+                    review_markdown="_Review pending (sprint-mentor T6)._",
                 )
                 await session.commit()
 
-                log.info(
-                    "homework_reviewed",
-                    passed=review.analysis.passed,
-                    score=review.analysis.score,
-                    language=review.response_language,
-                    issues=len(review.analysis.issues),
-                    notable=len(review.analysis.notable_solutions),
-                )
+                log.info("homework_review_stubbed", stub="sprint-mentor-T6")
 
                 # --- HW-007b: Webhook — reviewed notification ---
                 await hw_repo.update_status(sid, "completed")

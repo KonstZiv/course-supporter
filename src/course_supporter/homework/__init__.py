@@ -1,1 +1,1 @@
-"""Homework processing modules (matching, review)."""
+"""Homework processing modules (review)."""

@@ -151,6 +151,7 @@ def _submit_form(
     content_type: str = "text/x-python",
     student_external_id: str = "ext-student-1",
     webhook_url: str | None = None,
+    student_note: str | None = None,
 ) -> dict[str, object]:
     """Build form data + files for submit_homework."""
     data: dict[str, object] = {
@@ -161,6 +162,8 @@ def _submit_form(
     }
     if webhook_url is not None:
         data["webhook_url"] = webhook_url
+    if student_note is not None:
+        data["student_note"] = student_note
     return data
 
 
@@ -236,6 +239,65 @@ class TestSubmitHomework:
         assert data["student_id"] == str(student.id)
         assert data["status"] == "received"
         assert data["job_id"] == str(job.id)
+
+    async def test_student_note_threaded_to_create(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> None:
+        """D7-local student_note flows from the form into repo.create (KD15)."""
+        student = _mock_student()
+        submission = _mock_submission(student_id=student.id)
+        job = _mock_job()
+
+        def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
+            if requested_id == course_node_id:
+                return _mock_node(node_id=course_node_id)
+            if requested_id == node_id:
+                return _mock_node(node_id=node_id, parent_id=course_node_id)
+            return None
+
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", side_effect=get_node_by_id),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=course_node_id),
+            ),
+            patch.object(
+                StudentRepository, "get_or_create", return_value=(student, True)
+            ),
+            patch.object(HomeworkRepository, "find_duplicate", return_value=None),
+            patch.object(
+                HomeworkRepository, "create", return_value=submission
+            ) as mock_create,
+            patch.object(HomeworkRepository, "set_job_id", return_value=None),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(
+                    course_node_id=course_node_id,
+                    node_id=node_id,
+                    authored_document_id=authored_document_id,
+                    student_note="Я не певен щодо рекурсії — чи коректна база?",
+                ),
+                files={
+                    "file": (
+                        "solution.py",
+                        io.BytesIO(b"print('hello')"),
+                        "text/x-python",
+                    )
+                },
+            )
+
+        assert resp.status_code == 202
+        assert (
+            mock_create.call_args.kwargs["student_note"]
+            == "Я не певен щодо рекурсії — чи коректна база?"
+        )
 
     async def test_invalid_extension_returns_422(
         self,
@@ -553,3 +615,17 @@ class TestSubmitHomeworkOpenAPI:
             schema["paths"][path]["post"]["requestBody"]["content"].keys()
         )
         assert "multipart/form-data" in content_types
+
+    async def test_openapi_submit_form_exposes_student_note(
+        self, client: AsyncClient
+    ) -> None:
+        """The submission input contract surfaces student_note (D7-local, KD15)."""
+        resp = await client.get("/openapi.json")
+        schema = resp.json()
+        path = "/api/v1/homework/submit"
+        form = schema["paths"][path]["post"]["requestBody"]["content"][
+            "multipart/form-data"
+        ]["schema"]
+        body_model = form["$ref"].split("/")[-1]
+        props = schema["components"]["schemas"][body_model]["properties"]
+        assert "student_note" in props

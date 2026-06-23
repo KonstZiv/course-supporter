@@ -250,7 +250,7 @@ async def submit_homework(
         hw_repo = HomeworkRepository(session)
         existing = await hw_repo.find_duplicate(
             student_id=student.id,
-            node_id=node_id,
+            authored_document_id=authored_document_id,
             file_hash=file_hash,
         )
         if existing is not None:

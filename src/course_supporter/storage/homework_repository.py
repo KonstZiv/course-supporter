@@ -94,18 +94,21 @@ class HomeworkRepository:
         self,
         *,
         student_id: uuid.UUID,
-        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
         file_hash: str,
     ) -> HomeworkSubmission | None:
         """Find a completed submission with the same file hash.
 
-        Checks for an existing submission from the same student, for the
-        same course node, with an identical file hash that already has
-        a terminal result (completed or delivered).
+        Keyed on the task anchor: an existing submission from the same
+        student, for the same task (``authored_document_id``), with an
+        identical file hash that already has a terminal result (completed
+        or delivered). This catches a genuine re-submit of the same file
+        without constraining attempts — different file content for the
+        same task is a new attempt and is allowed (D2).
 
         Args:
             student_id: Student UUID.
-            node_id: Target course node UUID.
+            authored_document_id: Task anchor UUID (the AuthoredDocument).
             file_hash: SHA-256 hex digest to match.
 
         Returns:
@@ -115,7 +118,7 @@ class HomeworkRepository:
             select(HomeworkSubmission)
             .where(
                 HomeworkSubmission.student_id == student_id,
-                HomeworkSubmission.node_id == node_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
                 HomeworkSubmission.file_hash == file_hash,
                 HomeworkSubmission.status.in_({"completed", "delivered"}),
             )

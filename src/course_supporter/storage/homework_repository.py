@@ -46,10 +46,10 @@ class HomeworkRepository:
         student_id: uuid.UUID,
         course_node_id: uuid.UUID,
         node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
         file_url: str,
         file_type: str,
         original_filename: str | None = None,
-        task_hint_id: uuid.UUID | None = None,
         webhook_url: str | None = None,
         file_hash: str | None = None,
         response_language: str | None = None,
@@ -61,10 +61,11 @@ class HomeworkRepository:
             student_id: FK to the student record.
             course_node_id: Root CourseNode (the course).
             node_id: Specific course node the submission targets.
+            authored_document_id: FK to the AuthoredDocument (task) the
+                submission answers — the single submission↔task anchor (KD15).
             file_url: S3/B2 path to the uploaded file.
             file_type: MIME type of the uploaded file.
             original_filename: Original filename from the upload.
-            task_hint_id: Optional task ID hint from the caller.
             webhook_url: Per-submission webhook URL override.
             file_hash: SHA-256 hex digest of the uploaded file.
             response_language: Requested ISO 639-1 language for review.
@@ -77,10 +78,10 @@ class HomeworkRepository:
             student_id=student_id,
             course_node_id=course_node_id,
             node_id=node_id,
+            authored_document_id=authored_document_id,
             file_url=file_url,
             file_type=file_type,
             original_filename=original_filename,
-            task_hint_id=task_hint_id,
             webhook_url=webhook_url,
             file_hash=file_hash,
             response_language=response_language,

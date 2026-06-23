@@ -37,6 +37,8 @@ class TestHomeworkSubmissionModel:
         assert sub.safety_result is None
         assert sub.review_result is None
         assert sub.review_markdown is None
+        assert sub.score is None
+        assert sub.student_note is None
         assert sub.webhook_url is None
         assert sub.webhook_delivered_at is None
         assert sub.error_message is None
@@ -98,6 +100,27 @@ class TestHomeworkSubmissionModel:
         """status column default is 'received'."""
         col = HomeworkSubmission.__table__.c.status
         assert col.default.arg == "received"
+
+    def test_score_nullable(self) -> None:
+        """score (D1, final post-D10 grade) is nullable until reviewed."""
+        col = HomeworkSubmission.__table__.c.score
+        assert col.nullable is True
+
+    def test_student_note_nullable(self) -> None:
+        """student_note (D7-local) is a nullable free-text column."""
+        col = HomeworkSubmission.__table__.c.student_note
+        assert col.nullable is True
+
+    def test_score_range_check_constraint(self) -> None:
+        """ck_homework_score_range guards score to NULL or 0-100 (Q2)."""
+        from sqlalchemy import CheckConstraint
+
+        checks = {
+            c.name
+            for c in HomeworkSubmission.__table__.constraints
+            if isinstance(c, CheckConstraint)
+        }
+        assert "ck_homework_score_range" in checks
 
     def test_repr(self) -> None:
         """__repr__ includes id, status, and student_id."""

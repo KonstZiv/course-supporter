@@ -407,6 +407,12 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         comment="Assignment type when material is a concrete task "
         "(test/short_task/task/project). NULL for regular materials.",
     )
+    author_mentor_notes: Mapped[str | None] = mapped_column(
+        Text,
+        comment="D6: author notes that focus Mentor assessment at the task "
+        "level (free text); shifts emphasis on the node/course criteria "
+        "layers during review.",
+    )
     order: Mapped[int] = mapped_column(Integer, default=0)
 
     # ── Raw layer ──
@@ -1021,6 +1027,11 @@ class Student(SoftDeleteMixin, Base):
         String(10),
         comment="ISO 639-1 language code from last review (e.g. uk, en)",
     )
+    mentor_preferences: Mapped[str | None] = mapped_column(
+        Text,
+        comment="D7-global: student's standing preferences on review "
+        "style/limits (free text).",
+    )
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
@@ -1046,6 +1057,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
             "ix_homework_submissions_active",
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score BETWEEN 0 AND 100)",
+            name="ck_homework_score_range",
         ),
         {"comment": "Homework submissions from external systems for Mentor review"},
     )
@@ -1106,10 +1121,21 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     )
     review_result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
-        comment="Mentor review result (score, passed, feedback_sections)",
+        comment="Layered structured trace of the Mentor review (per-layer "
+        "judgments, aggregate + denoised scores, history reconciliation D10). "
+        "Exact internal form lands with the review graph in T6; the only key "
+        "pinned now is the webhook-facing ``verdict`` {passed, correctness} "
+        "read by build_reviewed_payload.",
     )
     review_markdown: Mapped[str | None] = mapped_column(
         Text, comment="Rendered Markdown of the Mentor review"
+    )
+    score: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Final (post-D10 denoising) review score 0-100 — the headline "
+        "grade delivered to the caller. D1 lifts it out of the review_result "
+        "JSONB into a typed column (KD15); review_result keeps the per-layer "
+        "and aggregate scores. Range enforced by ck_homework_score_range.",
     )
 
     # Webhook
@@ -1125,6 +1151,11 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     response_language: Mapped[str | None] = mapped_column(
         String(10),
         comment="ISO 639-1 language used for the review response",
+    )
+    student_note: Mapped[str | None] = mapped_column(
+        Text,
+        comment="D7-local: student's comment/question attached to this "
+        "submission (free text).",
     )
 
     # Error & tracking

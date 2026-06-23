@@ -7,9 +7,8 @@ safety classifier. The tests assert phrase variants -- not verbatim
 strings -- so the prompt remains editable for clarity without breaking
 the contract.
 
-Ladder regression guard ensures the new ``safety_check`` stage loads
-via the sealed 0.5 :func:`load_ladder_config` and the existing
-``mentor_example`` stage still loads alongside it.
+Ladder regression guard ensures the ``safety_check`` stage loads via
+the sealed 0.5 :func:`load_ladder_config`.
 """
 
 from __future__ import annotations
@@ -269,15 +268,3 @@ class TestSafetyCheckLadderLoads:
             "deepseek-v4-flash",
             "gemini-2.5-flash",
         ]
-
-
-class TestMentorExampleStillLoads:
-    """Regression guard: the existing example stage must continue
-    loading when the new ``safety_check`` stage is added to the same
-    file. Catches accidental YAML structural breakage."""
-
-    def test_present_with_two_entries(self) -> None:
-        cfg = load_ladder_config(_CONFIG_DIR)
-        stage = cfg.get_stage("mentor_example")
-        assert len(stage.ladder) == 2
-        assert stage.prompt_ref == "prompts/example/v1.md"

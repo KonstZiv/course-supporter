@@ -1,16 +1,9 @@
 # Mentor agent stage ladders (KD16).
 #
-# Phase 1+ tasks add real stages here as they rewrite Mentor /
-# sanity_check.
+# The real Mentor review stages (three-layer graph, config-driven per
+# vision D12) are added here in sprint-mentor T6. The old scaffold
+# stage was removed with the green-field cleanup (T1).
 stages:
-  mentor_example:
-    prompt_ref: "prompts/example/v1.md"
-    ladder:
-      - provider: deepseek
-        model: deepseek-chat
-      - provider: gemini
-        model: gemini-2.5-flash
-
   # Stage 2 LLM safety classifier per vision §KD14. Cheap binary
   # judgement on student submissions that already passed Stage 1
   # synchronous validation (size / magic / archive / unicode /

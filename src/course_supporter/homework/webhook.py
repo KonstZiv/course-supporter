@@ -45,17 +45,26 @@ def build_reviewed_payload(
     submission: HomeworkSubmission,
     student: Student,
 ) -> WebhookReviewedPayload:
-    """Build the 'reviewed' webhook payload from stored review result."""
+    """Build the 'reviewed' webhook payload from stored review data.
+
+    Per D1 (KD15) the headline ``score`` is read from its typed column, not
+    from ``review_result`` — re-reading it out of the JSONB would re-duplicate
+    it and reintroduce the sync drift KD15 warns against. ``passed`` and
+    ``correctness`` come from the caller-facing ``verdict`` block, the only
+    ``review_result`` key pinned in T3; its full layered shape lands with the
+    review graph in T6. Until the graph writes a real verdict (the T6 stub
+    does not), the reads degrade to safe defaults so the webhook still builds.
+    """
     review_result = submission.review_result or {}
-    analysis = review_result.get("analysis", {})
+    verdict = review_result.get("verdict", {})
 
     return WebhookReviewedPayload(
         submission_id=str(submission.id),
         student_external_id=student.external_id,
         review=ReviewSummary(
-            passed=analysis.get("passed", False),
-            score=analysis.get("score", 0),
-            correctness=analysis.get("correctness", "incorrect"),
+            passed=verdict.get("passed", False),
+            score=submission.score or 0,
+            correctness=verdict.get("correctness", "incorrect"),
             review_text=submission.review_markdown or "",
             response_language=submission.response_language or "en",
         ),

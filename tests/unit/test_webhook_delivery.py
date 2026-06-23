@@ -25,6 +25,7 @@ def _make_submission(
     review_result: dict | None = None,
     review_markdown: str | None = None,
     response_language: str | None = "uk",
+    score: int | None = None,
 ) -> MagicMock:
     sub = MagicMock()
     sub.id = uuid.uuid4()
@@ -34,6 +35,7 @@ def _make_submission(
     sub.review_result = review_result
     sub.review_markdown = review_markdown
     sub.response_language = response_language
+    sub.score = score
     return sub
 
 
@@ -50,10 +52,11 @@ def _make_tenant(webhook_url: str | None = None) -> MagicMock:
 
 
 def _sample_review_result() -> dict:
+    # T3 pins only the webhook-facing ``verdict`` key; score comes from the
+    # typed column (D1), not from review_result.
     return {
-        "analysis": {
+        "verdict": {
             "passed": True,
-            "score": 85,
             "correctness": "correct",
         },
     }
@@ -92,6 +95,7 @@ class TestBuildReviewedPayload:
             review_result=_sample_review_result(),
             review_markdown="Рішення правильне.",
             response_language="uk",
+            score=85,
         )
         student = _make_student()
 
@@ -104,11 +108,28 @@ class TestBuildReviewedPayload:
         assert payload.review.review_text == "Рішення правильне."
         assert payload.review.response_language == "uk"
 
+    def test_score_comes_from_column_not_jsonb(self) -> None:
+        """D1: headline score is the typed column, never re-read from JSONB."""
+        # A stray legacy score buried in review_result must be ignored.
+        sub = _make_submission(
+            review_result={
+                "verdict": {"passed": True, "correctness": "correct"},
+                "aggregate_score": 99,
+            },
+            score=72,
+        )
+        student = _make_student()
+
+        payload = build_reviewed_payload(sub, student)
+
+        assert payload.review.score == 72
+
     def test_defaults_for_missing_review(self) -> None:
         sub = _make_submission(
             review_result=None,
             review_markdown=None,
             response_language=None,
+            score=None,
         )
         student = _make_student()
 
@@ -116,6 +137,7 @@ class TestBuildReviewedPayload:
 
         assert payload.review.passed is False
         assert payload.review.score == 0
+        assert payload.review.correctness == "incorrect"
         assert payload.review.review_text == ""
         assert payload.review.response_language == "en"
 

@@ -33,6 +33,16 @@ class TestStudentModel:
         col = Student.__table__.c.external_id
         assert col.type.length == 200  # type: ignore[union-attr]
 
+    def test_mentor_preferences_default_none(self) -> None:
+        """mentor_preferences (D7-global) is None by default."""
+        student = Student(tenant_id=_uuid7(), external_id="ext-d7")
+        assert student.mentor_preferences is None
+
+    def test_mentor_preferences_nullable(self) -> None:
+        """mentor_preferences is a nullable free-text column (D7-global)."""
+        col = Student.__table__.c.mentor_preferences
+        assert col.nullable is True
+
     def test_repr(self) -> None:
         """__repr__ includes id, tenant_id, and external_id."""
         sid = _uuid7()

@@ -37,6 +37,7 @@ class TestAuthoredDocumentModel:
         assert entry.job_id is None
         assert entry.pending_since is None
         assert entry.error_message is None
+        assert entry.author_mentor_notes is None
 
     def test_create_with_raw_layer(self) -> None:
         """AuthoredDocument with raw layer populated (file upload)."""
@@ -103,6 +104,11 @@ class TestAuthoredDocumentModel:
         """source_type uses source_type_enum."""
         col = AuthoredDocument.__table__.c.source_type
         assert col.type.name == "source_type_enum"  # type: ignore[union-attr]
+
+    def test_author_mentor_notes_nullable(self) -> None:
+        """author_mentor_notes (D6) is a nullable free-text column."""
+        col = AuthoredDocument.__table__.c.author_mentor_notes
+        assert col.nullable is True
 
 
 class TestAuthoredDocumentForeignKeys:

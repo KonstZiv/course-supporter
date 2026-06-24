@@ -1,0 +1,22 @@
+# Sanity gate tuning (sprint-mentor T7, KD15 §1336-1339 / KD16 §1452).
+#
+# The sanity stage is a cheap binary classifier that asks "does this submission
+# look like an attempt at the declared task?" and emits {verdict, confidence,
+# reason}. Its purpose is economy — skip the expensive three-phase review graph
+# (T6) on obvious garbage — NOT task matching (the submission is already
+# anchored to its task via authored_document_id; TaskMatcher was dropped).
+#
+# Gate policy (ratified A3-conservative): ONLY a high-confidence mismatch is
+# terminal (status `mismatch`, graph not run, mismatch webhook). Match OR a
+# low-confidence mismatch passes through to the full review unchanged — no
+# signal is injected into the graph context. The fairness rationale: the cheap
+# model confidently catches gross garbage (where the economy is real), while
+# the unfair-rejection risk lives in ambiguous-but-valid atypical work, which
+# this rule routes into a full review.
+#
+# confidence_threshold — the floor a `mismatch` verdict's confidence must reach
+# to gate. Conservative on purpose (gate only clearly-off-task submissions);
+# calibrated on the T6/T7 live-acceptance pass and early prod traffic. Lower it
+# only if telemetry shows garbage slipping into review; raise it if valid work
+# is being rejected. Deploy-reload (D12 / KD16), like the review-graph config.
+confidence_threshold: 0.85

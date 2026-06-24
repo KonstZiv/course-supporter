@@ -980,14 +980,22 @@ class ExternalServiceCall(Base):
 
 
 class HomeworkStatus(StrEnum):
-    """Homework submission lifecycle states."""
+    """Homework submission lifecycle states (KD15 §1298).
+
+    Milestones reached on the safety → sanity → review → delivery pipeline.
+    sprint-mentor T7 reconciled this to the canon vocabulary: the in-progress
+    ``safety_check`` became the ``safety_ok`` milestone, and ``sanity_ok`` /
+    ``mismatch`` were added for the sanity gate.
+    """
 
     RECEIVED = "received"
-    SAFETY_CHECK = "safety_check"
+    SAFETY_OK = "safety_ok"
+    SANITY_OK = "sanity_ok"
     REVIEWING = "reviewing"
     COMPLETED = "completed"
     DELIVERED = "delivered"
     REJECTED = "rejected"
+    MISMATCH = "mismatch"
     FAILED = "failed"
 
 
@@ -1111,8 +1119,9 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         String(30),
         default="received",
         index=True,
-        comment="Lifecycle: received → safety_check → reviewing "
-        "→ completed → delivered | rejected | failed",
+        comment="Lifecycle milestone (KD15 §1298): received → safety_ok → "
+        "sanity_ok → reviewing → completed → delivered; terminals "
+        "rejected (safety) | mismatch (sanity) | failed (error).",
     )
 
     # Results (JSONB)

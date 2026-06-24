@@ -291,9 +291,21 @@ class TestHomeworkStatusEnum:
                 )
 
     def test_terminal_states(self) -> None:
-        """delivered and rejected are terminal (no outgoing transitions)."""
+        """delivered, rejected, and mismatch are terminal (no outgoing)."""
         assert HOMEWORK_TRANSITIONS["delivered"] == set()
         assert HOMEWORK_TRANSITIONS["rejected"] == set()
+        assert HOMEWORK_TRANSITIONS["mismatch"] == set()
+
+    def test_pipeline_milestones_chain(self) -> None:
+        """The happy-path pipeline chains safety_ok → sanity_ok → reviewing."""
+        assert "safety_ok" in HOMEWORK_TRANSITIONS["received"]
+        assert "sanity_ok" in HOMEWORK_TRANSITIONS["safety_ok"]
+        assert "reviewing" in HOMEWORK_TRANSITIONS["sanity_ok"]
+
+    def test_gate_terminals_reachable(self) -> None:
+        """Safety rejects from received; sanity mismatches from safety_ok."""
+        assert "rejected" in HOMEWORK_TRANSITIONS["received"]
+        assert "mismatch" in HOMEWORK_TRANSITIONS["safety_ok"]
 
     def test_failed_can_retry(self) -> None:
         """failed can transition back to received (retry)."""
@@ -304,6 +316,7 @@ class TestHomeworkStatusEnum:
         excluded = {
             HomeworkStatus.DELIVERED.value,
             HomeworkStatus.REJECTED.value,
+            HomeworkStatus.MISMATCH.value,
             HomeworkStatus.FAILED.value,
         }
         non_terminal = {s.value for s in HomeworkStatus if s.value not in excluded}

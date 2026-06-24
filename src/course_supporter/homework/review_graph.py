@@ -52,6 +52,7 @@ from course_supporter.homework.review_scoring import (
     build_score_signals,
     derive_verdict,
 )
+from course_supporter.homework.task_context import load_task_context
 from course_supporter.models.mentor_review import (
     HistoryReconciliation,
     Layer,
@@ -61,8 +62,6 @@ from course_supporter.models.mentor_review import (
 )
 from course_supporter.storage.orm import (
     AuthoredDocument,
-    DocumentSegment,
-    DocumentSummary,
     NodeSummaryFinal,
 )
 
@@ -292,31 +291,8 @@ class MentorReviewService:
     async def _load_task_context(
         self, authored_document_id: uuid.UUID
     ) -> tuple[str, str, str]:
-        """Task title/description/text from the active ready DocumentSummary.
-
-        Empty strings when the task is not ingested yet (degrade — the graph
-        still runs with minimal grounding, never hard-fails).
-        """
-        stmt = select(DocumentSummary).where(
-            DocumentSummary.authored_document_id == authored_document_id,
-            DocumentSummary.deleted_at.is_(None),
-            DocumentSummary.status == "ready",
-        )
-        result = await self._session.execute(stmt)
-        summary = result.scalar_one_or_none()
-        if summary is None:
-            return "", "", ""
-        text_stmt = (
-            select(DocumentSegment.content)
-            .where(
-                DocumentSegment.document_summary_id == summary.id,
-                DocumentSegment.deleted_at.is_(None),
-            )
-            .order_by(DocumentSegment.order)
-        )
-        text_result = await self._session.execute(text_stmt)
-        task_text = "\n\n".join(c for c in text_result.scalars().all() if c)
-        return summary.title or "", summary.description or "", task_text
+        """Task title/description/text (shared loader — see task_context.py)."""
+        return await load_task_context(self._session, authored_document_id)
 
     async def _history(self, submission: HomeworkSubmission) -> list[dict[str, Any]]:
         """Compact projection of the student's prior reviewed attempts (D10).

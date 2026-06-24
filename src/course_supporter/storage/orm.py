@@ -1119,6 +1119,14 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     safety_result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="Safety check result (safe, reason, flags)"
     )
+    sanity_result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Sanity gate result (sprint-mentor T7, KD15): "
+        "{verdict, confidence, reason} — does the submission look like an "
+        "attempt at the declared task? A high-confidence mismatch terminates "
+        "the pipeline before the (expensive) review graph; match or a "
+        "low-confidence mismatch passes through to review unchanged.",
+    )
     review_result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
         comment="Layered structured trace of the Mentor review (per-layer "

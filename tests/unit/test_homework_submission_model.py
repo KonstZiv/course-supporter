@@ -66,6 +66,7 @@ class TestHomeworkSubmissionModel:
     def test_jsonb_fields_round_trip(self) -> None:
         """JSONB result fields accept and return dicts."""
         safety = {"safe": True, "flags": []}
+        sanity = {"verdict": "match", "confidence": 0.92, "reason": "on task"}
         review = {"score": 85, "passed": True, "sections": ["good"]}
         sub = HomeworkSubmission(
             tenant_id=_uuid7(),
@@ -76,10 +77,25 @@ class TestHomeworkSubmissionModel:
             file_url="s3://bucket/file.py",
             file_type="text/x-python",
             safety_result=safety,
+            sanity_result=sanity,
             review_result=review,
         )
         assert sub.safety_result == safety
+        assert sub.sanity_result == sanity
         assert sub.review_result == review
+
+    def test_sanity_result_nullable(self) -> None:
+        """sanity_result (T7 gate verdict) is None until the sanity stage runs."""
+        sub = HomeworkSubmission(
+            tenant_id=_uuid7(),
+            student_id=_uuid7(),
+            course_node_id=_uuid7(),
+            node_id=_uuid7(),
+            authored_document_id=_uuid7(),
+            file_url="s3://bucket/file.py",
+            file_type="text/x-python",
+        )
+        assert sub.sanity_result is None
 
     def test_file_url_max_length(self) -> None:
         """file_url column accepts up to 2000 chars."""

@@ -250,6 +250,27 @@ class HomeworkRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def store_sanity_result(
+        self,
+        submission_id: uuid.UUID,
+        result: dict[str, Any],
+    ) -> None:
+        """Store the sanity gate result (sprint-mentor T7, KD15).
+
+        Mirrors :meth:`store_safety_result` — a single-column UPDATE of the
+        ``sanity_result`` JSONB ({verdict, confidence, reason}). Decoupled from
+        the status transition so the result is persisted before the gate
+        decision is acted on (the worker stores, then routes to ``mismatch``
+        or ``sanity_ok``).
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(sanity_result=result)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def store_review_result(
         self,
         submission_id: uuid.UUID,

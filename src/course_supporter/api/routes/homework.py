@@ -33,6 +33,9 @@ from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.document_summary_repository import (
+    DocumentSummaryRepository,
+)
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 from course_supporter.storage.student_repository import StudentRepository
@@ -204,6 +207,22 @@ async def submit_homework(
             status_code=422,
             detail="authored_document_id must reference a task "
             "(an AuthoredDocument with task_type set).",
+        )
+
+    # --- Readiness gate (KD15 §1319): the task must be ready (its
+    # DocumentSummary formed) before it accepts submissions. ---
+    # A submission against an un-ingested task would reach the review graph with
+    # empty grounding (degraded criteria + context), producing a low-quality
+    # review; reject early and cleanly instead. 409 Conflict, not 404 — the task
+    # exists, it is just not ready yet. The graph's degrade-tolerance stays as
+    # defense-in-depth, not the primary gate.
+    summary_repo = DocumentSummaryRepository(session)
+    summary = await summary_repo.get_by_authored_document_id(authored_document_id)
+    if summary is None or summary.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="Task is not ready for submissions yet "
+            "(its summary has not been generated).",
         )
 
     # --- Upload file to S3 (streaming SHA-256) ---

@@ -394,6 +394,9 @@ async def arq_process_homework(
         job_id: Job UUID as string.
         submission_id: HomeworkSubmission UUID as string.
     """
+    from course_supporter.homework.review_graph import (
+        build_mentor_review_service,
+    )
     from course_supporter.homework.webhook import (
         build_reviewed_payload,
         deliver_webhook,
@@ -601,37 +604,38 @@ async def arq_process_homework(
                     )
                     return
 
-                # --- review stage — T6 STUB ---
-                # The old two-step MentorAgent was removed in sprint-mentor
-                # T1 (green-field rewrite, vision D12). The three-layer
-                # Mentor review graph (vision §"Mentor review як граф")
-                # replaces this placeholder in sprint-mentor T6.
-                #
-                # Until then the stage records a marked placeholder so the
-                # pipeline stays end-to-end testable: review_result is
-                # non-NULL, so the downstream reviewed webhook still builds
-                # (with default summary fields). task matching was already
-                # dropped in C9.3 — submission is anchored to its task, no
-                # search needed (KD15, sanity replaces match in T7).
+                # --- review stage — Mentor review graph (sprint-mentor T6) ---
+                # The three-layer graph (vision §"Mentor review як граф",
+                # D8-D12) judges the submission on the node/course/industry
+                # layers, aggregates + denoises against the student's history,
+                # and synthesises one human review. Task matching was dropped
+                # in C9.3 — the submission is anchored to its task (KD15);
+                # sanity replaces match in T7.
                 await hw_repo.update_status(sid, "reviewing")
                 await session.commit()
 
-                # TODO(sprint-mentor T6): replace with the real review graph.
-                placeholder_review = {
-                    "_stub": "sprint-mentor-T6",
-                    "note": (
-                        "Mentor review not yet implemented — three-layer "
-                        "graph lands in sprint-mentor T6."
-                    ),
-                }
+                # Refresh so the graph reads fresh attributes after the safety
+                # commits expired the in-memory submission.
+                await session.refresh(submission)
+                review_service = build_mentor_review_service(session, stage_router)
+                review_output = await review_service.review(
+                    submission=submission,
+                    submission_text=submission_text,
+                )
                 await hw_repo.store_review_result(
                     sid,
-                    result=placeholder_review,
-                    review_markdown="_Review pending (sprint-mentor T6)._",
+                    result=review_output.review_result.model_dump(mode="json"),
+                    review_markdown=review_output.review_markdown,
+                    score=review_output.score,
                 )
                 await session.commit()
 
-                log.info("homework_review_stubbed", stub="sprint-mentor-T6")
+                log.info(
+                    "homework_review_complete",
+                    score=review_output.score,
+                    passed=review_output.review_result.verdict.passed,
+                    correctness=review_output.review_result.verdict.correctness,
+                )
 
                 # --- HW-007b: Webhook — reviewed notification ---
                 await hw_repo.update_status(sid, "completed")

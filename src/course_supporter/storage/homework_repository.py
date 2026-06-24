@@ -256,12 +256,25 @@ class HomeworkRepository:
         *,
         result: dict[str, Any],
         review_markdown: str,
+        score: int | None = None,
     ) -> None:
-        """Store Mentor review result and rendered Markdown."""
+        """Store Mentor review result, rendered Markdown, and the score.
+
+        The score is written in the SAME UPDATE as ``review_result`` so the
+        typed ``score`` column and the ``denoised_score`` inside the JSONB
+        never drift (D1 / KD15). ``score`` defaults to ``None`` (left
+        unchanged) for the placeholder path; the T6 graph always passes it.
+        """
+        values: dict[str, Any] = {
+            "review_result": result,
+            "review_markdown": review_markdown,
+        }
+        if score is not None:
+            values["score"] = score
         stmt = (
             update(HomeworkSubmission)
             .where(HomeworkSubmission.id == submission_id)
-            .values(review_result=result, review_markdown=review_markdown)
+            .values(**values)
         )
         await self._session.execute(stmt)
         await self._session.flush()

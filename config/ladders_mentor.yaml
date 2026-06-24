@@ -89,3 +89,81 @@ stages:
       - provider: deepseek
         model: deepseek-v4-flash
         max_output_tokens: 8192
+
+  # ── Mentor review graph (sprint-mentor T6, vision §1369-1400 / D8-D12) ──
+  # Three-phase review inside stage `review`. Ladders calibrated by reasoning
+  # analogy (like criteria_decomposition — no pre-spike); quality of layered
+  # judgement is an operator-gated LIVE acceptance gate, and ladder tuning is a
+  # config lever for any layer-collapse seen on real homework.
+
+  # Phase 1A — node + course layers (D8). Rubric application grounded in the
+  # node/course NodeSummaryFinal + the cached criteria. DEEP reasoning tier
+  # (the heaviest judgement: apply two rubrics against an untrusted submission),
+  # mirroring criteria_decomposition. structured_output only; the input is one
+  # submission + summaries, not a subtree, so no long_context requirement.
+  mentor_layered_evaluation_node_course:
+    prompt_ref: "prompts/mentor_layered_evaluation_node_course/v1.md"
+    requires: [structured_output]
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 8192
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192
+
+  # Phase 1B — industry layer (D8, autonomous). Same DEEP tier as 1A: an
+  # independent professional judgement, deliberately course-free (the prompt
+  # gets only the task + submission), so it is a separate stage to keep the
+  # layer un-anchored from the course rubric (decision 1, anti-anchoring).
+  mentor_layered_evaluation_industry:
+    prompt_ref: "prompts/mentor_layered_evaluation_industry/v1.md"
+    requires: [structured_output]
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 8192
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192
+
+  # Phase 3 — denoising (D10): semantic recidivism/correction matching against
+  # history + a bounded delta. MEDIUM tier — comparison, lighter than the
+  # layered judgement. structured_output (strict JSON outcome).
+  mentor_denoising:
+    prompt_ref: "prompts/mentor_denoising/v1.md"
+    requires: [structured_output]
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-pro
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192
+
+  # Synthesis — the single human review (review_markdown). MEDIUM strong-
+  # generation tier; this is writing quality, not reasoning depth. Plain
+  # Markdown output, so `requires: []` (no structured_output) — mirrors the
+  # pass_2c denoise text stages.
+  mentor_synthesis:
+    prompt_ref: "prompts/mentor_synthesis/v1.md"
+    requires: []
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-pro
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192

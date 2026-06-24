@@ -50,6 +50,12 @@ class TestAggregate:
         layers = [_layer("node", 100), _layer("course", 100), _layer("industry", 100)]
         assert aggregate_score(layers, _WEIGHTS) == 100
 
+    def test_half_boundary_rounds_up_not_to_even(self) -> None:
+        # 0.5*51 + 0.3*50 + 0.2*50 = 25.5 + 15 + 10 = 50.5 -> 51 (half UP),
+        # not 50 (round-half-to-even). Grades round up on a .5 boundary.
+        layers = [_layer("node", 51), _layer("course", 50), _layer("industry", 50)]
+        assert aggregate_score(layers, _WEIGHTS) == 51
+
 
 class TestDenoise:
     def test_positive_delta_within_cap(self) -> None:
@@ -114,6 +120,20 @@ class TestScoreSignals:
         assert len(signals) == 1
         assert signals[0].direction == "down"
         assert signals[0].magnitude == 10  # 0.5 * |30-50| = 10
+
+    def test_half_boundary_magnitude_rounds_up(self) -> None:
+        # node 51: 0.5 * (51-50) = 0.5 -> magnitude 1 (half UP), so the signal
+        # is kept rather than rounded to 0 and silently dropped.
+        layers = [_layer("node", 51), _layer("course", 50), _layer("industry", 50)]
+        signals = build_score_signals(
+            layers,
+            layer_rationales={"node": "edge"},
+            denoise_delta=0,
+            history_reason="",
+        )
+        assert len(signals) == 1
+        assert signals[0].layer == "node"
+        assert signals[0].magnitude == 1
 
     def test_neutral_layers_produce_no_signal(self) -> None:
         layers = [_layer("node", 50), _layer("course", 50), _layer("industry", 50)]

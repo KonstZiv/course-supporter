@@ -21,6 +21,8 @@ All functions are pure (no DB, no LLM) and unit-tested in isolation.
 
 from __future__ import annotations
 
+import math
+
 from course_supporter.homework.review_config import (
     LayerWeights,
     VerdictThresholds,
@@ -45,6 +47,18 @@ def _clamp_score(value: int) -> int:
     return max(0, min(100, value))
 
 
+def _round_half_up(value: float) -> int:
+    """Round a non-negative score half UP, not banker's-rounding to even.
+
+    ``round()`` is round-half-to-even (``round(50.5) == 50``), which students
+    perceive as unfair on a ``.5`` boundary — a grade should round up. The
+    weighted aggregate over integer scores lands on exact ``.5`` boundaries
+    (weights are tenths), so this matters; ``floor(x + 0.5)`` is exact there
+    (``.5`` is representable) and applies to non-negative scores/magnitudes.
+    """
+    return math.floor(value + 0.5)
+
+
 def _weight_for(layer: LayerName, weights: LayerWeights) -> float:
     return {
         "node": weights.node,
@@ -61,7 +75,7 @@ def aggregate_score(layers: list[Layer], weights: LayerWeights) -> int:
     rounded and clamped to ``0..100``.
     """
     total = sum(_weight_for(layer.layer, weights) * layer.score for layer in layers)
-    return _clamp_score(round(total))
+    return _clamp_score(_round_half_up(total))
 
 
 def apply_denoise(aggregate: int, delta: int, cap: int) -> int:
@@ -113,7 +127,7 @@ def build_score_signals(
     signals: list[ScoreSignal] = []
     for layer in layers:
         contribution = layer.weight * (layer.score - _NEUTRAL_SCORE)
-        magnitude = round(abs(contribution))
+        magnitude = _round_half_up(abs(contribution))
         if magnitude < 1:
             continue
         signals.append(

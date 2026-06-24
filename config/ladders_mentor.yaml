@@ -56,3 +56,36 @@ stages:
         model: deepseek-v4-flash
       - provider: gemini
         model: gemini-2.5-flash
+
+  # ── criteria_decomposition (sprint-mentor T4, vision §1386 / D11) ──
+  # Decomposes a task AuthoredDocument into the checkable review criteria
+  # the Mentor graph (T6) scores against. Computed ONCE per task version
+  # and cached (TaskCriteria) — a correctness/fairness guarantee, not an
+  # optimisation: the step is non-deterministic, so without the cache two
+  # attempts at the same task would be graded against different criteria.
+  #
+  # Model pick: a structured reasoning task over one task document
+  # (decompose requirements → atomic criteria), NOT a cheap binary
+  # classifier like safety_check. The reasoning tier mirrors the
+  # methodist stages (the closest comparable synthesis workload). Cost is
+  # amortised across every attempt at the task (cache hit ⇒ zero further
+  # LLM calls), so a capable primary is justified; deepseek-v4-flash is a
+  # competent cheap floor. ``requires: [structured_output]`` only —
+  # ``long_context`` is deliberately NOT required: the input is a single
+  # task document, not a subtree (the methodist_topdown rationale), so
+  # requiring it would falsely exclude legitimate rungs. No
+  # ``input_budget_ratio``: a per-task one-shot does not need the
+  # per-rung budget-skip machinery the per-subtree methodist passes do.
+  criteria_decomposition:
+    prompt_ref: "prompts/criteria_decomposition/v1.md"
+    requires: [structured_output]
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 8192
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192

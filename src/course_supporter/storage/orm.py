@@ -1567,6 +1567,112 @@ class NodeSummaryFinalPreviousSnapshot(SoftDeleteMixin, Base):
     )
 
 
+class TaskCriteria(SoftDeleteMixin, Base):
+    """Cached decomposition of a task into checkable criteria (vision §1386, D11).
+
+    1:1 (active) with a task ``AuthoredDocument`` — one ACTIVE row per
+    task (PARTIAL unique on ``authored_document_id`` WHERE
+    ``deleted_at IS NULL``). An LLM decomposition step derives the
+    checkable criteria once per task *version*; the Mentor review graph
+    (T6) then reuses them read-through so the per-submission review does
+    not re-derive them. The cache is a correctness/fairness guarantee,
+    NOT an optimisation: the decomposition is non-deterministic, so
+    without it two attempts at the same task would be graded against
+    different criteria.
+
+    Mirrors the ``NodeSummaryRaw`` cache apparatus (KD11). Two version
+    keys gate a reuse hit, BOTH must equal the current document:
+
+    * ``source_content_hash`` — content axis = ``AuthoredDocument
+      .content_hash`` at compute time (analogue of
+      ``NodeSummaryRaw.source_content_hash``).
+    * ``source_task_type`` — type axis = ``AuthoredDocument.task_type``
+      at compute time; the decomposition is task_type-aware (a test and
+      a project decompose differently), so re-typing the task
+      invalidates the cache alongside a content change.
+
+    A mismatch (re-ingest changed the content, or the author re-typed
+    the task) releases the old active row and inserts a fresh one — the
+    same release-old/insert-new reprocess discipline as
+    ``DocumentSummary`` (Task 3.2.6 Finding 2); soft-deleted history
+    coexists with the single active row.
+
+    MVP scope (sprint-mentor T4) is compute + cache + reuse only. The
+    author-editable slice of D11 (a Final-like editable layer with a
+    snapshot on re-version) is deferred — the author influences review
+    through ``author_mentor_notes`` (D6) until then. This table is the
+    Raw-equivalent only; no Final / Snapshot sibling exists yet.
+
+    Like ``NodeSummaryRaw`` / ``NodeSummaryFinal`` this is a LEAF of the
+    content_hash graph — derivative of the task, never a Merkle parent —
+    so it is excluded from every content_hash formula.
+    """
+
+    __tablename__ = "task_criteria"
+    __table_args__ = (
+        Index(
+            "ix_task_criteria_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Active-only 1:1 invariant: at most one criteria row per task among
+        # non-soft-deleted rows. A re-version soft-deletes the old row before
+        # inserting the new one (mirrors DocumentSummary, Task 3.2.6), so this
+        # partial-active unique holds while soft-deleted history coexists.
+        Index(
+            "uq_task_criteria_authored_document_id_active",
+            "authored_document_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "Cached task→criteria decomposition (vision §1386, D11) — "
+                "one ACTIVE row per task version; reused read-through by "
+                "the Mentor review graph (T6)"
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK to the task AuthoredDocument (active-only 1:1 invariant per "
+        "uq_task_criteria_authored_document_id_active). Hard-delete cascades "
+        "with the document; soft-delete cascades via "
+        "AuthoredDocument.__cascades_soft_delete_to__.",
+    )
+    criteria: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="The decomposition: list of checkable criteria, each "
+        "{statement, evidence}. Non-empty for a materialised row "
+        "(semantic minimum enforced at compute time).",
+    )
+    source_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="Content-axis version key = AuthoredDocument.content_hash at "
+        "compute time (mirrors NodeSummaryRaw.source_content_hash). A reuse "
+        "hit requires this to equal the document's current content_hash.",
+    )
+    source_task_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        comment="Type-axis version key = AuthoredDocument.task_type at compute "
+        "time. The decomposition is task_type-aware, so re-typing the task "
+        "invalidates the cache alongside a content change.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 # ──────────────────────────────────────────────
 # Cascade soft-delete topology (vision §3 KD3 + KD12)
 # ──────────────────────────────────────────────
@@ -1582,7 +1688,7 @@ CourseNode.__cascades_soft_delete_to__ = [
     NodeSummaryRaw,
     NodeSummaryFinal,
 ]
-AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary]
+AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary, TaskCriteria]
 DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
 # Phase 3.1 Q-C ratify (Option A — two-level): PreviousSnapshot cascades
 # from its parent NodeSummaryFinal, mirroring the AuthoredDocument →

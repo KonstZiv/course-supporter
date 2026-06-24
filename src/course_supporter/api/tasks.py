@@ -379,6 +379,40 @@ async def arq_ingest_material(
     log.info("ingestion_done")
 
 
+async def _notify_homework_failed(
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    *,
+    reason: str,
+) -> None:
+    """Best-effort 'failed' webhook (sprint-mentor T7).
+
+    Reloads the submission/student/tenant in the given (error-handling) session
+    and delivers a failed-event webhook. The caller wraps this so a webhook
+    error never masks the processing failure.
+    """
+    from course_supporter.homework.webhook import (
+        build_failed_payload,
+        deliver_webhook,
+        resolve_webhook_url,
+    )
+    from course_supporter.storage.homework_repository import HomeworkRepository
+    from course_supporter.storage.orm import Tenant
+    from course_supporter.storage.student_repository import StudentRepository
+
+    submission = await HomeworkRepository(session).get_by_id(submission_id)
+    if submission is None:
+        return
+    student = await StudentRepository(session).get_by_id(submission.student_id)
+    tenant = await session.get(Tenant, submission.tenant_id)
+    webhook_url = resolve_webhook_url(submission, tenant)
+    if not webhook_url or student is None:
+        return
+    payload = build_failed_payload(submission, student, reason=reason)
+    await deliver_webhook(url=webhook_url, payload=payload, session=session)
+    await session.commit()
+
+
 async def arq_process_homework(
     ctx: dict[str, Any],
     job_id: str,
@@ -386,8 +420,10 @@ async def arq_process_homework(
 ) -> None:
     """ARQ task: process a homework submission.
 
-    Orchestrates the full homework pipeline:
-    safety check → review (T6 stub) → webhook delivery.
+    Orchestrates the full homework pipeline (KD13 / KD15):
+    safety → sanity → review → delivery. Safety and the sanity gate both
+    short-circuit to a terminal (``rejected`` / ``mismatch``) + webhook; only
+    submissions that clear both reach the Mentor review graph (T6).
 
     Args:
         ctx: ARQ worker context (session_factory, stage_router, s3_client).
@@ -397,7 +433,9 @@ async def arq_process_homework(
     from course_supporter.homework.review_graph import (
         build_mentor_review_service,
     )
+    from course_supporter.homework.sanity_gate import build_sanity_gate_service
     from course_supporter.homework.webhook import (
+        build_mismatch_payload,
         build_reviewed_payload,
         deliver_webhook,
         resolve_webhook_url,
@@ -467,10 +505,10 @@ async def arq_process_homework(
             )
 
             await job_repo.update_status(jid, "active")
-            await hw_repo.update_status(sid, "safety_check")
             await session.commit()
 
-            # --- HW-004: Safety check ---
+            # --- HW-004: Safety check (runs while status is still 'received';
+            # sets the 'safety_ok' milestone only on pass, KD15 §1298) ---
             s3_key = s3.extract_key(submission.file_url)
             if s3_key is None:
                 msg = f"Cannot extract S3 key from {submission.file_url}"
@@ -604,13 +642,63 @@ async def arq_process_homework(
                     )
                     return
 
+                # Safety gate passed.
+                await hw_repo.update_status(sid, "safety_ok")
+                await session.commit()
+
+                # --- sanity stage — lightweight validity gate (T7, KD15
+                # §1336-1339) ---
+                # Cheap binary classifier: does the submission look like an
+                # attempt at the declared task? An economy gate before the
+                # expensive review graph — NOT task matching (the submission is
+                # anchored to its task, KD15). A high-confidence mismatch is
+                # terminal (ratified A3-conservative); match or a low-confidence
+                # mismatch passes through to review unchanged (no signal injected
+                # into the graph context).
+                sanity_service = build_sanity_gate_service(session, stage_router)
+                sanity_outcome = await sanity_service.evaluate(
+                    submission=submission,
+                    submission_text=submission_text,
+                )
+                await hw_repo.store_sanity_result(
+                    sid, sanity_outcome.classification.model_dump(mode="json")
+                )
+                await session.commit()
+
+                if sanity_outcome.gated:
+                    reason = sanity_outcome.classification.reason
+                    await hw_repo.update_status(sid, "mismatch", error_message=reason)
+                    await session.commit()
+                    log.info(
+                        "homework_sanity_mismatch",
+                        confidence=sanity_outcome.classification.confidence,
+                        reason=reason,
+                    )
+                    webhook_url = resolve_webhook_url(submission, tenant)
+                    if webhook_url and student:
+                        mismatch_payload = build_mismatch_payload(
+                            submission, student, reason=reason
+                        )
+                        await deliver_webhook(
+                            url=webhook_url,
+                            payload=mismatch_payload,
+                            session=session,
+                        )
+                        await session.commit()
+                    await job_repo.update_status(jid, "complete")
+                    await session.commit()
+                    return
+
+                # Sanity gate passed.
+                await hw_repo.update_status(sid, "sanity_ok")
+                await session.commit()
+
                 # --- review stage — Mentor review graph (sprint-mentor T6) ---
                 # The three-layer graph (vision §"Mentor review як граф",
                 # D8-D12) judges the submission on the node/course/industry
                 # layers, aggregates + denoises against the student's history,
-                # and synthesises one human review. Task matching was dropped
-                # in C9.3 — the submission is anchored to its task (KD15);
-                # sanity replaces match in T7.
+                # and synthesises one human review. Only submissions that
+                # cleared both safety and the sanity gate reach here.
                 await hw_repo.update_status(sid, "reviewing")
                 await session.commit()
 
@@ -695,16 +783,27 @@ async def arq_process_homework(
                 err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
                 await err_job_repo.update_status(jid, "failed", error_message=str(exc))
+                failed_set = False
                 try:
                     await err_hw_repo.update_status(
                         sid, "failed", error_message=str(exc)
                     )
+                    failed_set = True
                 except ValueError as status_exc:
                     log.warning(
                         "homework_status_update_skipped",
                         reason=str(status_exc),
                     )
                 await err_session.commit()
+                # Best-effort 'failed' webhook (T7) — only when we actually moved
+                # the submission to 'failed' (skip if it was already terminal,
+                # which carries its own webhook). A webhook error must never mask
+                # the processing failure.
+                if failed_set:
+                    try:
+                        await _notify_homework_failed(err_session, sid, reason=str(exc))
+                    except Exception:
+                        log.warning("homework_failed_webhook_skipped", exc_info=True)
             log.error("homework_processing_failed", error=str(exc))
 
 

@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from course_supporter.config import get_settings
 from course_supporter.enqueue import (
+    create_homework_job,
+    dispatch_homework,
     enqueue_ingestion,
     enqueue_node_summary_regeneration,
 )
@@ -33,6 +35,91 @@ def _mock_job(job_id: uuid.UUID | None = None) -> MagicMock:
     job = MagicMock()
     job.id = job_id or uuid.uuid4()
     return job
+
+
+class TestHomeworkEnqueue:
+    """create_homework_job + dispatch_homework (DD-3.2.6-A commit-then-dispatch).
+
+    The two-helper split is the race fix: the durable Job + submission↔job link
+    are created (and the caller commits them) BEFORE the ARQ dispatch, so a hot
+    worker can never read a not-yet-committed Job/submission.
+    """
+
+    async def test_create_homework_job_creates_and_links_without_dispatch(
+        self,
+    ) -> None:
+        session = _mock_session()
+        mock_job = _mock_job()
+        tenant_id = uuid.uuid4()
+        submission_id = uuid.uuid4()
+
+        with (
+            patch("course_supporter.enqueue.JobRepository") as job_cls,
+            patch("course_supporter.enqueue.HomeworkRepository") as hw_cls,
+        ):
+            job_cls.return_value.create = AsyncMock(return_value=mock_job)
+            hw_cls.return_value.set_job_id = AsyncMock()
+
+            result = await create_homework_job(
+                session=session,
+                tenant_id=tenant_id,
+                submission_id=submission_id,
+            )
+
+        assert result is mock_job
+        create_kwargs = job_cls.return_value.create.call_args.kwargs
+        assert create_kwargs["job_type"] == "homework"
+        assert create_kwargs["tenant_id"] == tenant_id
+        assert create_kwargs["input_params"] == {"submission_id": str(submission_id)}
+        # Links the submission to the job in the same (uncommitted) transaction.
+        hw_cls.return_value.set_job_id.assert_awaited_once_with(
+            submission_id, mock_job.id
+        )
+        # DB-only: no ARQ dispatch, no commit — the caller owns the commit.
+        session.commit.assert_not_awaited()
+
+    async def test_dispatch_homework_dispatches_and_records_arq_id(self) -> None:
+        session = _mock_session()
+        redis = _mock_redis(arq_job_id="arq:hw:1")
+        job_id = uuid.uuid4()
+        submission_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as job_cls:
+            job_cls.return_value.set_arq_job_id = AsyncMock()
+            await dispatch_homework(
+                redis=redis,
+                session=session,
+                job_id=job_id,
+                submission_id=submission_id,
+            )
+
+        redis.enqueue_job.assert_awaited_once_with(
+            "arq_process_homework",
+            str(job_id),
+            str(submission_id),
+            _queue_name="homework",
+        )
+        job_cls.return_value.set_arq_job_id.assert_awaited_once_with(job_id, "arq:hw:1")
+        session.commit.assert_awaited_once()
+
+    async def test_dispatch_homework_handles_none_arq_job(self) -> None:
+        session = _mock_session()
+        redis = _mock_redis()
+        redis.enqueue_job = AsyncMock(return_value=None)
+        job_id = uuid.uuid4()
+
+        with patch("course_supporter.enqueue.JobRepository") as job_cls:
+            job_cls.return_value.set_arq_job_id = AsyncMock()
+            await dispatch_homework(
+                redis=redis,
+                session=session,
+                job_id=job_id,
+                submission_id=uuid.uuid4(),
+            )
+
+        # No arq job → no arq_job_id record, no second commit.
+        job_cls.return_value.set_arq_job_id.assert_not_awaited()
+        session.commit.assert_not_awaited()
 
 
 class TestEnqueueIngestion:

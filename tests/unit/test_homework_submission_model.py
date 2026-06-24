@@ -66,6 +66,7 @@ class TestHomeworkSubmissionModel:
     def test_jsonb_fields_round_trip(self) -> None:
         """JSONB result fields accept and return dicts."""
         safety = {"safe": True, "flags": []}
+        sanity = {"verdict": "match", "confidence": 0.92, "reason": "on task"}
         review = {"score": 85, "passed": True, "sections": ["good"]}
         sub = HomeworkSubmission(
             tenant_id=_uuid7(),
@@ -76,10 +77,25 @@ class TestHomeworkSubmissionModel:
             file_url="s3://bucket/file.py",
             file_type="text/x-python",
             safety_result=safety,
+            sanity_result=sanity,
             review_result=review,
         )
         assert sub.safety_result == safety
+        assert sub.sanity_result == sanity
         assert sub.review_result == review
+
+    def test_sanity_result_nullable(self) -> None:
+        """sanity_result (T7 gate verdict) is None until the sanity stage runs."""
+        sub = HomeworkSubmission(
+            tenant_id=_uuid7(),
+            student_id=_uuid7(),
+            course_node_id=_uuid7(),
+            node_id=_uuid7(),
+            authored_document_id=_uuid7(),
+            file_url="s3://bucket/file.py",
+            file_type="text/x-python",
+        )
+        assert sub.sanity_result is None
 
     def test_file_url_max_length(self) -> None:
         """file_url column accepts up to 2000 chars."""
@@ -275,9 +291,21 @@ class TestHomeworkStatusEnum:
                 )
 
     def test_terminal_states(self) -> None:
-        """delivered and rejected are terminal (no outgoing transitions)."""
+        """delivered, rejected, and mismatch are terminal (no outgoing)."""
         assert HOMEWORK_TRANSITIONS["delivered"] == set()
         assert HOMEWORK_TRANSITIONS["rejected"] == set()
+        assert HOMEWORK_TRANSITIONS["mismatch"] == set()
+
+    def test_pipeline_milestones_chain(self) -> None:
+        """The happy-path pipeline chains safety_ok → sanity_ok → reviewing."""
+        assert "safety_ok" in HOMEWORK_TRANSITIONS["received"]
+        assert "sanity_ok" in HOMEWORK_TRANSITIONS["safety_ok"]
+        assert "reviewing" in HOMEWORK_TRANSITIONS["sanity_ok"]
+
+    def test_gate_terminals_reachable(self) -> None:
+        """Safety rejects from received; sanity mismatches from safety_ok."""
+        assert "rejected" in HOMEWORK_TRANSITIONS["received"]
+        assert "mismatch" in HOMEWORK_TRANSITIONS["safety_ok"]
 
     def test_failed_can_retry(self) -> None:
         """failed can transition back to received (retry)."""
@@ -288,6 +316,7 @@ class TestHomeworkStatusEnum:
         excluded = {
             HomeworkStatus.DELIVERED.value,
             HomeworkStatus.REJECTED.value,
+            HomeworkStatus.MISMATCH.value,
             HomeworkStatus.FAILED.value,
         }
         non_terminal = {s.value for s in HomeworkStatus if s.value not in excluded}

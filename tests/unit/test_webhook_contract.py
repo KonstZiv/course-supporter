@@ -8,7 +8,12 @@ parallel hand-written contract file).
 
 from __future__ import annotations
 
-from course_supporter.models.webhook import ReviewSummary, WebhookReviewedPayload
+from course_supporter.models.webhook import (
+    ReviewSummary,
+    WebhookFailedPayload,
+    WebhookMismatchPayload,
+    WebhookReviewedPayload,
+)
 
 
 class TestReviewSummaryContract:
@@ -56,3 +61,41 @@ class TestWebhookReviewedPayloadContract:
         assert WebhookReviewedPayload.model_fields["event"].default == "reviewed"
         event = WebhookReviewedPayload.model_json_schema()["properties"]["event"]
         assert event.get("const") == "reviewed" or event.get("enum") == ["reviewed"]
+
+
+class TestWebhookMismatchPayloadContract:
+    """T7 mismatch event — sanity gate rejection, no score (review never ran)."""
+
+    def test_field_set_is_locked(self) -> None:
+        assert set(WebhookMismatchPayload.model_fields) == {
+            "event",
+            "submission_id",
+            "student_external_id",
+            "reason",
+            "timestamp",
+        }
+
+    def test_event_default_is_mismatch(self) -> None:
+        assert WebhookMismatchPayload.model_fields["event"].default == "mismatch"
+
+    def test_carries_no_review_or_score(self) -> None:
+        # No review ran on a sanity-gated submission — the payload must not
+        # imply one. Only the gate's reason travels.
+        assert "review" not in WebhookMismatchPayload.model_fields
+        assert "score" not in WebhookMismatchPayload.model_fields
+
+
+class TestWebhookFailedPayloadContract:
+    """T7 failed event — processing error, no review produced."""
+
+    def test_field_set_is_locked(self) -> None:
+        assert set(WebhookFailedPayload.model_fields) == {
+            "event",
+            "submission_id",
+            "student_external_id",
+            "reason",
+            "timestamp",
+        }
+
+    def test_event_default_is_failed(self) -> None:
+        assert WebhookFailedPayload.model_fields["event"].default == "failed"

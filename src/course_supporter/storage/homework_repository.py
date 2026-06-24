@@ -15,16 +15,29 @@ from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger()
 
-# Task matching was removed in sprint-mentor T1 (KD15: a submission is
-# anchored to its task, so the matching/matched states are gone). The
-# safety check now hands off straight to review.
+# Homework lifecycle, reconciled to the KD15 §1298 vocabulary in sprint-mentor
+# T7. The status is the MILESTONE the submission has REACHED (so ``safety_ok`` /
+# ``sanity_ok``, not the old in-progress ``safety_check``). Pipeline:
+# safety → sanity → review → delivery (task matching was dropped in T1 — the
+# submission is anchored to its task, KD15; the cheap sanity gate replaces
+# match). Four clean terminals:
+#   - ``delivered``  — review delivered to the caller (success);
+#   - ``rejected``   — safety violation (kept distinct from ``failed`` so a
+#                       safety refusal is never confused with a processing error);
+#   - ``mismatch``   — sanity gate judged the submission off-task (high
+#                       confidence);
+#   - ``failed``     — processing error (re-activate via ``failed → received``).
+# Safety runs while the status is still ``received`` (it sets ``safety_ok`` only
+# on pass), so ``received`` can go to ``safety_ok`` / ``rejected`` / ``failed``.
 HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
-    "received": {"safety_check", "failed"},
-    "safety_check": {"reviewing", "rejected", "failed"},
+    "received": {"safety_ok", "rejected", "failed"},
+    "safety_ok": {"sanity_ok", "mismatch", "failed"},
+    "sanity_ok": {"reviewing", "failed"},
     "reviewing": {"completed", "failed"},
     "completed": {"delivered", "failed"},
     "delivered": set(),
     "rejected": set(),
+    "mismatch": set(),
     "failed": {"received"},
 }
 
@@ -246,6 +259,27 @@ class HomeworkRepository:
             update(HomeworkSubmission)
             .where(HomeworkSubmission.id == submission_id)
             .values(safety_result=result)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def store_sanity_result(
+        self,
+        submission_id: uuid.UUID,
+        result: dict[str, Any],
+    ) -> None:
+        """Store the sanity gate result (sprint-mentor T7, KD15).
+
+        Mirrors :meth:`store_safety_result` — a single-column UPDATE of the
+        ``sanity_result`` JSONB ({verdict, confidence, reason}). Decoupled from
+        the status transition so the result is persisted before the gate
+        decision is acted on (the worker stores, then routes to ``mismatch``
+        or ``sanity_ok``).
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(sanity_result=result)
         )
         await self._session.execute(stmt)
         await self._session.flush()

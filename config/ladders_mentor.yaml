@@ -57,6 +57,28 @@ stages:
       - provider: gemini
         model: gemini-2.5-flash
 
+  # ── sanity_check (sprint-mentor T7, vision §1336-1339 / KD16 §1452) ──
+  # Lightweight validity gate between safety and review: "does the submission
+  # look like an attempt at the declared task?" → {verdict, confidence, reason}.
+  # Its purpose is economy — skip the expensive three-phase review graph on
+  # obvious garbage — so the model tier is the CHEAP binary classifier, the same
+  # tier as ``safety_check`` (mistral-small primary; deepseek-v4-flash /
+  # gemini-2.5-flash equivalent-tier fallbacks for outages, ordered by
+  # historical reliability, not capability). Frontier reasoning would be
+  # overkill for a coarse triage decision; a high confidence_threshold
+  # (config/sanity.yaml) keeps the gate conservative regardless of model. Alias
+  # rungs ("latest stable") per the safety_check convention.
+  sanity_check:
+    prompt_ref: "prompts/sanity_check/v1.md"
+    requires: [structured_output]
+    ladder:
+      - provider: mistral
+        model: mistral-small-latest
+      - provider: deepseek
+        model: deepseek-v4-flash
+      - provider: gemini
+        model: gemini-2.5-flash
+
   # ── criteria_decomposition (sprint-mentor T4, vision §1386 / D11) ──
   # Decomposes a task AuthoredDocument into the checkable review criteria
   # the Mentor graph (T6) scores against. Computed ONCE per task version

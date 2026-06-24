@@ -10,11 +10,17 @@ import httpx
 import pytest
 
 from course_supporter.homework.webhook import (
+    build_failed_payload,
+    build_mismatch_payload,
     build_reviewed_payload,
     deliver_webhook,
     resolve_webhook_url,
 )
-from course_supporter.models.webhook import WebhookReviewedPayload
+from course_supporter.models.webhook import (
+    WebhookFailedPayload,
+    WebhookMismatchPayload,
+    WebhookReviewedPayload,
+)
 
 # --- Helpers ---
 
@@ -143,6 +149,36 @@ class TestBuildReviewedPayload:
 
 
 # --- deliver_webhook ---
+
+
+class TestBuildMismatchPayload:
+    def test_builds_off_task_payload(self) -> None:
+        sub = _make_submission()
+        student = _make_student()
+
+        payload = build_mismatch_payload(
+            sub, student, reason="answers an unrelated task"
+        )
+
+        assert isinstance(payload, WebhookMismatchPayload)
+        assert payload.event == "mismatch"
+        assert payload.submission_id == str(sub.id)
+        assert payload.student_external_id == "student-42"
+        assert payload.reason == "answers an unrelated task"
+
+
+class TestBuildFailedPayload:
+    def test_builds_failure_payload(self) -> None:
+        sub = _make_submission()
+        student = _make_student()
+
+        payload = build_failed_payload(sub, student, reason="LLM ladder exhausted")
+
+        assert isinstance(payload, WebhookFailedPayload)
+        assert payload.event == "failed"
+        assert payload.submission_id == str(sub.id)
+        assert payload.student_external_id == "student-42"
+        assert payload.reason == "LLM ladder exhausted"
 
 
 class TestDeliverWebhook:

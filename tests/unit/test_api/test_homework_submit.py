@@ -19,6 +19,9 @@ from course_supporter.storage.authored_document_repository import (
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
+from course_supporter.storage.document_summary_repository import (
+    DocumentSummaryRepository,
+)
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.student_repository import StudentRepository
 
@@ -30,7 +33,8 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-ENQUEUE_FUNC = "course_supporter.api.routes.homework.enqueue_homework"
+CREATE_JOB_FUNC = "course_supporter.api.routes.homework.create_homework_job"
+DISPATCH_FUNC = "course_supporter.api.routes.homework.dispatch_homework"
 
 
 def _mock_node(
@@ -66,6 +70,13 @@ def _mock_task_doc(
     doc.task_type = task_type
     doc.deleted_at = deleted_at
     return doc
+
+
+def _mock_summary(status: str = "ready") -> MagicMock:
+    """Create a mock DocumentSummary (ready by default — passes the gate)."""
+    summary = MagicMock()
+    summary.status = status
+    return summary
 
 
 def _mock_submission(
@@ -204,6 +215,11 @@ class TestSubmitHomework:
                 return_value=_mock_task_doc(course_root_id=course_node_id),
             ),
             patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary(status="ready"),
+            ),
+            patch.object(
                 StudentRepository,
                 "get_or_create",
                 return_value=(student, True),
@@ -215,7 +231,8 @@ class TestSubmitHomework:
             ),
             patch.object(HomeworkRepository, "create", return_value=submission),
             patch.object(HomeworkRepository, "set_job_id", return_value=None),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",
@@ -267,6 +284,11 @@ class TestSubmitHomework:
                 return_value=_mock_task_doc(course_root_id=course_node_id),
             ),
             patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary(status="ready"),
+            ),
+            patch.object(
                 StudentRepository, "get_or_create", return_value=(student, True)
             ),
             patch.object(HomeworkRepository, "find_duplicate", return_value=None),
@@ -274,7 +296,8 @@ class TestSubmitHomework:
                 HomeworkRepository, "create", return_value=submission
             ) as mock_create,
             patch.object(HomeworkRepository, "set_job_id", return_value=None),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",
@@ -466,6 +489,55 @@ class TestSubmitHomework:
         assert resp.status_code == 422
         assert "must reference a task" in resp.json()["detail"]
 
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            pytest.param(None, id="no_summary"),
+            pytest.param(_mock_summary(status="pending"), id="not_ready"),
+        ],
+    )
+    async def test_unready_task_returns_409(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        summary: MagicMock | None,
+    ) -> None:
+        """A task with no ready DocumentSummary returns 409 (KD15 §1319).
+
+        The task exists (so not 404) — it is just not ingested yet; the submit
+        route enforces readiness up front rather than letting the review graph
+        degrade to empty grounding.
+        """
+
+        def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
+            if requested_id == course_node_id:
+                return _mock_node(node_id=course_node_id)
+            if requested_id == node_id:
+                return _mock_node(node_id=node_id, parent_id=course_node_id)
+            return None
+
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", side_effect=get_node_by_id),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=course_node_id),
+            ),
+            patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=summary,
+            ),
+        ):
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(course_node_id=course_node_id, node_id=node_id),
+                files={"file": ("solution.py", io.BytesIO(b"x=1"), "text/x-python")},
+            )
+        assert resp.status_code == 409
+        assert "not ready" in resp.json()["detail"].lower()
+
     async def test_webhook_ssrf_rejected(
         self,
         client: AsyncClient,
@@ -525,6 +597,11 @@ class TestSubmitHomework:
                 "get_by_id",
                 return_value=_mock_task_doc(course_root_id=course_node_id),
             ),
+            patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary(status="ready"),
+            ),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",
@@ -569,6 +646,11 @@ class TestSubmitHomework:
                 AuthoredDocumentRepository,
                 "get_by_id",
                 return_value=_mock_task_doc(course_root_id=course_node_id),
+            ),
+            patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary(status="ready"),
             ),
             patch.object(
                 StudentRepository,

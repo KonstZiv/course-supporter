@@ -28,11 +28,14 @@ from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.enqueue import enqueue_homework
+from course_supporter.enqueue import create_homework_job, dispatch_homework
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.document_summary_repository import (
+    DocumentSummaryRepository,
+)
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.s3 import S3Client, upload_file_chunks
 from course_supporter.storage.student_repository import StudentRepository
@@ -206,6 +209,22 @@ async def submit_homework(
             "(an AuthoredDocument with task_type set).",
         )
 
+    # --- Readiness gate (KD15 §1319): the task must be ready (its
+    # DocumentSummary formed) before it accepts submissions. ---
+    # A submission against an un-ingested task would reach the review graph with
+    # empty grounding (degraded criteria + context), producing a low-quality
+    # review; reject early and cleanly instead. 409 Conflict, not 404 — the task
+    # exists, it is just not ready yet. The graph's degrade-tolerance stays as
+    # defense-in-depth, not the primary gate.
+    summary_repo = DocumentSummaryRepository(session)
+    summary = await summary_repo.get_by_authored_document_id(authored_document_id)
+    if summary is None or summary.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="Task is not ready for submissions yet "
+            "(its summary has not been generated).",
+        )
+
     # --- Upload file to S3 (streaming SHA-256) ---
     submission_id = uuid.uuid4()
     filename = file.filename or "upload"
@@ -296,20 +315,29 @@ async def submit_homework(
             student_note=student_note,
         )
 
-        # Enqueue processing
-        job = await enqueue_homework(
-            redis=arq,
+        # Create the durable Job + submission↔job link (DB only — no dispatch
+        # yet), then commit everything staged (student + submission + job).
+        job = await create_homework_job(
             session=session,
             tenant_id=tenant.tenant_id,
             submission_id=submission.id,
         )
-
-        await hw_repo.set_job_id(submission.id, job.id)
         await session.commit()
     except Exception:
-        # Clean up orphaned S3 file if DB operations fail
+        # Clean up orphaned S3 file if DB operations fail (BEFORE the commit).
         await s3.delete_object(key)
         raise
+
+    # Dispatch to ARQ AFTER the commit (DD-3.2.6-A): the worker can only pick up
+    # the job once its rows are durable, closing the "Job not found" race. This
+    # is deliberately outside the S3-cleanup guard — a dispatch failure leaves a
+    # durable, re-dispatchable submission with its file intact.
+    await dispatch_homework(
+        redis=arq,
+        session=session,
+        job_id=job.id,
+        submission_id=submission.id,
+    )
 
     logger.info(
         "homework_submitted",

@@ -28,7 +28,7 @@ from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.enqueue import enqueue_homework
+from course_supporter.enqueue import create_homework_job, dispatch_homework
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -315,20 +315,29 @@ async def submit_homework(
             student_note=student_note,
         )
 
-        # Enqueue processing
-        job = await enqueue_homework(
-            redis=arq,
+        # Create the durable Job + submission↔job link (DB only — no dispatch
+        # yet), then commit everything staged (student + submission + job).
+        job = await create_homework_job(
             session=session,
             tenant_id=tenant.tenant_id,
             submission_id=submission.id,
         )
-
-        await hw_repo.set_job_id(submission.id, job.id)
         await session.commit()
     except Exception:
-        # Clean up orphaned S3 file if DB operations fail
+        # Clean up orphaned S3 file if DB operations fail (BEFORE the commit).
         await s3.delete_object(key)
         raise
+
+    # Dispatch to ARQ AFTER the commit (DD-3.2.6-A): the worker can only pick up
+    # the job once its rows are durable, closing the "Job not found" race. This
+    # is deliberately outside the S3-cleanup guard — a dispatch failure leaves a
+    # durable, re-dispatchable submission with its file intact.
+    await dispatch_homework(
+        redis=arq,
+        session=session,
+        job_id=job.id,
+        submission_id=submission.id,
+    )
 
     logger.info(
         "homework_submitted",

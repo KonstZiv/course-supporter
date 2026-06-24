@@ -33,7 +33,8 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-ENQUEUE_FUNC = "course_supporter.api.routes.homework.enqueue_homework"
+CREATE_JOB_FUNC = "course_supporter.api.routes.homework.create_homework_job"
+DISPATCH_FUNC = "course_supporter.api.routes.homework.dispatch_homework"
 
 
 def _mock_node(
@@ -230,7 +231,8 @@ class TestSubmitHomework:
             ),
             patch.object(HomeworkRepository, "create", return_value=submission),
             patch.object(HomeworkRepository, "set_job_id", return_value=None),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",
@@ -294,7 +296,8 @@ class TestSubmitHomework:
                 HomeworkRepository, "create", return_value=submission
             ) as mock_create,
             patch.object(HomeworkRepository, "set_job_id", return_value=None),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",

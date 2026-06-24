@@ -15,6 +15,7 @@ from course_supporter.jobs import JobType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
+from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import Job
 
@@ -151,54 +152,82 @@ async def enqueue_ingestion(
     return job
 
 
-async def enqueue_homework(
+async def create_homework_job(
     *,
-    redis: ArqRedis,
     session: AsyncSession,
     tenant_id: uuid.UUID,
     submission_id: uuid.UUID,
 ) -> Job:
-    """Create a Job record and enqueue homework processing.
+    """Create the durable Job row for a homework submission and link it.
 
-    Enqueues to the separate ``homework`` ARQ queue.
-    The caller is responsible for committing the session.
+    DB-only — no ARQ dispatch. Creates the Job and stages the submission↔job
+    link in the caller's session. The caller commits this together with its
+    other staged work (student + submission) and THEN calls
+    :func:`dispatch_homework`, so a hot worker can never read a Job/submission
+    that is not yet committed (the DD-3.2.6-A "Job not found" race).
+
+    Two helpers rather than the helper-owns-commit shape of
+    :func:`enqueue_ingestion` because the homework file is the student's
+    submission: dispatching after the caller's commit, OUTSIDE its S3-cleanup
+    guard, means a dispatch failure leaves a durable, re-dispatchable
+    submission with its file intact instead of deleting it.
 
     Args:
-        redis: ARQ Redis connection pool.
-        session: Active DB session (caller controls transaction).
+        session: Active DB session (caller controls + commits the transaction).
         tenant_id: Owning tenant UUID.
         submission_id: HomeworkSubmission to process.
 
     Returns:
-        The created Job with ``arq_job_id`` set.
+        The created Job (not yet committed; no ``arq_job_id`` until dispatch).
     """
-    log = structlog.get_logger().bind(submission_id=str(submission_id))
-    repo = JobRepository(session)
-
-    job = await repo.create(
+    job = await JobRepository(session).create(
         tenant_id=tenant_id,
         job_type="homework",
         input_params={
             "submission_id": str(submission_id),
         },
     )
+    # Stage the submission↔job link into the same transaction as the Job, so
+    # the caller's single commit makes both durable before dispatch.
+    await HomeworkRepository(session).set_job_id(submission_id, job.id)
+    return job
 
+
+async def dispatch_homework(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    submission_id: uuid.UUID,
+) -> None:
+    """Dispatch homework processing to ARQ AFTER the caller's commit (DD-3.2.6-A).
+
+    Must be called only once the Job + submission are committed, so the worker
+    always reads durable rows. Records ``arq_job_id`` in a second commit. A
+    failure here leaves the committed submission intact for re-dispatch — it
+    does not roll back the durable rows or delete the uploaded file.
+
+    Args:
+        redis: ARQ Redis connection pool.
+        session: DB session (used only for the ``arq_job_id`` second commit).
+        job_id: The committed Job's id.
+        submission_id: HomeworkSubmission being processed.
+    """
+    log = structlog.get_logger().bind(submission_id=str(submission_id))
     arq_job = await redis.enqueue_job(
         "arq_process_homework",
-        str(job.id),
+        str(job_id),
         str(submission_id),
         _queue_name="homework",
     )
-
     if arq_job is not None:
-        await repo.set_arq_job_id(job.id, arq_job.job_id)
-
+        await JobRepository(session).set_arq_job_id(job_id, arq_job.job_id)
+        await session.commit()
     log.info(
-        "homework_job_enqueued",
-        job_id=str(job.id),
+        "homework_job_dispatched",
+        job_id=str(job_id),
         arq_job_id=arq_job.job_id if arq_job else None,
     )
-    return job
 
 
 async def enqueue_node_summary_regeneration(

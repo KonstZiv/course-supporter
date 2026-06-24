@@ -332,6 +332,7 @@ class Settings(BaseSettings):
     platform_registry_path: Path = Path("config/platforms.yaml")
     language_registry_path: Path = Path("config/languages.yaml")
     ladders_dir: Path = Path("config")
+    mentor_review_config_path: Path = Path("config/mentor_review.yaml")
 
     # --- Convenience properties ---
     @property

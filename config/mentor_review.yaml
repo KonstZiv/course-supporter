@@ -1,0 +1,39 @@
+# Mentor review graph tuning (sprint-mentor T6, vision §1369-1400 / D12).
+#
+# Config-driven graph parameters, deploy-based reload (KD16 reload policy):
+# the course author adjusts these by editing this file and redeploying, not by
+# rewriting code. The model choice per phase lives in ladders_mentor.yaml; the
+# scoring knobs below are the graph's deterministic-arithmetic parameters.
+#
+# Invariants enforced at load (homework/review_config.py):
+#   * each layer weight is STRICTLY in (0, 1) — no layer is disabled (0) or
+#     dominant (1). This is the D7 x D8 invariant pinned at the config level.
+#   * the three weights sum to 1.0 (a clean weighted average).
+#   * verdict bands are ordered: partially_correct_min <= correct_min.
+
+# Base layer weights for the weighted aggregate (D8: node -> course ->
+# industry, by increasing scope). Node-heaviest because the task lives at the
+# node. Student preferences NEVER touch these (D7-local acts on synthesis text
+# only); the author tunes them here.
+layer_weights:
+  node: 0.5
+  course: 0.3
+  industry: 0.2
+
+denoise:
+  # Ceiling on |denoise_delta| (D10): history nudges the aggregate, it never
+  # dominates the rubric. The phase-3 agent is asked for a delta within
+  # [-cap, +cap]; the scoring code re-clamps to this ceiling defensively.
+  cap: 10
+
+verdict_thresholds:
+  # The verdict is CODE-DERIVED from the final (post-denoise) score, never
+  # emitted by the LLM — this guarantees score<->verdict consistency (no
+  # "incorrect" verdict on an 85 score). passed = score >= pass_score.
+  # correctness bands (on the final score):
+  #   score >= correct_min              -> "correct"
+  #   partially_correct_min <= score    -> "partially_correct"
+  #   score < partially_correct_min     -> "incorrect"
+  pass_score: 60
+  correct_min: 85
+  partially_correct_min: 50

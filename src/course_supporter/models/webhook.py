@@ -3,14 +3,15 @@
 This module is the canonical contract for what the service POSTs back to the
 caller after homework review — per decision 2.4.13 the contract lives in code
 (these models), not in a parallel hand-written file. sprint-mentor T5 finalised
-it; the field set below is locked by ``tests/unit/test_webhook_contract.py`` so
-any change is a deliberate, test-breaking one.
+``reviewed``; the field set is locked by ``tests/unit/test_webhook_contract.py``
+so any change is a deliberate, test-breaking one.
 
-One event type today:
+Three outbound event types (each a distinct ``event`` discriminator — new types
+WIDEN the set, they never mutate ``reviewed``):
 - reviewed: sent after Mentor review, delivers the final score and feedback.
-
-Failure/mismatch notifications are deferred to T7: their shape depends on the
-sanity result and the mismatch-gating decision, both of which land there.
+- mismatch: sent when the sanity gate rejects a submission as off-task (T7); the
+  review graph did not run, so there is no score — only the gate's reason.
+- failed: sent when processing errors out (T7); our fault, no review produced.
 """
 
 from __future__ import annotations
@@ -53,3 +54,39 @@ class WebhookReviewedPayload(BaseModel):
     student_external_id: str
     review: ReviewSummary
     timestamp: datetime
+
+
+class WebhookMismatchPayload(BaseModel):
+    """Payload sent when the sanity gate rejects a submission as off-task (T7).
+
+    A high-confidence ``mismatch`` from the sanity gate (KD15 §1336-1339): the
+    review graph did not run, so there is no score or review — only the gate's
+    ``reason``. A distinct event from ``failed``: the submission was processed
+    fine, it just is not an attempt at the declared task.
+    """
+
+    event: Literal["mismatch"] = "mismatch"
+    submission_id: str
+    student_external_id: str
+    reason: str = Field(description="Why the gate judged the submission off-task.")
+    timestamp: datetime
+
+
+class WebhookFailedPayload(BaseModel):
+    """Payload sent when homework processing fails (T7).
+
+    Our error (LLM outage, unexpected exception) — no review was produced.
+    Distinct from ``mismatch`` (a clean off-task verdict) and ``reviewed`` (a
+    completed review).
+    """
+
+    event: Literal["failed"] = "failed"
+    submission_id: str
+    student_external_id: str
+    reason: str = Field(description="Short failure description.")
+    timestamp: datetime
+
+
+# The union of outbound payloads. ``deliver_webhook`` accepts any of them — each
+# carries ``event`` / ``submission_id`` and serialises via ``model_dump``.
+WebhookPayload = WebhookReviewedPayload | WebhookMismatchPayload | WebhookFailedPayload

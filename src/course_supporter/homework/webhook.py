@@ -1,7 +1,9 @@
 """Webhook delivery for the homework pipeline.
 
-Delivers one event type to external systems:
+Delivers three event types to external systems (T7 added the latter two):
 - reviewed: after Mentor review (delivers score and feedback)
+- mismatch: sanity gate rejected the submission as off-task (no review ran)
+- failed: processing errored out (our fault, no review produced)
 
 Retry strategy: inline exponential backoff, non-blocking on failure.
 """
@@ -20,6 +22,9 @@ from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.config import get_settings
 from course_supporter.models.webhook import (
     ReviewSummary,
+    WebhookFailedPayload,
+    WebhookMismatchPayload,
+    WebhookPayload,
     WebhookReviewedPayload,
 )
 from course_supporter.service_logging import get_current_job_id
@@ -72,10 +77,43 @@ def build_reviewed_payload(
     )
 
 
+def build_mismatch_payload(
+    submission: HomeworkSubmission,
+    student: Student,
+    *,
+    reason: str,
+) -> WebhookMismatchPayload:
+    """Build the 'mismatch' webhook payload (T7 sanity gate rejection).
+
+    No review ran, so there is no score — only the sanity gate's ``reason``.
+    """
+    return WebhookMismatchPayload(
+        submission_id=str(submission.id),
+        student_external_id=student.external_id,
+        reason=reason,
+        timestamp=datetime.now(UTC),
+    )
+
+
+def build_failed_payload(
+    submission: HomeworkSubmission,
+    student: Student,
+    *,
+    reason: str,
+) -> WebhookFailedPayload:
+    """Build the 'failed' webhook payload (T7 processing error)."""
+    return WebhookFailedPayload(
+        submission_id=str(submission.id),
+        student_external_id=student.external_id,
+        reason=reason,
+        timestamp=datetime.now(UTC),
+    )
+
+
 async def deliver_webhook(
     *,
     url: str,
-    payload: WebhookReviewedPayload,
+    payload: WebhookPayload,
     session: AsyncSession,
 ) -> bool:
     """Deliver a webhook payload with retry and audit logging.

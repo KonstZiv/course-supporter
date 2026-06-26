@@ -16,7 +16,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.orm import AuthoredDocument, CourseNode, Student, Tenant
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    HomeworkSubmission,
+    Student,
+    Tenant,
+)
 from course_supporter.storage.student_repository import StudentRepository
 
 pytestmark = pytest.mark.requires_db
@@ -36,7 +42,7 @@ async def _submit(
     root: CourseNode,
     doc: AuthoredDocument,
     filename: str,
-) -> object:
+) -> HomeworkSubmission:
     return await repo.create(
         tenant_id=tenant.id,
         student_id=student.id,
@@ -77,13 +83,13 @@ class TestListActiveSubmissionsInCourse:
             doc=seed_material_entry,
             filename="gone.py",
         )
-        gone.deleted_at = datetime.now(UTC)  # type: ignore[attr-defined]
+        gone.deleted_at = datetime.now(UTC)
         await db_session.flush()
 
         rows = await repo.list_active_submissions_in_course(
             student.id, seed_root_node.id
         )
-        assert [r.id for r in rows] == [live.id]  # type: ignore[attr-defined]
+        assert [r.id for r in rows] == [live.id]
 
     async def test_course_scoped(
         self,

@@ -33,8 +33,10 @@ STUB_TENANT = TenantContext(
     key_prefix="cs_test",
 )
 
-CREATE_JOB_FUNC = "course_supporter.api.routes.homework.create_homework_job"
-DISPATCH_FUNC = "course_supporter.api.routes.homework.dispatch_homework"
+# T2: the create/dispatch call sites moved into the shared submission_core
+# helper; the mock targets follow them (the behaviour assertions are unchanged).
+CREATE_JOB_FUNC = "course_supporter.homework.submission_core.create_homework_job"
+DISPATCH_FUNC = "course_supporter.homework.submission_core.dispatch_homework"
 
 
 def _mock_node(

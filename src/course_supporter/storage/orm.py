@@ -446,6 +446,21 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         "per-entity formula wired in Phase 2.",
     )
 
+    # ── Persisted slide renders (Phase 6 T3, KD17) ──
+    slide_keys: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="Phase 6 T3 (KD17): ordered S3 object keys of the persisted "
+        "per-slide WebP renders (index = slide_number - 1). NULL for "
+        "non-presentation sources and presentations ingested before T3; a "
+        "populated list means the slides are addressable via the portal media "
+        "endpoint. Written on the arq_ingest_material seam after Pass 2b, "
+        "overwritten in place on re-ingest. Gathered into the delete-cleanup "
+        "key set so the WebP objects are scrubbed with the document. NOT in "
+        "content_hash (derived render artifact, re-produced on reprocess).",
+    )
+
     # ── Pending "receipt" ──
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("jobs.id", ondelete="SET NULL"),

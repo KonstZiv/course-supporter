@@ -837,6 +837,12 @@ async def delete_document(
     s3_key = s3.extract_key(document.source_url)
     if s3_key is not None:
         file_keys.append(s3_key)
+    # Persisted per-slide WebP renders (Phase 6 T3) are S3 objects distinct
+    # from source_url; gather them before the cascade scrub so they are
+    # scrubbed alongside the document. Already-S3 keys (stored verbatim by
+    # the ingest seam) — no extract_key round-trip needed.
+    if document.slide_keys:
+        file_keys.extend(document.slide_keys)
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on the AuthoredDocument

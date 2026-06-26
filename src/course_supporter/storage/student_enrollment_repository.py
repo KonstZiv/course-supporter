@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import StudentEnrollment
+from course_supporter.storage.orm import CourseNode, StudentEnrollment
 
 
 class StudentEnrollmentRepository:
@@ -68,6 +68,34 @@ class StudentEnrollmentRepository:
         stmt = (
             select(StudentEnrollment)
             .where(StudentEnrollment.student_id == student_id)
+            .order_by(StudentEnrollment.created_at)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_enrolled_courses(
+        self,
+        student_id: uuid.UUID,
+    ) -> list[CourseNode]:
+        """List the root CourseNodes a student is enrolled in (portal listing).
+
+        JOINs enrollments → course_nodes and returns only ACTIVE roots
+        (``deleted_at IS NULL``), ordered oldest-enrollment-first (mirrors
+        :meth:`list_for_student`). One query — no N+1 (Phase 6 T4a c1, Q4).
+        The enrollment grant is itself the publish gate (publish-gate A, KD17):
+        a student sees exactly the courses they are enrolled in. Root-ness is
+        guaranteed by the bind route (enrollments only ever bind a root).
+        """
+        stmt = (
+            select(CourseNode)
+            .join(
+                StudentEnrollment,
+                StudentEnrollment.course_node_id == CourseNode.id,
+            )
+            .where(
+                StudentEnrollment.student_id == student_id,
+                CourseNode.deleted_at.is_(None),
+            )
             .order_by(StudentEnrollment.created_at)
         )
         result = await self._session.execute(stmt)

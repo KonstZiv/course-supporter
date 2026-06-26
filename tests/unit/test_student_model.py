@@ -43,6 +43,17 @@ class TestStudentModel:
         col = Student.__table__.c.mentor_preferences
         assert col.nullable is True
 
+    def test_display_name_default_none(self) -> None:
+        """display_name (portal, Phase 6 T1) is None by default."""
+        student = Student(tenant_id=_uuid7(), external_id="ext-dn")
+        assert student.display_name is None
+
+    def test_display_name_nullable_typed(self) -> None:
+        """display_name is a nullable String(200) column (KD17)."""
+        col = Student.__table__.c.display_name
+        assert col.nullable is True
+        assert col.type.length == 200  # type: ignore[attr-defined]
+
     def test_repr(self) -> None:
         """__repr__ includes id, tenant_id, and external_id."""
         sid = _uuid7()

@@ -29,11 +29,11 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
+from course_supporter.api.routes._portal_shared import curated_verdict
 from course_supporter.api.schemas import (
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
-    PortalVerdict,
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.homework.submission_core import (
@@ -189,31 +189,13 @@ async def submit_portal_homework(
     )
 
 
-def _curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:
-    """Extract ONLY the caller-facing verdict from review_result.
-
-    The full ``review_result`` JSONB (and ``safety_result`` / ``sanity_result``)
-    is the internal trace and is never returned — only its ``verdict`` block,
-    and only once a review has written it (None otherwise).
-    """
-    if not review_result:
-        return None
-    verdict = review_result.get("verdict")
-    if not isinstance(verdict, dict):
-        return None
-    return PortalVerdict(
-        passed=bool(verdict.get("passed", False)),
-        correctness=str(verdict.get("correctness", "incorrect")),
-    )
-
-
 def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
     """Curated list item — no review_markdown, no internal trace."""
     return PortalSubmissionListItem(
         id=submission.id,
         status=submission.status,
         score=submission.score,
-        verdict=_curated_verdict(submission.review_result),
+        verdict=curated_verdict(submission.review_result),
         created_at=submission.created_at,
         original_filename=submission.original_filename,
     )
@@ -225,7 +207,7 @@ def _to_detail(submission: HomeworkSubmission) -> PortalSubmissionDetail:
         id=submission.id,
         status=submission.status,
         score=submission.score,
-        verdict=_curated_verdict(submission.review_result),
+        verdict=curated_verdict(submission.review_result),
         review_markdown=submission.review_markdown,
         created_at=submission.created_at,
         original_filename=submission.original_filename,

@@ -65,7 +65,16 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = []
     cors_allow_credentials: bool = False
     cors_allowed_methods: list[str] = ["GET", "POST"]
-    cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key"]
+    cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key", "Authorization"]
+
+    # --- Student portal session (Phase 6 T1, KD17) ---
+    # HS256-signed stateless bearer token (header, not cookie — deploy is
+    # cross-origin). The secret signs/verifies portal session tokens; set a
+    # strong value in prod via PORTAL_SESSION_SECRET. Revocation is immediate
+    # regardless of TTL — get_current_student re-checks the credential's
+    # is_active on every request (mirror of the API-key path).
+    portal_session_secret: SecretStr = SecretStr("dev-portal-session-secret-change-me")
+    portal_session_ttl_hours: int = 12
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"

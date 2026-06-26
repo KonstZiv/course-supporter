@@ -29,6 +29,8 @@ repos:
           - python-magic>=0.4.27
           - pytest>=8.0
           - pillow>=10.0
+          - argon2-cffi>=25.1
+          - pyjwt>=2.11
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/ tests/unit/security/

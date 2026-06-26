@@ -72,3 +72,26 @@ class StudentEnrollmentRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def is_enrolled(
+        self,
+        student_id: uuid.UUID,
+        course_node_id: uuid.UUID,
+    ) -> bool:
+        """Return True if the student is enrolled in the course (root node).
+
+        The enrollment grant is at the ROOT-CourseNode (course) level (KD17),
+        so ``course_node_id`` is a course root — for a submission, the task's
+        ``course_root_id``. Gates the portal submission point (Phase 6 T2, Q1):
+        a student may only submit to a task whose course they are enrolled in.
+        """
+        stmt = (
+            select(StudentEnrollment.id)
+            .where(
+                StudentEnrollment.student_id == student_id,
+                StudentEnrollment.course_node_id == course_node_id,
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.first() is not None

@@ -87,3 +87,41 @@ class TestUnbind:
             student_id=student.id, course_node_id=seed_root_node.id
         )
         assert deleted is False
+
+
+class TestIsEnrolled:
+    async def test_enrolled_true(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """is_enrolled is True after a bind (Phase 6 T2 submission gate)."""
+        student = await _make_student(db_session, seed_tenant, "ext-enr-true")
+        repo = StudentEnrollmentRepository(db_session)
+        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        assert await repo.is_enrolled(student.id, seed_root_node.id) is True
+
+    async def test_not_enrolled_false(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """is_enrolled is False with no bind."""
+        student = await _make_student(db_session, seed_tenant, "ext-enr-false")
+        repo = StudentEnrollmentRepository(db_session)
+        assert await repo.is_enrolled(student.id, seed_root_node.id) is False
+
+    async def test_unbind_makes_not_enrolled(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """is_enrolled flips back to False after unbind (revoke course access)."""
+        student = await _make_student(db_session, seed_tenant, "ext-enr-unbind")
+        repo = StudentEnrollmentRepository(db_session)
+        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        await repo.unbind(student_id=student.id, course_node_id=seed_root_node.id)
+        assert await repo.is_enrolled(student.id, seed_root_node.id) is False

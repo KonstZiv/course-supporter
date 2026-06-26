@@ -27,6 +27,9 @@ from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.node_summaries import router as node_summaries_router
 from course_supporter.api.routes.nodes import router as nodes_router
 from course_supporter.api.routes.portal_auth import router as portal_auth_router
+from course_supporter.api.routes.portal_submissions import (
+    router as portal_submissions_router,
+)
 from course_supporter.api.routes.storage import router as storage_router
 from course_supporter.api.routes.students import router as students_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -275,4 +278,5 @@ app.include_router(cost_router, prefix="/api/v1")
 app.include_router(storage_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(portal_auth_router, prefix="/api/v1")
+app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")

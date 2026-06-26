@@ -987,3 +987,25 @@ class EnrollmentRequest(BaseModel):
     course_node_id: uuid.UUID = Field(
         description="Root CourseNode (the course) to grant access to."
     )
+
+
+class PortalSubmitResponse(BaseModel):
+    """Response for a portal session submission (Phase 6 T2, mode-2 in_app).
+
+    The student tracks progress + reads the review via the read-path (status on
+    the same endpoint), so the response is minimal: no caller-facing job_id, no
+    student_id (it is the session's own student).
+    """
+
+    submission_id: uuid.UUID = Field(
+        description="The created (or duplicate) submission."
+    )
+    status: str = Field(
+        description="Submission status ('received' for a fresh "
+        "submission; the existing status when a duplicate was returned)."
+    )
+    duplicate: bool = Field(
+        default=False,
+        description="True when an identical file for this task was already "
+        "submitted — the existing submission is returned, no new review runs.",
+    )

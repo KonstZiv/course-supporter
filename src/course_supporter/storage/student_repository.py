@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,51 @@ class StudentRepository:
             if existing is None:
                 raise  # Unexpected integrity error, not a duplicate
             return existing, False
+
+    async def create(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        external_id: str,
+        display_name: str | None = None,
+    ) -> Student:
+        """Explicitly create a student (portal provisioning, Phase 6 T1).
+
+        Distinct from :meth:`get_or_create`: this is the generate/manual
+        ``external_id`` provisioning path and lets a duplicate
+        ``(tenant_id, external_id)`` raise ``IntegrityError`` (the route maps
+        it to 409) rather than silently returning the existing row.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            external_id: Student identifier (generated or admin-provided).
+            display_name: Optional portal display name.
+
+        Returns:
+            The newly created Student.
+        """
+        student = Student(
+            tenant_id=tenant_id,
+            external_id=external_id,
+            display_name=display_name,
+        )
+        self._session.add(student)
+        await self._session.flush()
+        return student
+
+    async def set_display_name(
+        self,
+        student_id: uuid.UUID,
+        display_name: str | None,
+    ) -> None:
+        """Set a student's portal display_name (existing-Student provisioning)."""
+        stmt = (
+            update(Student)
+            .where(Student.id == student_id)
+            .values(display_name=display_name)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
 
     async def get_by_id(self, student_id: uuid.UUID) -> Student | None:
         """Get a student by primary key."""

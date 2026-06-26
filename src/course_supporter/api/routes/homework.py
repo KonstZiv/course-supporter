@@ -11,10 +11,8 @@ Routes
 
 from __future__ import annotations
 
-import hashlib
 import uuid
-from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import structlog
 from arq.connections import ArqRedis
@@ -23,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import HomeworkSubmitResponse, TenantWebhookResponse
-from course_supporter.api.upload_validation import file_extension
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.homework.submission_core import (
+    create_and_dispatch_submission,
+    validate_homework_file,
+)
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -36,9 +36,11 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
-from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.s3 import S3Client, upload_file_chunks
+from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_repository import StudentRepository
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import Student
 
 logger = structlog.get_logger()
 
@@ -49,42 +51,6 @@ S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 CheckDep = Annotated[TenantContext, Depends(require_scope(AuthScope.CHECK))]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
-
-# 10 MB max file size
-MAX_HOMEWORK_SIZE = 10 * 1024 * 1024
-
-ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
-    {
-        ".py",
-        ".js",
-        ".ts",
-        ".java",
-        ".c",
-        ".cpp",
-        ".cs",
-        ".sql",
-        ".md",
-        ".txt",
-        ".html",
-        ".ipynb",
-        ".zip",
-        ".gz",
-    }
-)
-
-
-async def _hashing_upload(
-    file: UploadFile,
-) -> tuple[AsyncIterator[bytes], hashlib._Hash]:
-    """Wrap upload_file_chunks to compute SHA-256 while streaming."""
-    hasher = hashlib.sha256()
-
-    async def _stream() -> AsyncIterator[bytes]:
-        async for chunk in upload_file_chunks(file):
-            hasher.update(chunk)
-            yield chunk
-
-    return _stream(), hasher
 
 
 @router.post("/homework/submit", status_code=202)
@@ -149,25 +115,8 @@ async def submit_homework(
 
     Returns 202 Accepted with submission and job IDs for tracking.
     """
-    # --- Validate file ---
-    ext = file_extension(file.filename)
-    if ext not in ALLOWED_HOMEWORK_EXTENSIONS:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"File extension '{ext}' is not allowed. "
-                f"Accepted: {sorted(ALLOWED_HOMEWORK_EXTENSIONS)}"
-            ),
-        )
-
-    if file.size is not None and file.size > MAX_HOMEWORK_SIZE:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"File too large ({file.size} bytes). "
-                f"Maximum: {MAX_HOMEWORK_SIZE} bytes (10 MB)."
-            ),
-        )
+    # --- Validate file (shared pre-upload gate, run first) ---
+    validate_homework_file(file)
 
     # --- Validate webhook URL (SSRF protection) ---
     if webhook_url is not None:
@@ -225,134 +174,47 @@ async def submit_homework(
             "(its summary has not been generated).",
         )
 
-    # --- Upload file to S3 (streaming SHA-256) ---
-    submission_id = uuid.uuid4()
-    filename = file.filename or "upload"
-    key = f"homework/{tenant.tenant_id}/{submission_id}/{filename}"
-    content_type = file.content_type or "application/octet-stream"
+    # --- Upload + create + dispatch via the shared core (mode-1: webhook) ---
+    # The student is resolved by get-or-create on external_id, INSIDE the core's
+    # S3-cleanup guard (so a resolution failure cleans up the upload, unchanged).
+    student_repo = StudentRepository(session)
 
-    stream, hasher = await _hashing_upload(file)
-    s3_url, uploaded_bytes = await s3.upload_smart(
-        stream=stream,
-        key=key,
-        content_type=content_type,
-        file_size=file.size,
-    )
-    file_hash = hasher.hexdigest()
-
-    # Check actual uploaded size (in case file.size was None)
-    if uploaded_bytes > MAX_HOMEWORK_SIZE:
-        await s3.delete_object(key)
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"File too large ({uploaded_bytes} bytes). "
-                f"Maximum: {MAX_HOMEWORK_SIZE} bytes (10 MB)."
-            ),
-        )
-
-    logger.info(
-        "homework_file_uploaded",
-        key=key,
-        size=uploaded_bytes,
-        content_type=content_type,
-        file_hash=file_hash,
-    )
-
-    # --- Create DB records (clean up S3 on failure) ---
-    try:
-        # Get or create student
-        student_repo = StudentRepository(session)
-        student, created = await student_repo.get_or_create(
+    async def _resolve_student() -> tuple[Student, bool]:
+        return await student_repo.get_or_create(
             tenant_id=tenant.tenant_id,
             external_id=student_external_id,
         )
-        if created:
-            logger.info(
-                "student_created",
-                student_id=str(student.id),
-                external_id=student_external_id,
-            )
 
-        # --- Dedup: check for identical file already reviewed ---
-        hw_repo = HomeworkRepository(session)
-        existing = await hw_repo.find_duplicate(
-            student_id=student.id,
-            authored_document_id=authored_document_id,
-            file_hash=file_hash,
-        )
-        if existing is not None:
-            # Identical file already processed — return cached result
-            await s3.delete_object(key)
-            logger.warning(
-                "homework_duplicate_detected",
-                student_id=str(student.id),
-                node_id=str(node_id),
-                file_hash=file_hash,
-                existing_submission_id=str(existing.id),
-            )
-            return HomeworkSubmitResponse(
-                submission_id=existing.id,
-                student_id=student.id,
-                status=existing.status,
-                job_id=existing.job_id,
-                duplicate=True,
-            )
-
-        # Create submission
-        submission = await hw_repo.create(
-            tenant_id=tenant.tenant_id,
-            student_id=student.id,
-            course_node_id=course_node_id,
-            node_id=node_id,
-            authored_document_id=authored_document_id,
-            file_url=s3_url,
-            file_type=content_type,
-            original_filename=file.filename,
-            webhook_url=webhook_url,
-            file_hash=file_hash,
-            response_language=response_language,
-            student_note=student_note,
-        )
-
-        # Create the durable Job + submission↔job link (DB only — no dispatch
-        # yet), then commit everything staged (student + submission + job).
-        job = await create_homework_job(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            submission_id=submission.id,
-        )
-        await session.commit()
-    except Exception:
-        # Clean up orphaned S3 file if DB operations fail (BEFORE the commit).
-        await s3.delete_object(key)
-        raise
-
-    # Dispatch to ARQ AFTER the commit (DD-3.2.6-A): the worker can only pick up
-    # the job once its rows are durable, closing the "Job not found" race. This
-    # is deliberately outside the S3-cleanup guard — a dispatch failure leaves a
-    # durable, re-dispatchable submission with its file intact.
-    await dispatch_homework(
-        redis=arq,
+    result = await create_and_dispatch_submission(
         session=session,
-        job_id=job.id,
-        submission_id=submission.id,
+        s3=s3,
+        arq=arq,
+        tenant_id=tenant.tenant_id,
+        resolve_student=_resolve_student,
+        course_node_id=course_node_id,
+        node_id=node_id,
+        authored_document_id=authored_document_id,
+        file=file,
+        delivery_mode="webhook",
+        webhook_url=webhook_url,
+        response_language=response_language,
+        student_note=student_note,
     )
 
-    logger.info(
-        "homework_submitted",
-        submission_id=str(submission.id),
-        student_id=str(student.id),
-        node_id=str(node_id),
-        job_id=str(job.id),
-        file_hash=file_hash,
-    )
+    if result.duplicate:
+        return HomeworkSubmitResponse(
+            submission_id=result.submission.id,
+            student_id=result.student.id,
+            status=result.submission.status,
+            job_id=result.job_id,
+            duplicate=True,
+        )
 
     return HomeworkSubmitResponse(
-        submission_id=submission.id,
-        student_id=student.id,
+        submission_id=result.submission.id,
+        student_id=result.student.id,
         status="received",
-        job_id=job.id,
+        job_id=result.job_id,
     )
 
 

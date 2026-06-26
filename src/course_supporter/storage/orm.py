@@ -1077,6 +1077,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
             "score IS NULL OR (score BETWEEN 0 AND 100)",
             name="ck_homework_score_range",
         ),
+        CheckConstraint(
+            "delivery_mode IN ('webhook', 'in_app')",
+            name="ck_homework_delivery_mode",
+        ),
         {"comment": "Homework submissions from external systems for Mentor review"},
     )
 
@@ -1169,6 +1173,18 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     )
     webhook_delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+    delivery_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="webhook",
+        server_default="webhook",
+        comment="Where the review is delivered (Phase 6 T2, KD17). 'webhook' "
+        "(mode-1, the default — caller-owned student, review POSTed back; "
+        "unchanged) or 'in_app' (mode-2 — portal session submission). For "
+        "'in_app' NO webhook fires even when the tenant has a default "
+        "webhook_url (resolve_webhook_url returns None), and the submission "
+        "terminates at 'completed' for the student to read via the read-path "
+        "(it never reaches 'delivered'). Enforced by ck_homework_delivery_mode.",
     )
 
     # Language

@@ -138,6 +138,33 @@ class TestHomeworkSubmissionModel:
         }
         assert "ck_homework_score_range" in checks
 
+    def test_delivery_mode_default(self) -> None:
+        """delivery_mode defaults to 'webhook' (mode-1, unchanged) — Phase 6 T2."""
+        col = HomeworkSubmission.__table__.c.delivery_mode
+        assert col.default.arg == "webhook"  # type: ignore[union-attr]
+        assert col.server_default.arg == "webhook"  # type: ignore[union-attr]
+
+    def test_delivery_mode_not_nullable(self) -> None:
+        """delivery_mode is required (NOT NULL — every submission has a mode)."""
+        col = HomeworkSubmission.__table__.c.delivery_mode
+        assert col.nullable is False
+
+    def test_delivery_mode_max_length(self) -> None:
+        """delivery_mode column accepts up to 20 chars."""
+        col = HomeworkSubmission.__table__.c.delivery_mode
+        assert col.type.length == 20  # type: ignore[union-attr]
+
+    def test_delivery_mode_check_constraint(self) -> None:
+        """ck_homework_delivery_mode restricts delivery_mode to webhook/in_app."""
+        from sqlalchemy import CheckConstraint
+
+        checks = {
+            c.name
+            for c in HomeworkSubmission.__table__.constraints
+            if isinstance(c, CheckConstraint)
+        }
+        assert "ck_homework_delivery_mode" in checks
+
     def test_repr(self) -> None:
         """__repr__ includes id, status, and student_id."""
         sid = _uuid7()

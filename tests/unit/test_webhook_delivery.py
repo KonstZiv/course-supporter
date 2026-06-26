@@ -32,12 +32,14 @@ def _make_submission(
     review_markdown: str | None = None,
     response_language: str | None = "uk",
     score: int | None = None,
+    delivery_mode: str = "webhook",
 ) -> MagicMock:
     sub = MagicMock()
     sub.id = uuid.uuid4()
     sub.tenant_id = uuid.uuid4()
     sub.student_id = uuid.uuid4()
     sub.webhook_url = webhook_url
+    sub.delivery_mode = delivery_mode
     sub.review_result = review_result
     sub.review_markdown = review_markdown
     sub.response_language = response_language
@@ -90,6 +92,29 @@ class TestResolveWebhookUrl:
     def test_none_when_no_tenant(self) -> None:
         sub = _make_submission(webhook_url=None)
         assert resolve_webhook_url(sub, None) is None
+
+    def test_in_app_isolates_from_webhook(self) -> None:
+        """in_app returns None even with submission + tenant URLs (Phase 6 T2).
+
+        The marker isolates a portal submission from the caller webhook: no
+        webhook fires, the submission terminates at 'completed', and the
+        student reads the review via the read-path.
+        """
+        sub = _make_submission(
+            webhook_url="https://sub.example.com",
+            delivery_mode="in_app",
+        )
+        tenant = _make_tenant(webhook_url="https://tenant.example.com")
+        assert resolve_webhook_url(sub, tenant) is None
+
+    def test_webhook_mode_unchanged(self) -> None:
+        """Explicit delivery_mode='webhook' keeps the mode-1 resolution."""
+        sub = _make_submission(
+            webhook_url=None,
+            delivery_mode="webhook",
+        )
+        tenant = _make_tenant(webhook_url="https://tenant.example.com")
+        assert resolve_webhook_url(sub, tenant) == "https://tenant.example.com"
 
 
 # --- Payload builders ---

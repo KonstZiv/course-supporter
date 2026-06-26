@@ -987,3 +987,74 @@ class EnrollmentRequest(BaseModel):
     course_node_id: uuid.UUID = Field(
         description="Root CourseNode (the course) to grant access to."
     )
+
+
+class PortalSubmitResponse(BaseModel):
+    """Response for a portal session submission (Phase 6 T2, mode-2 in_app).
+
+    The student tracks progress + reads the review via the read-path (status on
+    the same endpoint), so the response is minimal: no caller-facing job_id, no
+    student_id (it is the session's own student).
+    """
+
+    submission_id: uuid.UUID = Field(
+        description="The created (or duplicate) submission."
+    )
+    status: str = Field(
+        description="Submission status ('received' for a fresh "
+        "submission; the existing status when a duplicate was returned)."
+    )
+    duplicate: bool = Field(
+        default=False,
+        description="True when an identical file for this task was already "
+        "submitted — the existing submission is returned, no new review runs.",
+    )
+
+
+class PortalVerdict(BaseModel):
+    """Caller-facing verdict shown to the student (Phase 6 T2 read-path).
+
+    Derived from ``review_result['verdict']`` (the only review_result key the
+    student ever sees); None until a review has written it. The full layered
+    ``review_result`` JSONB is NEVER exposed.
+    """
+
+    passed: bool = Field(description="Whether the submission meets the bar.")
+    correctness: str = Field(
+        description="Coarse correctness (correct / partially_correct / incorrect)."
+    )
+
+
+class PortalSubmissionListItem(BaseModel):
+    """One attempt in the read-path list (Phase 6 T2). NO review_markdown.
+
+    The list is intentionally light: the heavy ``review_markdown`` is fetched
+    only in the detail view. The internal trace
+    (``review_result``/``safety_result``/``sanity_result``) is NEVER included.
+    """
+
+    id: uuid.UUID
+    status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    verdict: PortalVerdict | None = Field(default=None)
+    created_at: datetime
+    original_filename: str | None = None
+
+
+class PortalSubmissionDetail(BaseModel):
+    """One attempt — the full curated slice (Phase 6 T2 read-path detail).
+
+    The student sees ``status`` / ``score`` / ``verdict`` / ``review_markdown``
+    only. The internal trace (``review_result`` / ``safety_result`` /
+    ``sanity_result``) is NEVER serialized here.
+    """
+
+    id: uuid.UUID
+    status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    verdict: PortalVerdict | None = Field(default=None)
+    review_markdown: str | None = Field(
+        default=None, description="Rendered Markdown review (None until reviewed)."
+    )
+    created_at: datetime
+    original_filename: str | None = None

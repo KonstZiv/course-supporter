@@ -42,7 +42,19 @@ def resolve_webhook_url(
     submission: HomeworkSubmission,
     tenant: Tenant | None,
 ) -> str | None:
-    """Return the webhook URL for this submission (per-submission or tenant default)."""
+    """Return the webhook URL for this submission, or None if none applies.
+
+    The ``delivery_mode`` marker is read FIRST (Phase 6 T2, KD17): a portal
+    ``in_app`` submission has no webhook target, so this returns None even when
+    the tenant has a default ``webhook_url``. Every webhook path (reviewed,
+    mismatch, failed) gates on this function, so the marker isolates the portal
+    submission from the caller webhook entirely — the submission terminates at
+    ``completed`` and the student reads the review via the read-path. Mode-1
+    (``delivery_mode='webhook'``) is unchanged: per-submission URL, then the
+    tenant default.
+    """
+    if submission.delivery_mode == "in_app":
+        return None
     return submission.webhook_url or (tenant.webhook_url if tenant else None)
 
 

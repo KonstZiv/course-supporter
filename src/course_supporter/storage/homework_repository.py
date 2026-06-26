@@ -67,6 +67,7 @@ class HomeworkRepository:
         file_hash: str | None = None,
         response_language: str | None = None,
         student_note: str | None = None,
+        delivery_mode: str = "webhook",
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -85,6 +86,8 @@ class HomeworkRepository:
             response_language: Requested ISO 639-1 language for review.
             student_note: D7-local free-text note the student attached to this
                 submission (steers the Mentor review of this attempt).
+            delivery_mode: ``'webhook'`` (mode-1, default) or ``'in_app'``
+                (mode-2 portal session submission; Phase 6 T2, KD17).
 
         Returns:
             The newly created HomeworkSubmission.
@@ -102,6 +105,7 @@ class HomeworkRepository:
             file_hash=file_hash,
             response_language=response_language,
             student_note=student_note,
+            delivery_mode=delivery_mode,
         )
         self._session.add(submission)
         await self._session.flush()
@@ -183,6 +187,51 @@ class HomeworkRepository:
             stmt = stmt.where(HomeworkSubmission.course_node_id == course_node_id)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_for_student_and_task(
+        self,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> list[HomeworkSubmission]:
+        """List a student's attempts on one task, newest first (read-path).
+
+        Ownership-scoped (``student_id``) and task-scoped
+        (``authored_document_id``, the KD15 anchor), excluding soft-deleted
+        rows (Q7: a soft-deleted submission is invisible to the student). The
+        portal read-path lists attempts per task; mode-1's :meth:`get_for_student`
+        is course-scoped and is left untouched.
+        """
+        stmt = (
+            select(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .order_by(HomeworkSubmission.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_owned(
+        self,
+        submission_id: uuid.UUID,
+        student_id: uuid.UUID,
+    ) -> HomeworkSubmission | None:
+        """Get a non-deleted submission owned by this student (read-path detail).
+
+        Ownership-only authorization (Q1): a student reads only their own
+        submissions, regardless of current enrollment (own history survives an
+        un-enrollment). A soft-deleted submission is not returned (Q7 — the
+        route maps the None to a generic 404).
+        """
+        stmt = select(HomeworkSubmission).where(
+            HomeworkSubmission.id == submission_id,
+            HomeworkSubmission.student_id == student_id,
+            HomeworkSubmission.deleted_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def update_status(
         self,

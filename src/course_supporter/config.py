@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_allowed_origins: list[str] = []
     cors_allow_credentials: bool = False
-    cors_allowed_methods: list[str] = ["GET", "POST"]
+    cors_allowed_methods: list[str] = ["GET", "POST", "DELETE"]
     cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key", "Authorization"]
 
     # --- Student portal session (Phase 6 T1, KD17) ---

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from course_supporter.language import (
     InvalidLanguageError,
@@ -886,4 +886,104 @@ class NodeSummaryEditViewResponse(BaseModel):
             "occurred yet (the very first run produced the current "
             "Final via INSERT)."
         ),
+    )
+
+
+# --- Student portal (Phase 6 T1, KD17) ---
+
+
+class PortalLoginRequest(BaseModel):
+    """Request body for POST /portal/login.
+
+    The portal is tenant-scoped and the login lookup happens before the
+    student is known, so the tenant is resolved explicitly from ``tenant_id``
+    (KD17 ratify Q2) rather than guessed.
+    """
+
+    tenant_id: uuid.UUID = Field(description="Tenant the student belongs to.")
+    login: str = Field(min_length=1, max_length=200, description="Student login.")
+    password: str = Field(min_length=1, description="Student password (plaintext).")
+
+
+class PortalLoginResponse(BaseModel):
+    """Response for a successful POST /portal/login."""
+
+    access_token: str = Field(description="HS256 bearer session token.")
+    token_type: str = Field(default="bearer", description="Always ``bearer``.")
+    student_id: uuid.UUID = Field(description="Authenticated student ID.")
+    display_name: str | None = Field(
+        default=None, description="Student's portal display name, if set."
+    )
+
+
+class PortalMeResponse(BaseModel):
+    """Response for GET /portal/me (the authenticated student's identity)."""
+
+    student_id: uuid.UUID
+    tenant_id: uuid.UUID
+    login: str
+    display_name: str | None = None
+
+
+class ProvisionStudentRequest(BaseModel):
+    """Request body for POST /students (tenant-admin provisioning, scope PREP).
+
+    ``external_id`` has three modes (KD17 ratify Q2 refinement B):
+
+    * ``generate`` — the system mints a fresh ``external_id`` (omit the field);
+    * ``manual``   — caller supplies ``external_id`` (must be new in the tenant);
+    * ``existing`` — caller supplies ``student_id`` of an existing student; the
+      credential is attached to it (the integration-mode student gains a portal
+      login and its prior history). No new student row is created.
+    """
+
+    mode: Literal["generate", "manual", "existing"] = Field(
+        description="external_id resolution mode."
+    )
+    external_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Required for mode='manual'; must be omitted for "
+        "mode='generate'; ignored for mode='existing'.",
+    )
+    student_id: uuid.UUID | None = Field(
+        default=None,
+        description="Required for mode='existing' — the existing student to "
+        "attach the credential to.",
+    )
+    login: str = Field(min_length=1, max_length=200, description="Portal login.")
+    password: str = Field(
+        min_length=1,
+        description="Portal password (plaintext; only the argon2id hash is "
+        "stored). Must meet the minimum-length policy.",
+    )
+    display_name: str | None = Field(
+        default=None, max_length=200, description="Portal display name."
+    )
+
+    @model_validator(mode="after")
+    def _check_mode_fields(self) -> Self:
+        if self.mode == "manual" and not self.external_id:
+            raise ValueError("external_id is required when mode='manual'")
+        if self.mode == "existing" and self.student_id is None:
+            raise ValueError("student_id is required when mode='existing'")
+        if self.mode == "generate" and self.external_id is not None:
+            raise ValueError("external_id must be omitted when mode='generate'")
+        return self
+
+
+class ProvisionStudentResponse(BaseModel):
+    """Response for a successful POST /students (201)."""
+
+    student_id: uuid.UUID
+    external_id: str
+    login: str
+
+
+class EnrollmentRequest(BaseModel):
+    """Request body for POST /students/enrollments (bind student↔course)."""
+
+    student_id: uuid.UUID = Field(description="Student to enroll.")
+    course_node_id: uuid.UUID = Field(
+        description="Root CourseNode (the course) to grant access to."
     )

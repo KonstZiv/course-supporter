@@ -733,3 +733,26 @@ class TestPdfPathIntegration:
         assert proc._slide_raw is not None
         assert len(proc._slide_raw) == 14
         assert all(sr.image_bytes for sr in proc._slide_raw)
+
+
+class TestRenderedSlidesAccessor:
+    """Phase 6 T3 read-only seam accessor (additive, KD-2.3-F intact)."""
+
+    def test_empty_before_process_raw(self) -> None:
+        """No renders yet → empty sequence (never None)."""
+        proc = PresentationProcessor()
+        assert proc.rendered_slides == ()
+        assert len(proc.rendered_slides) == 0
+
+    async def test_surfaces_full_sequence_after_extraction(self) -> None:
+        """Accessor returns the exact per-slide sequence Pass 1 consumed."""
+        pdf = _FIXTURES / "lesson6_functions_1.pdf"
+        proc = PresentationProcessor()
+        await proc.process_raw(_make_source(pdf))
+
+        slides = proc.rendered_slides
+        assert len(slides) == 14
+        assert [s.slide_number for s in slides] == list(range(1, 15))
+        assert all(s.image_bytes for s in slides)
+        # Same object the processor holds internally — a view, not a copy.
+        assert list(slides) == proc._slide_raw

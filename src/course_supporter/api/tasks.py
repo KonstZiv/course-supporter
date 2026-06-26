@@ -111,6 +111,10 @@ async def arq_ingest_material(
         source_url: URL or S3 path to the source file.
         priority: Job priority ('normal' or 'immediate').
     """
+    # PresentationProcessor + persist_slide_webps drive the Phase 6 T3 (KD17)
+    # slide-WebP persistence on the seam (presentation source_type only).
+    from course_supporter.ingestion.presentation import PresentationProcessor
+    from course_supporter.ingestion.slide_persist import persist_slide_webps
     from course_supporter.ingestion_callback import IngestionCallback
     from course_supporter.job_priority import JobPriority, check_work_window
     from course_supporter.llm.stage_router import StageRouter
@@ -337,6 +341,37 @@ async def arq_ingest_material(
                 summary_id=str(summary.id),
                 segment_count=len(segments),
             )
+
+            # ── Slide persistence (Phase 6 T3, KD17) — presentation only ──
+            # Persist the transiently-rendered slides as WebP to S3 and record
+            # the ordered keys on the AuthoredDocument, INSIDE this Pass 2b
+            # business unit so the commit below makes segments + slide_keys
+            # durable together (Q3 strict). A failure here propagates to the
+            # outer ``except`` → rollback → ``on_failure`` soft-delete
+            # (material-complete iff ingest-success). The processor is
+            # untouched bar a read-only accessor (``rendered_slides``); the
+            # LLM contour (KD-2.3-F) is byte-identical.
+            if isinstance(processor, PresentationProcessor) and s3 is not None:
+                if root_node is None:
+                    msg = (
+                        f"Presentation {material_id} has no root CourseNode; "
+                        "cannot key slide objects"
+                    )
+                    raise ValueError(msg)
+                slide_keys = await persist_slide_webps(
+                    s3,
+                    tenant_id=root_node.tenant_id,
+                    node_id=entry.course_node_id,
+                    document_id=entry.id,
+                    slides=processor.rendered_slides,
+                )
+                await entry_repo.set_slide_keys(mid, slide_keys=slide_keys)
+                log.info(
+                    "slides_persisted",
+                    material_id=material_id,
+                    slide_count=len(slide_keys),
+                )
+
             await session.commit()
             # ── /Pass 2b ──
 

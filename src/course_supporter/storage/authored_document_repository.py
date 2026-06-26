@@ -342,6 +342,34 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
+    async def set_slide_keys(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        slide_keys: list[str],
+    ) -> AuthoredDocument:
+        """Persist the ordered per-slide WebP S3 keys (Phase 6 T3, KD17).
+
+        Written on the ``arq_ingest_material`` seam after Pass 2b for
+        presentation sources; ``arq_ingest_material`` flushes this inside the
+        same business unit so the keys become durable together with the Pass
+        2b segments (the existing commit). Overwrites in place on re-ingest.
+
+        Args:
+            entry_id: AuthoredDocument id to update.
+            slide_keys: Ordered S3 keys (index = slide_number - 1).
+
+        Returns:
+            The updated AuthoredDocument.
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.slide_keys = slide_keys
+        await self._session.flush()
+        return entry
+
     async def update_material_role(
         self,
         entry: AuthoredDocument,

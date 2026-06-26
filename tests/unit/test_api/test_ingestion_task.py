@@ -511,3 +511,120 @@ class TestArqIngestMaterial:
             )
 
         mock_unlink.assert_awaited_once_with(missing_ok=True)
+
+    async def test_presentation_persists_slides_on_seam(self) -> None:
+        """Phase 6 T3: presentation ingest persists slides + records keys."""
+        from course_supporter.ingestion.presentation import (
+            PresentationProcessor,
+            SlideRaw,
+        )
+
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        mid = uuid.UUID(material_id)
+
+        doc = SourceDocument(
+            source_type=SourceType.PRESENTATION,
+            source_url="http://localhost:9000/bucket/deck.pdf",
+        )
+        slides = [
+            SlideRaw(slide_number=1, raw_text="a", image_bytes=b"\x89PNG"),
+            SlideRaw(slide_number=2, raw_text="b", image_bytes=b"\x89PNG"),
+        ]
+        # spec=PresentationProcessor → isinstance(...) is True at the seam.
+        pres_proc = MagicMock(spec=PresentationProcessor)
+        pres_proc.process_raw = AsyncMock(return_value=doc)
+        pres_proc.process_macro = AsyncMock(return_value=_default_summary_draft())
+        pres_proc.process_detail = AsyncMock(return_value=[])
+        pres_proc.rendered_slides = slides
+
+        ctx = _make_arq_ctx()
+        ctx["s3_client"] = AsyncMock()
+        persist_keys = ["tenants/t/nodes/n/slides/d/0001.webp", "…/0002.webp"]
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(_ENTRY_REPO) as mock_entry_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value={SourceType.PRESENTATION: pres_proc}),
+            patch(
+                "course_supporter.ingestion.slide_persist.persist_slide_webps",
+                new=AsyncMock(return_value=persist_keys),
+            ) as mock_persist,
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_entry()
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
+            mock_entry_cls.return_value.set_slide_keys = AsyncMock()
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
+
+            await arq_ingest_material(
+                ctx,
+                job_id,
+                material_id,
+                "presentation",
+                "http://localhost:9000/bucket/deck.pdf",
+            )
+
+        mock_persist.assert_awaited_once()
+        assert mock_persist.call_args.kwargs["slides"] is slides
+        mock_entry_cls.return_value.set_slide_keys.assert_awaited_once_with(
+            mid, slide_keys=persist_keys
+        )
+        mock_cb_cls.return_value.on_success.assert_awaited_once()
+
+    async def test_non_presentation_skips_slide_persist(self) -> None:
+        """Non-presentation ingest never touches the slide-persist seam."""
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+
+        doc = SourceDocument(
+            source_type=SourceType.WEB, source_url="https://example.com"
+        )
+        ctx = _make_arq_ctx()
+        ctx["s3_client"] = AsyncMock()  # s3 present — yet still skipped
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(_ENTRY_REPO) as mock_entry_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=_mock_processors(doc)),
+            patch(
+                "course_supporter.ingestion.slide_persist.persist_slide_webps",
+                new=AsyncMock(),
+            ) as mock_persist,
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
+            mock_entry_cls.return_value.get_by_id = AsyncMock(
+                return_value=_mock_entry()
+            )
+            mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
+            mock_entry_cls.return_value.set_slide_keys = AsyncMock()
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
+
+            await arq_ingest_material(
+                ctx, job_id, material_id, "web", "https://example.com"
+            )
+
+        mock_persist.assert_not_awaited()
+        mock_entry_cls.return_value.set_slide_keys.assert_not_awaited()

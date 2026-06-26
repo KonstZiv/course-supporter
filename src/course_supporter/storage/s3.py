@@ -22,6 +22,14 @@ MULTIPART_CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB
 MULTIPART_THRESHOLD = 50 * 1024 * 1024  # 50 MB
 DOWNLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
+# Flat presigned-GET validity for student-portal media delivery (Phase 6
+# T3, KD17): 300 min = 2x the 150-min maximum material length. The single
+# source of truth for the media-fetch TTL — deliberately NOT derived from
+# ``duration_sec`` (KD17 decoupled the link lifetime from the media length;
+# one constant covers every media kind). A session outliving the TTL → page
+# reload re-issues a fresh link; seamless in-player refresh is DD-6-B.
+PRESIGNED_GET_TTL_SEC = 300 * 60  # 18000 s
+
 
 def sanitize_s3_key(filename: str) -> str:
     """Strip directory components from a filename for safe S3 key composition.
@@ -424,6 +432,42 @@ class S3Client:
             ExpiresIn=expires_in,
         )
         logger.info("s3_presigned_url", key=key, expires_in=expires_in)
+        return url
+
+    async def generate_presigned_get_url(
+        self,
+        key: str,
+        *,
+        expires_in: int = PRESIGNED_GET_TTL_SEC,
+    ) -> str:
+        """Generate a presigned GET URL for direct client read (Phase 6 T3).
+
+        The read-side sibling of :meth:`generate_presigned_url` (which
+        signs ``put_object``): this signs ``get_object`` so the URL drops
+        straight into an ``<img>`` / ``<video>`` element and the browser
+        issues Range requests to S3 directly — the backend never proxies
+        media bytes (KD17). Unlike the PUT variant, ``ContentType`` is not
+        a signed parameter; the object's stored ``Content-Type`` (e.g.
+        ``image/webp`` for persisted slides) drives the browser render.
+
+        Args:
+            key: Object key to sign for reading.
+            expires_in: URL validity in seconds (default
+                :data:`PRESIGNED_GET_TTL_SEC` = 300 min, the flat KD17 TTL).
+
+        Returns:
+            Presigned GET URL string.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        url: str = await self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+        logger.info("s3_presigned_get_url", key=key, expires_in=expires_in)
         return url
 
     async def head_object(self, key: str) -> dict[str, Any]:

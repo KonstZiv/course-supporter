@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import re
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -177,6 +178,22 @@ class PresentationProcessor(MaterialProcessor):
         # ``audio.py`` word-cache miss).
         # DD-2.3-AJ: explicit-state-passing refactor (Phase 2.5, all processors).
         self._slide_raw: list[SlideRaw] | None = None
+
+    @property
+    def rendered_slides(self) -> Sequence[SlideRaw]:
+        """Read-only view of the per-slide renders from ``process_raw``.
+
+        Additive accessor for the Phase 6 T3 media seam (KD17): the
+        ``arq_ingest_material`` orchestrator reads this AFTER ``process_raw``
+        to persist the transiently-rendered slide images as WebP. It exposes
+        the exact ``SlideRaw`` sequence already produced for Pass 1 — no new
+        computation, no behavioural change, no LLM call. The KD-2.3-F
+        invariant (Pass 1 / Pass 2a / Pass 2b output byte-identical) is
+        untouched; persistence logic lives entirely on the seam
+        (``ingestion/slide_persist.py``), never here. Empty before
+        ``process_raw`` runs.
+        """
+        return self._slide_raw or ()
 
     async def process_raw(
         self,

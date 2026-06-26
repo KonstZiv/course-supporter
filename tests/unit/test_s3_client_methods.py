@@ -61,6 +61,49 @@ class TestGeneratePresignedUrl:
             await client.generate_presigned_url("k", "text/plain")
 
 
+class TestGeneratePresignedGetUrl:
+    async def test_signs_get_object_with_flat_ttl(self) -> None:
+        """generate_presigned_get_url() signs get_object at the flat KD17 TTL."""
+        from course_supporter.storage.s3 import PRESIGNED_GET_TTL_SEC
+
+        client = _make_client()
+        client._client.generate_presigned_url = AsyncMock(
+            return_value="https://s3.example.com/test-bucket/slide?sig=xyz"
+        )
+
+        url = await client.generate_presigned_get_url(
+            "tenants/t1/nodes/n1/slides/d1/0001.webp"
+        )
+
+        assert url == "https://s3.example.com/test-bucket/slide?sig=xyz"
+        assert PRESIGNED_GET_TTL_SEC == 18000
+        # No ContentType in the signed params (unlike the PUT variant).
+        client._client.generate_presigned_url.assert_awaited_once_with(
+            "get_object",
+            Params={
+                "Bucket": "test-bucket",
+                "Key": "tenants/t1/nodes/n1/slides/d1/0001.webp",
+            },
+            ExpiresIn=PRESIGNED_GET_TTL_SEC,
+        )
+
+    async def test_custom_expiry(self) -> None:
+        """Custom expires_in is forwarded to S3."""
+        client = _make_client()
+        client._client.generate_presigned_url = AsyncMock(return_value="url")
+
+        await client.generate_presigned_get_url("key", expires_in=120)
+
+        call_kwargs = client._client.generate_presigned_url.call_args
+        assert call_kwargs.kwargs["ExpiresIn"] == 120
+
+    async def test_raises_without_init(self) -> None:
+        """Raises RuntimeError if client not initialized."""
+        client = S3Client("http://x", "a", "b", "c")
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await client.generate_presigned_get_url("k")
+
+
 class TestHeadObject:
     async def test_returns_metadata(self) -> None:
         """head_object() returns metadata dict."""

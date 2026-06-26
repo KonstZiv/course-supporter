@@ -101,6 +101,7 @@ def _mock_entry(
     state: str = "raw",
     error_message: str | None = None,
     job_id: uuid.UUID | None = None,
+    slide_keys: list[str] | None = None,
 ) -> MagicMock:
     """Create a mock AuthoredDocument with ORM-compatible attributes."""
     entry = MagicMock()
@@ -118,6 +119,9 @@ def _mock_entry(
     entry.job_id = job_id
     entry.processing_estimate = None
     entry.deleted_at = None
+    # Phase 6 T3: explicit so MagicMock auto-attr does not make the
+    # delete-cleanup slide-key gathering branch spuriously truthy.
+    entry.slide_keys = slide_keys
     entry.created_at = datetime.now(UTC)
     entry.updated_at = datetime.now(UTC)
     return entry
@@ -934,6 +938,58 @@ class TestDeleteDocument:
         assert kwargs["file_keys"] == ["tenants/t/file.pdf"]
         assert kwargs["course_node_id"] == node_id
         assert kwargs["tenant_id"] == STUB_TENANT.tenant_id
+
+    async def test_gathers_slide_keys_into_cleanup(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """Persisted per-slide WebP keys (Phase 6 T3) are scrubbed too.
+
+        A presentation's ``slide_keys`` are S3 objects distinct from
+        ``source_url``; the handler gathers them (after the source key,
+        before cascade) so ``enqueue_s3_cleanup`` removes every WebP slide
+        alongside the original deck.
+        """
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="presentation",
+            source_url="http://localhost:9000/bucket/tenants/t/deck.pptx",
+            slide_keys=[
+                "tenants/t/nodes/n/slides/d/0001.webp",
+                "tenants/t/nodes/n/slides/d/0002.webp",
+            ],
+        )
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/deck.pptx")
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.documents.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/documents/{entry.id}")
+        assert resp.status_code == 204
+        enqueue_mock.assert_awaited_once()
+        # Source deck key first, then the two slide keys — ordered, all scrubbed.
+        assert enqueue_mock.call_args.kwargs["file_keys"] == [
+            "tenants/t/deck.pptx",
+            "tenants/t/nodes/n/slides/d/0001.webp",
+            "tenants/t/nodes/n/slides/d/0002.webp",
+        ]
 
     async def test_no_enqueue_when_extract_key_returns_none(
         self,

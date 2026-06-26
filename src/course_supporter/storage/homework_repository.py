@@ -188,6 +188,38 @@ class HomeworkRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_active_submissions_in_course(
+        self,
+        student_id: uuid.UUID,
+        course_root_id: uuid.UUID,
+    ) -> list[HomeworkSubmission]:
+        """List a student's ACTIVE submissions across a whole course (read-path).
+
+        Course-scoped (``course_node_id`` is the course ROOT, KD15) and
+        ownership-scoped, EXCLUDING soft-deleted rows (Q7 — a soft-deleted
+        attempt is invisible to the student). Powers the materials-tree overlay:
+        one query per course, grouped by ``authored_document_id`` in Python (no
+        N+1, Phase 6 T4a c2). Newest-first so the first row in each group is the
+        latest attempt.
+
+        Deliberately distinct from the soft-delete-AGNOSTIC
+        :meth:`get_for_student` (shared with the Mentor review-graph history
+        reconciliation, ``review_graph.py``), which is left untouched — the
+        ``active`` in the name flags the ``deleted_at`` filter that the curated
+        read-path requires but the review path must not (Q1).
+        """
+        stmt = (
+            select(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.course_node_id == course_root_id,
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .order_by(HomeworkSubmission.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_for_student_and_task(
         self,
         student_id: uuid.UUID,

@@ -1106,3 +1106,88 @@ class PortalCourseListItem(BaseModel):
 
     id: uuid.UUID
     title: str = Field(description="Course (root CourseNode) title.")
+
+
+class PortalAttemptResult(BaseModel):
+    """A single attempt's curated outcome (Phase 6 T4a c2 overlay).
+
+    Carried by ``last`` and ``best`` in the task overlay. Only the score and
+    the curated verdict — the internal trace (``review_result`` beyond
+    ``verdict`` / ``safety_result`` / ``sanity_result``) is never here.
+    """
+
+    score: int | None = Field(
+        default=None, description="Final 0-100 grade, if reviewed."
+    )
+    verdict: PortalVerdict | None = Field(default=None)
+
+
+class PortalSubmissionOverlay(BaseModel):
+    """Per-task submission overlay for the materials tree (Phase 6 T4a c2).
+
+    Computed from the student's OWN active (non-deleted) submissions on the
+    task — one query per course, grouped in Python (no N+1).
+    """
+
+    submission_status: Literal["none", "pending", "reviewed"] = Field(
+        description="By the LATEST attempt: ``none`` (no attempts) / ``pending`` "
+        "(in flight OR a terminal error) / ``reviewed`` (a review is written). "
+        "Terminal errors (rejected / mismatch / failed) fold to ``pending`` for "
+        "now — surfacing them distinctly is DD-6-D (a borrow, not final).",
+    )
+    last: PortalAttemptResult | None = Field(
+        default=None,
+        description="The latest attempt's curated result (present iff ≥1 attempt).",
+    )
+    best: PortalAttemptResult | None = Field(
+        default=None,
+        description="The highest-scored REVIEWED attempt with a non-null score "
+        "(pending / null-score attempts never compete). Absent when no attempt "
+        "has a usable score yet; equals ``last`` when there is exactly one.",
+    )
+
+
+class PortalMaterialItem(BaseModel):
+    """One document in the course tree — a reading material or a task.
+
+    ``kind`` discriminates (mirroring the T3 descriptor so the FE consumes one
+    flat contract): ``material`` (``task_type`` IS NULL) carries no overlay;
+    ``task`` (``task_type`` IS NOT NULL) carries the submission overlay.
+    """
+
+    id: uuid.UUID
+    kind: Literal["material", "task"] = Field(
+        description="``task`` if the document is a submittable assignment "
+        "(task_type IS NOT NULL), else ``material``.",
+    )
+    label: str = Field(
+        description="Display label: the filename, else ``{source_type} #{order}``."
+    )
+    source_type: str = Field(description="video / presentation / text / web / audio.")
+    order: int = Field(description="0-based position among sibling documents.")
+    overlay: PortalSubmissionOverlay | None = Field(
+        default=None,
+        description="Submission overlay — present iff ``kind=task``, else null.",
+    )
+
+
+class PortalMaterialTreeNode(BaseModel):
+    """Recursive course-tree node, curated for the portal (Phase 6 T4a c2).
+
+    Narrower than the author-facing ``NodeWithDocumentsResponse``: only
+    id / title / order + children + documents (no content_hash, summary_status,
+    language, timestamps). Soft-deleted nodes / documents and non-READY
+    documents are filtered out before projection (publish-gate A + READY-only).
+    """
+
+    id: uuid.UUID
+    title: str = Field(description="Node title.")
+    order: int = Field(description="0-based position among siblings.")
+    documents: list[PortalMaterialItem] = Field(
+        default_factory=list,
+        description="READY documents directly on this node (materials + tasks).",
+    )
+    children: list[PortalMaterialTreeNode] = Field(
+        default_factory=list,
+        description="Child nodes, recursively nested.",
+    )

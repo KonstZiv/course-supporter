@@ -67,6 +67,7 @@ class HomeworkRepository:
         file_hash: str | None = None,
         response_language: str | None = None,
         student_note: str | None = None,
+        delivery_mode: str = "webhook",
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -85,6 +86,8 @@ class HomeworkRepository:
             response_language: Requested ISO 639-1 language for review.
             student_note: D7-local free-text note the student attached to this
                 submission (steers the Mentor review of this attempt).
+            delivery_mode: ``'webhook'`` (mode-1, default) or ``'in_app'``
+                (mode-2 portal session submission; Phase 6 T2, KD17).
 
         Returns:
             The newly created HomeworkSubmission.
@@ -102,6 +105,7 @@ class HomeworkRepository:
             file_hash=file_hash,
             response_language=response_language,
             student_note=student_note,
+            delivery_mode=delivery_mode,
         )
         self._session.add(submission)
         await self._session.flush()

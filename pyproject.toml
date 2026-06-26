@@ -53,6 +53,8 @@ dependencies = [
     # via ``httpx.Timeout`` (TASK-2.4.18). Was transitively pulled in
     # by ``openai`` SDK; legalised as a first-class dependency.
     "httpx>=0.28",
+    "argon2-cffi>=25.1.0",
+    "pyjwt>=2.11.0",
 ]
 
 [dependency-groups]

@@ -57,9 +57,32 @@ class TestSettings:
 
     def test_environment_enum(self) -> None:
         """Environment accepts valid values."""
-        s = Settings(environment="production", _env_file=None)  # type: ignore[arg-type]
+        s = Settings(
+            environment="production",  # type: ignore[arg-type]
+            portal_session_secret="prod-secret-override",  # type: ignore[arg-type]
+            _env_file=None,
+        )
         assert s.is_prod is True
         assert s.is_dev is False
+
+    def test_portal_secret_default_rejected_in_prod(self) -> None:
+        """Production + the dev portal-session secret default → fail fast."""
+        with pytest.raises(ValidationError, match="portal_session_secret"):
+            Settings(environment="production", _env_file=None)  # type: ignore[arg-type]
+
+    def test_portal_secret_override_ok_in_prod(self) -> None:
+        """Production + an overridden portal-session secret loads fine."""
+        s = Settings(
+            environment="production",  # type: ignore[arg-type]
+            portal_session_secret="a-strong-prod-secret",  # type: ignore[arg-type]
+            _env_file=None,
+        )
+        assert s.is_prod is True
+
+    def test_portal_secret_default_ok_in_dev(self) -> None:
+        """Development tolerates the dev default (no override required)."""
+        s = Settings(environment="development", _env_file=None)  # type: ignore[arg-type]
+        assert s.is_dev is True
 
     def test_invalid_environment(self) -> None:
         """Invalid environment value raises ValidationError."""

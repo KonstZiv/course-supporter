@@ -1040,6 +1040,13 @@ class Student(SoftDeleteMixin, Base):
         comment="D7-global: student's standing preferences on review "
         "style/limits (free text).",
     )
+    display_name: Mapped[str | None] = mapped_column(
+        String(200),
+        comment="Portal display name (Phase 6 T1, KD17). Typed column — chosen "
+        "over metadata_ — for the student's own-facing name in the portal. "
+        "Nullable: integration-mode students (created via get_or_create on "
+        "submit) carry none.",
+    )
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
@@ -1201,6 +1208,133 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         return (
             f"HomeworkSubmission(id={self.id!r}, status={self.status!r}, "
             f"student_id={self.student_id!r})"
+        )
+
+
+# ──────────────────────────────────────────────
+# Student portal — identity & access (Phase 6 T1, KD17 §3 + §5)
+# ──────────────────────────────────────────────
+
+
+class StudentCredential(Base):
+    """Native portal login credential, 1:1-optional with ``Student`` (KD17).
+
+    The portal overlay gives a ``Student`` its own session-based login on
+    top of the integration mode (caller-owned ``external_id`` + webhook),
+    which is left untouched. Most integration-mode students carry NO
+    credential — the 1:1 is optional, modelled as a separate table rather
+    than columns on ``Student`` so the integration record stays pure.
+
+    Lifecycle is ``is_active`` (NOT soft-delete): "revoke access" sets
+    ``is_active = False`` while the ``Student`` and its history are kept
+    (DD-6-A — full soft-delete of a student does not exist). A plain
+    ``Base`` (no ``SoftDeleteMixin``) deliberately keeps this table out of
+    the cascade-soft-delete machinery; the ``Student → HomeworkSubmission``
+    cascade is untouched by T1.
+
+    ``login`` is unique per tenant (composite unique ``(tenant_id, login)``):
+    the portal is tenant-scoped and the login lookup happens BEFORE the
+    student is known, so ``tenant_id`` lives here and the login route
+    resolves the tenant explicitly rather than guessing.
+    """
+
+    __tablename__ = "student_credentials"
+    __table_args__ = (
+        Index(
+            "uq_student_credential_tenant_login",
+            "tenant_id",
+            "login",
+            unique=True,
+        ),
+        {"comment": "Native portal login credential, 1:1-optional with Student"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        comment="FK → Student (UNIQUE — 1:1-optional credential per KD17)",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="Owning tenant. Present here (not derived) because login "
+        "lookup is by (tenant_id, login) before the student is known.",
+    )
+    login: Mapped[str] = mapped_column(
+        String(200),
+        comment="Student login, unique per tenant (composite unique with tenant_id).",
+    )
+    password_hash: Mapped[str] = mapped_column(
+        Text,
+        comment="Argon2id password hash (argon2-cffi). Raw password is never "
+        "stored and shown only once at provisioning.",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+        comment="False = access revoked (login + existing bearer tokens "
+        "rejected at the per-request is_active check). Student and history "
+        "are retained (DD-6-A).",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"StudentCredential(id={self.id!r}, student_id={self.student_id!r}, "
+            f"login={self.login!r}, is_active={self.is_active!r})"
+        )
+
+
+class StudentEnrollment(Base):
+    """Student↔course access grant (KD17). Source of truth is our side.
+
+    Binds a ``Student`` to a course (a root ``CourseNode``). The bind route
+    validates root-ness (``parent_id IS NULL``) structurally — the FK alone
+    cannot enforce it. Unbind is a row DELETE (a grant, not history; the
+    student's submissions FK the ``AuthoredDocument``, not the enrollment, so
+    there are no orphans). A plain ``Base`` — no soft-delete.
+
+    T1 builds the model + bind/unbind only; enforcement of course
+    visibility by enrollment is deferred to the read-path (T2) / portal (T4).
+    """
+
+    __tablename__ = "student_enrollments"
+    __table_args__ = (
+        Index(
+            "uq_student_enrollment",
+            "student_id",
+            "course_node_id",
+            unique=True,
+        ),
+        {"comment": "Student↔course access grant (KD17); unbind = row DELETE"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Student.",
+    )
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → root CourseNode (the course). Root-ness "
+        "(parent_id IS NULL) is validated at the bind route, not the FK.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"StudentEnrollment(id={self.id!r}, student_id={self.student_id!r}, "
+            f"course_node_id={self.course_node_id!r})"
         )
 
 

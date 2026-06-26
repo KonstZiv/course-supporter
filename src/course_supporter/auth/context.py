@@ -20,3 +20,20 @@ class TenantContext:
     scopes: list[str]
     plan_id: str
     key_prefix: str
+
+
+@dataclass(frozen=True)
+class StudentContext:
+    """Authenticated student-portal context (Phase 6 T1, KD17).
+
+    Mirror of :class:`TenantContext` for the native session path. Resolved
+    from the bearer token's ``student_id`` and validated against the live
+    credential (``is_active``) on every request, so access revocation is
+    immediate. The portal is tenant-scoped — ``tenant_id`` comes from the
+    credential, not a request field.
+    """
+
+    student_id: uuid.UUID
+    tenant_id: uuid.UUID
+    login: str
+    display_name: str | None

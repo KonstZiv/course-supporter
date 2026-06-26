@@ -6,17 +6,22 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 from fastapi import Depends, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPBearer
+from fastapi.security.http import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from course_supporter.auth.context import TenantContext
+from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.keys import hash_api_key
+from course_supporter.auth.student_session import (
+    SessionTokenError,
+    decode_session_token,
+)
 from course_supporter.llm.router import ModelRouter
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.database import get_session
-from course_supporter.storage.orm import APIKey, Tenant
+from course_supporter.storage.orm import APIKey, Student, StudentCredential, Tenant
 from course_supporter.storage.s3 import S3Client
 
 if TYPE_CHECKING:
@@ -24,6 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "get_arq_redis",
+    "get_current_student",
     "get_current_tenant",
     "get_model_router",
     "get_s3_client",
@@ -32,6 +38,12 @@ __all__ = [
 ]
 
 api_key_header = APIKeyHeader(name="X-API-Key")
+
+# Portal session bearer scheme (Phase 6 T1). auto_error=False so a missing or
+# non-bearer Authorization header yields None (handled as 401 below) rather
+# than FastAPI's default 403, keeping the unauthenticated response a clean 401.
+bearer_scheme = HTTPBearer(auto_error=False)
+_bearer_dep = Security(bearer_scheme)
 
 
 _get_session = Depends(get_session)
@@ -78,6 +90,57 @@ async def get_current_tenant(
         scopes=api_key_record.scopes,
         plan_id=api_key_record.plan_id,
         key_prefix=api_key_record.key_prefix,
+    )
+
+
+async def get_current_student(
+    credentials: HTTPAuthorizationCredentials | None = _bearer_dep,
+    session: AsyncSession = _get_session,
+) -> StudentContext:
+    """Authenticate a portal request via its bearer session token (KD17).
+
+    Decodes the stateless token, then validates it against the live
+    credential on every request — so revoking access (``is_active = False``)
+    rejects existing tokens immediately, without a session table. Mirrors
+    ``get_current_tenant``'s per-request active check.
+
+    Raises:
+        HTTPException 401: missing/invalid/expired token, or a credential that
+            no longer exists, is inactive, or whose tenant/student is inactive.
+    """
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    try:
+        student_id, tenant_id = decode_session_token(credentials.credentials)
+    except SessionTokenError as exc:
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired session"
+        ) from exc
+
+    stmt = (
+        select(StudentCredential, Student)
+        .join(Student, StudentCredential.student_id == Student.id)
+        .join(Tenant, StudentCredential.tenant_id == Tenant.id)
+        .where(
+            StudentCredential.student_id == student_id,
+            StudentCredential.tenant_id == tenant_id,
+            StudentCredential.is_active.is_(True),
+            Tenant.is_active.is_(True),
+            Student.deleted_at.is_(None),
+        )
+    )
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=401, detail="Session is no longer valid")
+
+    credential, student = row
+    return StudentContext(
+        student_id=student.id,
+        tenant_id=credential.tenant_id,
+        login=credential.login,
+        display_name=student.display_name,
     )
 
 

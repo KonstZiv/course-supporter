@@ -1090,3 +1090,19 @@ class PortalMediaResponse(BaseModel):
         "(kind=slides only; empty list for a pre-T3 presentation). None "
         "otherwise.",
     )
+
+
+# --- Portal materials-listing (Phase 6 T4a, KD17) ---
+
+
+class PortalCourseListItem(BaseModel):
+    """One enrolled course on the portal landing list (Phase 6 T4a c1).
+
+    Deliberately bare — id + title only. No counts, no peeking into the tree:
+    the first screen is cheap, and the material tree is a separate per-course
+    call. Enrollment IS the visibility gate (publish-gate A, KD17): the list is
+    exactly the student's active enrollments.
+    """
+
+    id: uuid.UUID
+    title: str = Field(description="Course (root CourseNode) title.")

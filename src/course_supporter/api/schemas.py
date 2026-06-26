@@ -1009,3 +1009,52 @@ class PortalSubmitResponse(BaseModel):
         description="True when an identical file for this task was already "
         "submitted — the existing submission is returned, no new review runs.",
     )
+
+
+class PortalVerdict(BaseModel):
+    """Caller-facing verdict shown to the student (Phase 6 T2 read-path).
+
+    Derived from ``review_result['verdict']`` (the only review_result key the
+    student ever sees); None until a review has written it. The full layered
+    ``review_result`` JSONB is NEVER exposed.
+    """
+
+    passed: bool = Field(description="Whether the submission meets the bar.")
+    correctness: str = Field(
+        description="Coarse correctness (correct / partially_correct / incorrect)."
+    )
+
+
+class PortalSubmissionListItem(BaseModel):
+    """One attempt in the read-path list (Phase 6 T2). NO review_markdown.
+
+    The list is intentionally light: the heavy ``review_markdown`` is fetched
+    only in the detail view. The internal trace
+    (``review_result``/``safety_result``/``sanity_result``) is NEVER included.
+    """
+
+    id: uuid.UUID
+    status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    verdict: PortalVerdict | None = Field(default=None)
+    created_at: datetime
+    original_filename: str | None = None
+
+
+class PortalSubmissionDetail(BaseModel):
+    """One attempt — the full curated slice (Phase 6 T2 read-path detail).
+
+    The student sees ``status`` / ``score`` / ``verdict`` / ``review_markdown``
+    only. The internal trace (``review_result`` / ``safety_result`` /
+    ``sanity_result``) is NEVER serialized here.
+    """
+
+    id: uuid.UUID
+    status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    verdict: PortalVerdict | None = Field(default=None)
+    review_markdown: str | None = Field(
+        default=None, description="Rendered Markdown review (None until reviewed)."
+    )
+    created_at: datetime
+    original_filename: str | None = None

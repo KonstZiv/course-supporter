@@ -29,7 +29,12 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
-from course_supporter.api.schemas import PortalSubmitResponse
+from course_supporter.api.schemas import (
+    PortalSubmissionDetail,
+    PortalSubmissionListItem,
+    PortalSubmitResponse,
+    PortalVerdict,
+)
 from course_supporter.auth.context import StudentContext
 from course_supporter.homework.submission_core import (
     create_and_dispatch_submission,
@@ -42,7 +47,8 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
-from course_supporter.storage.orm import Student
+from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.orm import HomeworkSubmission, Student
 from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
@@ -181,3 +187,116 @@ async def submit_portal_homework(
         submission_id=result.submission.id,
         status="received",
     )
+
+
+def _curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:
+    """Extract ONLY the caller-facing verdict from review_result.
+
+    The full ``review_result`` JSONB (and ``safety_result`` / ``sanity_result``)
+    is the internal trace and is never returned — only its ``verdict`` block,
+    and only once a review has written it (None otherwise).
+    """
+    if not review_result:
+        return None
+    verdict = review_result.get("verdict")
+    if not isinstance(verdict, dict):
+        return None
+    return PortalVerdict(
+        passed=bool(verdict.get("passed", False)),
+        correctness=str(verdict.get("correctness", "incorrect")),
+    )
+
+
+def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
+    """Curated list item — no review_markdown, no internal trace."""
+    return PortalSubmissionListItem(
+        id=submission.id,
+        status=submission.status,
+        score=submission.score,
+        verdict=_curated_verdict(submission.review_result),
+        created_at=submission.created_at,
+        original_filename=submission.original_filename,
+    )
+
+
+def _to_detail(submission: HomeworkSubmission) -> PortalSubmissionDetail:
+    """Curated detail — adds review_markdown; still no internal trace."""
+    return PortalSubmissionDetail(
+        id=submission.id,
+        status=submission.status,
+        score=submission.score,
+        verdict=_curated_verdict(submission.review_result),
+        review_markdown=submission.review_markdown,
+        created_at=submission.created_at,
+        original_filename=submission.original_filename,
+    )
+
+
+@router.get(
+    "/portal/tasks/{authored_document_id}/submissions",
+    response_model=list[PortalSubmissionListItem],
+)
+async def list_portal_submissions(
+    student: StudentDep,
+    session: SessionDep,
+    authored_document_id: Annotated[
+        uuid.UUID,
+        Path(description="AuthoredDocument (task) to list the student's attempts for."),
+    ],
+) -> list[PortalSubmissionListItem]:
+    """List the student's own attempts on a task, newest first (read-path).
+
+    Visibility (Q1): the task is visible if the student OWNS at least one attempt
+    on it (own history survives un-enrollment) OR is currently enrolled in its
+    course. Otherwise a generic 404 — never leaking which tasks exist outside the
+    student's access. An enrolled student with no attempts gets an empty list.
+    Soft-deleted attempts are excluded (Q7).
+    """
+    rows = await HomeworkRepository(session).list_for_student_and_task(
+        student.student_id, authored_document_id
+    )
+    if rows:
+        return [_to_list_item(s) for s in rows]
+
+    # No own attempts → visibility requires enrollment in the task's course.
+    task_doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
+    if (
+        task_doc is None
+        or task_doc.deleted_at is not None
+        or task_doc.task_type is None
+    ):
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+
+    enrolled = await StudentEnrollmentRepository(session).is_enrolled(
+        student.student_id, task_doc.course_root_id
+    )
+    if not enrolled:
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+    return []
+
+
+@router.get(
+    "/portal/submissions/{submission_id}",
+    response_model=PortalSubmissionDetail,
+)
+async def get_portal_submission(
+    student: StudentDep,
+    session: SessionDep,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission to read (must be the student's own)."),
+    ],
+) -> PortalSubmissionDetail:
+    """Read one of the student's own submissions — the full curated slice.
+
+    Ownership-only authorization (Q1): a non-owned, unknown, or soft-deleted
+    submission collapses to the same generic 404. The internal trace
+    (review_result / safety_result / sanity_result) is never serialized — the
+    student sees status / score / verdict / review_markdown only.
+    """
+    submission = await HomeworkRepository(session).get_owned(
+        submission_id, student.student_id
+    )
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Submission not found.")
+    return _to_detail(submission)

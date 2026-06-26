@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -305,3 +306,155 @@ class TestPortalSubmitGates:
             files={"file": ("evil.exe", io.BytesIO(b"x"), "application/octet-stream")},
         )
         assert resp.status_code == 422
+
+
+def _mock_reviewed_submission() -> MagicMock:
+    """A fully reviewed submission whose review_result carries internal trace."""
+    sub = MagicMock()
+    sub.id = uuid.uuid4()
+    sub.status = "completed"
+    sub.score = 87
+    sub.review_markdown = "## Good work\nWell done."
+    # review_result carries the verdict AND internal trace that must NEVER leak.
+    sub.review_result = {
+        "verdict": {"passed": True, "correctness": "correct"},
+        "layers": {"node": "INTERNAL — secret layered judgment"},
+        "denoised_score": 87,
+    }
+    sub.safety_result = {"safe": True, "internal_flags": ["x"]}
+    sub.sanity_result = {"verdict": "match", "confidence": 0.9}
+    sub.created_at = datetime.now(UTC)
+    sub.original_filename = "solution.py"
+    return sub
+
+
+class TestPortalReadList:
+    async def test_owns_attempts_returns_items(self, client: AsyncClient) -> None:
+        """A student who owns attempts sees them (newest-first list)."""
+        sub = _mock_reviewed_submission()
+        with patch.object(
+            HomeworkRepository, "list_for_student_and_task", return_value=[sub]
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        items = resp.json()
+        assert len(items) == 1
+        item = items[0]
+        # List item is light — no review_markdown, no internal trace.
+        assert set(item) == {
+            "id",
+            "status",
+            "score",
+            "verdict",
+            "created_at",
+            "original_filename",
+        }
+        assert item["verdict"] == {"passed": True, "correctness": "correct"}
+        assert "review_markdown" not in item
+
+    async def test_enrolled_no_attempts_empty(self, client: AsyncClient) -> None:
+        """Enrolled, no attempts yet → 200 empty list."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                HomeworkRepository, "list_for_student_and_task", return_value=[]
+            ),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_not_enrolled_no_attempts_404(self, client: AsyncClient) -> None:
+        """Neither enrolled nor any own attempts → generic 404."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                HomeworkRepository, "list_for_student_and_task", return_value=[]
+            ),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root),
+            ),
+            patch.object(
+                StudentEnrollmentRepository, "is_enrolled", return_value=False
+            ),
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_unknown_task_no_attempts_404(self, client: AsyncClient) -> None:
+        """No attempts + unknown task → generic 404."""
+        with (
+            patch.object(
+                HomeworkRepository, "list_for_student_and_task", return_value=[]
+            ),
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=None),
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 404
+
+
+class TestPortalReadDetail:
+    async def test_owned_returns_curated_slice(self, client: AsyncClient) -> None:
+        """Detail returns the curated slice and NEVER the internal trace."""
+        sub = _mock_reviewed_submission()
+        with patch.object(HomeworkRepository, "get_owned", return_value=sub):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Exactly the curated fields — and nothing else.
+        assert set(data) == {
+            "id",
+            "status",
+            "score",
+            "verdict",
+            "review_markdown",
+            "created_at",
+            "original_filename",
+        }
+        assert data["status"] == "completed"
+        assert data["score"] == 87
+        assert data["verdict"] == {"passed": True, "correctness": "correct"}
+        assert data["review_markdown"] == "## Good work\nWell done."
+
+        # The internal trace must NOT appear anywhere in the response body.
+        body = resp.text
+        assert "review_result" not in data
+        assert "safety_result" not in data
+        assert "sanity_result" not in data
+        assert "INTERNAL" not in body
+        assert "denoised_score" not in body
+        assert "confidence" not in body
+
+    async def test_verdict_none_until_reviewed(self, client: AsyncClient) -> None:
+        """verdict is None when review_result has no verdict yet."""
+        sub = MagicMock()
+        sub.id = uuid.uuid4()
+        sub.status = "reviewing"
+        sub.score = None
+        sub.review_markdown = None
+        sub.review_result = None
+        sub.created_at = datetime.now(UTC)
+        sub.original_filename = "solution.py"
+        with patch.object(HomeworkRepository, "get_owned", return_value=sub):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["verdict"] is None
+        assert data["score"] is None
+        assert data["review_markdown"] is None
+
+    async def test_not_owned_404(self, client: AsyncClient) -> None:
+        """A non-owned / unknown / soft-deleted submission → generic 404."""
+        with patch.object(HomeworkRepository, "get_owned", return_value=None):
+            resp = await client.get(f"/api/v1/portal/submissions/{uuid.uuid4()}")
+        assert resp.status_code == 404

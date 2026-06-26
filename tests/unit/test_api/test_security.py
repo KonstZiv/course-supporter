@@ -82,6 +82,7 @@ class TestDebugMode:
 
         prod_settings = Settings(
             environment=Environment.PRODUCTION,
+            portal_session_secret="prod-secret-override",  # type: ignore[arg-type]
             _env_file=None,
         )
         assert prod_settings.is_dev is False

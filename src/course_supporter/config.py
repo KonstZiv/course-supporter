@@ -39,6 +39,12 @@ _LLM_PROVIDER_KEYS = (
 _STT_PROVIDER_KEYS = ("elevenlabs", "deepgram")
 _ALL_PROVIDER_KEYS = _LLM_PROVIDER_KEYS + _STT_PROVIDER_KEYS
 
+# Dev-only default for the portal session signing secret. A production
+# deployment MUST override it (PORTAL_SESSION_SECRET) — booting prod with this
+# known value would let anyone forge a student's session token. Enforced by
+# ``_validate_portal_session_secret`` below.
+_DEFAULT_PORTAL_SESSION_SECRET = "dev-portal-session-secret-change-me"  # noqa: S105
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables.
@@ -73,7 +79,7 @@ class Settings(BaseSettings):
     # strong value in prod via PORTAL_SESSION_SECRET. Revocation is immediate
     # regardless of TTL — get_current_student re-checks the credential's
     # is_active on every request (mirror of the API-key path).
-    portal_session_secret: SecretStr = SecretStr("dev-portal-session-secret-change-me")
+    portal_session_secret: SecretStr = SecretStr(_DEFAULT_PORTAL_SESSION_SECRET)
     portal_session_ttl_hours: int = 12
 
     # --- PostgreSQL ---
@@ -180,6 +186,29 @@ class Settings(BaseSettings):
                 f"{worst_case_tail_hours}; otherwise a queue tail admitted at "
                 f"the ceiling expires before the worker reaches it "
                 f'(DD-3.3c-I "job expired").'
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_portal_session_secret(self) -> Self:
+        """Refuse to boot prod with the dev portal-session secret (Phase 6 T1).
+
+        The HS256 portal token is signed with ``portal_session_secret``; if
+        production silently fell back to the known dev default, anyone could
+        forge a student's session token. Fail fast at settings load (mirrors
+        the timezone and intake-expiry validators) so a missing
+        ``PORTAL_SESSION_SECRET`` surfaces at boot, not as an account takeover.
+        """
+        if (
+            self.environment == Environment.PRODUCTION
+            and self.portal_session_secret.get_secret_value()
+            == _DEFAULT_PORTAL_SESSION_SECRET
+        ):
+            msg = (
+                "portal_session_secret must be overridden in production "
+                "(set PORTAL_SESSION_SECRET) — the dev default would let anyone "
+                "forge student session tokens."
             )
             raise ValueError(msg)
         return self

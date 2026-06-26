@@ -1058,3 +1058,35 @@ class PortalSubmissionDetail(BaseModel):
     )
     created_at: datetime
     original_filename: str | None = None
+
+
+class PortalMediaResponse(BaseModel):
+    """How to render a material to the student, originals-only (Phase 6 T3).
+
+    A single descriptor the portal SPA branches on (KD17). ``kind``:
+
+    - ``external`` — YouTube/web: ``url`` is the original external link
+      (never proxied through S3).
+    - ``file`` — uploaded video/audio: ``url`` is a fresh presigned-GET on the
+      object (flat 300-min TTL, KD17).
+    - ``slides`` — presentation: ``slide_urls`` is the ordered list of fresh
+      presigned-GET URLs for the persisted WebP renders (empty for a
+      presentation ingested before T3 — never an error).
+
+    Deliberately minimal and forward-extensible (T4 informs the final shape).
+    """
+
+    kind: Literal["external", "file", "slides"] = Field(
+        description="Render mode the portal branches on."
+    )
+    url: str | None = Field(
+        default=None,
+        description="External link (kind=external) or presigned-GET URL "
+        "(kind=file). None for kind=slides.",
+    )
+    slide_urls: list[str] | None = Field(
+        default=None,
+        description="Ordered presigned-GET URLs for the slide WebPs "
+        "(kind=slides only; empty list for a pre-T3 presentation). None "
+        "otherwise.",
+    )

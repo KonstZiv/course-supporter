@@ -252,10 +252,58 @@ class TestPortalMaterialsTree:
         with get_by_id, enrolled, subtree, subs:
             resp = await client.get(_materials_url(root.id))
         overlay = resp.json()["documents"][0]["overlay"]
-        # Error terminal folds to pending (DD-6-D borrow).
-        assert overlay["submission_status"] == "pending"
+        # Error terminal surfaces as "error" (DD-6-D de-collapse); a failed
+        # attempt has no usable score, so best is absent.
+        assert overlay["submission_status"] == "error"
         assert overlay["last"] == {"score": None, "verdict": None}
         assert overlay["best"] is None
+
+    @pytest.mark.parametrize("terminal", ["rejected", "mismatch", "failed"])
+    async def test_error_terminals_surface_as_error(
+        self, client: AsyncClient, terminal: str
+    ) -> None:
+        """Each error terminal → submission_status 'error' (DD-6-D de-collapse).
+
+        The coarse overlay carries one 'error' bucket; the precise terminal
+        (rejected / mismatch / failed) lives in the read-path detail. The
+        internal trace never reaches the overlay — last is the curated shell
+        (score / verdict only), best absent (no usable score).
+        """
+        task = _doc(task_type="task")
+        root = _node(documents=[task])
+        attempt = _sub(authored_document_id=task.id, status=terminal)
+        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [attempt])
+        with get_by_id, enrolled, subtree, subs:
+            resp = await client.get(_materials_url(root.id))
+        overlay = resp.json()["documents"][0]["overlay"]
+        assert overlay["submission_status"] == "error"
+        assert overlay["last"] == {"score": None, "verdict": None}
+        assert overlay["best"] is None
+
+    async def test_error_terminal_does_not_win_best(self, client: AsyncClient) -> None:
+        """An error terminal never competes for best; a prior reviewed score does.
+
+        Latest is an error terminal (status 'error', no score); an earlier
+        reviewed attempt holds the best score. The error attempt must not
+        suppress or win best — best stays the reviewed max.
+        """
+        task = _doc(task_type="task")
+        root = _node(documents=[task])
+        # Newest-first: latest is a terminal error, earlier one was reviewed.
+        latest = _sub(authored_document_id=task.id, status="rejected")
+        reviewed = _sub(
+            authored_document_id=task.id,
+            status="completed",
+            score=70,
+            review_result={"verdict": {"passed": True, "correctness": "correct"}},
+        )
+        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [latest, reviewed])
+        with get_by_id, enrolled, subtree, subs:
+            resp = await client.get(_materials_url(root.id))
+        overlay = resp.json()["documents"][0]["overlay"]
+        assert overlay["submission_status"] == "error"  # latest drives status
+        assert overlay["last"] == {"score": None, "verdict": None}
+        assert overlay["best"]["score"] == 70  # reviewed attempt still wins best
 
     async def test_soft_deleted_and_non_ready_filtered(
         self, client: AsyncClient

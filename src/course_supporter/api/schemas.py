@@ -1129,11 +1129,13 @@ class PortalSubmissionOverlay(BaseModel):
     task — one query per course, grouped in Python (no N+1).
     """
 
-    submission_status: Literal["none", "pending", "reviewed"] = Field(
+    submission_status: Literal["none", "pending", "reviewed", "error"] = Field(
         description="By the LATEST attempt: ``none`` (no attempts) / ``pending`` "
-        "(in flight OR a terminal error) / ``reviewed`` (a review is written). "
-        "Terminal errors (rejected / mismatch / failed) fold to ``pending`` for "
-        "now — surfacing them distinctly is DD-6-D (a borrow, not final).",
+        "(in flight: received / safety_ok / sanity_ok / reviewing) / ``reviewed`` "
+        "(a review is written: completed / delivered) / ``error`` (a terminal "
+        "error: rejected / mismatch / failed). The tree carries only this coarse "
+        "``error`` bucket — the precise terminal is the read-path detail's "
+        "concern.",
     )
     last: PortalAttemptResult | None = Field(
         default=None,

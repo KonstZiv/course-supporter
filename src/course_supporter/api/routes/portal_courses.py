@@ -65,9 +65,13 @@ StudentDep = Annotated[StudentContext, Depends(get_current_student)]
 # never leaks which courses exist outside the student's access (rule #12).
 _COURSE_NOT_FOUND = "Course not found."
 
-# Lifecycle statuses that mean a review has been written. Everything else —
-# in-flight AND the error terminals — folds to "pending" in the overlay.
+# Lifecycle statuses that mean a review has been written.
 _REVIEWED_STATUSES = frozenset({"completed", "delivered"})
+# Terminal-error statuses (KD15 §1298): safety-violation (rejected) /
+# sanity-mismatch (mismatch) / processing-failure (failed). Surfaced as one
+# coarse "error" bucket in the overlay; the precise terminal lives in the
+# read-path detail.
+_ERROR_STATUSES = frozenset({"rejected", "mismatch", "failed"})
 
 
 @router.get("/portal/courses", response_model=list[PortalCourseListItem])
@@ -91,17 +95,21 @@ async def list_portal_courses(
     ]
 
 
-def _overlay_status(status: str) -> Literal["pending", "reviewed"]:
+def _overlay_status(status: str) -> Literal["pending", "reviewed", "error"]:
     """Map a lifecycle status to the coarse overlay status.
 
-    ``reviewed`` = a review is written (``completed`` / ``delivered``).
-    Everything else — in-flight (received / safety_ok / sanity_ok / reviewing)
-    AND the error terminals (rejected / mismatch / failed) — folds to
-    ``pending``. Surfacing the error terminals distinctly is DD-6-D (the
-    read-path terminal UX), deliberately deferred: this is a DD-6-D borrow, not
-    the final semantics.
+    Three buckets: ``reviewed`` = a review is written (``completed`` /
+    ``delivered``); ``error`` = a terminal error (``rejected`` / ``mismatch`` /
+    ``failed``); ``pending`` = everything else, i.e. in-flight (``received`` /
+    ``safety_ok`` / ``sanity_ok`` / ``reviewing``). The overlay deliberately
+    carries only this coarse ``error`` bucket — the precise terminal (and any
+    human-readable reason) is the read-path detail's concern.
     """
-    return "reviewed" if status in _REVIEWED_STATUSES else "pending"
+    if status in _REVIEWED_STATUSES:
+        return "reviewed"
+    if status in _ERROR_STATUSES:
+        return "error"
+    return "pending"
 
 
 def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverlay:

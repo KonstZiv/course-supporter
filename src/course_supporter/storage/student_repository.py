@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import Student
+from course_supporter.storage.orm import Student, StudentCredential, StudentEnrollment
+
+
+class StudentRosterRow(NamedTuple):
+    """One tenant-admin roster row: Student ⟕ StudentCredential + count.
+
+    ``login`` / ``is_active`` are ``None`` for integration-mode students
+    without a portal credential (LEFT join). ``enrollment_count`` is a
+    correlated scalar subquery — not a GROUP BY — so the LEFT join grain
+    stays one-row-per-student.
+    """
+
+    student_id: uuid.UUID
+    external_id: str
+    login: str | None
+    display_name: str | None
+    is_active: bool | None
+    enrollment_count: int
 
 
 class StudentRepository:
@@ -132,3 +149,74 @@ class StudentRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_with_access(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[StudentRosterRow]:
+        """List a tenant's students with portal-access state + enrollment count.
+
+        Tenant-admin roster (Phase 6 T5). LEFT JOIN ``StudentCredential`` so
+        integration-mode students without a portal credential still appear
+        (``login`` / ``is_active`` null) — the admin needs them visible to
+        attach a credential via ``existing``-mode provisioning.
+        ``enrollment_count`` is a correlated scalar subquery (not a GROUP BY)
+        to avoid a grain conflict with the LEFT join. Soft-deleted students
+        are excluded; newest-first, paginated (mirrors ``GET /nodes``).
+        """
+        enrollment_count = (
+            select(func.count())
+            .select_from(StudentEnrollment)
+            .where(StudentEnrollment.student_id == Student.id)
+            .correlate(Student)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(
+                Student.id,
+                Student.external_id,
+                StudentCredential.login,
+                Student.display_name,
+                StudentCredential.is_active,
+                enrollment_count.label("enrollment_count"),
+            )
+            .outerjoin(
+                StudentCredential,
+                StudentCredential.student_id == Student.id,
+            )
+            .where(
+                Student.tenant_id == tenant_id,
+                Student.deleted_at.is_(None),
+            )
+            .order_by(Student.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            StudentRosterRow(
+                student_id=row.id,
+                external_id=row.external_id,
+                login=row.login,
+                display_name=row.display_name,
+                is_active=row.is_active,
+                enrollment_count=row.enrollment_count,
+            )
+            for row in result
+        ]
+
+    async def count_for_tenant(self, tenant_id: uuid.UUID) -> int:
+        """Count a tenant's non-deleted students (roster pagination total)."""
+        stmt = (
+            select(func.count())
+            .select_from(Student)
+            .where(
+                Student.tenant_id == tenant_id,
+                Student.deleted_at.is_(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()

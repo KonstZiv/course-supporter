@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
-from course_supporter.api.routes._portal_shared import curated_verdict
+from course_supporter.api.routes._portal_shared import curated_verdict, material_label
 from course_supporter.api.schemas import (
     PortalAttemptResult,
     PortalCourseListItem,
@@ -146,11 +146,6 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
     )
 
 
-def _material_label(doc: AuthoredDocument) -> str:
-    """Display label: the filename, else a derived ``{source_type} #{order}``."""
-    return doc.filename or f"{doc.source_type} #{doc.order}"
-
-
 def _project_document(
     doc: AuthoredDocument,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
@@ -161,7 +156,11 @@ def _project_document(
     return PortalMaterialItem(
         id=doc.id,
         kind="task" if is_task else "material",
-        label=_material_label(doc),
+        label=material_label(
+            filename=doc.filename,
+            source_type=doc.source_type,
+            order=doc.order,
+        ),
         source_type=doc.source_type,
         order=doc.order,
         overlay=overlay,

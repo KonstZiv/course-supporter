@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis
+from course_supporter.api.routes._portal_shared import material_label
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
@@ -44,6 +45,12 @@ from course_supporter.models.cost import (
     ByProviderEntry,
     CostSummaryResponse,
     CourseCostResponse,
+    HomeworkByCourseEntry,
+    HomeworkByStudentEntry,
+    HomeworkByTaskEntry,
+    HomeworkCostResponse,
+    HomeworkCourseCostResponse,
+    HomeworkTaskCostResponse,
 )
 from course_supporter.services.cost_cache import (
     get_cached,
@@ -54,7 +61,10 @@ from course_supporter.services.cost_cache import (
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import Tenant
-from course_supporter.storage.repositories import ExternalServiceCallRepository
+from course_supporter.storage.repositories import (
+    ExternalServiceCallRepository,
+    HomeworkCostRepository,
+)
 
 logger = structlog.get_logger()
 
@@ -219,6 +229,183 @@ async def get_cost_summary(
     if not no_cache:
         await set_cached(redis, cache_key, response.model_dump_json(by_alias=True))
     return response
+
+
+# ──────────────────────────────────────────────
+# Homework cost-attribution (Phase 6, 6.HC)
+# ──────────────────────────────────────────────
+#
+# A separate surface from /cost/summary. Homework ExternalServiceCall rows are
+# written by the same _persist surface, but the homework Job carries
+# course_node_id=NULL (Variant B rejected, DD-6-I), so /cost/summary files
+# their cost under unattributed_cost_usd. These three endpoints attribute it by
+# joining ESC straight to HomeworkSubmission on job_id (HomeworkCostRepository).
+#
+# The tree is drilled on demand: total → by-course → by-task → by-student, each
+# level a separate request keyed by the parent. No Redis cache (MVP): freshness
+# beats a 5-min TTL on a report drilled interactively. Tenant isolation is
+# enforced in the repository on HomeworkSubmission.tenant_id (NOT NULL); the
+# course/task path params are scoped in-query, so a foreign or unknown id
+# returns an empty breakdown (leak-safe — indistinguishable from an own id with
+# no homework), not a 404.
+
+
+@router.get("/cost/homework", response_model=HomeworkCostResponse)
+async def get_homework_cost(
+    tenant: SharedDep,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to_: Annotated[date | None, Query(alias="to")] = None,
+    limit_courses: Annotated[int, Query(ge=0, le=500)] = 50,
+    offset_courses: Annotated[int, Query(ge=0)] = 0,
+) -> HomeworkCostResponse:
+    """Homework-processing cost for the tenant — total + by-course (level 1).
+
+    ``from``/``to`` are optional with the same fallback semantics as
+    ``/cost/summary`` (see module docstring). Drill into a course via each
+    ``by_course`` row's ``course_node_id``.
+    """
+    from_, to_ = await _resolve_date_range(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        from_=from_,
+        to_=to_,
+    )
+    if from_ > to_:
+        raise HTTPException(status_code=422, detail="from must be <= to")
+
+    repo = HomeworkCostRepository(session)
+    total = await repo.get_homework_total(
+        tenant_id=tenant.tenant_id, from_date=from_, to_date=to_
+    )
+    by_course_rows = await repo.get_homework_by_course(
+        tenant_id=tenant.tenant_id,
+        from_date=from_,
+        to_date=to_,
+        limit=limit_courses,
+        offset=offset_courses,
+    )
+    return HomeworkCostResponse(
+        from_=from_,
+        to_=to_,
+        total_usd=total,
+        by_course=[
+            HomeworkByCourseEntry(
+                course_node_id=row.course_node_id,
+                course_title=row.course_title,
+                cost_usd=row.cost_usd,
+            )
+            for row in by_course_rows
+        ],
+    )
+
+
+@router.get(
+    "/cost/homework/course/{course_node_id}",
+    response_model=HomeworkCourseCostResponse,
+)
+async def get_homework_cost_course(
+    course_node_id: uuid.UUID,
+    tenant: SharedDep,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to_: Annotated[date | None, Query(alias="to")] = None,
+    limit_tasks: Annotated[int, Query(ge=0, le=500)] = 50,
+    offset_tasks: Annotated[int, Query(ge=0)] = 0,
+) -> HomeworkCourseCostResponse:
+    """Homework cost for one course, grouped by task (level 2).
+
+    Drilled by the parent level's ``course_node_id``. Soft-deleted tasks appear
+    with ``is_deleted=true`` (shown, not filtered). A foreign or unknown course
+    returns an empty ``by_task`` (leak-safe — see the section note above).
+    """
+    from_, to_ = await _resolve_date_range(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        from_=from_,
+        to_=to_,
+    )
+    if from_ > to_:
+        raise HTTPException(status_code=422, detail="from must be <= to")
+
+    repo = HomeworkCostRepository(session)
+    by_task_rows = await repo.get_homework_by_task(
+        tenant_id=tenant.tenant_id,
+        course_node_id=course_node_id,
+        from_date=from_,
+        to_date=to_,
+        limit=limit_tasks,
+        offset=offset_tasks,
+    )
+    return HomeworkCourseCostResponse(
+        course_node_id=course_node_id,
+        from_=from_,
+        to_=to_,
+        by_task=[
+            HomeworkByTaskEntry(
+                authored_document_id=row.authored_document_id,
+                task_label=material_label(
+                    filename=row.filename,
+                    source_type=row.source_type,
+                    order=row.order,
+                ),
+                is_deleted=row.is_deleted,
+                cost_usd=row.cost_usd,
+            )
+            for row in by_task_rows
+        ],
+    )
+
+
+@router.get(
+    "/cost/homework/task/{authored_document_id}",
+    response_model=HomeworkTaskCostResponse,
+)
+async def get_homework_cost_task(
+    authored_document_id: uuid.UUID,
+    tenant: SharedDep,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to_: Annotated[date | None, Query(alias="to")] = None,
+    limit_students: Annotated[int, Query(ge=0, le=500)] = 50,
+    offset_students: Annotated[int, Query(ge=0)] = 0,
+) -> HomeworkTaskCostResponse:
+    """Homework cost for one task, grouped by student — the leaf (level 3).
+
+    Each student's ``cost_usd`` sums across ALL their submissions for the task.
+    A foreign or unknown task returns an empty ``by_student`` (leak-safe).
+    """
+    from_, to_ = await _resolve_date_range(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        from_=from_,
+        to_=to_,
+    )
+    if from_ > to_:
+        raise HTTPException(status_code=422, detail="from must be <= to")
+
+    repo = HomeworkCostRepository(session)
+    by_student_rows = await repo.get_homework_by_student(
+        tenant_id=tenant.tenant_id,
+        authored_document_id=authored_document_id,
+        from_date=from_,
+        to_date=to_,
+        limit=limit_students,
+        offset=offset_students,
+    )
+    return HomeworkTaskCostResponse(
+        authored_document_id=authored_document_id,
+        from_=from_,
+        to_=to_,
+        by_student=[
+            HomeworkByStudentEntry(
+                student_id=row.student_id,
+                student_display=row.student_display,
+                cost_usd=row.cost_usd,
+            )
+            for row in by_student_rows
+        ],
+    )
 
 
 @router.get("/cost/course/{course_node_id}", response_model=CourseCostResponse)

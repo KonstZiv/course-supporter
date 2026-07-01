@@ -29,3 +29,17 @@ def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | 
         passed=bool(verdict.get("passed", False)),
         correctness=str(verdict.get("correctness", "incorrect")),
     )
+
+
+def material_label(*, filename: str | None, source_type: str, order: int) -> str:
+    """Display label for an authored document: the filename, else a derived
+    ``{source_type} #{order}``.
+
+    Byte-identical to the prior ``portal_courses._material_label`` (Phase 6
+    T4a). Extracted here (6.HC) so the homework-cost drill-down composes the
+    SAME task label the portal materials tree shows — one source, no
+    duplicated format string (same house rule as :func:`curated_verdict`).
+    Field-based rather than doc-based so the cost route, which holds only the
+    aggregated raw columns, can call it without materialising an ORM object.
+    """
+    return filename or f"{source_type} #{order}"

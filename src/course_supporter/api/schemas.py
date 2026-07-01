@@ -989,6 +989,69 @@ class EnrollmentRequest(BaseModel):
     )
 
 
+class StudentRosterItem(BaseModel):
+    """One row of the tenant-admin student roster (GET /students, T5).
+
+    Projects ``Student`` LEFT JOIN ``StudentCredential``: ``login`` and
+    ``is_active`` are null for integration-mode students that never got a
+    portal credential — they are still listed so the admin can attach one
+    via the ``existing`` provisioning mode. ``is_active`` mirrors the
+    revoke state (deferred hard-delete, DD-6-A): null = no credential,
+    true = active, false = access revoked.
+    """
+
+    student_id: uuid.UUID = Field(description="Student primary key.")
+    external_id: str = Field(description="Caller-system student identifier.")
+    login: str | None = Field(
+        default=None,
+        description="Portal login, or null if no credential provisioned.",
+    )
+    display_name: str | None = Field(
+        default=None, description="Portal display name (nullable)."
+    )
+    is_active: bool | None = Field(
+        default=None,
+        description="Credential state: null = no credential, true = active, "
+        "false = access revoked. Mirrors the revoke/restore toggle.",
+    )
+    enrollment_count: int = Field(
+        description="Number of course enrollments (correlated count)."
+    )
+
+
+class StudentRosterResponse(BaseModel):
+    """Paginated tenant-admin student roster (GET /students, T5)."""
+
+    items: list[StudentRosterItem] = Field(
+        description="Students for the current page (newest-first)."
+    )
+    total: int = Field(description="Total non-deleted students for the tenant.")
+    limit: int = Field(description="Maximum items per page (as requested).")
+    offset: int = Field(description="Number of items skipped (as requested).")
+
+
+class StudentEnrollmentItem(BaseModel):
+    """One enrollment of a student (GET /students/{id}/enrollments, T5).
+
+    Only ``course_node_id`` + ``enrolled_at`` — the title is resolved
+    client-side from the roots the admin UI already holds. Enrollments to
+    a since-soft-deleted course are preserved here (unlike the portal
+    listing) so the admin can see and unbind them.
+    """
+
+    course_node_id: uuid.UUID = Field(description="Enrolled root CourseNode id.")
+    enrolled_at: datetime = Field(description="When the grant was created.")
+
+
+class StudentEnrollmentsResponse(BaseModel):
+    """A student's enrollments (GET /students/{id}/enrollments, T5)."""
+
+    student_id: uuid.UUID = Field(description="The student these grants belong to.")
+    items: list[StudentEnrollmentItem] = Field(
+        description="Enrollments, oldest-first (mirrors bind order)."
+    )
+
+
 class PortalSubmitResponse(BaseModel):
     """Response for a portal session submission (Phase 6 T2, mode-2 in_app).
 

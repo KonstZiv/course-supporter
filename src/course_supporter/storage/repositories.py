@@ -7,14 +7,18 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import (
+    AuthoredDocument,
     CourseNode,
     ExternalServiceCall,
+    HomeworkSubmission,
     Job,
     SoftDeleteMixin,
+    Student,
+    StudentCredential,
 )
 
 
@@ -113,6 +117,45 @@ class ByActionRow(NamedTuple):
     """One action row in /cost/course/{id} by_action breakdown."""
 
     action: str
+    cost_usd: float
+
+
+class HomeworkByCourseRow(NamedTuple):
+    """One course root in the /cost/homework by_course breakdown."""
+
+    course_node_id: uuid.UUID
+    course_title: str
+    cost_usd: float
+
+
+class HomeworkByTaskRow(NamedTuple):
+    """One task (AuthoredDocument) in the /cost/homework/course/{id} breakdown.
+
+    Carries the raw label fields (``filename``/``source_type``/``order``)
+    rather than a composed label: the display label is composed in the route
+    layer via the shared ``material_label`` helper (an api-layer projection
+    the storage layer must not import). ``is_deleted`` flags a soft-deleted
+    task — shown, not filtered (its processing cost still counts).
+    """
+
+    authored_document_id: uuid.UUID
+    filename: str | None
+    source_type: str
+    order: int
+    is_deleted: bool
+    cost_usd: float
+
+
+class HomeworkByStudentRow(NamedTuple):
+    """One student in the /cost/homework/task/{id} leaf breakdown.
+
+    ``student_display`` is resolved server-side via COALESCE(display_name,
+    credential login, external_id, id) so a mode-1 student with a NULL
+    display_name still renders a stable identifier.
+    """
+
+    student_id: uuid.UUID
+    student_display: str
     cost_usd: float
 
 
@@ -468,5 +511,256 @@ class ExternalServiceCallRepository:
         result = await self._session.execute(stmt)
         return [
             ByActionRow(action=row.action, cost_usd=float(row.cost_usd))
+            for row in result.all()
+        ]
+
+
+class HomeworkCostRepository:
+    """Read-only cost attribution for homework processing (Phase 6, 6.HC).
+
+    A cross-section distinct from the ingestion-oriented
+    :class:`ExternalServiceCallRepository`. Homework ``ExternalServiceCall``
+    rows are written by the same ``service_logging._persist`` surface, but the
+    homework ``Job`` is created with ``course_node_id = NULL`` (Variant B
+    rejected — DD-6-I), so ``/cost/summary`` files their cost under
+    ``unattributed_cost_usd`` and never under ``by_course``. This repository
+    attributes them by joining ESC straight to ``HomeworkSubmission`` on
+    ``job_id`` — the submission carries every grouping key (tenant, student,
+    task, course-root, node, time), so the ``jobs`` table is not needed in the
+    join. The inner join simultaneously drops ingestion ESC (whose ``job_id``
+    matches no submission) and submissions whose ``job_id`` is NULL.
+
+    Shares the :class:`ExternalServiceCallRepository` invariants (§140):
+    ``COALESCE(SUM, 0)``, ``WHERE cost_usd IS NOT NULL`` (NULL = unknown cost,
+    excluded from sums), inclusive date range via :func:`_to_exclusive`,
+    ``ORDER BY SUM(cost_usd) DESC``, pagination on the breakdowns.
+
+    Tenant isolation: every query filters ``HomeworkSubmission.tenant_id``
+    (NOT NULL) — never ``Job.tenant_id`` (nullable) and never through
+    ``Student`` (not a tenant boundary). The leak surface is zero.
+
+    Soft-delete: enrichment joins (``CourseNode`` / ``AuthoredDocument`` /
+    ``Student``) are by id with NO ``deleted_at`` filter, so a soft-deleted
+    course, task, or student still resolves its name and keeps its cost. Task
+    deletion is surfaced via ``HomeworkByTaskRow.is_deleted`` rather than
+    hidden.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_homework_total(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+    ) -> float:
+        """Total homework-processing cost for the tenant in the period.
+
+        Level 1 (top). Returns ``0.0`` if no rows match.
+        """
+        stmt = (
+            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            .select_from(ExternalServiceCall)
+            .join(
+                HomeworkSubmission,
+                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
+            )
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
+        return float(result.scalar_one() or 0.0)
+
+    async def get_homework_by_course(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[HomeworkByCourseRow]:
+        """Homework cost grouped by course root (level 1 breakdown).
+
+        Groups by ``HomeworkSubmission.course_node_id`` (the course ROOT,
+        KD15) and enriches ``CourseNode.title``. The parent-key drill for
+        level 2 is each row's ``course_node_id``.
+        """
+        stmt = (
+            select(
+                CourseNode.id.label("course_node_id"),
+                CourseNode.title.label("course_title"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
+                ),
+            )
+            .select_from(ExternalServiceCall)
+            .join(
+                HomeworkSubmission,
+                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
+            )
+            .join(CourseNode, HomeworkSubmission.course_node_id == CourseNode.id)
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(CourseNode.id, CourseNode.title)
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            HomeworkByCourseRow(
+                course_node_id=row.course_node_id,
+                course_title=row.course_title,
+                cost_usd=float(row.cost_usd),
+            )
+            for row in result.all()
+        ]
+
+    async def get_homework_by_task(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        course_node_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[HomeworkByTaskRow]:
+        """Homework cost grouped by task within one course (level 2 breakdown).
+
+        Scoped to one course root (``course_node_id``) and grouped by
+        ``authored_document_id``. Soft-deleted tasks are INCLUDED — the
+        ``AuthoredDocument`` join is by id with no ``deleted_at`` filter, so a
+        soft-deleted task keeps its row and cost; ``is_deleted`` flags it for
+        the UI marker. Raw label fields are returned for the route to compose
+        the T4a-identical display label.
+        """
+        stmt = (
+            select(
+                AuthoredDocument.id.label("authored_document_id"),
+                AuthoredDocument.filename.label("filename"),
+                AuthoredDocument.source_type.label("source_type"),
+                AuthoredDocument.order.label("order"),
+                AuthoredDocument.deleted_at.label("deleted_at"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
+                ),
+            )
+            .select_from(ExternalServiceCall)
+            .join(
+                HomeworkSubmission,
+                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
+            )
+            .join(
+                AuthoredDocument,
+                HomeworkSubmission.authored_document_id == AuthoredDocument.id,
+            )
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                HomeworkSubmission.course_node_id == course_node_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(
+                AuthoredDocument.id,
+                AuthoredDocument.filename,
+                AuthoredDocument.source_type,
+                AuthoredDocument.order,
+                AuthoredDocument.deleted_at,
+            )
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            HomeworkByTaskRow(
+                authored_document_id=row.authored_document_id,
+                filename=row.filename,
+                source_type=row.source_type,
+                order=row.order,
+                is_deleted=row.deleted_at is not None,
+                cost_usd=float(row.cost_usd),
+            )
+            for row in result.all()
+        ]
+
+    async def get_homework_by_student(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[HomeworkByStudentRow]:
+        """Homework cost grouped by student for one task — the leaf (level 3).
+
+        The leaf sums cost across ALL of the student's submissions for the task
+        (every attempt's job → its ESC rows). ``student_display`` falls back
+        display_name → credential login → external_id → id so a mode-1 student
+        with no portal display_name and no credential still resolves. Student
+        is inner-joined (``student_id`` is NOT NULL); the credential is
+        outer-joined (1:1-optional).
+        """
+        student_display = func.coalesce(
+            Student.display_name,
+            StudentCredential.login,
+            Student.external_id,
+            cast(Student.id, String),
+        )
+        stmt = (
+            select(
+                Student.id.label("student_id"),
+                student_display.label("student_display"),
+                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
+                    "cost_usd"
+                ),
+            )
+            .select_from(ExternalServiceCall)
+            .join(
+                HomeworkSubmission,
+                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
+            )
+            .join(Student, HomeworkSubmission.student_id == Student.id)
+            .outerjoin(StudentCredential, StudentCredential.student_id == Student.id)
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                ExternalServiceCall.created_at >= from_date,
+                ExternalServiceCall.created_at < _to_exclusive(to_date),
+                ExternalServiceCall.cost_usd.is_not(None),
+            )
+            .group_by(
+                Student.id,
+                Student.display_name,
+                Student.external_id,
+                StudentCredential.login,
+            )
+            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            HomeworkByStudentRow(
+                student_id=row.student_id,
+                student_display=row.student_display,
+                cost_usd=float(row.cost_usd),
+            )
             for row in result.all()
         ]

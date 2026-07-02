@@ -125,6 +125,28 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosmtpd"
+version = "1.4.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "atpublic" },
+    { name = "attrs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/ca/b2b7cc880403ef24be77383edaadfcf0098f5d7b9ddbf3e2c17ef0a6af0d/aiosmtpd-1.4.6.tar.gz", hash = "sha256:5a811826e1a5a06c25ebc3e6c4a704613eb9a1bcf6b78428fbe865f4f6c9a4b8", size = 152775, upload-time = "2024-05-18T11:37:50.029Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/39/d401756df60a8344848477d54fdf4ce0f50531f6149f3b8eaae9c06ae3dc/aiosmtpd-1.4.6-py3-none-any.whl", hash = "sha256:72c99179ba5aa9ae0abbda6994668239b64a5ce054471955fe75f581d2592475", size = 154263, upload-time = "2024-05-18T11:37:47.877Z" },
+]
+
+[[package]]
+name = "aiosmtplib"
+version = "5.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/25/d36d056e62a1dc3dd51ce76e7647c62966702193dc91eafa7fd4e1006a91/aiosmtplib-5.1.2.tar.gz", hash = "sha256:04a0ea3c678f5b719f998f290dce010ca512e1385836d3944206299df03b060f", size = 71031, upload-time = "2026-06-20T15:00:48.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/ec/c5a415cd1309eaac28ad3c599458194d25ba07189bb07a1bac2c6713c17e/aiosmtplib-5.1.2-py3-none-any.whl", hash = "sha256:070d467cc329dafd0af59108ba5d217d973cba10309910fed359a2a7bfb52d7a", size = 28394, upload-time = "2026-06-20T15:00:47.299Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.18.4"
 source = { registry = "https://pypi.org/simple" }
@@ -241,6 +263,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/63/f9/0f1df9a39b36fc4df590a5f2fca010e6bc8ba2635b75f0368f41722ef24e/arq-0.27.0.tar.gz", hash = "sha256:302a16e78396923fbff0f542fee0e04c731cc549195d18d039be3cc1a3431106", size = 415951, upload-time = "2026-02-02T14:38:21.509Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/89/e28a3a82da9b3d5ccacf143013b8911501c3593cf976b14b34711766fd4c/arq-0.27.0-py3-none-any.whl", hash = "sha256:4ca085671520472e45f09f5c37a1495097e5c4a79faaf18efcb9a759f8917f87", size = 26026, upload-time = "2026-02-02T14:38:19.375Z" },
+]
+
+[[package]]
+name = "atpublic"
+version = "7.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/05/e2e131a0debaf0f01b8a1b586f5f11713f6affc3e711b406f15f11eafc92/atpublic-7.0.0.tar.gz", hash = "sha256:466ef10d0c8bbd14fd02a5fbd5a8b6af6a846373d91106d3a07c16d72d96b63e", size = 17801, upload-time = "2025-11-29T05:56:45.45Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/c0/271f3e1e3502a8decb8ee5c680dbed2d8dc2cd504f5e20f7ed491d5f37e1/atpublic-7.0.0-py3-none-any.whl", hash = "sha256:6702bd9e7245eb4e8220a3e222afcef7f87412154732271ee7deee4433b72b4b", size = 6421, upload-time = "2025-11-29T05:56:44.604Z" },
 ]
 
 [[package]]
@@ -447,6 +478,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
+    { name = "aiosmtplib" },
     { name = "alembic" },
     { name = "anthropic" },
     { name = "argon2-cffi" },
@@ -483,6 +515,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aiosmtpd" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -500,6 +533,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "aiobotocore", specifier = ">=2.15" },
+    { name = "aiosmtplib", specifier = ">=5.1.2" },
     { name = "alembic", specifier = ">=1.14" },
     { name = "anthropic", specifier = ">=0.49" },
     { name = "argon2-cffi", specifier = ">=25.1.0" },
@@ -536,6 +570,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aiosmtpd", specifier = ">=1.4.6" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pre-commit", specifier = ">=4.1" },
     { name = "pytest", specifier = ">=8.3" },

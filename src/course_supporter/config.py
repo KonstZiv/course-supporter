@@ -120,6 +120,21 @@ class Settings(BaseSettings):
     webhook_timeout_seconds: int = 30
     webhook_max_retries: int = 3
 
+    # --- SMTP ---
+    # Transactional email transport (student portal password-recovery, R1).
+    # Inline defaults target the local-dev aiosmtpd capture (``localhost:1025``,
+    # no auth, no TLS) so a dev checkout sends into a local sink out of the box.
+    # Production (Resend: real host, 587, STARTTLS, credentials) is supplied via
+    # ``.env.prod`` per the env-only-deploy-specifics rule — the code carries no
+    # provider coupling. ``smtp_start_tls`` selects STARTTLS (port 587); implicit
+    # TLS (port 465) is a later config extension, out of R1 scope.
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str = "no-reply@localhost"
+    smtp_start_tls: bool = False
+
     # --- Intake admission / queue lifetime (DD-3.3c-I) ---
     # These five knobs parametrize the slow-hardware intake policy so a
     # capacity upgrade is a config change, not a code change. Defaults are

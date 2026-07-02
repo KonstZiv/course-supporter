@@ -55,6 +55,7 @@ dependencies = [
     "httpx>=0.28",
     "argon2-cffi>=25.1.0",
     "pyjwt>=2.11.0",
+    "aiosmtplib>=5.1.2",
 ]
 
 [dependency-groups]
@@ -66,6 +67,7 @@ dev = [
     "mypy>=1.14",
     "pre-commit>=4.1",
     "types-pyyaml>=6.0.12.20250915",
+    "aiosmtpd>=1.4.6",
 ]
 docs = [
     "mkdocs-material>=9",
@@ -109,6 +111,7 @@ ignore = [
 "src/course_supporter/storage/orm.py" = ["RUF012"]
 "tests/**/*.py" = ["S101", "S105", "S106", "S108", "T20", "RUF001"]
 "src/course_supporter/ingestion/stop_words.py" = ["RUF001"]
+"src/course_supporter/services/email_text.py" = ["RUF001"]
 "src/course_supporter/security/regex_patterns.py" = ["RUF001", "RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]

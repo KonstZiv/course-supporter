@@ -58,7 +58,9 @@ async def send_email(*, to: str, subject: str, body: str) -> None:
         start_tls=settings.smtp_start_tls,
     )
 
-    # PII-lean: log the recipient domain only, never the full mailbox — enough
-    # for delivery audit without writing the address into the app-log trail.
+    # PII-lean: log the recipient domain only — never the full mailbox and
+    # never the rendered subject/body. Enough for delivery audit without
+    # writing recipient or message content into the app-log trail; the "which
+    # email" signal lives in the worker's ``message_id`` binding.
     _, _, domain = to.rpartition("@")
-    logger.info("email_sent", subject=subject, recipient_domain=domain or "?")
+    logger.info("email_sent", recipient_domain=domain or "?")

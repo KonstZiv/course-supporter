@@ -99,11 +99,18 @@ async def portal_login(
 
 
 @router.get("/portal/me", response_model=PortalMeResponse)
-async def portal_me(student: StudentDep) -> PortalMeResponse:
-    """Return the authenticated student's identity (from the session)."""
+async def portal_me(student: StudentDep, session: SessionDep) -> PortalMeResponse:
+    """Return the authenticated student's identity + recovery-email status."""
+    cred_repo = StudentCredentialRepository(session)
+    credential = await cred_repo.get_by_student_id(student.student_id)
     return PortalMeResponse(
         student_id=student.student_id,
         tenant_id=student.tenant_id,
         login=student.login,
         display_name=student.display_name,
+        recovery_email=credential.recovery_email if credential is not None else None,
+        recovery_email_confirmed=(
+            credential is not None
+            and credential.recovery_email_confirmed_at is not None
+        ),
     )

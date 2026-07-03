@@ -1308,6 +1308,20 @@ class StudentCredential(Base):
         "rejected at the per-request is_active check). Student and history "
         "are retained (DD-6-A).",
     )
+    recovery_email: Mapped[str | None] = mapped_column(
+        String(320),
+        nullable=True,
+        comment="Optional student-owned recovery email (Phase 6 R2). The "
+        "student sets and confirms it in the portal; the tenant does not "
+        "supply it. NULL = none set. A forgot-password link is only ever "
+        "sent to a CONFIRMED address (recovery_email_confirmed_at NOT NULL).",
+    )
+    recovery_email_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the recovery_email was confirmed (Phase 6 R2). NULL "
+        "while pending; changing recovery_email resets this to NULL.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -1319,6 +1333,85 @@ class StudentCredential(Base):
         return (
             f"StudentCredential(id={self.id!r}, student_id={self.student_id!r}, "
             f"login={self.login!r}, is_active={self.is_active!r})"
+        )
+
+
+class StudentCredentialToken(Base):
+    """Single-use recovery token for a ``StudentCredential`` (Phase 6 R2).
+
+    Backs both self-service flows keyed by ``purpose``: ``password_reset``
+    (forgot-password) and ``email_confirm`` (recovery-email verification).
+    The raw token is generated with ``secrets.token_urlsafe`` and emailed;
+    only its SHA-256 hash (``hash_api_key``, the fast unsalted API-key hasher,
+    NOT the slow argon2 password hasher) is stored here, so a DB read cannot
+    reconstruct a live token.
+
+    Single-use is enforced by ``used_at`` (redeeming stamps it). Issuing a new
+    token of the same purpose for a credential first burns any unused siblings
+    (mass ``used_at`` stamp), so only the latest link works. Redemption also
+    live-checks ``credential.is_active`` at the route (mirror of
+    ``get_current_student``): revoking access invalidates outstanding tokens
+    without touching this table, and a reset never revives a revoked
+    credential.
+
+    A plain ``Base`` (no soft-delete) — tokens are transient; ``ON DELETE
+    CASCADE`` from the credential removes them with it.
+    """
+
+    __tablename__ = "student_credential_tokens"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('password_reset', 'email_confirm')",
+            name="ck_student_credential_token_purpose",
+        ),
+        Index(
+            "uq_student_credential_token_hash",
+            "token_hash",
+            unique=True,
+        ),
+        Index(
+            "ix_student_credential_tokens_credential_purpose",
+            "credential_id",
+            "purpose",
+        ),
+        {"comment": "Single-use recovery token (password_reset / email_confirm)"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    credential_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("student_credentials.id", ondelete="CASCADE"),
+        comment="FK → StudentCredential the token belongs to. The composite "
+        "(credential_id, purpose) index covers both the burn-siblings query "
+        "and the FK cascade (leftmost prefix), so no standalone FK index.",
+    )
+    purpose: Mapped[str] = mapped_column(
+        String(32),
+        comment="Token flow: 'password_reset' or 'email_confirm' (CHECK-guarded).",
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 hex of the raw token (hash_api_key). The redemption "
+        "lookup is by hash (unique index); the raw token is never stored.",
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        comment="Expiry (issue time + purpose TTL: reset short, confirm long).",
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When redeemed (single-use). NULL = unused. Issuing a new "
+        "token of the same purpose also stamps outstanding siblings.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"StudentCredentialToken(id={self.id!r}, "
+            f"credential_id={self.credential_id!r}, purpose={self.purpose!r}, "
+            f"used_at={self.used_at!r})"
         )
 
 

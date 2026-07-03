@@ -112,6 +112,7 @@ ignore = [
 "tests/**/*.py" = ["S101", "S105", "S106", "S108", "T20", "RUF001"]
 "src/course_supporter/ingestion/stop_words.py" = ["RUF001"]
 "src/course_supporter/services/email_text.py" = ["RUF001"]
+"src/course_supporter/auth/recovery_tokens.py" = ["RUF001"]
 "src/course_supporter/security/regex_patterns.py" = ["RUF001", "RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]

@@ -9,6 +9,8 @@ Routes
 - ``GET    /students``                      — list the tenant roster (T5).
 - ``POST   /students/{student_id}/revoke``  — revoke portal access.
 - ``POST   /students/{student_id}/restore`` — restore portal access.
+- ``POST   /students/{student_id}/password`` — reset the portal password
+  (DD-6-J, author-side fallback).
 - ``POST   /students/enrollments``          — bind student↔course.
 - ``DELETE /students/enrollments``          — unbind student↔course.
 - ``GET    /students/{student_id}/enrollments`` — list a student's grants (T5).
@@ -29,6 +31,7 @@ from course_supporter.api.schemas import (
     EnrollmentRequest,
     ProvisionStudentRequest,
     ProvisionStudentResponse,
+    SetStudentPasswordRequest,
     StudentEnrollmentItem,
     StudentEnrollmentsResponse,
     StudentRosterItem,
@@ -172,6 +175,7 @@ async def list_students(
             )
             for r in rows
         ],
+        tenant_id=tenant.tenant_id,
         total=total,
         limit=limit,
         offset=offset,
@@ -222,6 +226,42 @@ async def restore_access(
     await _set_student_active(session, tenant, student_id, is_active=True)
     logger.info(
         "student_access_restored",
+        tenant_id=str(tenant.tenant_id),
+        student_id=str(student_id),
+    )
+
+
+@router.post("/students/{student_id}/password", status_code=204)
+async def set_student_password(
+    student_id: uuid.UUID,
+    body: SetStudentPasswordRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> None:
+    """Reset a student's portal password (DD-6-J — author-side fallback).
+
+    The last-resort path when a student has no confirmed recovery email (the
+    self-service reset is primary). Mirrors revoke/restore's by-id, tenant-
+    scoped form: rehashes the existing credential's ``password_hash`` (argon2id,
+    same min-length policy as provisioning) and never touches ``is_active`` —
+    resetting the secret is the student's tier, not access. 404 if the student
+    is unknown to the tenant or has no credential.
+    """
+    student = await StudentRepository(session).get_by_id(student_id)
+    if student is None or student.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Student not found.")
+    try:
+        password_hash = hash_password(body.password)
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    updated = await StudentCredentialRepository(session).set_password(
+        student_id, password_hash=password_hash
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Student has no portal credential.")
+    await session.commit()
+    logger.info(
+        "student_password_reset_by_admin",
         tenant_id=str(tenant.tenant_id),
         student_id=str(student_id),
     )

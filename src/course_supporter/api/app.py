@@ -33,6 +33,9 @@ from course_supporter.api.routes.portal_courses import (
 from course_supporter.api.routes.portal_materials import (
     router as portal_materials_router,
 )
+from course_supporter.api.routes.portal_recovery import (
+    router as portal_recovery_router,
+)
 from course_supporter.api.routes.portal_submissions import (
     router as portal_submissions_router,
 )
@@ -287,4 +290,5 @@ app.include_router(portal_auth_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")
+app.include_router(portal_recovery_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")

@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     # is_active on every request (mirror of the API-key path).
     portal_session_secret: SecretStr = SecretStr(_DEFAULT_PORTAL_SESSION_SECRET)
     portal_session_ttl_hours: int = 12
+    # Base URL of the student-portal SPA, used to build the links embedded in
+    # password-recovery emails (reset / confirm). The recovery routes append the
+    # tenant segment + route: ``{portal_base_url}/{tenant_id}/reset-password?
+    # token=...`` (mirror of DD-6-M's ``${origin}/${tenantId}/login``). The dev
+    # default targets the portal SPA dev server; the deployed portal origin is
+    # supplied via PORTAL_BASE_URL in ``.env.prod`` (Phase 6 password-recovery).
+    portal_base_url: str = "http://localhost:5173"
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"
@@ -224,6 +231,31 @@ class Settings(BaseSettings):
                 "portal_session_secret must be overridden in production "
                 "(set PORTAL_SESSION_SECRET) — the dev default would let anyone "
                 "forge student session tokens."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_smtp_configured_in_prod(self) -> Self:
+        """Refuse to boot prod with the dev SMTP defaults (password-recovery R2).
+
+        Transactional recovery mail (reset / confirm) is undeliverable if
+        production silently kept the local-dev aiosmtpd defaults. Fail fast at
+        settings load (mirrors ``_validate_portal_session_secret``) so a missing
+        SMTP_HOST / SMTP_FROM surfaces at boot, not as silently-dropped recovery
+        mail. Credentials are intentionally NOT in the predicate: the channel is
+        provider-agnostic (Q1) and some relays accept no AUTH — empty creds
+        against a real relay fail loudly at send time (log + ARQ retry), not at
+        boot, so gating on them would false-positive on AUTH-less relays.
+        """
+        if self.environment == Environment.PRODUCTION and (
+            self.smtp_host == "localhost" or self.smtp_from == "no-reply@localhost"
+        ):
+            msg = (
+                "SMTP must be configured in production (set SMTP_HOST and "
+                "SMTP_FROM) — the local-dev defaults (localhost / "
+                "no-reply@localhost) would make password-recovery email "
+                "undeliverable."
             )
             raise ValueError(msg)
         return self

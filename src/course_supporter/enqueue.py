@@ -1,4 +1,8 @@
-"""Enqueue helpers for submitting jobs to ARQ with DB tracking."""
+"""Enqueue helpers for submitting jobs to ARQ with DB tracking.
+
+The email helper (``enqueue_email``) is the fire-and-forget exception — no
+``Job`` row, no DB tracking (Phase 6 R1's 4th enqueue form).
+"""
 
 from __future__ import annotations
 
@@ -298,3 +302,34 @@ async def enqueue_node_summary_regeneration(
         arq_job_id=arq_job.job_id if arq_job else None,
     )
     return job
+
+
+async def enqueue_email(
+    *,
+    arq: ArqRedis,
+    message_id: str,
+    to: str,
+    context: dict[str, str],
+) -> None:
+    """Enqueue a transactional email on the default queue (Phase 6 R1/R2).
+
+    The fire-and-forget 4th enqueue form: unlike the Job-backed helpers above,
+    email creates NO ``Job`` row and stages no DB work — a direct
+    ``arq.enqueue_job`` with ARQ's built-in retry (``max_tries``). Routes call
+    this typed helper rather than ``arq.enqueue_job`` directly; ``message_id``
+    and ``context`` are the ``email_text`` template id + its ``{placeholder}``
+    values (e.g. ``password_reset`` + ``{reset_url, ttl}``). Log-only and
+    PII-lean — the recipient domain, never the mailbox.
+    """
+    _, _, domain = to.rpartition("@")
+    log = structlog.get_logger().bind(
+        message_id=message_id,
+        recipient_domain=domain or "?",
+    )
+    await arq.enqueue_job(
+        "arq_send_email",
+        message_id=message_id,
+        to=to,
+        context=context,
+    )
+    log.info("email_enqueued")

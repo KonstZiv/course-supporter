@@ -917,12 +917,86 @@ class PortalLoginResponse(BaseModel):
 
 
 class PortalMeResponse(BaseModel):
-    """Response for GET /portal/me (the authenticated student's identity)."""
+    """Response for GET /portal/me (the authenticated student's identity).
+
+    The recovery-email status is folded in (Phase 6 R2) rather than exposed on
+    a separate GET: ``recovery_email`` is the current address (or None), and
+    ``recovery_email_confirmed`` reflects whether it has been verified. A
+    forgot-password link is only ever sent to a confirmed address.
+    """
 
     student_id: uuid.UUID
     tenant_id: uuid.UUID
     login: str
     display_name: str | None = None
+    recovery_email: str | None = None
+    recovery_email_confirmed: bool = False
+
+
+class RecoveryEmailRequest(BaseModel):
+    """Request body for POST /portal/recovery-email (set/change; protected).
+
+    The email is validated only minimally — a single ``@`` with a non-empty
+    local part and domain (RP6): deliverability is proven by the confirm flow
+    (the mail must arrive and its token be redeemed), not a strict RFC
+    validator, so no ``email-validator`` dependency is pulled in. ``max_length``
+    mirrors the ``String(320)`` column so an overflow is a 422, not a DB error.
+    """
+
+    email: str = Field(
+        min_length=3,
+        max_length=320,
+        description="Student-owned recovery email to set or change.",
+    )
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email_shape(cls, v: str) -> str:
+        local, sep, domain = v.strip().partition("@")
+        if not sep or not local or not domain:
+            msg = "email must contain a local part and a domain (e.g. name@example.com)"
+            raise ValueError(msg)
+        return v.strip()
+
+
+class RecoveryEmailResponse(BaseModel):
+    """Response for POST /portal/recovery-email (the new pending state)."""
+
+    recovery_email: str = Field(description="The address now on file.")
+    recovery_email_confirmed: bool = Field(
+        description="Always False right after set/change — a confirm mail was sent."
+    )
+
+
+class ConfirmRecoveryEmailRequest(BaseModel):
+    """Request body for POST /portal/recovery-email/confirm (public)."""
+
+    token: str = Field(min_length=1, description="The email-confirm token.")
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request body for POST /portal/password/forgot (public).
+
+    Identifies the credential by ``(tenant_id, login)`` — the stable portal
+    identifier — not by email (recovery emails are optional and not unique).
+    The route always returns a generic 202 regardless of existence
+    (anti-enumeration); a reset link is only sent to a confirmed recovery email.
+    """
+
+    tenant_id: uuid.UUID = Field(description="Tenant the student belongs to.")
+    login: str = Field(min_length=1, max_length=200, description="Student login.")
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request body for POST /portal/password/reset (public).
+
+    ``password`` carries the schema floor only (``min_length=1``); the real
+    minimum-length policy is enforced at hash time (argon2id), mapping a weak
+    password to 422 — mirroring provisioning.
+    """
+
+    token: str = Field(min_length=1, description="The password-reset token.")
+    password: str = Field(min_length=1, description="New password (plaintext).")
 
 
 class ProvisionStudentRequest(BaseModel):

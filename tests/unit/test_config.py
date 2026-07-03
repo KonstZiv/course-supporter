@@ -60,6 +60,8 @@ class TestSettings:
         s = Settings(
             environment="production",  # type: ignore[arg-type]
             portal_session_secret="prod-secret-override",  # type: ignore[arg-type]
+            smtp_host="smtp.example.com",
+            smtp_from="noreply@example.com",
             _env_file=None,
         )
         assert s.is_prod is True
@@ -68,13 +70,40 @@ class TestSettings:
     def test_portal_secret_default_rejected_in_prod(self) -> None:
         """Production + the dev portal-session secret default → fail fast."""
         with pytest.raises(ValidationError, match="portal_session_secret"):
-            Settings(environment="production", _env_file=None)  # type: ignore[arg-type]
+            Settings(
+                environment="production",  # type: ignore[arg-type]
+                smtp_host="smtp.example.com",
+                smtp_from="noreply@example.com",
+                _env_file=None,
+            )
 
     def test_portal_secret_override_ok_in_prod(self) -> None:
         """Production + an overridden portal-session secret loads fine."""
         s = Settings(
             environment="production",  # type: ignore[arg-type]
             portal_session_secret="a-strong-prod-secret",  # type: ignore[arg-type]
+            smtp_host="smtp.example.com",
+            smtp_from="noreply@example.com",
+            _env_file=None,
+        )
+        assert s.is_prod is True
+
+    def test_smtp_default_rejected_in_prod(self) -> None:
+        """Production + the dev SMTP defaults (localhost) → fail fast."""
+        with pytest.raises(ValidationError, match="SMTP must be configured"):
+            Settings(
+                environment="production",  # type: ignore[arg-type]
+                portal_session_secret="a-strong-prod-secret",  # type: ignore[arg-type]
+                _env_file=None,
+            )
+
+    def test_smtp_override_ok_in_prod(self) -> None:
+        """Production + a configured SMTP host + from loads fine."""
+        s = Settings(
+            environment="production",  # type: ignore[arg-type]
+            portal_session_secret="a-strong-prod-secret",  # type: ignore[arg-type]
+            smtp_host="smtp.resend.com",
+            smtp_from="platform@mail.example.com",
             _env_file=None,
         )
         assert s.is_prod is True

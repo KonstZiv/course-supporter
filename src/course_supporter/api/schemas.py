@@ -1054,6 +1054,18 @@ class ProvisionStudentResponse(BaseModel):
     login: str
 
 
+class SetStudentPasswordRequest(BaseModel):
+    """Request body for POST /students/{id}/password (DD-6-J, scope PREP).
+
+    Author-side password reset — the fallback path when a student has no
+    confirmed recovery email. Schema floor only (``min_length=1``); the real
+    minimum-length policy is enforced at hash time (argon2id, mapping a weak
+    password to 422), exactly as provisioning does.
+    """
+
+    password: str = Field(min_length=1, description="New portal password (plaintext).")
+
+
 class EnrollmentRequest(BaseModel):
     """Request body for POST /students/enrollments (bind student↔course)."""
 
@@ -1096,6 +1108,11 @@ class StudentRosterItem(BaseModel):
 class StudentRosterResponse(BaseModel):
     """Paginated tenant-admin student roster (GET /students, T5)."""
 
+    tenant_id: uuid.UUID = Field(
+        description="The tenant these students belong to (DD-6-M). Lets the "
+        "author UI build the shared portal link ${PORTAL_ORIGIN}/${tenant_id}/"
+        "login without exposing the UUID elsewhere; present even at 0 courses."
+    )
     items: list[StudentRosterItem] = Field(
         description="Students for the current page (newest-first)."
     )

@@ -8,6 +8,7 @@ package exposes only forms + identity primitives + ports for now; the
 extraction and orchestration logic land in later commits.
 """
 
+from course_supporter.normalizer.canonical_zip import write_canonical_zip
 from course_supporter.normalizer.classify import (
     KNOWN_EXTENSIONS,
     ExtensionClassifier,
@@ -47,4 +48,5 @@ __all__ = [
     "collapse_denylist",
     "compute_aggregate_hash",
     "denylist_prefix",
+    "write_canonical_zip",
 ]

@@ -8,6 +8,8 @@ and context policy constants.
 """
 
 from course_supporter.security.archive import (
+    ClassifiedEntry,
+    EntryVerdict,
     ExtractedFile,
     extract_archive_safely,
     extract_submission_content,
@@ -58,9 +60,11 @@ __all__ = [
     "AUTHORED_POLICY",
     "HOMEWORK_POLICY",
     "PROMPT_INJECTION_PATTERNS",
+    "ClassifiedEntry",
     "CompiledPattern",
     "ContextPolicy",
     "CourseContext",
+    "EntryVerdict",
     "ErrorCategory",
     "ExtractedFile",
     "FileContent",

@@ -110,9 +110,12 @@ def _extract(
 ) -> list[ExtractedFile]:
     """Eager-list helper for exhaustive iterator consumption."""
     return list(
-        extract_archive_safely(
+        # ``archive_kind: str`` deliberately admits invalid kinds (e.g.
+        # "rar") for the negative test; the classify overloads narrow it
+        # to a Literal, so suppress the resulting call-overload here.
+        extract_archive_safely(  # type: ignore[call-overload]
             archive_bytes,
-            archive_kind=archive_kind,  # type: ignore[arg-type]
+            archive_kind=archive_kind,
             max_unzipped_size=max_unzipped_size,
             max_nesting_depth=max_nesting_depth,
             allowed_extensions=allowed_extensions,

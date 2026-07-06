@@ -21,6 +21,7 @@ from course_supporter.normalizer.exceptions import (
     NormalizerError,
     NormalizerLimitError,
 )
+from course_supporter.normalizer.extract import DefaultTextExtractor
 from course_supporter.normalizer.hashing import (
     canonicalize_path,
     compute_aggregate_hash,
@@ -39,6 +40,7 @@ from course_supporter.normalizer.ports import EntryClassifier, TextExtractor
 
 __all__ = [
     "KNOWN_EXTENSIONS",
+    "DefaultTextExtractor",
     "Delta",
     "EntryClass",
     "EntryClassifier",

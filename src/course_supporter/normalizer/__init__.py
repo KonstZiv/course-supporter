@@ -3,9 +3,9 @@
 Domain-neutral library: sandbox-unpack (via the security layer's
 ``extract_archive_safely`` classify mode) -> denylist / classify ->
 canonical snapshot + algorithmic manifest + aggregate hash, plus the
-``base``-vs-``submission`` delta. Zero LLM, zero new dependencies. This
-package exposes only forms + identity primitives + ports for now; the
-extraction and orchestration logic land in later commits.
+``base``-vs-``submission`` delta. Zero LLM, zero new dependencies. The
+public entry point is ``normalize_archive``; ``compute_delta`` lands in a
+later commit.
 """
 
 from course_supporter.normalizer.canonical_zip import write_canonical_zip
@@ -14,6 +14,11 @@ from course_supporter.normalizer.classify import (
     ExtensionClassifier,
     collapse_denylist,
     denylist_prefix,
+)
+from course_supporter.normalizer.core import normalize_archive
+from course_supporter.normalizer.exceptions import (
+    NormalizerError,
+    NormalizerLimitError,
 )
 from course_supporter.normalizer.hashing import (
     canonicalize_path,
@@ -42,11 +47,14 @@ __all__ = [
     "Manifest",
     "ManifestEntry",
     "NormalizedSnapshot",
+    "NormalizerError",
+    "NormalizerLimitError",
     "NormalizerLimits",
     "TextExtractor",
     "canonicalize_path",
     "collapse_denylist",
     "compute_aggregate_hash",
     "denylist_prefix",
+    "normalize_archive",
     "write_canonical_zip",
 ]

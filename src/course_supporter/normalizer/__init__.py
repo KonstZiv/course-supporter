@@ -16,6 +16,7 @@ from course_supporter.normalizer.classify import (
     denylist_prefix,
 )
 from course_supporter.normalizer.core import normalize_archive
+from course_supporter.normalizer.delta import compute_delta
 from course_supporter.normalizer.exceptions import (
     NormalizerError,
     NormalizerLimitError,
@@ -54,6 +55,7 @@ __all__ = [
     "canonicalize_path",
     "collapse_denylist",
     "compute_aggregate_hash",
+    "compute_delta",
     "denylist_prefix",
     "normalize_archive",
     "write_canonical_zip",

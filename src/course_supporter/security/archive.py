@@ -593,18 +593,39 @@ def _yield_or_recurse(
         )
 
     if classify:
-        # Extension is whitelisted; the only remaining content signal
-        # is the magic gate. ``ext`` is already recognised, so any
-        # rejection here is a magic-level disagreement (mismatch or
-        # empty content), never a FORBIDDEN_TYPE.
-        try:
-            verify_extension_matches_content(arcname, content)
-        except SecurityRejectedError:
+        # Extension is whitelisted; the remaining content signal is the
+        # magic gate, whose outcome maps to a verdict:
+        #   * empty content -- no magic to check, not a mismatch; the
+        #     extension is whitelisted, so INCLUDE (e.g. __init__.py).
+        #   * MAGIC_MISMATCH -- genuine ext/content disagreement on a
+        #     recognised extension (a .py carrying an ELF, a .pdf carrying
+        #     a PE); a security signal -> surface as MAGIC_MISMATCH.
+        #   * FORBIDDEN_TYPE -- the extension is whitelisted by the caller
+        #     but absent from the magic layer's family table (.sql /
+        #     .yaml / .go / ...). The magic layer has NO opinion; this is
+        #     not a content mismatch, so INCLUDE it (the caller's
+        #     allowlist already accepted the extension).
+        if not content:
             yield ClassifiedEntry(
                 arcname=arcname,
                 content=content,
                 depth=depth,
-                verdict=EntryVerdict.MAGIC_MISMATCH,
+                verdict=EntryVerdict.INCLUDED,
+            )
+            return
+        try:
+            verify_extension_matches_content(arcname, content)
+        except SecurityRejectedError as exc:
+            verdict = (
+                EntryVerdict.MAGIC_MISMATCH
+                if exc.category is ErrorCategory.MAGIC_MISMATCH
+                else EntryVerdict.INCLUDED
+            )
+            yield ClassifiedEntry(
+                arcname=arcname,
+                content=content,
+                depth=depth,
+                verdict=verdict,
             )
             return
         yield ClassifiedEntry(

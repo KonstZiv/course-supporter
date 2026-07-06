@@ -85,8 +85,13 @@ def _zip_with_symlink(real_name: str, link_name: str, target: str) -> bytes:
 # Real magic byte fixtures for the content gate.
 PDF_BYTES = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n" + b"trailer body\n" * 5
 PE_BYTES = b"\x4d\x5a\x90\x00\x03\x00\x00\x00" + b"\x00" * 200
+ELF_BYTES = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 80
 TEXT_BYTES = b"hello world\n"
 BINARY_BYTES = bytes(range(256))
+
+# Allowlist that whitelists extensions libmagic does NOT recognise in its
+# family table (sql / yaml / go / ts / toml), alongside recognised ones.
+_MIXED_WHITELIST = frozenset({"txt", "pdf", "py", "sql", "yaml", "go", "ts", "toml"})
 
 _WHITELIST = frozenset({"txt", "pdf", "zip"})
 _BUDGET = 1 * 1024 * 1024  # 1 MB
@@ -219,6 +224,58 @@ class TestClassifyConversions:
 
     def test_empty_archive_yields_nothing(self) -> None:
         assert _classify(_zip_fixture([])) == []
+
+
+# ── Classify: magic gate maps to the right verdict ─────────────────
+
+
+class TestClassifyMagicGate:
+    def test_whitelisted_libmagic_unrecognised_is_included(self) -> None:
+        # These extensions are whitelisted but absent from the magic
+        # layer's family table -> verify raises FORBIDDEN_TYPE, which is
+        # NOT a content mismatch, so the entry must be INCLUDED.
+        archive = _zip_fixture(
+            [
+                ("q.sql", b"SELECT 1;\n"),
+                ("conf.yaml", b"key: value\n"),
+                ("main.go", b"package main\n"),
+                ("app.ts", b"const x = 1;\n"),
+                ("pyproject.toml", b"[tool]\n"),
+            ]
+        )
+        entries = _by_name(_classify(archive, allowed_extensions=_MIXED_WHITELIST))
+        for name in ("q.sql", "conf.yaml", "main.go", "app.ts", "pyproject.toml"):
+            assert entries[name].verdict is EntryVerdict.INCLUDED
+
+    def test_empty_whitelisted_file_is_included(self) -> None:
+        # Empty content has no magic to check -- not a mismatch.
+        archive = _zip_fixture([("pkg/__init__.py", b"")])
+        entries = _classify(archive, allowed_extensions=_MIXED_WHITELIST)
+        assert len(entries) == 1
+        assert entries[0].verdict is EntryVerdict.INCLUDED
+        assert entries[0].content == b""
+
+    def test_genuine_mismatch_on_recognised_ext_still_magic_mismatch(self) -> None:
+        # A .py carrying ELF and a .pdf carrying PE are real ext/content
+        # disagreements on recognised extensions -> MAGIC_MISMATCH kept.
+        archive = _zip_fixture([("evil.py", ELF_BYTES), ("evil.pdf", PE_BYTES)])
+        entries = _by_name(_classify(archive, allowed_extensions=_MIXED_WHITELIST))
+        assert entries["evil.py"].verdict is EntryVerdict.MAGIC_MISMATCH
+        assert entries["evil.pdf"].verdict is EntryVerdict.MAGIC_MISMATCH
+
+    def test_non_whitelisted_ext_still_forbidden_type(self) -> None:
+        # Case-1 allowlist gate is untouched: a non-whitelisted extension
+        # still yields FORBIDDEN_TYPE.
+        archive = _zip_fixture([("data.bin", BINARY_BYTES)])
+        entries = _classify(archive, allowed_extensions=_MIXED_WHITELIST)
+        assert entries[0].verdict is EntryVerdict.FORBIDDEN_TYPE
+
+    def test_recognised_ext_matching_content_included(self) -> None:
+        # Recognised extension with matching content stays INCLUDED.
+        archive = _zip_fixture([("readme.txt", TEXT_BYTES), ("doc.pdf", PDF_BYTES)])
+        entries = _by_name(_classify(archive, allowed_extensions=_MIXED_WHITELIST))
+        assert entries["readme.txt"].verdict is EntryVerdict.INCLUDED
+        assert entries["doc.pdf"].verdict is EntryVerdict.INCLUDED
 
 
 # ── Classify: structural guards still raise (level-1 unpack-guard) ──

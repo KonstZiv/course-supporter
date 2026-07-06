@@ -76,8 +76,9 @@ import tarfile
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import IO, Literal
+from typing import IO, Literal, overload
 
 import anyio
 import structlog
@@ -141,6 +142,57 @@ class ExtractedFile:
     depth: int
 
 
+class EntryVerdict(StrEnum):
+    """Per-entry content-gate outcome, surfaced only in classify mode.
+
+    In the default (strict) mode the content gate raises instead of
+    yielding a verdict (see :func:`extract_archive_safely`). The
+    structural guards (traversal, bomb, symlink, declared-size) are
+    orthogonal -- they raise in both modes and never produce a
+    verdict.
+    """
+
+    INCLUDED = "included"
+    """Extension is whitelisted and content matches the extension."""
+    FORBIDDEN_TYPE = "forbidden_type"
+    """Extension is not in ``allowed_extensions`` (strict mode raises
+    ``FORBIDDEN_TYPE`` here instead)."""
+    MAGIC_MISMATCH = "magic_mismatch"
+    """Whitelisted extension but content disagrees / is empty (strict
+    mode raises ``MAGIC_MISMATCH`` here instead)."""
+    NESTED_ARCHIVE = "nested_archive"
+    """Entry is itself an archive; in classify mode it is NOT opened
+    (the nested-archive bomb vector stays unreachable) -- strict mode
+    recurses into it instead."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifiedEntry:
+    """Structurally-valid archive entry annotated with its verdict.
+
+    Yielded only by ``extract_archive_safely(classify=True)``. Mirrors
+    :class:`ExtractedFile` (same ``arcname`` / ``content`` / ``depth``
+    guarantees) and adds :attr:`verdict`. The normalizer (KD18)
+    consumes the full annotated stream to build a manifest that covers
+    excluded content, rather than aborting on the first
+    non-whitelisted entry.
+
+    Attributes:
+        arcname: NFKC-normalized, path-validated archive entry name.
+        content: Full decompressed bytes. For ``NESTED_ARCHIVE`` this
+            is the nested archive's own raw bytes -- it is never
+            opened, so the caller hashes it as an opaque blob.
+        depth: Archive-recursion depth. Always the top level in
+            classify mode, since nested archives are not opened.
+        verdict: The content-gate outcome (:class:`EntryVerdict`).
+    """
+
+    arcname: str
+    content: bytes
+    depth: int
+    verdict: EntryVerdict
+
+
 class _Budget:
     """Mutable byte counter shared across recursive extraction.
 
@@ -163,6 +215,7 @@ class _Budget:
             )
 
 
+@overload
 def extract_archive_safely(
     archive_bytes: bytes,
     *,
@@ -170,7 +223,31 @@ def extract_archive_safely(
     max_unzipped_size: int,
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
-) -> Iterator[ExtractedFile]:
+    classify: Literal[False] = False,
+) -> Iterator[ExtractedFile]: ...
+
+
+@overload
+def extract_archive_safely(
+    archive_bytes: bytes,
+    *,
+    archive_kind: Literal["zip", "tar.gz"],
+    max_unzipped_size: int,
+    max_nesting_depth: int,
+    allowed_extensions: frozenset[str],
+    classify: Literal[True],
+) -> Iterator[ClassifiedEntry]: ...
+
+
+def extract_archive_safely(
+    archive_bytes: bytes,
+    *,
+    archive_kind: Literal["zip", "tar.gz"],
+    max_unzipped_size: int,
+    max_nesting_depth: int,
+    allowed_extensions: frozenset[str],
+    classify: bool = False,
+) -> Iterator[ExtractedFile | ClassifiedEntry]:
     """Iterate validated files from an archive; raise on first violation.
 
     Args:
@@ -203,7 +280,23 @@ def extract_archive_safely(
             depth limit, encoding); ``FORBIDDEN_TYPE`` on whitelist
             failure for a file inside the archive;
             ``MAGIC_MISMATCH`` on extension/content disagreement
-            for a non-archive entry.
+            for a non-archive entry. In classify mode the three
+            content-level signals are demoted to annotated yields
+            (see below); the structural ``ARCHIVE_VIOLATION`` guards
+            still raise.
+
+    Classify mode (``classify=True``, KD18 P1 KD-A): yields
+    :class:`ClassifiedEntry` instead of :class:`ExtractedFile`.
+    Non-whitelisted extensions, magic mismatches, and nested archives
+    no longer raise / recurse -- they surface as ``FORBIDDEN_TYPE`` /
+    ``MAGIC_MISMATCH`` / ``NESTED_ARCHIVE`` verdicts so the caller
+    sees the full tree (needed to build a manifest that covers
+    excluded content). Nested archives are NOT opened in this mode,
+    so the nested-archive bomb vector stays unreachable. The
+    structural unpack-guards (traversal, bomb, symlink,
+    declared-size) are unchanged and still raise. The default
+    ``classify=False`` preserves the byte-identical strict path used
+    by production Stage 1 callers.
     """
     budget = _Budget(max_unzipped_size)
     yield from _extract_recursive(
@@ -214,6 +307,7 @@ def extract_archive_safely(
         max_nesting_depth=max_nesting_depth,
         allowed_extensions=allowed_extensions,
         current_depth=0,
+        classify=classify,
     )
 
 
@@ -229,7 +323,8 @@ def _extract_recursive(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
-) -> Iterator[ExtractedFile]:
+    classify: bool,
+) -> Iterator[ExtractedFile | ClassifiedEntry]:
     if current_depth >= max_nesting_depth:
         raise SecurityRejectedError(
             ErrorCategory.ARCHIVE_VIOLATION,
@@ -245,6 +340,7 @@ def _extract_recursive(
             max_nesting_depth=max_nesting_depth,
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
+            classify=classify,
         )
     elif archive_kind == "tar.gz":
         yield from _extract_tar_gz(
@@ -254,6 +350,7 @@ def _extract_recursive(
             max_nesting_depth=max_nesting_depth,
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
+            classify=classify,
         )
     else:
         raise SecurityRejectedError(
@@ -270,7 +367,8 @@ def _extract_zip(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
-) -> Iterator[ExtractedFile]:
+    classify: bool,
+) -> Iterator[ExtractedFile | ClassifiedEntry]:
     try:
         zf = zipfile.ZipFile(io.BytesIO(archive_bytes))
     except zipfile.BadZipFile as exc:
@@ -343,6 +441,7 @@ def _extract_zip(
                 max_unzipped_size=max_unzipped_size,
                 max_nesting_depth=max_nesting_depth,
                 allowed_extensions=allowed_extensions,
+                classify=classify,
             )
 
 
@@ -354,7 +453,8 @@ def _extract_tar_gz(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
-) -> Iterator[ExtractedFile]:
+    classify: bool,
+) -> Iterator[ExtractedFile | ClassifiedEntry]:
     try:
         tf = tarfile.open(  # noqa: SIM115 — context manager handled below
             fileobj=io.BytesIO(archive_bytes),
@@ -427,6 +527,7 @@ def _extract_tar_gz(
                 max_unzipped_size=max_unzipped_size,
                 max_nesting_depth=max_nesting_depth,
                 allowed_extensions=allowed_extensions,
+                classify=classify,
             )
 
 
@@ -439,10 +540,31 @@ def _yield_or_recurse(
     max_unzipped_size: int,
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
-) -> Iterator[ExtractedFile]:
-    """Yield ``content`` as ExtractedFile, or recurse if it's an archive."""
+    classify: bool,
+) -> Iterator[ExtractedFile | ClassifiedEntry]:
+    """Yield ``content`` as an entry, or recurse if it's an archive.
+
+    In strict mode (``classify=False``) this is the fail-closed
+    content gate: nested archives recurse, non-whitelisted extensions
+    and magic mismatches raise. In classify mode the same three
+    content-level signals become annotated :class:`ClassifiedEntry`
+    yields instead -- the caller sees the full tree. The upstream
+    structural guards (in ``_extract_zip`` / ``_extract_tar_gz``) have
+    already run and raise in both modes.
+    """
     nested_kind = _archive_kind_for_arcname(arcname)
     if nested_kind is not None:
+        if classify:
+            # Never open a nested archive in classify mode: the
+            # zip-bomb-via-recursion vector stays unreachable and the
+            # caller records the entry as an opaque raw-hashed blob.
+            yield ClassifiedEntry(
+                arcname=arcname,
+                content=content,
+                depth=depth,
+                verdict=EntryVerdict.NESTED_ARCHIVE,
+            )
+            return
         yield from _extract_recursive(
             content,
             archive_kind=nested_kind,
@@ -451,15 +573,68 @@ def _yield_or_recurse(
             max_nesting_depth=max_nesting_depth,
             allowed_extensions=allowed_extensions,
             current_depth=depth + 1,
+            classify=classify,
         )
         return
 
     ext = extension_of(arcname)
     if ext not in allowed_extensions:
+        if classify:
+            yield ClassifiedEntry(
+                arcname=arcname,
+                content=content,
+                depth=depth,
+                verdict=EntryVerdict.FORBIDDEN_TYPE,
+            )
+            return
         raise SecurityRejectedError(
             ErrorCategory.FORBIDDEN_TYPE,
             f"archive entry {arcname!r} extension {ext!r} not in whitelist",
         )
+
+    if classify:
+        # Extension is whitelisted; the remaining content signal is the
+        # magic gate, whose outcome maps to a verdict:
+        #   * empty content -- no magic to check, not a mismatch; the
+        #     extension is whitelisted, so INCLUDE (e.g. __init__.py).
+        #   * MAGIC_MISMATCH -- genuine ext/content disagreement on a
+        #     recognised extension (a .py carrying an ELF, a .pdf carrying
+        #     a PE); a security signal -> surface as MAGIC_MISMATCH.
+        #   * FORBIDDEN_TYPE -- the extension is whitelisted by the caller
+        #     but absent from the magic layer's family table (.sql /
+        #     .yaml / .go / ...). The magic layer has NO opinion; this is
+        #     not a content mismatch, so INCLUDE it (the caller's
+        #     allowlist already accepted the extension).
+        if not content:
+            yield ClassifiedEntry(
+                arcname=arcname,
+                content=content,
+                depth=depth,
+                verdict=EntryVerdict.INCLUDED,
+            )
+            return
+        try:
+            verify_extension_matches_content(arcname, content)
+        except SecurityRejectedError as exc:
+            verdict = (
+                EntryVerdict.MAGIC_MISMATCH
+                if exc.category is ErrorCategory.MAGIC_MISMATCH
+                else EntryVerdict.INCLUDED
+            )
+            yield ClassifiedEntry(
+                arcname=arcname,
+                content=content,
+                depth=depth,
+                verdict=verdict,
+            )
+            return
+        yield ClassifiedEntry(
+            arcname=arcname,
+            content=content,
+            depth=depth,
+            verdict=EntryVerdict.INCLUDED,
+        )
+        return
 
     verify_extension_matches_content(arcname, content)
 

@@ -8,6 +8,12 @@ package exposes only forms + identity primitives + ports for now; the
 extraction and orchestration logic land in later commits.
 """
 
+from course_supporter.normalizer.classify import (
+    KNOWN_EXTENSIONS,
+    ExtensionClassifier,
+    collapse_denylist,
+    denylist_prefix,
+)
 from course_supporter.normalizer.hashing import (
     canonicalize_path,
     compute_aggregate_hash,
@@ -25,16 +31,20 @@ from course_supporter.normalizer.models import (
 from course_supporter.normalizer.ports import EntryClassifier, TextExtractor
 
 __all__ = [
+    "KNOWN_EXTENSIONS",
     "Delta",
     "EntryClass",
     "EntryClassifier",
     "ExcludedEntry",
     "ExcludedReason",
+    "ExtensionClassifier",
     "Manifest",
     "ManifestEntry",
     "NormalizedSnapshot",
     "NormalizerLimits",
     "TextExtractor",
     "canonicalize_path",
+    "collapse_denylist",
     "compute_aggregate_hash",
+    "denylist_prefix",
 ]

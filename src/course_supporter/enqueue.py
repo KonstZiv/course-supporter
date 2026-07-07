@@ -21,7 +21,8 @@ from course_supporter.storage.authored_document_repository import (
 )
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import Job
+from course_supporter.storage.orm import Job, ProjectBase
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 
 async def enqueue_ingestion(
@@ -302,6 +303,78 @@ async def enqueue_node_summary_regeneration(
         arq_job_id=arq_job.job_id if arq_job else None,
     )
     return job
+
+
+async def enqueue_base_normalize(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+    archive_key: str,
+) -> ProjectBase:
+    """Create the next pending base version + its Job, enqueue normalization.
+
+    KD18 P2. Helper-owns-commit (QQ5, mirrors :func:`enqueue_ingestion`): a
+    Job-row-backed job WITHOUT any ``ExternalServiceCall`` (base normalization
+    is deterministic, zero LLM). Ordering matters twice:
+
+    1. ``create_version`` flushes FIRST — the concurrency collision point. Two
+       racing re-uploads of the same document read the same
+       ``MAX(version) + 1`` and the second flush raises ``IntegrityError`` on
+       ``UNIQUE(authored_document_id, version)``. This helper does NOT wrap or
+       swallow it (mirrors the repository): it propagates to the route for a
+       clean 409, and because the flush fails BEFORE the Job insert, no Job row
+       is created for the losing upload.
+    2. The durable commit of the pending base + Job precedes the ARQ dispatch
+       (DD-3.2.6-A): a hot worker can never read a Job whose ``ProjectBase`` is
+       not yet committed. A second commit records ``arq_job_id``.
+
+    Enqueue payload = ``(job_id, project_base_id)`` on the default queue; the
+    worker re-reads ``archive_key`` from the ``ProjectBase`` by id.
+
+    Returns:
+        The created pending :class:`ProjectBase` — the route builds its
+        response (version / id) from it.
+    """
+    log = structlog.get_logger().bind(authored_document_id=str(authored_document_id))
+    job_repo = JobRepository(session)
+
+    # (1) Allocate the pending base version first — the flush here is the
+    # concurrency arbiter (UNIQUE); a collision raises before any Job exists.
+    base = await ProjectBaseRepository(session).create_version(
+        authored_document_id=authored_document_id,
+        archive_key=archive_key,
+    )
+    # Durable Job row (BASE_NORMALIZE — deterministic, no ESC).
+    job = await job_repo.create(
+        tenant_id=tenant_id,
+        job_type=JobType.BASE_NORMALIZE,
+        input_params={"project_base_id": str(base.id)},
+    )
+    # (2) QQ5 boundary (mirrors enqueue_ingestion): durable-commit the pending
+    # base + Job BEFORE the ARQ side-effect, so the worker never reads a Job
+    # without its ProjectBase. The helper takes ownership of the commit.
+    await session.commit()
+
+    arq_job = await redis.enqueue_job(
+        "base_normalize_task",
+        str(job.id),
+        str(base.id),
+    )
+
+    if arq_job is not None:
+        await job_repo.set_arq_job_id(job.id, arq_job.job_id)
+        await session.commit()
+
+    log.info(
+        "base_normalize_enqueued",
+        project_base_id=str(base.id),
+        version=base.version,
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return base
 
 
 async def enqueue_email(

@@ -279,3 +279,122 @@ class TestUpdateState:
             repo = ProjectBaseRepository(session)
             with pytest.raises(ValueError, match="ProjectBase not found"):
                 await repo.mark_failed(uuid.uuid4(), failure_reason="x")
+
+
+class TestFindBySnapshotHash:
+    async def test_matches_any_ready_version(
+        self, project_doc: tuple[async_sessionmaker[AsyncSession], uuid.UUID]
+    ) -> None:
+        """Echo-match resolves the exact version, not just the latest — a
+        student who built on v1 while v2 is active still resolves to v1."""
+        factory, doc_id = project_doc
+        async with factory() as session:
+            repo = ProjectBaseRepository(session)
+            v1 = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v1"
+            )
+            await repo.mark_ready(
+                v1.id,
+                snapshot_key="k/v1/snapshot.zip",
+                snapshot_hash="1" * 64,
+                manifest={"schema": 1},
+            )
+            v2 = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v2"
+            )
+            await repo.mark_ready(
+                v2.id,
+                snapshot_key="k/v2/snapshot.zip",
+                snapshot_hash="2" * 64,
+                manifest={"schema": 1},
+            )
+
+            hit_v1 = await repo.find_by_snapshot_hash(doc_id, "1" * 64)
+            hit_v2 = await repo.find_by_snapshot_hash(doc_id, "2" * 64)
+            assert hit_v1 is not None and hit_v1.id == v1.id and hit_v1.version == 1
+            assert hit_v2 is not None and hit_v2.id == v2.id and hit_v2.version == 2
+
+    async def test_unknown_hash_is_none(
+        self, project_doc: tuple[async_sessionmaker[AsyncSession], uuid.UUID]
+    ) -> None:
+        factory, doc_id = project_doc
+        async with factory() as session:
+            repo = ProjectBaseRepository(session)
+            base = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v1"
+            )
+            await repo.mark_ready(
+                base.id,
+                snapshot_key="k/v1/snapshot.zip",
+                snapshot_hash="1" * 64,
+                manifest={"schema": 1},
+            )
+            assert await repo.find_by_snapshot_hash(doc_id, "9" * 64) is None
+
+    async def test_pending_and_failed_never_match(
+        self, project_doc: tuple[async_sessionmaker[AsyncSession], uuid.UUID]
+    ) -> None:
+        """snapshot_hash is NULL until READY — an echo can never resolve a
+        pending / failed version (nothing to compare against)."""
+        factory, doc_id = project_doc
+        async with factory() as session:
+            repo = ProjectBaseRepository(session)
+            pending = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v1"
+            )
+            failed = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v2"
+            )
+            await repo.mark_failed(failed.id, failure_reason="bad zip")
+            # Neither has a snapshot_hash → no echo can match; the (NULL == x)
+            # comparison is never true in SQL either.
+            assert pending.snapshot_hash is None
+            assert await repo.find_by_snapshot_hash(doc_id, "1" * 64) is None
+
+    async def test_scoped_to_document(
+        self, project_doc: tuple[async_sessionmaker[AsyncSession], uuid.UUID]
+    ) -> None:
+        """The same hash under a FOREIGN document does not match."""
+        factory, doc_id = project_doc
+        async with factory() as session:
+            repo = ProjectBaseRepository(session)
+            base = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v1"
+            )
+            await repo.mark_ready(
+                base.id,
+                snapshot_key="k/v1/snapshot.zip",
+                snapshot_hash="1" * 64,
+                manifest={"schema": 1},
+            )
+            other_doc = uuid.uuid4()
+            assert await repo.find_by_snapshot_hash(other_doc, "1" * 64) is None
+
+    async def test_identical_reupload_resolves_newest(
+        self, project_doc: tuple[async_sessionmaker[AsyncSession], uuid.UUID]
+    ) -> None:
+        """Byte-identical re-upload (two versions share a hash) → newest match,
+        deterministically (minimal staleness)."""
+        factory, doc_id = project_doc
+        async with factory() as session:
+            repo = ProjectBaseRepository(session)
+            v1 = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v1"
+            )
+            await repo.mark_ready(
+                v1.id,
+                snapshot_key="k/v1/snapshot.zip",
+                snapshot_hash="7" * 64,
+                manifest={"schema": 1},
+            )
+            v2 = await repo.create_version(
+                authored_document_id=doc_id, archive_key="k/v2"
+            )
+            await repo.mark_ready(
+                v2.id,
+                snapshot_key="k/v2/snapshot.zip",
+                snapshot_hash="7" * 64,
+                manifest={"schema": 1},
+            )
+            hit = await repo.find_by_snapshot_hash(doc_id, "7" * 64)
+            assert hit is not None and hit.id == v2.id and hit.version == 2

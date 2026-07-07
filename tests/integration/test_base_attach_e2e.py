@@ -33,15 +33,12 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
 from course_supporter.config import get_settings
-from course_supporter.normalizer import normalize_archive
+from course_supporter.normalizer import _PROJECT_NORMALIZE_LIMITS, normalize_archive
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
-from course_supporter.workers.base_normalize import (
-    _BASE_NORMALIZE_LIMITS,
-    base_normalize_task,
-)
+from course_supporter.workers.base_normalize import base_normalize_task
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
@@ -220,7 +217,7 @@ class TestBaseAttachE2E:
 
         # Echo round-trip: the descriptor hash == the deterministic aggregate.
         expected = normalize_archive(
-            raw, archive_kind="zip", limits=_BASE_NORMALIZE_LIMITS
+            raw, archive_kind="zip", limits=_PROJECT_NORMALIZE_LIMITS
         )
         assert desc["snapshot_hash"] == expected.snapshot_hash
 

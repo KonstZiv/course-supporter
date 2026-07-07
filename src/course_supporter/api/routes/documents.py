@@ -82,7 +82,7 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["documents"])
 
 # KD18 P2 (Decision 1, 1A): raw-upload size cap for an author base archive
-# (compressed bytes). Distinct from the worker's _BASE_NORMALIZE_LIMITS, which
+# (compressed bytes). Distinct from the shared _PROJECT_NORMALIZE_LIMITS, which
 # bound the UNPACK. Enforced by streaming cutoff (never buffer-then-check).
 _BASE_ARCHIVE_MAX_UPLOAD_BYTES: Final[int] = 100 * 1024 * 1024
 _BASE_UPLOAD_CHUNK_BYTES: Final[int] = 1024 * 1024

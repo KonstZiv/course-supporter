@@ -27,6 +27,7 @@ from course_supporter.normalizer.hashing import (
     compute_aggregate_hash,
 )
 from course_supporter.normalizer.models import (
+    _PROJECT_NORMALIZE_LIMITS,
     Delta,
     EntryClass,
     ExcludedEntry,
@@ -44,6 +45,7 @@ from course_supporter.normalizer.serde import (
 
 __all__ = [
     "KNOWN_EXTENSIONS",
+    "_PROJECT_NORMALIZE_LIMITS",
     "DefaultTextExtractor",
     "Delta",
     "EntryClass",

@@ -23,12 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.config import get_settings
 from course_supporter.jobs import JobType
-from course_supporter.normalizer import normalize_archive
+from course_supporter.normalizer import _PROJECT_NORMALIZE_LIMITS, normalize_archive
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
 from course_supporter.workers.base_normalize import (
-    _BASE_NORMALIZE_LIMITS,
     _snapshot_key_for,
     base_normalize_task,
 )
@@ -116,7 +115,7 @@ class TestBaseNormalizeTaskLive:
         result = await base_normalize_task(ctx, str(job_id), str(base_id))
 
         expected = normalize_archive(
-            raw, archive_kind="zip", limits=_BASE_NORMALIZE_LIMITS
+            raw, archive_kind="zip", limits=_PROJECT_NORMALIZE_LIMITS
         )
         assert result["state"] == "ready"
         # Point A: the aggregate over NORMALIZED content, not the raw-zip hash.

@@ -1219,6 +1219,38 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         ForeignKey("jobs.id", ondelete="SET NULL"), index=True
     )
 
+    # ── Project base + snapshot (KD18 P2; POPULATED BY P3) ──
+    # P2 lands these four nullable carriers; the project delta-submit path
+    # (P3) fills them when a project submission is normalized against a base.
+    # Nullable with NO server_default — P3 consumes them without a second
+    # migration; NULL means "not a project submission".
+    base_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("project_bases.id", ondelete="SET NULL"),
+        index=True,
+        comment="FK → ProjectBase version this project submission was diffed "
+        "against (KD18). SET NULL — the submission's own snapshot columns are "
+        "self-contained, so dropping a base version only clears the pointer. "
+        "NULL for non-project submissions. Populated by P3.",
+    )
+    snapshot_key: Mapped[str | None] = mapped_column(
+        String(2000),
+        comment="S3 object key of the submission's normalized snapshot zip "
+        "(KD18). Inherits the submission lifecycle. NULL for non-project "
+        "submissions. Populated by P3.",
+    )
+    snapshot_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Aggregate SHA-256 (sorted path:hash) of the submission "
+        "snapshot (KD18) — the echoed base_snapshot_hash match key. NULL for "
+        "non-project submissions. Populated by P3.",
+    )
+    snapshot_manifest: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Algorithmic manifest of the submission snapshot (KD18): "
+        "schema / aggregate_hash / included / excluded / totals. NULL for "
+        "non-project submissions. Populated by P3.",
+    )
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -1239,6 +1271,117 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         return (
             f"HomeworkSubmission(id={self.id!r}, status={self.status!r}, "
             f"student_id={self.student_id!r})"
+        )
+
+
+class ProjectBase(Base):
+    """Append-only normalized base-archive version for a project task (KD18 P2).
+
+    A project task (``AuthoredDocument`` with ``task_type='project'``) may
+    carry a base archive — the starting project the student builds on. Each
+    upload is an immutable version: re-upload creates version ``n+1`` and
+    existing submissions keep the reference to the version they were diffed
+    against. The active version is the latest ``READY`` one.
+
+    Lifecycle (``state``): ``pending`` on create → the base-normalize ARQ job
+    (Job-row, zero LLM) runs the deterministic normalizer and either sets
+    ``ready`` (with ``snapshot_key`` / ``snapshot_hash`` / ``manifest``
+    populated) or ``failed`` (with ``failure_reason``). The ``snapshot_hash``
+    is the aggregate hash of the normalized snapshot — the echo-match key a
+    project submission is checked against (P3), so it is indexed for the
+    WHERE-match against any version.
+
+    Plain ``Base`` (no ``SoftDeleteMixin``): versions are append-only and
+    removed only when the parent document is deleted (FK CASCADE).
+    """
+
+    __tablename__ = "project_bases"
+    __table_args__ = (
+        Index(
+            "ix_project_bases_snapshot_hash",
+            "snapshot_hash",
+        ),
+        Index(
+            "uq_project_base_document_version",
+            "authored_document_id",
+            "version",
+            unique=True,
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'ready', 'failed')",
+            name="ck_project_bases_state",
+        ),
+        {
+            "comment": "Append-only normalized base-archive versions for "
+            "project tasks (KD18)",
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        comment="FK → AuthoredDocument (the project task). CASCADE — deleting "
+        "the task removes its base versions. The composite "
+        "(authored_document_id, version) unique index covers this FK (leftmost "
+        "prefix), so no standalone FK index.",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        comment="Monotonic 1-based version per document. Re-upload = new "
+        "version; existing submissions retain their referenced version. "
+        "Active version = latest READY. Unique per document.",
+    )
+    archive_key: Mapped[str] = mapped_column(
+        String(2000),
+        comment="S3 object key of the raw uploaded base archive (the original "
+        "the student downloads).",
+    )
+    snapshot_key: Mapped[str | None] = mapped_column(
+        String(2000),
+        nullable=True,
+        default=None,
+        comment="S3 object key of the normalized canonical zip. NULL until READY.",
+    )
+    snapshot_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+        comment="Aggregate SHA-256 (sorted path:hash) of the normalized "
+        "snapshot — the echo-match key (P3 matches submissions against any "
+        "version). NULL until READY. Indexed (non-unique) for the WHERE-match.",
+    )
+    manifest: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="Algorithmic manifest (schema / aggregate_hash / included / "
+        "excluded / totals) of the normalized snapshot. NULL until READY.",
+    )
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+        server_default="pending",
+        comment="Normalization lifecycle: pending → ready | failed(reason). "
+        "Enforced by ck_project_bases_state.",
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Human-readable failure reason when state='failed' (the "
+        "SecurityRejectedError category / NormalizerError message). NULL "
+        "otherwise.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"ProjectBase(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"version={self.version!r}, state={self.state!r})"
         )
 
 

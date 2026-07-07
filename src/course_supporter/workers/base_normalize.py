@@ -29,9 +29,7 @@ NOT from a ``ContextPolicy`` (``AUTHORED_POLICY`` leaves archives disabled).
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
-from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Final
 
@@ -39,9 +37,9 @@ import structlog
 from botocore.exceptions import ClientError
 
 from course_supporter.normalizer import (
-    Manifest,
     NormalizerError,
     NormalizerLimits,
+    manifest_to_jsonb,
     normalize_archive,
 )
 from course_supporter.security.exceptions import SecurityRejectedError
@@ -77,21 +75,6 @@ _BASE_NORMALIZE_LIMITS: Final[NormalizerLimits] = NormalizerLimits(
 # S3 "object does not exist" codes — a missing archive is PERMANENT (the raw
 # upload vanished), not a retry-able connection error.
 _NOT_FOUND_ERROR_CODES: frozenset[str] = frozenset({"NoSuchKey", "404", "NotFound"})
-
-
-def _manifest_to_jsonb(manifest: Manifest) -> dict[str, Any]:
-    """Serialize the frozen ``Manifest`` to a JSONB-ready dict (StrEnum → value).
-
-    ``dataclasses.asdict`` with a factory that unwraps ``StrEnum`` members to
-    their string value (``EntryClass`` / ``ExcludedReason``). The stored shape
-    mirrors the dataclass field names (``cls`` / ``total_files`` /
-    ``total_bytes``), tagged by ``schema`` for forward evolution.
-    """
-
-    def _factory(items: list[tuple[str, Any]]) -> dict[str, Any]:
-        return {k: (v.value if isinstance(v, StrEnum) else v) for k, v in items}
-
-    return dataclasses.asdict(manifest, dict_factory=_factory)
 
 
 def _snapshot_key_for(archive_key: str) -> str:
@@ -204,7 +187,7 @@ async def base_normalize_task(
             base.id,
             snapshot_key=snapshot_key,
             snapshot_hash=snapshot.snapshot_hash,
-            manifest=_manifest_to_jsonb(snapshot.manifest),
+            manifest=manifest_to_jsonb(snapshot.manifest),
         )
         await job_repo.update_status(uuid.UUID(job_id), "complete")
         await session.commit()

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -74,6 +74,7 @@ from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_chunks
 
 logger = structlog.get_logger()
@@ -836,6 +837,34 @@ async def attach_project_base(
         version=base.version,
         state=base.state,
     )
+
+
+@router.get("/documents/{document_id}/base/manifest")
+async def get_project_base_manifest(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """The latest READY base version's manifest (KD18 P2, author-only).
+
+    Returns the algorithmic manifest exactly as the base-normalize worker stored
+    it (``schema`` / ``aggregate_hash`` / ``included`` / ``excluded`` /
+    ``total_files`` / ``total_bytes``). ``PrepDep`` (author) — NOT the mode-1
+    API-key ``GET /base``, because the manifest is the full file listing. 404 if
+    the document has no READY base (a pending / failed version carries no
+    manifest).
+    """
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    base = await ProjectBaseRepository(session).get_latest_ready(document.id)
+    if base is None or base.manifest is None:
+        raise HTTPException(
+            status_code=404, detail="No ready base manifest for this document."
+        )
+    return base.manifest
 
 
 @router.get("/documents/{document_id}")

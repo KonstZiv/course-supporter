@@ -20,7 +20,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
-from course_supporter.api.schemas import HomeworkSubmitResponse, TenantWebhookResponse
+from course_supporter.api.schemas import (
+    HomeworkSubmitResponse,
+    ProjectBaseDescriptorResponse,
+    TenantWebhookResponse,
+)
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
@@ -36,6 +40,7 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_repository import StudentRepository
 
@@ -261,3 +266,43 @@ async def update_tenant_webhook(
     )
 
     return TenantWebhookResponse(webhook_url=webhook_url)
+
+
+@router.get("/homework/tasks/{authored_document_id}/base")
+async def get_task_base(
+    authored_document_id: uuid.UUID,
+    tenant: CheckDep,
+    session: SessionDep,
+    s3: S3Dep,
+) -> ProjectBaseDescriptorResponse:
+    """Base descriptor for a project task (KD18 P2, mode-1 API-key).
+
+    Returns the active base — the latest READY version — with its echo-match
+    ``snapshot_hash`` and a presigned GET of the original archive. If a base
+    exists but none is READY yet, returns the latest version with its state
+    (``pending`` / ``failed``, ``snapshot_hash`` null). 404 if the task carries
+    no base at all (not an empty object).
+    """
+    # Tenant ownership via document → node.
+    doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    node = await CourseNodeRepository(session).get_by_id(doc.course_node_id)
+    if node is None or node.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    pb_repo = ProjectBaseRepository(session)
+    base = await pb_repo.get_latest_ready(authored_document_id)
+    if base is None:
+        base = await pb_repo.get_latest(authored_document_id)
+    if base is None:
+        raise HTTPException(status_code=404, detail="No base attached to this task.")
+
+    original_url = await s3.generate_presigned_get_url(base.archive_key)
+    return ProjectBaseDescriptorResponse(
+        base_version_id=base.id,
+        version=base.version,
+        snapshot_hash=base.snapshot_hash,
+        state=base.state,
+        original_url=original_url,
+    )

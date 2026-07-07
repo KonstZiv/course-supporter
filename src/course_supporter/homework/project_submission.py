@@ -11,13 +11,16 @@ worker hit, 1A). Deterministic, zero LLM. It:
    fails the submission CLOSED (persisted like the stage-1 rejection);
 2. stores the canonical snapshot in S3 (a sibling of the raw key) + the three
    snapshot columns;
-3. computes the base-vs-submission delta and LOGS its counts — the delta is
-   DERIVED on read (P4/P5) from the two persisted manifests, not persisted here;
-4. builds a BOUNDED interim ``submission_text`` for safety → sanity → review.
+3. computes the base-vs-submission delta (derived on read from the two
+   persisted manifests, not persisted here) and LOGS its counts;
+4. builds the rich Mentor delta-context ``submission_text`` for safety →
+   sanity → review via the pure :func:`build_mentor_context` (P4).
 
-The interim text is over-inclusive (the whole submission, not just the delta)
-and byte-budgeted so it cannot blow up the LLM context — a stop-gap. P4 replaces
-it at the ``tasks.py`` seam with the H2-budgeted trusted/untrusted delta context.
+The context is the H2-budgeted trusted/untrusted delta assembly: a
+system-computed trusted block (base tree + two-level delta + F2 metrics +
+staleness) followed by priority-ordered untrusted file bodies / diffs. The
+pure builder does the assembly; this worker supplies only the I/O — the two
+snapshot zips and a ``read_text`` closure over them.
 """
 
 from __future__ import annotations
@@ -25,17 +28,18 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
+from contextlib import ExitStack
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
 
 import structlog
 
+from course_supporter.homework.mentor_context import Side, build_mentor_context
 from course_supporter.normalizer import (
     _PROJECT_NORMALIZE_LIMITS,
     DefaultTextExtractor,
-    EntryClass,
     Manifest,
-    NormalizedSnapshot,
+    ManifestEntry,
     NormalizerError,
     compute_delta,
     manifest_from_jsonb,
@@ -51,16 +55,10 @@ if TYPE_CHECKING:
 
     from course_supporter.storage.homework_repository import HomeworkRepository
     from course_supporter.storage.job_repository import JobRepository
-    from course_supporter.storage.orm import HomeworkSubmission
+    from course_supporter.storage.orm import HomeworkSubmission, ProjectBase
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
-
-# Byte budget for the interim ``submission_text`` fed to safety → sanity →
-# review (Edit II). Kept at the 1 MB order of the existing single-file safety
-# input (HOMEWORK_POLICY caps single files at 1 MB); the project path bypasses
-# that policy, so without this an unbounded project could hand the LLM tens of MB.
-PROJECT_SAFETY_TEXT_MAX_BYTES: Final[int] = 1024 * 1024
 
 # An empty base manifest — the "no base attached" case. compute_delta against it
 # yields every submission path as "new" (KD18: base absent → delta "all new").
@@ -94,64 +92,6 @@ def _project_failure_reason(exc: NormalizerError | SecurityRejectedError) -> str
     return f"{type(exc).__name__}: {exc}"
 
 
-def build_interim_submission_text(snapshot: NormalizedSnapshot) -> str:
-    """Bounded, over-inclusive interim text for the LLM stages (Edit II).
-
-    Delimited concat (``--- {path} ---\\n{text}``, mirroring the single-file
-    archive assembly) of every INCLUDED TEXT / DOCUMENT entry — docx / pdf are
-    extracted here too via :class:`DefaultTextExtractor`; BINARY entries are
-    outside the review scope and skipped. Whole entries are added until the next
-    would exceed :data:`PROJECT_SAFETY_TEXT_MAX_BYTES`; the remainder is dropped
-    and summarised in ONE aggregate omission marker. If the very first entry
-    already exceeds the budget it is truncated (so the LLM is never handed an
-    empty body). This is the whole submission, NOT the delta — P4 narrows it.
-    """
-    extractor = DefaultTextExtractor()
-    parts: list[str] = []
-    used = 0
-    omitted_entries = 0
-    omitted_bytes = 0
-    budget_hit = False
-
-    with zipfile.ZipFile(io.BytesIO(snapshot.canonical_zip)) as zf:
-        for entry in snapshot.manifest.included:
-            if entry.cls not in (EntryClass.TEXT, EntryClass.DOCUMENT):
-                continue  # BINARY — hash-tracked only, outside review scope.
-            if budget_hit:
-                omitted_entries += 1
-                omitted_bytes += entry.size
-                continue
-            text = extractor.extract(entry.cls, zf.read(entry.path))
-            if text is None:
-                continue
-            block = f"--- {entry.path} ---\n{text}"
-            block_bytes = len(block.encode("utf-8"))
-            sep = 1 if parts else 0
-            if used + sep + block_bytes > PROJECT_SAFETY_TEXT_MAX_BYTES:
-                if not parts:
-                    # First eligible block over budget — include a truncated
-                    # slice so safety is never blind, then stop.
-                    truncated = block.encode("utf-8")[:PROJECT_SAFETY_TEXT_MAX_BYTES]
-                    parts.append(truncated.decode("utf-8", errors="ignore"))
-                    used = len(truncated)
-                    budget_hit = True
-                    continue
-                budget_hit = True
-                omitted_entries += 1
-                omitted_bytes += entry.size
-                continue
-            parts.append(block)
-            used += sep + block_bytes
-
-    text = "\n".join(parts)
-    if omitted_entries:
-        text += (
-            f"\n--- omitted for budget: {omitted_entries} entries, "
-            f"{omitted_bytes} bytes ---"
-        )
-    return text
-
-
 async def process_project_submission(
     *,
     session: AsyncSession,
@@ -165,8 +105,8 @@ async def process_project_submission(
     raw_key: str,
 ) -> str | None:
     """Normalize a project submission, persist its snapshot, log the delta, and
-    return the bounded interim ``submission_text`` — or ``None`` on a fail-closed
-    rejection (already persisted; the caller returns).
+    return the rich Mentor delta-context ``submission_text`` — or ``None`` on a
+    fail-closed rejection (already persisted; the caller returns).
 
     Fail-closed on a content/structural rejection (a malformed / bomb archive):
     persist a ``{"source": "normalizer", "reason": ...}`` safety result, set the
@@ -206,13 +146,24 @@ async def process_project_submission(
     )
     await session.commit()
 
-    # Delta — LOGGED only. It is derived on read (P4/P5) from the two persisted
-    # manifests, so nothing is persisted here and nothing reaches the Mentor yet.
+    # Resolve the base once: its manifest drives the delta (derived on read,
+    # never persisted) and its version drives the staleness line. base_id is set
+    # (preflight) only for a matched READY base, so its snapshot_key / manifest /
+    # version are all populated; base absent → empty manifest → "all new".
     base_manifest = _EMPTY_MANIFEST
+    base: ProjectBase | None = None
+    base_version: int | None = None
+    latest_version: int | None = None
     if submission.base_id is not None:
-        base = await ProjectBaseRepository(session).get_by_id(submission.base_id)
-        if base is not None and base.manifest is not None:
-            base_manifest = manifest_from_jsonb(base.manifest)
+        repo = ProjectBaseRepository(session)
+        base = await repo.get_by_id(submission.base_id)
+        if base is not None:
+            base_version = base.version
+            if base.manifest is not None:
+                base_manifest = manifest_from_jsonb(base.manifest)
+        latest = await repo.get_latest_ready(submission.authored_document_id)
+        latest_version = latest.version if latest is not None else None
+
     delta = compute_delta(base_manifest, snapshot.manifest)
     log.info(
         "project_submission.delta",
@@ -224,7 +175,35 @@ async def process_project_submission(
         snapshot_hash=snapshot.snapshot_hash,
     )
 
-    return build_interim_submission_text(snapshot)
+    # Assemble the rich context inside a resource-scoped block. The submission
+    # snapshot is already in memory (just uploaded); only the base snapshot is
+    # fetched from S3, and only when a base is attached. Both zips close once the
+    # pure builder has read every body it needs (it reads lazily during assembly,
+    # entirely within this ``with``).
+    extractor = DefaultTextExtractor()
+    with ExitStack() as stack:
+        sub_zf = stack.enter_context(
+            zipfile.ZipFile(io.BytesIO(snapshot.canonical_zip))
+        )
+        base_zf: zipfile.ZipFile | None = None
+        if base is not None and base.snapshot_key is not None:
+            base_bytes = await s3.get_object(base.snapshot_key)
+            base_zf = stack.enter_context(zipfile.ZipFile(io.BytesIO(base_bytes)))
+
+        def read_text(side: Side, entry: ManifestEntry) -> str | None:
+            zf = sub_zf if side == "sub" else base_zf
+            if zf is None:
+                return None
+            return extractor.extract(entry.cls, zf.read(entry.path))
+
+        return build_mentor_context(
+            base_manifest=base_manifest,
+            sub_manifest=snapshot.manifest,
+            delta=delta,
+            read_text=read_text,
+            base_version=base_version,
+            latest_version=latest_version,
+        )
 
 
 async def _persist_rejection(

@@ -53,9 +53,9 @@ class NormalizerLimits:
     Level 1 guards the raw archive against zip-bombs before denylist
     pruning. Level 2 caps the cleaned snapshot after denylist pruning (a
     forgotten ``.venv`` collapses to a manifest row rather than tripping
-    the cap). ``kept_single_max_bytes`` is the single home for the
-    per-file review threshold; P1 stores it but applies no filter -- P4
-    compares ``ManifestEntry.size`` against it downstream.
+    the cap). ``kept_single_max_bytes`` is stored but enforced by nothing
+    here (only ``kept_total_max_bytes`` raises); it is a reserved
+    per-file knob for downstream consumers.
     """
 
     raw_max_unzipped_bytes: int = 150 * 1024 * 1024
@@ -73,16 +73,18 @@ class NormalizerLimits:
 #     project, evolved). An asymmetric cap (a smaller submission limit) would
 #     reject valid submissions the base itself passed; base == submission keeps
 #     the accept/reject envelope identical on both sides.
-#   * One kept_single threshold — P4 compares ``ManifestEntry.size`` against
-#     ``kept_single_max_bytes`` to pick a per-file render mode (whole vs unified
-#     diff); a single value keeps that decision predictable across both sides.
+#   * One kept_single value — kept identical on both sides for the same
+#     symmetry reason, though the normalizer enforces neither side (only
+#     ``kept_total_max_bytes`` raises). It is a reserved, currently-unused
+#     per-file knob; the P4 delta-context renderer picks whole-vs-diff with
+#     its own dedicated threshold, NOT this value.
 #
 # These limits do NOT drive inclusion/exclusion — ``ExcludedReason`` is
 # exhaustive (denylist_dir / magic_mismatch / nested_archive); there is no
 # size-based exclusion, and exceeding ``kept_total_max_bytes`` RAISES the whole
 # archive (``NormalizerLimitError``) rather than silently dropping entries. They
-# are an accept/reject anti-bomb guard + the P4 per-file threshold, NOT an
-# "honest delta" mechanism.
+# are an accept/reject anti-bomb guard, NOT an "honest delta" mechanism and NOT
+# the P4 per-file render threshold (P4 owns a dedicated constant for that).
 #
 #   raw_max_unzipped_bytes 200 MB — level-1 cumulative unzip guard (anti-bomb),
 #       generous for a real author-curated project, far below any bomb.
@@ -90,8 +92,8 @@ class NormalizerLimits:
 #       entry, never recursed into (bomb vector stays unreachable).
 #   kept_total_max_bytes  100 MB  — level-2 cap on the CLEANED snapshot, applied
 #       AFTER the denylist collapse (a forgotten .venv does not count).
-#   kept_single_max_bytes   5 MB  — P4 per-file review threshold; the normalizer
-#       stores but does not enforce it.
+#   kept_single_max_bytes   5 MB  — stored, unenforced; a reserved per-file
+#       knob, NOT the P4 whole-vs-diff render threshold (P4 owns that).
 _PROJECT_NORMALIZE_LIMITS: Final[NormalizerLimits] = NormalizerLimits(
     raw_max_unzipped_bytes=200 * 1024 * 1024,
     raw_max_nesting_depth=1,

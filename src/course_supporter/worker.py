@@ -23,6 +23,7 @@ from course_supporter.api.tasks import (
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
+from course_supporter.workers.base_normalize import base_normalize_task
 from course_supporter.workers.email_send import arq_send_email
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
 
@@ -216,6 +217,7 @@ class WorkerSettings:
         arq_regenerate_node_summary,
         s3_cleanup_task,
         arq_send_email,
+        base_normalize_task,
     ]
     on_startup = startup
     on_shutdown = shutdown

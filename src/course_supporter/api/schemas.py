@@ -641,6 +641,47 @@ class PresignedUrlResponse(BaseModel):
     expires_in: int = Field(description="URL validity in seconds.")
 
 
+class ProjectBaseAttachResponse(BaseModel):
+    """Response for POST /documents/{document_id}/base (KD18 P2).
+
+    Returned with 202 — the base archive is stored and the deterministic
+    normalization is enqueued; the version starts ``pending`` and flips to
+    ``ready`` | ``failed`` in the background.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    base_version_id: uuid.UUID = Field(
+        description="The created ProjectBase version id."
+    )
+    version: int = Field(description="1-based version number for this document.")
+    state: str = Field(description="Normalization state (``pending`` on attach).")
+
+
+class ProjectBaseDescriptorResponse(BaseModel):
+    """Response for GET /homework/tasks/{id}/base (KD18 P2, mode-1 API-key).
+
+    The active base — the latest ``ready`` version — or, if none is ready yet,
+    the latest version with its ``state`` (``snapshot_hash`` is ``null`` until
+    ready). ``snapshot_hash`` is exposed by design: the P3 submit path echoes
+    it as ``base_snapshot_hash``. ``original_url`` is a presigned GET of the
+    author's original archive.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    base_version_id: uuid.UUID = Field(description="The ProjectBase version id.")
+    version: int = Field(description="1-based version number.")
+    snapshot_hash: str | None = Field(
+        default=None,
+        description="Aggregate snapshot hash (echo-match key); null until ready.",
+    )
+    state: str = Field(description="Normalization state: pending | ready | failed.")
+    original_url: str = Field(
+        description="Presigned GET URL of the original base archive."
+    )
+
+
 class ConfirmUploadRequest(BaseModel):
     """Request body for POST /nodes/{node_id}/documents/confirm-upload."""
 

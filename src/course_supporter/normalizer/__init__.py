@@ -27,6 +27,7 @@ from course_supporter.normalizer.hashing import (
     compute_aggregate_hash,
 )
 from course_supporter.normalizer.models import (
+    _PROJECT_NORMALIZE_LIMITS,
     Delta,
     EntryClass,
     ExcludedEntry,
@@ -37,9 +38,14 @@ from course_supporter.normalizer.models import (
     NormalizerLimits,
 )
 from course_supporter.normalizer.ports import EntryClassifier, TextExtractor
+from course_supporter.normalizer.serde import (
+    manifest_from_jsonb,
+    manifest_to_jsonb,
+)
 
 __all__ = [
     "KNOWN_EXTENSIONS",
+    "_PROJECT_NORMALIZE_LIMITS",
     "DefaultTextExtractor",
     "Delta",
     "EntryClass",
@@ -59,6 +65,8 @@ __all__ = [
     "compute_aggregate_hash",
     "compute_delta",
     "denylist_prefix",
+    "manifest_from_jsonb",
+    "manifest_to_jsonb",
     "normalize_archive",
     "write_canonical_zip",
 ]

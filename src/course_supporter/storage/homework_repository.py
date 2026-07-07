@@ -68,6 +68,7 @@ class HomeworkRepository:
         response_language: str | None = None,
         student_note: str | None = None,
         delivery_mode: str = "webhook",
+        base_id: uuid.UUID | None = None,
     ) -> HomeworkSubmission:
         """Create a new homework submission.
 
@@ -88,6 +89,11 @@ class HomeworkRepository:
                 submission (steers the Mentor review of this attempt).
             delivery_mode: ``'webhook'`` (mode-1, default) or ``'in_app'``
                 (mode-2 portal session submission; Phase 6 T2, KD17).
+            base_id: FK → the ProjectBase version this project submission was
+                echo-matched against (KD18 P3), resolved at submit-time. ``None``
+                for single-file / non-project / no-base project submissions. The
+                worker-time snapshot columns are set later via
+                :meth:`store_snapshot`.
 
         Returns:
             The newly created HomeworkSubmission.
@@ -106,6 +112,7 @@ class HomeworkRepository:
             response_language=response_language,
             student_note=student_note,
             delivery_mode=delivery_mode,
+            base_id=base_id,
         )
         self._session.add(submission)
         await self._session.flush()
@@ -390,6 +397,35 @@ class HomeworkRepository:
             update(HomeworkSubmission)
             .where(HomeworkSubmission.id == submission_id)
             .values(**values)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def store_snapshot(
+        self,
+        submission_id: uuid.UUID,
+        *,
+        snapshot_key: str,
+        snapshot_hash: str,
+        snapshot_manifest: dict[str, Any],
+    ) -> None:
+        """Persist the project submission's normalized snapshot (KD18 P3).
+
+        Sets the three worker-time snapshot columns (``base_id`` is written at
+        submit-time by :meth:`create`). Mirror of :meth:`store_safety_result` /
+        :meth:`store_review_result` — a single UPDATE, no status transition. The
+        manifest arrives already JSONB-serialized (via
+        ``normalizer.manifest_to_jsonb``); this method only writes. Called once
+        by the delta-submit worker before the safety stage (Commit 5).
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(
+                snapshot_key=snapshot_key,
+                snapshot_hash=snapshot_hash,
+                snapshot_manifest=snapshot_manifest,
+            )
         )
         await self._session.execute(stmt)
         await self._session.flush()

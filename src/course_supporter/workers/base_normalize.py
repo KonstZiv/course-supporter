@@ -23,25 +23,25 @@ Security note: under KD18 1A the author upload path does NOT run
 ``run_stage1`` (its archive branch is fail-closed and would reject a real
 project's non-allowlisted files). The MANDATORY structural sandbox for a base
 is ``extract_archive_safely`` in classify mode, reached via ``normalize_archive``
-HERE. The resource guards therefore come from ``_BASE_NORMALIZE_LIMITS`` below,
-NOT from a ``ContextPolicy`` (``AUTHORED_POLICY`` leaves archives disabled).
+HERE. The resource guards therefore come from the shared
+``_PROJECT_NORMALIZE_LIMITS`` (normalizer package — identical for base and P3
+submission normalization), NOT from a ``ContextPolicy`` (``AUTHORED_POLICY``
+leaves archives disabled).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
-from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, Final
+from typing import Any
 
 import structlog
 from botocore.exceptions import ClientError
 
 from course_supporter.normalizer import (
-    Manifest,
+    _PROJECT_NORMALIZE_LIMITS,
     NormalizerError,
-    NormalizerLimits,
+    manifest_to_jsonb,
     normalize_archive,
 )
 from course_supporter.security.exceptions import SecurityRejectedError
@@ -52,46 +52,15 @@ from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
 
-# ── Base normalization limits (SECURITY KNOB — review-able) ────────────
-# Explicit resource guards for base-archive normalization. Distinct from the
-# route's raw-upload size cap (100 MB compressed): these bound the *unpack*.
-# The P1 ``NormalizerLimits`` API exposes exactly these four knobs — there is
-# no separate per-entry-size or entry-count param; the anti-zip-bomb defence is
-# the cumulative ``raw_max_unzipped_bytes`` + ``raw_max_nesting_depth``, and the
-# entry count is bounded implicitly by the cumulative unzipped size.
-#   raw_max_unzipped_bytes 200 MB — level-1 cumulative unzip guard (anti-bomb),
-#       generous for a real author-curated project, far below any bomb.
-#   raw_max_nesting_depth   1     — a nested archive is recorded as an excluded
-#       entry, never recursed into (bomb vector stays unreachable).
-#   kept_total_max_bytes  100 MB  — level-2 cap on the CLEANED snapshot, applied
-#       AFTER the denylist collapse (a forgotten .venv does not count).
-#   kept_single_max_bytes   5 MB  — P4 per-file review threshold; the normalizer
-#       stores but does not enforce it (inert in P2).
-_BASE_NORMALIZE_LIMITS: Final[NormalizerLimits] = NormalizerLimits(
-    raw_max_unzipped_bytes=200 * 1024 * 1024,
-    raw_max_nesting_depth=1,
-    kept_total_max_bytes=100 * 1024 * 1024,
-    kept_single_max_bytes=5 * 1024 * 1024,
-)
+# Base normalization uses the shared ``_PROJECT_NORMALIZE_LIMITS`` (normalizer
+# package) — the same instance the P3 submission worker normalizes with, so base
+# and submission share one accept/reject envelope + one kept_single threshold.
+# Distinct from the route's raw-upload cap (100 MB compressed): these bound the
+# *unpack*, not the uploaded bytes.
 
 # S3 "object does not exist" codes — a missing archive is PERMANENT (the raw
 # upload vanished), not a retry-able connection error.
 _NOT_FOUND_ERROR_CODES: frozenset[str] = frozenset({"NoSuchKey", "404", "NotFound"})
-
-
-def _manifest_to_jsonb(manifest: Manifest) -> dict[str, Any]:
-    """Serialize the frozen ``Manifest`` to a JSONB-ready dict (StrEnum → value).
-
-    ``dataclasses.asdict`` with a factory that unwraps ``StrEnum`` members to
-    their string value (``EntryClass`` / ``ExcludedReason``). The stored shape
-    mirrors the dataclass field names (``cls`` / ``total_files`` /
-    ``total_bytes``), tagged by ``schema`` for forward evolution.
-    """
-
-    def _factory(items: list[tuple[str, Any]]) -> dict[str, Any]:
-        return {k: (v.value if isinstance(v, StrEnum) else v) for k, v in items}
-
-    return dataclasses.asdict(manifest, dict_factory=_factory)
 
 
 def _snapshot_key_for(archive_key: str) -> str:
@@ -181,7 +150,7 @@ async def base_normalize_task(
         # guards; content signals become excluded manifest rows.
         try:
             snapshot = normalize_archive(
-                raw, archive_kind=archive_kind, limits=_BASE_NORMALIZE_LIMITS
+                raw, archive_kind=archive_kind, limits=_PROJECT_NORMALIZE_LIMITS
             )
         except (NormalizerError, SecurityRejectedError) as exc:
             reason = _failure_reason(exc)
@@ -204,7 +173,7 @@ async def base_normalize_task(
             base.id,
             snapshot_key=snapshot_key,
             snapshot_hash=snapshot.snapshot_hash,
-            manifest=_manifest_to_jsonb(snapshot.manifest),
+            manifest=manifest_to_jsonb(snapshot.manifest),
         )
         await job_repo.update_status(uuid.UUID(job_id), "complete")
         await session.commit()

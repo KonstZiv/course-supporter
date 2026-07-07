@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Final
 
 
 class EntryClass(StrEnum):
@@ -61,6 +62,42 @@ class NormalizerLimits:
     raw_max_nesting_depth: int = 1
     kept_total_max_bytes: int = 50 * 1024 * 1024
     kept_single_max_bytes: int = 2 * 1024 * 1024
+
+
+# ── Shared project-normalize limits (SECURITY KNOB — review-able) ──────────
+# The single NormalizerLimits instance used to normalize BOTH sides of a project
+# task: the author's base archive (P2 base-normalize worker) and the student's
+# submission (P3 delta-submit worker). One constant, deliberately:
+#
+#   * Symmetric accept/reject — a submission is a superset of the base (same
+#     project, evolved). An asymmetric cap (a smaller submission limit) would
+#     reject valid submissions the base itself passed; base == submission keeps
+#     the accept/reject envelope identical on both sides.
+#   * One kept_single threshold — P4 compares ``ManifestEntry.size`` against
+#     ``kept_single_max_bytes`` to pick a per-file render mode (whole vs unified
+#     diff); a single value keeps that decision predictable across both sides.
+#
+# These limits do NOT drive inclusion/exclusion — ``ExcludedReason`` is
+# exhaustive (denylist_dir / magic_mismatch / nested_archive); there is no
+# size-based exclusion, and exceeding ``kept_total_max_bytes`` RAISES the whole
+# archive (``NormalizerLimitError``) rather than silently dropping entries. They
+# are an accept/reject anti-bomb guard + the P4 per-file threshold, NOT an
+# "honest delta" mechanism.
+#
+#   raw_max_unzipped_bytes 200 MB — level-1 cumulative unzip guard (anti-bomb),
+#       generous for a real author-curated project, far below any bomb.
+#   raw_max_nesting_depth   1     — a nested archive is recorded as an excluded
+#       entry, never recursed into (bomb vector stays unreachable).
+#   kept_total_max_bytes  100 MB  — level-2 cap on the CLEANED snapshot, applied
+#       AFTER the denylist collapse (a forgotten .venv does not count).
+#   kept_single_max_bytes   5 MB  — P4 per-file review threshold; the normalizer
+#       stores but does not enforce it.
+_PROJECT_NORMALIZE_LIMITS: Final[NormalizerLimits] = NormalizerLimits(
+    raw_max_unzipped_bytes=200 * 1024 * 1024,
+    raw_max_nesting_depth=1,
+    kept_total_max_bytes=100 * 1024 * 1024,
+    kept_single_max_bytes=5 * 1024 * 1024,
+)
 
 
 @dataclass(frozen=True, slots=True)

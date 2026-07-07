@@ -95,6 +95,39 @@ class ProjectBaseRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def find_by_snapshot_hash(
+        self, authored_document_id: uuid.UUID, snapshot_hash: str
+    ) -> ProjectBase | None:
+        """Echo-match: the base version whose snapshot the student diffed against.
+
+        The KD18 P3 echo contract — a project submission carries the
+        ``base_snapshot_hash`` it was built from; this resolves it to the exact
+        base version. Scoped to the ONE document and matched against ANY of its
+        versions (not just the active/latest): a student who built on v1 while v3
+        is active still resolves to v1 (staleness surfaces separately on the
+        read-path from ``version``). ``snapshot_hash`` is NULL until READY, so
+        pending / failed versions never match; the explicit ``state == 'ready'``
+        filter keeps the intent legible.
+
+        Returns the full row (``id`` → the submission's ``base_id``, ``version``
+        → staleness, ``manifest`` → delta) or None when the hash matches no
+        version — the caller (Commit 4) treats None as an unknown echo → 422.
+        Ordered ``version`` DESC + LIMIT 1 so a byte-identical re-upload (two
+        versions sharing a hash) resolves to the newest match (minimal
+        staleness), deterministically.
+        """
+        stmt = (
+            select(ProjectBase)
+            .where(
+                ProjectBase.authored_document_id == authored_document_id,
+                ProjectBase.snapshot_hash == snapshot_hash,
+                ProjectBase.state == "ready",
+            )
+            .order_by(ProjectBase.version.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def mark_ready(
         self,
         base_id: uuid.UUID,

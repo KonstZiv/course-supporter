@@ -465,6 +465,9 @@ async def arq_process_homework(
         job_id: Job UUID as string.
         submission_id: HomeworkSubmission UUID as string.
     """
+    from course_supporter.homework.project_submission import (
+        process_project_submission,
+    )
     from course_supporter.homework.review_graph import (
         build_mentor_review_service,
     )
@@ -475,6 +478,7 @@ async def arq_process_homework(
         deliver_webhook,
         resolve_webhook_url,
     )
+    from course_supporter.models.source import AssignmentType
     from course_supporter.security.archive import extract_submission_content
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import (
@@ -484,6 +488,9 @@ async def arq_process_homework(
     )
     from course_supporter.security.stage1 import run_stage1
     from course_supporter.security.stage2 import run_stage2_safety_check
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
     from course_supporter.storage.course_node_repository import (
         CourseNodeRepository,
     )
@@ -578,73 +585,106 @@ async def arq_process_homework(
                     ),
                 )
 
-                # Extract content (handles archives)
-                content = await extract_submission_content(file_path)
-
-                # Log non-fatal security warnings at WARNING level
-                for sw in content.security_warnings:
-                    log.warning(
-                        "security_warning",
-                        **sw.as_log_dict(),
-                    )
-
-                log.info(
-                    "homework_content_extracted",
-                    files=len(content.files),
-                    total_size=content.total_size,
-                    security_warnings=len(content.security_warnings),
+                # --- KD18 P3: branch on task_type ---
+                # A project submission bypasses the single-file path's
+                # extract_submission_content + run_stage1 (fail-closed on a real
+                # project's non-allowlisted files — the same wall P2's base hit,
+                # 1A) and is normalized via the classify normalizer instead,
+                # BEFORE safety. Non-project submissions are byte-unchanged.
+                file_bytes = file_path.read_bytes()
+                task_doc = await AuthoredDocumentRepository(session).get_by_id(
+                    submission.authored_document_id
+                )
+                is_project = (
+                    task_doc is not None
+                    and task_doc.task_type == AssignmentType.PROJECT.value
                 )
 
-                # --- KD14 Stage 1 — synchronous validation ---
-                # File already downloaded above; HOMEWORK_POLICY caps at 1 MB
-                # so in-memory read is safe (per Phase 1.2 §6.2 option a ratify).
-                file_bytes = file_path.read_bytes()
-                try:
-                    stage1_result = run_stage1(
-                        filename=submission.original_filename or file_path.name,
-                        content=file_bytes,
-                        context="homework",
+                if is_project:
+                    project_text = await process_project_submission(
+                        session=session,
+                        s3=s3,
+                        hw_repo=hw_repo,
+                        job_repo=job_repo,
+                        submission=submission,
+                        sid=sid,
+                        jid=jid,
+                        file_bytes=file_bytes,
+                        raw_key=s3_key,
                     )
-                except SecurityRejectedError as stage1_exc:
-                    # Stage 1 rejection persists as Stage1RejectionResult
-                    # (synthetic shape; ``source='stage1'`` discriminates from
-                    # Stage 2 SafetyResult per KD-1.2-I).
-                    rejection = Stage1RejectionResult(
-                        category=stage1_exc.category,
-                        detail=stage1_exc.detail,
-                    )
-                    await hw_repo.store_safety_result(
-                        sid, rejection.model_dump(mode="json")
-                    )
-                    await hw_repo.update_status(
-                        sid, "rejected", error_message=stage1_exc.detail
-                    )
-                    await job_repo.update_status(jid, "complete")
-                    await session.commit()
-                    log.warning(
-                        "homework_rejected_stage1",
-                        category=stage1_exc.category.value,
-                        detail=stage1_exc.detail,
-                    )
-                    return
-
-                # --- KD14 Stage 2 — LLM safety classifier (canonical) ---
-                # Assemble submission_text per Stage 1 output shape:
-                # archive_entries → concatenate entries with separators
-                #   (legacy SubmissionContent.full_text parity);
-                # nfc_text → use directly (NFC-normalized text body);
-                # both None (binary like PDF) → best-effort UTF-8 decode
-                #   (legacy ``safety/archive._read_text_file`` parity).
-                if stage1_result.archive_entries is not None:
-                    submission_text = "\n".join(
-                        f"--- {entry.arcname} ---\n"
-                        f"{entry.content.decode('utf-8', errors='replace')}"
-                        for entry in stage1_result.archive_entries
-                    )
-                elif stage1_result.nfc_text is not None:
-                    submission_text = stage1_result.nfc_text
+                    if project_text is None:
+                        # Fail-closed rejection persisted inside; the finally
+                        # cleans the temp file. P4 will assemble the real Mentor
+                        # delta context; here the interim text feeds safety.
+                        return
+                    submission_text = project_text
                 else:
-                    submission_text = file_bytes.decode("utf-8", errors="replace")
+                    # Extract content (handles archives)
+                    content = await extract_submission_content(file_path)
+
+                    # Log non-fatal security warnings at WARNING level
+                    for sw in content.security_warnings:
+                        log.warning(
+                            "security_warning",
+                            **sw.as_log_dict(),
+                        )
+
+                    log.info(
+                        "homework_content_extracted",
+                        files=len(content.files),
+                        total_size=content.total_size,
+                        security_warnings=len(content.security_warnings),
+                    )
+
+                    # --- KD14 Stage 1 — synchronous validation ---
+                    # HOMEWORK_POLICY caps at 1 MB so the in-memory read above is
+                    # safe (per Phase 1.2 §6.2 option a ratify).
+                    try:
+                        stage1_result = run_stage1(
+                            filename=submission.original_filename or file_path.name,
+                            content=file_bytes,
+                            context="homework",
+                        )
+                    except SecurityRejectedError as stage1_exc:
+                        # Stage 1 rejection persists as Stage1RejectionResult
+                        # (synthetic shape; ``source='stage1'`` discriminates from
+                        # Stage 2 SafetyResult per KD-1.2-I).
+                        rejection = Stage1RejectionResult(
+                            category=stage1_exc.category,
+                            detail=stage1_exc.detail,
+                        )
+                        await hw_repo.store_safety_result(
+                            sid, rejection.model_dump(mode="json")
+                        )
+                        await hw_repo.update_status(
+                            sid, "rejected", error_message=stage1_exc.detail
+                        )
+                        await job_repo.update_status(jid, "complete")
+                        await session.commit()
+                        log.warning(
+                            "homework_rejected_stage1",
+                            category=stage1_exc.category.value,
+                            detail=stage1_exc.detail,
+                        )
+                        return
+
+                    # --- KD14 Stage 2 — LLM safety classifier (canonical) ---
+                    # Assemble submission_text per Stage 1 output shape:
+                    # archive_entries → concatenate entries with separators
+                    #   (legacy SubmissionContent.full_text parity);
+                    # nfc_text → use directly (NFC-normalized text body);
+                    # both None (binary like PDF) → best-effort UTF-8 decode
+                    #   (legacy ``safety/archive._read_text_file`` parity).
+                    if stage1_result.archive_entries is not None:
+                        submission_text = "\n".join(
+                            f"--- {entry.arcname} ---\n"
+                            f"{entry.content.decode('utf-8', errors='replace')}"
+                            for entry in stage1_result.archive_entries
+                        )
+                    elif stage1_result.nfc_text is not None:
+                        submission_text = stage1_result.nfc_text
+                    else:
+                        submission_text = file_bytes.decode("utf-8", errors="replace")
 
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).

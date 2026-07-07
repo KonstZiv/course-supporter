@@ -31,20 +31,34 @@ from fastapi import HTTPException, UploadFile
 
 from course_supporter.api.upload_validation import file_extension
 from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import upload_file_chunks
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from course_supporter.storage.orm import HomeworkSubmission, Student
+    from course_supporter.storage.orm import (
+        AuthoredDocument,
+        HomeworkSubmission,
+        Student,
+    )
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
 
-# 10 MB max file size.
+# 10 MB max file size (single-file KD15 submissions).
 MAX_HOMEWORK_SIZE = 10 * 1024 * 1024
+
+# 100 MB raw-upload cap for a PROJECT submission (KD18 P3, Edit I-a). A project
+# submission is a superset of its base, so it mirrors the author base-attach
+# route's compressed cap (``documents._BASE_ARCHIVE_MAX_UPLOAD_BYTES``) rather
+# than the 10 MB single-file cap — an asymmetric cap would reject valid projects
+# the base itself passed. Distinct from the normalizer's UNPACK guard
+# (``_PROJECT_NORMALIZE_LIMITS``); this bounds the uploaded (compressed) bytes.
+PROJECT_SUBMISSION_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
     {
@@ -66,13 +80,21 @@ ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 
-def validate_homework_file(file: UploadFile) -> None:
+def validate_homework_file(
+    file: UploadFile, *, max_upload_bytes: int = MAX_HOMEWORK_SIZE
+) -> None:
     """Reject a homework upload by extension allowlist + declared size (422).
 
     The pre-upload gate, shared by both entry-points and run FIRST (before any
     mode-specific validation) so the failure mode is identical across modes.
     The post-upload size re-check (when ``file.size`` was unknown) lives in
     :func:`create_and_dispatch_submission`.
+
+    ``max_upload_bytes`` is the size cap (KD18 P3, Edit I-a): the default 10 MB
+    for single-file KD15 submissions, or ``PROJECT_SUBMISSION_MAX_UPLOAD_BYTES``
+    (100 MB) for a project submission — the route resolves it from ``task_type``
+    and passes the same value here and to :func:`create_and_dispatch_submission`.
+    The extension check is unchanged and task-agnostic, so it still fails first.
     """
     ext = file_extension(file.filename)
     if ext not in ALLOWED_HOMEWORK_EXTENSIONS:
@@ -84,12 +106,13 @@ def validate_homework_file(file: UploadFile) -> None:
             ),
         )
 
-    if file.size is not None and file.size > MAX_HOMEWORK_SIZE:
+    if file.size is not None and file.size > max_upload_bytes:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"File too large ({file.size} bytes). "
-                f"Maximum: {MAX_HOMEWORK_SIZE} bytes (10 MB)."
+                f"Maximum: {max_upload_bytes} bytes "
+                f"({max_upload_bytes // (1024 * 1024)} MB)."
             ),
         )
 
@@ -125,6 +148,109 @@ class SubmissionDispatch:
     job_id: uuid.UUID | None
 
 
+async def project_preflight(
+    *,
+    session: AsyncSession,
+    task_doc: AuthoredDocument,
+    file: UploadFile,
+    base_snapshot_hash: str | None,
+) -> uuid.UUID | None:
+    """Sync gate for a project submission — resolve the echo-matched base
+    version (or reject) BEFORE any S3 upload, so no rejection ever orphans a
+    file (KD18 P3).
+
+    Called by both submit routes ONLY when ``task_type == 'project'``; the
+    single-file / non-project path never enters here (byte-unchanged). Every
+    rejection carries a stable ``code`` (for the P5 FE dictionary) + a 3-part
+    human ``details`` (what happened / why it matters / what to do).
+
+    Decision table:
+
+    * file is not an archive -> 422 ``ARCHIVE_ONLY`` (single-file KD15 stays for
+      other task types).
+    * no base row at all -> ``None`` — no-base: an empty snapshot, delta "all
+      new"; the echo is not required.
+    * base row(s) exist but none READY -> 409 ``BASE_NOT_READY`` (mirror of the
+      summary-readiness 409: the base exists, it is just still being prepared).
+    * >= 1 READY version:
+        - echo missing / blank -> 422 ``MISSING_BASE_ECHO``.
+        - echo present, no match -> 422 ``UNKNOWN_BASE_ECHO``.
+        - echo matches any version -> that version's id. An OLDER version is
+          accepted (staleness is derived on the read-path, not an error).
+
+    Returns the ``base_id`` to persist at submit-time, or ``None`` for a no-base
+    project submission.
+    """
+    if archive_kind_for_filename(file.filename or "") is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "ARCHIVE_ONLY",
+                "details": (
+                    "This task expects a project archive, but the uploaded file "
+                    "is not one. A project submission is diffed against the "
+                    "task's base as a whole archive, so a single loose file "
+                    "cannot be processed. Re-submit the whole project as a "
+                    ".zip / .tar.gz / .tgz / .gz archive."
+                ),
+            },
+        )
+
+    pb_repo = ProjectBaseRepository(session)
+    doc_id = task_doc.id
+    latest_ready = await pb_repo.get_latest_ready(doc_id)
+    if latest_ready is None:
+        # No READY version — distinguish "no base at all" from "not ready yet".
+        if await pb_repo.get_latest(doc_id) is None:
+            return None  # no-base: empty snapshot, delta "all new".
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BASE_NOT_READY",
+                "details": (
+                    "This task has a base, but it is still being prepared. Your "
+                    "submission is diffed against the base's normalized "
+                    "snapshot, which does not exist yet. Wait a moment and "
+                    "re-submit — the base becomes available once processing "
+                    "finishes."
+                ),
+            },
+        )
+
+    echo = (base_snapshot_hash or "").strip()
+    if not echo:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "MISSING_BASE_ECHO",
+                "details": (
+                    "This project task has a ready base, but the submission did "
+                    "not declare which base version it was built from. The "
+                    "declared base_snapshot_hash pins the exact base your "
+                    "project started from so the diff is honest. Fetch the base "
+                    "descriptor and re-submit including its snapshot_hash."
+                ),
+            },
+        )
+
+    matched = await pb_repo.find_by_snapshot_hash(doc_id, echo)
+    if matched is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "UNKNOWN_BASE_ECHO",
+                "details": (
+                    "The declared base_snapshot_hash does not match any version "
+                    "of this task's base. Only a hash produced by one of this "
+                    "task's base versions can be diffed against, so an unknown "
+                    "value cannot be reconciled. Re-fetch the current base "
+                    "descriptor and re-submit with its snapshot_hash."
+                ),
+            },
+        )
+    return matched.id
+
+
 async def create_and_dispatch_submission(
     *,
     session: AsyncSession,
@@ -140,6 +266,8 @@ async def create_and_dispatch_submission(
     webhook_url: str | None = None,
     response_language: str | None = None,
     student_note: str | None = None,
+    base_id: uuid.UUID | None = None,
+    max_upload_bytes: int = MAX_HOMEWORK_SIZE,
 ) -> SubmissionDispatch:
     """Upload to S3, create the submission + Job, then dispatch to ARQ.
 
@@ -153,6 +281,11 @@ async def create_and_dispatch_submission(
 
     ``resolve_student`` runs inside the guard so a resolution failure cleans up
     the upload — preserving mode-1's exact behaviour after the extraction.
+
+    ``base_id`` (KD18 P3) is the echo-matched ProjectBase version resolved by
+    :func:`project_preflight` for a project submission (``None`` otherwise); it
+    is persisted at create-time. ``max_upload_bytes`` is the post-upload size
+    cap (default 10 MB; 100 MB for a project), matched to the pre-upload gate.
     """
     submission_id = uuid.uuid4()
     filename = file.filename or "upload"
@@ -169,13 +302,14 @@ async def create_and_dispatch_submission(
     file_hash = hasher.hexdigest()
 
     # Check actual uploaded size (in case file.size was None).
-    if uploaded_bytes > MAX_HOMEWORK_SIZE:
+    if uploaded_bytes > max_upload_bytes:
         await s3.delete_object(key)
         raise HTTPException(
             status_code=422,
             detail=(
                 f"File too large ({uploaded_bytes} bytes). "
-                f"Maximum: {MAX_HOMEWORK_SIZE} bytes (10 MB)."
+                f"Maximum: {max_upload_bytes} bytes "
+                f"({max_upload_bytes // (1024 * 1024)} MB)."
             ),
         )
 
@@ -231,6 +365,7 @@ async def create_and_dispatch_submission(
             response_language=response_language,
             student_note=student_note,
             delivery_mode=delivery_mode,
+            base_id=base_id,
         )
 
         # Create the durable Job + submission↔job link (DB only — no dispatch

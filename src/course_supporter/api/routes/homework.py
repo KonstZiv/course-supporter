@@ -30,9 +30,13 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.homework.submission_core import (
+    MAX_HOMEWORK_SIZE,
+    PROJECT_SUBMISSION_MAX_UPLOAD_BYTES,
     create_and_dispatch_submission,
+    project_preflight,
     validate_homework_file,
 )
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -111,6 +115,15 @@ async def submit_homework(
             "(D7-global), which is not a submission field.",
         ),
     ] = None,
+    base_snapshot_hash: Annotated[
+        str | None,
+        Form(
+            description="KD18 P3: for a project task with a ready base, the "
+            "snapshot_hash of the base version this submission was built from "
+            "(echoed from GET /homework/tasks/{id}/base). Required for a "
+            "project-with-base submission; ignored for other task types.",
+        ),
+    ] = None,
 ) -> HomeworkSubmitResponse:
     """Submit homework for review.
 
@@ -120,8 +133,21 @@ async def submit_homework(
 
     Returns 202 Accepted with submission and job IDs for tracking.
     """
+    # --- Resolve the task anchor early: its task_type sets the upload cap (a
+    # project = 100 MB, Edit I-a) and drives the project preflight below. The
+    # resolution is silent here; its 404/422 validation stays in anchor order
+    # so the extension gate below still fails first. ---
+    doc_repo = AuthoredDocumentRepository(session)
+    task_doc = await doc_repo.get_by_id(authored_document_id)
+    is_project = (
+        task_doc is not None and task_doc.task_type == AssignmentType.PROJECT.value
+    )
+    max_upload = (
+        PROJECT_SUBMISSION_MAX_UPLOAD_BYTES if is_project else MAX_HOMEWORK_SIZE
+    )
+
     # --- Validate file (shared pre-upload gate, run first) ---
-    validate_homework_file(file)
+    validate_homework_file(file, max_upload_bytes=max_upload)
 
     # --- Validate webhook URL (SSRF protection) ---
     if webhook_url is not None:
@@ -145,9 +171,8 @@ async def submit_homework(
         raise HTTPException(status_code=404, detail="Node not found.")
 
     # --- Verify the anchor: authored_document_id is a real task in this course
-    # (KD15 referential validation — structural, not the T7 sanity classifier). ---
-    doc_repo = AuthoredDocumentRepository(session)
-    task_doc = await doc_repo.get_by_id(authored_document_id)
+    # (KD15 referential validation — structural, not the T7 sanity classifier).
+    # task_doc was resolved above for the cap; validate it here in anchor order. ---
     if (
         task_doc is None
         or task_doc.deleted_at is not None
@@ -179,6 +204,18 @@ async def submit_homework(
             "(its summary has not been generated).",
         )
 
+    # --- Project preflight (KD18 P3): archive-only + echo-match → base_id, ALL
+    # before any S3 upload so a rejection never orphans a file. Only runs for a
+    # project task; other task types keep the byte-unchanged single-file path. ---
+    base_id: uuid.UUID | None = None
+    if is_project:
+        base_id = await project_preflight(
+            session=session,
+            task_doc=task_doc,
+            file=file,
+            base_snapshot_hash=base_snapshot_hash,
+        )
+
     # --- Upload + create + dispatch via the shared core (mode-1: webhook) ---
     # The student is resolved by get-or-create on external_id, INSIDE the core's
     # S3-cleanup guard (so a resolution failure cleans up the upload, unchanged).
@@ -204,6 +241,8 @@ async def submit_homework(
         webhook_url=webhook_url,
         response_language=response_language,
         student_note=student_note,
+        base_id=base_id,
+        max_upload_bytes=max_upload,
     )
 
     if result.duplicate:

@@ -21,6 +21,6 @@ class NormalizerLimitError(NormalizerError):
 
     Raised when the aggregate size of the kept (denylist-pruned) entries
     exceeds ``NormalizerLimits.kept_total_max_bytes``. A single oversized
-    file does NOT trigger this -- per KD18 P1, ``kept_single_max_bytes``
-    is a downstream (P4) review threshold, not a normalizer filter.
+    file does NOT trigger this -- ``kept_single_max_bytes`` is stored but
+    enforced by nothing (a reserved per-file knob, not a normalizer filter).
     """

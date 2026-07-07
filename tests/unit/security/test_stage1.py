@@ -31,9 +31,9 @@ from course_supporter.security.exceptions import (
 )
 from course_supporter.security.stage1 import (
     Stage1Result,
-    _archive_kind_for_filename,
     _decode_text,
     _is_text_extension,
+    archive_kind_for_filename,
     run_stage1,
 )
 
@@ -524,7 +524,7 @@ class TestArchiveKindForFilename:
         ],
     )
     def test_dispatch(self, filename: str, expected: str | None) -> None:
-        assert _archive_kind_for_filename(filename) == expected
+        assert archive_kind_for_filename(filename) == expected
 
 
 class TestIsTextExtension:

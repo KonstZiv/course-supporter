@@ -219,7 +219,7 @@ def run_stage1(
         verify_extension_matches_content(filename, content)
         detected_mime = detect_mime_type(content)
 
-        archive_kind = _archive_kind_for_filename(filename)
+        archive_kind = archive_kind_for_filename(filename)
         if archive_kind is not None:
             return _handle_archive_input(
                 filename=filename,
@@ -328,7 +328,7 @@ def _handle_archive_input(
     )
 
 
-def _archive_kind_for_filename(
+def archive_kind_for_filename(
     filename: str,
 ) -> Literal["zip", "tar.gz"] | None:
     """Return the archive kind for ``filename`` or ``None``.
@@ -341,6 +341,10 @@ def _archive_kind_for_filename(
     consistent with the homework allow-list (``.gz`` / ``.tgz``);
     the alternative (silently accept bare gzip) would skip path
     validation and member discovery entirely.
+
+    Public (KD18 P2): reused by the base-attach route and the
+    base-normalize worker to resolve ``archive_kind`` from the upload
+    filename / S3 key extension, keeping route↔worker consistent.
     """
     norm = normalize_filename(filename).lower()
     if norm.endswith(".tar.gz") or norm.endswith(".tgz"):

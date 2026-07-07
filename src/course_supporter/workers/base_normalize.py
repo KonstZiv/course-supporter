@@ -45,7 +45,7 @@ from course_supporter.normalizer import (
     normalize_archive,
 )
 from course_supporter.security.exceptions import SecurityRejectedError
-from course_supporter.security.stage1 import _archive_kind_for_filename
+from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
@@ -146,7 +146,7 @@ async def base_normalize_task(
         await session.commit()
 
         archive_key = base.archive_key
-        archive_kind = _archive_kind_for_filename(archive_key)
+        archive_kind = archive_kind_for_filename(archive_key)
         if archive_kind is None:
             reason = (
                 f"unsupported_archive: cannot resolve archive kind from "

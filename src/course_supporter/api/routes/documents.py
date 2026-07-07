@@ -28,6 +28,7 @@ from typing import Annotated, Final
 import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
@@ -39,13 +40,14 @@ from course_supporter.api.schemas import (
     PresignedUrlRequest,
     PresignedUrlResponse,
     ProcessingEstimate,
+    ProjectBaseAttachResponse,
 )
 from course_supporter.api.upload_validation import check_platform
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.config import get_settings
-from course_supporter.enqueue import enqueue_ingestion
+from course_supporter.enqueue import enqueue_base_normalize, enqueue_ingestion
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline import media
 from course_supporter.jobs.cancellation_service import JobCancellationService
@@ -62,6 +64,7 @@ from course_supporter.security.exceptions import (
 )
 from course_supporter.security.file_type import extension_of
 from course_supporter.security.policies import get_max_size_for_extension
+from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -76,6 +79,45 @@ from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_c
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["documents"])
+
+# KD18 P2 (Decision 1, 1A): raw-upload size cap for an author base archive
+# (compressed bytes). Distinct from the worker's _BASE_NORMALIZE_LIMITS, which
+# bound the UNPACK. Enforced by streaming cutoff (never buffer-then-check).
+_BASE_ARCHIVE_MAX_UPLOAD_BYTES: Final[int] = 100 * 1024 * 1024
+_BASE_UPLOAD_CHUNK_BYTES: Final[int] = 1024 * 1024
+
+
+async def _read_upload_capped(file: UploadFile, cap: int) -> bytes:
+    """Read an upload fully into memory, enforcing ``cap`` DURING the read.
+
+    A fast pre-check on the declared ``Content-Length`` rejects an oversize
+    upload before reading a byte; the chunked loop then re-enforces the cap
+    against the ACTUAL bytes (Content-Length can lie), stopping the moment the
+    running total exceeds ``cap`` — the upload is never fully buffered when
+    oversize, and no S3 write happens on rejection. Raises ``413``.
+    """
+    if file.size is not None and file.size > cap:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "UPLOAD_TOO_LARGE",
+                "details": f"upload {file.size} bytes exceeds base archive cap {cap}",
+            },
+        )
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_BASE_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "UPLOAD_TOO_LARGE",
+                    "details": f"upload exceeds base archive cap {cap} bytes",
+                },
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _processing_estimate() -> ProcessingEstimate:
@@ -696,6 +738,104 @@ async def list_documents(
     repo = AuthoredDocumentRepository(session)
     documents = await repo.get_for_node(node_id)
     return [AuthoredDocumentResponse.model_validate(d) for d in documents]
+
+
+@router.post("/documents/{document_id}/base", status_code=202)
+async def attach_project_base(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+    s3: S3Dep,
+    arq: ArqDep,
+    file: Annotated[
+        UploadFile,
+        File(description="Base project archive (.zip / .tar.gz / .tgz / .gz)."),
+    ],
+) -> ProjectBaseAttachResponse:
+    """Attach a base archive to a project task (KD18 P2).
+
+    The document must be ``task_type='project'`` (else 422). The archive is
+    stored raw to S3 and a new append-only ``ProjectBase`` version is created
+    (``pending``) + a deterministic normalization job enqueued — 202, the
+    normalization runs asynchronously.
+
+    Security context (Decision 1, 1A): the mandatory structural sandbox is
+    ``extract_archive_safely`` (classify) inside ``normalize_archive``, run by
+    the ARQ job — the fail-closed ``run_stage1`` archive branch is deliberately
+    NOT on this path (it would reject a real project's non-allowlisted files).
+    The HTTP gate here is light: an archive-kind extension + a streamed size cap.
+    """
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    if document.task_type != AssignmentType.PROJECT.value:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "NOT_A_PROJECT_TASK",
+                "details": (
+                    "base archives attach only to task_type='project' documents"
+                ),
+            },
+        )
+
+    archive_kind = archive_kind_for_filename(file.filename or "")
+    if archive_kind is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "NOT_AN_ARCHIVE",
+                "details": "base must be a .zip / .tar.gz / .tgz / .gz archive",
+            },
+        )
+
+    raw = await _read_upload_capped(file, _BASE_ARCHIVE_MAX_UPLOAD_BYTES)
+
+    # UUID-scoped key (matches the existing presigned convention; the version
+    # lives in the DB, not the key — avoids a version-in-key S3-overwrite race).
+    # The extension is canonicalized to the resolved kind so the worker
+    # re-derives the SAME archive_kind via archive_kind_for_filename.
+    ext = "tar.gz" if archive_kind == "tar.gz" else "zip"
+    archive_key = (
+        f"tenants/{tenant.tenant_id}/nodes/{document.course_node_id}/"
+        f"bases/{document_id}/{uuid.uuid4()}/original.{ext}"
+    )
+    await s3.upload_file(archive_key, raw, "application/octet-stream")
+
+    try:
+        base = await enqueue_base_normalize(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            authored_document_id=document_id,
+            archive_key=archive_key,
+        )
+    except IntegrityError as exc:
+        # A concurrent re-upload won the UNIQUE(doc, version) race. The stored
+        # S3 object is orphaned (uuid-scoped — no overwrite of the winner);
+        # cleanup folds into the deferred base-S3-cleanup debt (sibling DD-6-R).
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BASE_VERSION_CONFLICT",
+                "details": "a concurrent base upload won the version race; retry",
+            },
+        ) from exc
+
+    logger.info(
+        "base_attached",
+        document_id=str(document_id),
+        base_version_id=str(base.id),
+        version=base.version,
+    )
+    return ProjectBaseAttachResponse(
+        base_version_id=base.id,
+        version=base.version,
+        state=base.state,
+    )
 
 
 @router.get("/documents/{document_id}")

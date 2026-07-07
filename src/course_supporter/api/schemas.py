@@ -641,6 +641,23 @@ class PresignedUrlResponse(BaseModel):
     expires_in: int = Field(description="URL validity in seconds.")
 
 
+class ProjectBaseAttachResponse(BaseModel):
+    """Response for POST /documents/{document_id}/base (KD18 P2).
+
+    Returned with 202 — the base archive is stored and the deterministic
+    normalization is enqueued; the version starts ``pending`` and flips to
+    ``ready`` | ``failed`` in the background.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    base_version_id: uuid.UUID = Field(
+        description="The created ProjectBase version id."
+    )
+    version: int = Field(description="1-based version number for this document.")
+    state: str = Field(description="Normalization state (``pending`` on attach).")
+
+
 class ConfirmUploadRequest(BaseModel):
     """Request body for POST /nodes/{node_id}/documents/confirm-upload."""
 

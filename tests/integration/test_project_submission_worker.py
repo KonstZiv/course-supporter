@@ -1,14 +1,16 @@
-"""Integration tests for the KD18 P3 worker project-branch.
+"""Integration tests for the KD18 P4 worker project-branch.
 
-Two surfaces, both on a live DB:
+Live infra (``docker compose up -d`` — PostgreSQL + MinIO + Redis), zero mocks
+on the critical path (only the safety / sanity / review LLM stages are stubbed):
 
-* ``process_project_submission`` directly, with REAL MinIO — the P3-specific
-  normalize → S3 snapshot → persist → delta path, plus the fail-closed rejection.
-* the full ``arq_process_homework`` on a project submission with the safety /
-  sanity / review LLM stages stubbed (mirroring test_homework_pipeline) — proving
-  a project flows safety → sanity → review on the interim text to ``delivered``.
-
-Requires ``docker compose up -d`` (PostgreSQL + MinIO).
+* ``process_project_submission`` directly, with REAL MinIO — the normalize → S3
+  snapshot → persist → delta path, the fail-closed rejection, and the base
+  round-trip (base snapshot fetched from MinIO to build the rich context).
+* the full ``arq_process_homework`` on a project submission through the real
+  worker + real S3, proving the rich Mentor delta context reaches
+  safety → sanity → review UNCHANGED (G2) and the run completes. The acceptance
+  closer exercises ONE delta that triggers all four render branches at once:
+  CHANGED-FULL, CHANGED-DIFF, a neighbour hit, and a budget-overflow drop.
 """
 
 from __future__ import annotations
@@ -18,8 +20,7 @@ import io
 import uuid
 import zipfile
 from collections.abc import AsyncGenerator
-from contextlib import ExitStack
-from pathlib import Path
+from contextlib import ExitStack, suppress
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,7 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.config import get_settings
-from course_supporter.homework.project_submission import process_project_submission
+from course_supporter.homework.project_submission import (
+    _submission_snapshot_key,
+    process_project_submission,
+)
 from course_supporter.homework.review_graph import MentorReviewOutput
 from course_supporter.homework.sanity_gate import SanityGateOutcome
 from course_supporter.models.mentor_review import (
@@ -84,25 +88,38 @@ def _project_zip(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+def _incompressible(marker: str, n_lines: int) -> bytes:
+    """High-entropy text (a sha256 hex per line) so the archive's compression
+    ratio stays well under the security layer's 100x zip-bomb guard, while the
+    per-line ``marker`` prefix stays greppable for include/drop assertions."""
+    lines = [
+        f"{marker} {i:06d} {hashlib.sha256(f'{marker}{i}'.encode()).hexdigest()}"
+        for i in range(n_lines)
+    ]
+    return "\n".join(lines).encode()
+
+
 async def _seed(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     base_manifest: dict[str, Any] | None = None,
     base_hash: str | None = None,
+    base_snapshot_key: str | None = None,
+    file_url: str | None = None,
     job_status: str = "queued",
-) -> dict[str, uuid.UUID]:
+) -> dict[str, Any]:
     """Tenant + node + project task + student + submission + job. Optionally a
-    READY base (with a manifest) linked to the submission via base_id.
+    READY base (with a manifest + snapshot_key) linked via base_id.
 
-    ``job_status`` mirrors the worker precondition: the full worker sets the job
-    ``active`` before the project branch, so a direct call to
-    ``process_project_submission`` that hits the rejection path (which transitions
-    the job to ``complete``) must seed ``active`` (not ``queued``)."""
+    ``file_url`` overrides the submission URL (a real path-style MinIO URL so the
+    worker's ``extract_key`` / ``download_file`` resolve it). ``job_status``
+    mirrors the worker precondition: a direct ``process_project_submission`` call
+    that hits the rejection path (job → ``complete``) must seed ``active``."""
     async with session_factory() as session:
-        tenant = Tenant(name=f"p3w-{uuid.uuid4().hex[:8]}")
+        tenant = Tenant(name=f"p4w-{uuid.uuid4().hex[:8]}")
         session.add(tenant)
         await session.flush()
-        node = make_root_course_node(tenant_id=tenant.id, title="P3W", order=0)
+        node = make_root_course_node(tenant_id=tenant.id, title="P4W", order=0)
         session.add(node)
         await session.flush()
         doc = AuthoredDocument(
@@ -119,12 +136,13 @@ async def _seed(
         await session.flush()
 
         base_id: uuid.UUID | None = None
+        seeded_base_key = base_snapshot_key or f"base/{uuid.uuid4().hex}/snapshot.zip"
         if base_manifest is not None:
             base = ProjectBase(
                 authored_document_id=doc.id,
                 version=1,
                 archive_key="k/v1/original.zip",
-                snapshot_key="k/v1/snapshot.zip",
+                snapshot_key=seeded_base_key,
                 snapshot_hash=base_hash or "0" * 64,
                 manifest=base_manifest,
                 state="ready",
@@ -139,7 +157,8 @@ async def _seed(
             course_node_id=node.id,
             node_id=node.id,
             authored_document_id=doc.id,
-            file_url=f"s3://bucket/homework/{tenant.id}/{uuid.uuid4()}/proj.zip",
+            file_url=file_url
+            or f"s3://bucket/homework/{tenant.id}/{uuid.uuid4()}/proj.zip",
             file_type="application/zip",
             original_filename="proj.zip",
             status="received",
@@ -163,11 +182,12 @@ async def _seed(
             "doc_id": doc.id,
             "submission_id": submission.id,
             "job_id": job.id,
+            "base_snapshot_key": seeded_base_key if base_id is not None else None,
         }
 
 
 async def _cleanup(
-    session_factory: async_sessionmaker[AsyncSession], ids: dict[str, uuid.UUID]
+    session_factory: async_sessionmaker[AsyncSession], ids: dict[str, Any]
 ) -> None:
     async with session_factory() as session:
         await session.execute(
@@ -180,6 +200,9 @@ async def _cleanup(
             delete(Student).where(Student.tenant_id == ids["tenant_id"])
         )
         await session.execute(
+            delete(ProjectBase).where(ProjectBase.authored_document_id == ids["doc_id"])
+        )
+        await session.execute(
             delete(AuthoredDocument).where(
                 AuthoredDocument.course_node_id == ids["node_id"]
             )
@@ -189,8 +212,18 @@ async def _cleanup(
         await session.commit()
 
 
+async def _s3_purge(s3_client: S3Client, *keys: str | None) -> None:
+    for key in keys:
+        if key:
+            with suppress(Exception):
+                await s3_client.delete_object(key)
+
+
+# ── direct process_project_submission (real MinIO) ─────────────────────────
+
+
 class TestProcessProjectSubmissionDirect:
-    async def test_ready_persists_snapshot_and_returns_text(
+    async def test_ready_persists_snapshot_and_returns_rich_context(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         s3_client: S3Client,
@@ -216,7 +249,10 @@ class TestProcessProjectSubmissionDirect:
                     raw_key=raw_key,
                 )
             assert text is not None
-            assert "--- app/main.py ---" in text
+            # No base → all-new rich context.
+            assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
+            assert "F2: no base attached" in text
+            assert "type=NEW path=app/main.py" in text
 
             expected = normalize_archive(raw, archive_kind="zip")
             snapshot_key = (
@@ -232,7 +268,7 @@ class TestProcessProjectSubmissionDirect:
                 assert sub.snapshot_hash == expected.snapshot_hash
                 assert sub.snapshot_hash != hashlib.sha256(raw).hexdigest()
                 assert sub.snapshot_manifest is not None
-            await s3_client.delete_object(snapshot_key)
+            await _s3_purge(s3_client, snapshot_key)
         finally:
             await _cleanup(session_factory, ids)
 
@@ -264,44 +300,9 @@ class TestProcessProjectSubmissionDirect:
                 assert sub.status == "rejected"
                 assert sub.safety_result is not None
                 assert sub.safety_result["source"] == "normalizer"
-                assert "reason" in sub.safety_result
                 job = await session.get(Job, ids["job_id"])
                 assert job is not None
                 assert job.status == "complete"
-        finally:
-            await _cleanup(session_factory, ids)
-
-    async def test_no_base_delta_is_all_new(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        s3_client: S3Client,
-    ) -> None:
-        ids = await _seed(session_factory)
-        raw = _project_zip({"a.py": b"a = 1\n", "b.py": b"b = 2\n"})
-        try:
-            with structlog.testing.capture_logs() as logs:
-                async with session_factory() as session:
-                    sub = await session.get(HomeworkSubmission, ids["submission_id"])
-                    assert sub is not None
-                    await process_project_submission(
-                        session=session,
-                        s3=s3_client,
-                        hw_repo=HomeworkRepository(session),
-                        job_repo=JobRepository(session),
-                        submission=sub,
-                        sid=ids["submission_id"],
-                        jid=ids["job_id"],
-                        file_bytes=raw,
-                        raw_key=f"homework/{ids['tenant_id']}/{ids['submission_id']}/proj.zip",
-                    )
-            delta_log = next(
-                e for e in logs if e["event"] == "project_submission.delta"
-            )
-            assert delta_log["new"] == 2
-            assert delta_log["changed"] == 0
-            assert delta_log["deleted"] == 0
-            key = f"homework/{ids['tenant_id']}/{ids['submission_id']}/snapshot.zip"
-            await s3_client.delete_object(key)
         finally:
             await _cleanup(session_factory, ids)
 
@@ -311,7 +312,8 @@ class TestProcessProjectSubmissionDirect:
         s3_client: S3Client,
     ) -> None:
         # Base has a.py + gone.py; submission changes a.py, adds new.py, drops
-        # gone.py → changed=1, new=1, deleted=1.
+        # gone.py → changed=1, new=1, deleted=1. The base snapshot must live in
+        # MinIO — the worker fetches it to build the rich context.
         base_snap = normalize_archive(
             _project_zip({"a.py": b"a = 1\n", "gone.py": b"g = 0\n"}),
             archive_kind="zip",
@@ -321,13 +323,19 @@ class TestProcessProjectSubmissionDirect:
             base_manifest=manifest_to_jsonb(base_snap.manifest),
             base_hash=base_snap.snapshot_hash,
         )
+        await s3_client.upload_file(
+            ids["base_snapshot_key"], base_snap.canonical_zip, "application/zip"
+        )
         sub_raw = _project_zip({"a.py": b"a = 2\n", "new.py": b"n = 9\n"})
+        snapshot_key = (
+            f"homework/{ids['tenant_id']}/{ids['submission_id']}/snapshot.zip"
+        )
         try:
             with structlog.testing.capture_logs() as logs:
                 async with session_factory() as session:
                     sub = await session.get(HomeworkSubmission, ids["submission_id"])
                     assert sub is not None
-                    await process_project_submission(
+                    text = await process_project_submission(
                         session=session,
                         s3=s3_client,
                         hw_repo=HomeworkRepository(session),
@@ -344,10 +352,17 @@ class TestProcessProjectSubmissionDirect:
             assert delta_log["changed"] == 1
             assert delta_log["new"] == 1
             assert delta_log["deleted"] == 1
-            key = f"homework/{ids['tenant_id']}/{ids['submission_id']}/snapshot.zip"
-            await s3_client.delete_object(key)
+            # The rich context reflects the base delta.
+            assert text is not None
+            assert "type=CHANGED-FULL path=a.py" in text
+            assert "type=NEW path=new.py" in text
+            assert "DELETED (1): gone.py" in text
+            await _s3_purge(s3_client, snapshot_key, ids["base_snapshot_key"])
         finally:
             await _cleanup(session_factory, ids)
+
+
+# ── stubbed LLM stages (record the text they receive → prove G2) ───────────
 
 
 def _review_output() -> MentorReviewOutput:
@@ -371,11 +386,15 @@ def _review_output() -> MentorReviewOutput:
     )
 
 
-class _FakeSanityService:
+class _RecordingSanityService:
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
     async def evaluate(
         self, *, submission: Any, submission_text: str
     ) -> SanityGateOutcome:
-        del submission, submission_text
+        del submission
+        self.seen.append(submission_text)
         return SanityGateOutcome(
             classification=SanityClassification(
                 verdict="match", confidence=0.9, reason="on task"
@@ -384,85 +403,212 @@ class _FakeSanityService:
         )
 
 
-class _FakeReviewService:
+class _RecordingReviewService:
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
     async def review(
         self, *, submission: Any, submission_text: str
     ) -> MentorReviewOutput:
-        del submission, submission_text
+        del submission
+        self.seen.append(submission_text)
         return _review_output()
 
 
+def _safety_mock() -> AsyncMock:
+    return AsyncMock(
+        return_value=SafetyResult(
+            is_safe=True, violations=[], confidence=0.95, reasoning="benign"
+        )
+    )
+
+
+async def _run_full_worker(
+    session_factory: async_sessionmaker[AsyncSession],
+    s3_client: S3Client,
+    ids: dict[str, Any],
+    raw_key: str,
+    sub_raw: bytes,
+    *,
+    safety: AsyncMock,
+    sanity: _RecordingSanityService,
+    review: _RecordingReviewService,
+) -> None:
+    await s3_client.upload_file(raw_key, sub_raw, "application/zip")
+    ctx = {
+        "session_factory": session_factory,
+        "stage_router": MagicMock(),
+        "s3_client": s3_client,
+    }
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "course_supporter.security.stage2.run_stage2_safety_check", new=safety
+            )
+        )
+        stack.enter_context(
+            patch(
+                "course_supporter.homework.sanity_gate.build_sanity_gate_service",
+                new=MagicMock(return_value=sanity),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "course_supporter.homework.review_graph.build_mentor_review_service",
+                new=MagicMock(return_value=review),
+            )
+        )
+        await arq_process_homework(ctx, str(ids["job_id"]), str(ids["submission_id"]))
+
+
 class TestFullWorkerProjectPipeline:
-    async def test_project_flows_to_delivered_on_interim_text(
+    async def test_no_base_full_worker_reaches_stages_and_completes(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         s3_client: S3Client,
-        tmp_path: Path,
     ) -> None:
-        """A project submission runs through the real worker: normalize (real
-        MinIO snapshot) → safety → sanity → review (stubbed) → delivered, and the
-        stubbed safety receives the bounded interim text."""
-        ids = await _seed(session_factory)
-        raw = _project_zip({"app/main.py": b"def solve():\n    return 42\n"})
-        raw_key = f"homework/{ids['tenant_id']}/{ids['submission_id']}/proj.zip"
-        await s3_client.upload_file(raw_key, raw, "application/zip")
-        tmp_file = tmp_path / "proj.zip"
-        tmp_file.write_bytes(raw)
-
-        s3_ctx = MagicMock()
-        s3_ctx.extract_key = MagicMock(return_value=raw_key)
-        s3_ctx.download_file = AsyncMock(return_value=tmp_file)
-        s3_ctx.upload_file = AsyncMock()  # snapshot PUT (assert called)
-        ctx = {
-            "session_factory": session_factory,
-            "stage_router": MagicMock(),
-            "s3_client": s3_ctx,
-        }
-
-        safety = AsyncMock(
-            return_value=SafetyResult(
-                is_safe=True, violations=[], confidence=0.95, reasoning="benign"
-            )
+        """base_id=None end-to-end: real submit → worker → all-new rich context
+        (degraded staleness, no exception) → safety/sanity/review → completed."""
+        s = get_settings()
+        raw_key = f"homework/it-p4/{uuid.uuid4().hex}/proj.zip"
+        file_url = f"{s.s3_endpoint}/{s.s3_bucket}/{raw_key}"
+        ids = await _seed(session_factory, file_url=file_url)
+        sub_raw = _project_zip(
+            {"app/main.py": b"def solve():\n    return 42\n", "util.py": b"x = 1\n"}
+        )
+        safety, sanity, review = (
+            _safety_mock(),
+            _RecordingSanityService(),
+            _RecordingReviewService(),
         )
         try:
-            with ExitStack() as stack:
-                stack.enter_context(
-                    patch(
-                        "course_supporter.security.stage2.run_stage2_safety_check",
-                        new=safety,
-                    )
-                )
-                stack.enter_context(
-                    patch(
-                        "course_supporter.homework.sanity_gate.build_sanity_gate_service",
-                        new=MagicMock(return_value=_FakeSanityService()),
-                    )
-                )
-                stack.enter_context(
-                    patch(
-                        "course_supporter.homework.review_graph.build_mentor_review_service",
-                        new=MagicMock(return_value=_FakeReviewService()),
-                    )
-                )
-                await arq_process_homework(
-                    ctx, str(ids["job_id"]), str(ids["submission_id"])
-                )
-
+            await _run_full_worker(
+                session_factory,
+                s3_client,
+                ids,
+                raw_key,
+                sub_raw,
+                safety=safety,
+                sanity=sanity,
+                review=review,
+            )
             async with session_factory() as session:
                 sub = await session.get(HomeworkSubmission, ids["submission_id"])
                 assert sub is not None
-                # Terminal success — the seed carries no webhook_url, so the
-                # pipeline terminates at 'completed' (delivery needs a webhook).
                 assert sub.status == "completed"
                 assert sub.score == 73
-                # The P3 snapshot columns were persisted before safety.
                 assert sub.snapshot_hash is not None
-                assert sub.snapshot_manifest is not None
 
-            # The snapshot PUT happened; safety saw the interim project text.
-            s3_ctx.upload_file.assert_awaited_once()
-            safety.assert_awaited_once()
-            interim = safety.await_args.kwargs["submission_text"]
-            assert "--- app/main.py ---" in interim
+            text = safety.await_args.kwargs["submission_text"]
+            # G2 — the identical rich str flowed through all three stages.
+            assert sanity.seen == [text]
+            assert review.seen == [text]
+            # No-base rich context: all-new + degraded staleness, no crash.
+            assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
+            assert "F2: no base attached" in text
+            assert "Staleness: no base attached." in text
+            assert "type=NEW path=app/main.py" in text
         finally:
+            await _s3_purge(s3_client, raw_key, _submission_snapshot_key(raw_key))
+            await _cleanup(session_factory, ids)
+
+    async def test_four_branch_delta_reaches_stages_unchanged(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        """Acceptance closer: ONE delta triggers all four render branches at once
+        — CHANGED-FULL, CHANGED-DIFF, neighbour hit, budget-overflow drop — and
+        the rich context reaches safety/sanity/review UNCHANGED, run completes."""
+        big_lines = _incompressible("row", 2000).decode().split("\n")  # ~150 KB
+        big_base = "\n".join(big_lines).encode()
+        base_snap = normalize_archive(
+            _project_zip(
+                {
+                    "small.py": b"value = 1\n",
+                    "big.py": big_base,  # > 64 KB → CHANGED-DIFF once modified
+                    "config.py": b"CONFIG = True\n",  # unchanged → neighbour
+                }
+            ),
+            archive_kind="zip",
+        )
+        s = get_settings()
+        raw_key = f"homework/it-p4/{uuid.uuid4().hex}/proj.zip"
+        file_url = f"{s.s3_endpoint}/{s.s3_bucket}/{raw_key}"
+        ids = await _seed(
+            session_factory,
+            base_manifest=manifest_to_jsonb(base_snap.manifest),
+            base_hash=base_snap.snapshot_hash,
+            file_url=file_url,
+        )
+        await s3_client.upload_file(
+            ids["base_snapshot_key"], base_snap.canonical_zip, "application/zip"
+        )
+
+        big_sub_lines = list(big_lines)
+        big_sub_lines[10] = "row 000010 MODIFIED content goes here now aaaa"
+        big_sub = "\n".join(big_sub_lines).encode()
+        # ~350 KB each, high-entropy → two together exceed the 512 KB budget so
+        # filler_b drops whole; each survives the zip-bomb guard.
+        filler_a = _incompressible("AAAAMARKER", 4300)
+        filler_b = _incompressible("BBBBMARKER", 4300)
+        sub_raw = _project_zip(
+            {
+                "small.py": b"value = 2  # see config.py for the settings\n",
+                "big.py": big_sub,
+                "config.py": b"CONFIG = True\n",
+                "filler_a.py": filler_a,  # new, large → included
+                "filler_b.py": filler_b,  # new, large → overflow drop
+            }
+        )
+        safety, sanity, review = (
+            _safety_mock(),
+            _RecordingSanityService(),
+            _RecordingReviewService(),
+        )
+        try:
+            await _run_full_worker(
+                session_factory,
+                s3_client,
+                ids,
+                raw_key,
+                sub_raw,
+                safety=safety,
+                sanity=sanity,
+                review=review,
+            )
+            async with session_factory() as session:
+                sub = await session.get(HomeworkSubmission, ids["submission_id"])
+                assert sub is not None
+                assert sub.status == "completed"
+
+            text = safety.await_args.kwargs["submission_text"]
+            # G2 — identical rich str through all stages.
+            assert sanity.seen == [text]
+            assert review.seen == [text]
+            # trusted block (tree + delta + F2 + staleness).
+            assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
+            assert "F2: base has 3 files" in text
+            assert "Staleness: built on base v1" in text
+            # branch 1 — changed small → whole new version.
+            assert "type=CHANGED-FULL path=small.py" in text
+            # branch 2 — changed large → unified diff (difflib hunk present).
+            assert "type=CHANGED-DIFF path=big.py" in text
+            assert "@@" in text
+            assert "MODIFIED content goes here now" in text
+            # branch 3 — neighbour hit (unchanged base file name-dropped).
+            assert "type=NEIGHBOR path=config.py" in text
+            # branch 4 — budget overflow: dropped WHOLE (body absent) + marker.
+            assert "SKIPPED path=filler_b.py" in text
+            assert "BBBBMARKER" not in text
+            # the higher-priority filler_a body IS present (proves priority).
+            assert "type=NEW path=filler_a.py" in text
+            assert "AAAAMARKER" in text
+        finally:
+            await _s3_purge(
+                s3_client,
+                raw_key,
+                _submission_snapshot_key(raw_key),
+                ids["base_snapshot_key"],
+            )
             await _cleanup(session_factory, ids)

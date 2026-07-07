@@ -1,7 +1,7 @@
 """Canonical Job type enum + transitional application-level validation.
 
-Vision §3 KD13 fixes the universe of ``Job.job_type`` values to
-exactly four:
+Vision §3 KD13 fixes the KD13 universe of ``Job.job_type`` values to
+four; KD18 (P2) adds a fifth deterministic type:
 
 * ``document_processing`` — pipeline of one ``AuthoredDocument``
   (stages: pass_1 → pass_2a → pass_2b → pass_2c).
@@ -10,6 +10,8 @@ exactly four:
 * ``homework_processing`` — student submission review (safety →
   sanity → review → delivery).
 * ``s3_cleanup`` — async hard-delete of S3 files after soft-delete.
+* ``base_normalize`` — deterministic project-base archive
+  normalization (KD18 P2; zero LLM, no ESC).
 
 The DB-level CHECK constraint that would enforce this is
 **deferred to Phase 2.x** (see task 0.3 pre-flight): current
@@ -43,6 +45,10 @@ class JobType(StrEnum):
     NODE_SUMMARY_REGENERATION = "node_summary_regeneration"
     HOMEWORK_PROCESSING = "homework_processing"
     S3_CLEANUP = "s3_cleanup"
+    # KD18 P2: deterministic base-archive normalization (zero LLM, no ESC).
+    # A String(50) job_type value — no migration (the DB CHECK is still
+    # deferred, see module docstring). The one Job type added by KD18.
+    BASE_NORMALIZE = "base_normalize"
 
 
 _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)

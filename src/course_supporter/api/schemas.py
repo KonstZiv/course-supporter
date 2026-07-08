@@ -1236,12 +1236,46 @@ class PortalSubmissionListItem(BaseModel):
     original_filename: str | None = None
 
 
+class PortalDeltaReceipt(BaseModel):
+    """I2 delta counters + staleness for a project submission (KD18 P5).
+
+    Derived on read (KD-P3-B) from the persisted base + submission manifests —
+    the DB stores manifests, not counts, and ``compute_delta`` is BE-only. The
+    student sees how their submission diverged from the base and whether the
+    base has since moved on. Null on the parent detail for a non-project
+    submission (no delta concept) — a DISTINCT state from an all-zero delta.
+
+    The hygiene level (normalizer-excluded new files) is deliberately NOT
+    surfaced to the student.
+    """
+
+    changed: int = Field(
+        description="Files present in both base and submission with different content."
+    )
+    new: int = Field(description="Files added relative to the base.")
+    deleted: int = Field(description="Base files absent from the submission.")
+    base_version: int | None = Field(
+        default=None,
+        description="Version of the base this submission was built on; null when "
+        "no base was attached.",
+    )
+    latest_version: int | None = Field(
+        default=None,
+        description="Latest READY base version now; null when no base was attached.",
+    )
+    is_stale: bool = Field(
+        description="True when a newer READY base exists than the one built on "
+        "(a signal, not a blocker)."
+    )
+
+
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
     The student sees ``status`` / ``score`` / ``verdict`` / ``review_markdown``
     only. The internal trace (``review_result`` / ``safety_result`` /
-    ``sanity_result``) is NEVER serialized here.
+    ``sanity_result``) is NEVER serialized here. A project submission also
+    carries the ``delta`` receipt (KD18 P5); it is null for a non-project one.
     """
 
     id: uuid.UUID
@@ -1253,6 +1287,11 @@ class PortalSubmissionDetail(BaseModel):
     )
     created_at: datetime
     original_filename: str | None = None
+    delta: PortalDeltaReceipt | None = Field(
+        default=None,
+        description="I2 delta receipt (KD18 P5) for a project submission — "
+        "counters + staleness; null for a non-project submission.",
+    )
 
 
 class PortalBaseDownload(BaseModel):

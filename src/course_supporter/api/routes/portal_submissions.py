@@ -32,6 +32,7 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._portal_shared import curated_verdict
 from course_supporter.api.schemas import (
     PortalBaseDownload,
+    PortalDeltaReceipt,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
@@ -45,6 +46,7 @@ from course_supporter.homework.submission_core import (
     validate_homework_file,
 )
 from course_supporter.models.source import AssignmentType
+from course_supporter.normalizer import compute_delta, manifest_from_jsonb
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -298,8 +300,66 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
     )
 
 
-def _to_detail(submission: HomeworkSubmission) -> PortalSubmissionDetail:
-    """Curated detail — adds review_markdown; still no internal trace."""
+async def _delta_receipt(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> PortalDeltaReceipt | None:
+    """The I2 delta receipt — counters + staleness, derived on read (KD18 P5).
+
+    Null for a non-project submission (no snapshot manifest → no delta concept),
+    a DISTINCT state from an all-zero delta. For a project submission the delta
+    is derived (KD-P3-B) from the persisted manifests — the DB stores manifests,
+    not counts, and ``compute_delta`` is BE-only. Counters are the sizes of the
+    delta path tuples; the hygiene level is intentionally not surfaced.
+    """
+    raw_sub = submission.snapshot_manifest
+    if raw_sub is None:
+        # Non-project submission: no delta concept.
+        return None
+    sub_manifest = manifest_from_jsonb(raw_sub)
+
+    # A project submission with no base attached (or whose base row / manifest is
+    # gone) diffs against nothing → everything is new, no staleness.
+    all_new = PortalDeltaReceipt(
+        changed=0,
+        new=len(sub_manifest.included),
+        deleted=0,
+        base_version=None,
+        latest_version=None,
+        is_stale=False,
+    )
+    if submission.base_id is None:
+        return all_new
+
+    pb_repo = ProjectBaseRepository(session)
+    base = await pb_repo.get_by_id(submission.base_id)
+    if base is None or base.manifest is None:
+        return all_new
+
+    delta = compute_delta(manifest_from_jsonb(base.manifest), sub_manifest)
+    latest_ready = await pb_repo.get_latest_ready(submission.authored_document_id)
+    latest_version = latest_ready.version if latest_ready is not None else None
+    is_stale = latest_version is not None and base.version < latest_version
+    return PortalDeltaReceipt(
+        changed=len(delta.changed),
+        new=len(delta.new),
+        deleted=len(delta.deleted),
+        base_version=base.version,
+        latest_version=latest_version,
+        is_stale=is_stale,
+    )
+
+
+def _to_detail(
+    submission: HomeworkSubmission,
+    *,
+    delta: PortalDeltaReceipt | None = None,
+) -> PortalSubmissionDetail:
+    """Curated detail — adds review_markdown; still no internal trace.
+
+    ``delta`` (KD18 P5) is the pre-computed I2 receipt for a project submission,
+    None for a non-project one. Kept as a defaulted param so the single caller
+    stays explicit and no other serialization path is affected.
+    """
     return PortalSubmissionDetail(
         id=submission.id,
         status=submission.status,
@@ -308,6 +368,7 @@ def _to_detail(submission: HomeworkSubmission) -> PortalSubmissionDetail:
         review_markdown=submission.review_markdown,
         created_at=submission.created_at,
         original_filename=submission.original_filename,
+        delta=delta,
     )
 
 
@@ -378,4 +439,5 @@ async def get_portal_submission(
     )
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
-    return _to_detail(submission)
+    delta = await _delta_receipt(session, submission)
+    return _to_detail(submission, delta=delta)

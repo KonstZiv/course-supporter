@@ -41,6 +41,7 @@ from course_supporter.api.schemas import (
     PresignedUrlResponse,
     ProcessingEstimate,
     ProjectBaseAttachResponse,
+    ProjectBaseStateResponse,
 )
 from course_supporter.api.upload_validation import check_platform
 from course_supporter.auth.context import TenantContext
@@ -837,6 +838,40 @@ async def attach_project_base(
         version=base.version,
         state=base.state,
     )
+
+
+@router.get("/documents/{document_id}/base")
+async def get_project_base_state(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> ProjectBaseStateResponse:
+    """The latest base version's state for author monitoring (KD18 P6).
+
+    Returns the LATEST version REGARDLESS of state (``get_latest`` — NOT
+    ``get_latest_ready``) so a freshly re-uploaded ``pending`` / ``failed`` v2
+    is not masked by an older READY v1: the author is monitoring THIS upload's
+    normalization, the opposite goal of the mode-1 student descriptor
+    (``GET /homework/tasks/{id}/base``, which needs a usable READY base). This
+    is the only author-facing surface carrying ``failure_reason`` — the manifest
+    route is READY-only, so ``pending`` / ``failed`` states render from here.
+    404 if the document has no base at all.
+    """
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    base = await ProjectBaseRepository(session).get_latest(document.id)
+    if base is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NO_BASE_ATTACHED",
+                "details": "no base archive is attached to this task",
+            },
+        )
+    return ProjectBaseStateResponse.model_validate(base)
 
 
 @router.get("/documents/{document_id}/base/manifest")

@@ -32,6 +32,7 @@ from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
@@ -70,6 +71,13 @@ def _mock_root_node(tenant_id: uuid.UUID) -> MagicMock:
     node.tenant_id = tenant_id
     node.parent_id = None
     return node
+
+
+def _mock_base(archive_key: str = "bases/original.zip") -> MagicMock:
+    base = MagicMock()
+    base.archive_key = archive_key
+    base.state = "ready"
+    return base
 
 
 def _mock_summary(status: str = "ready") -> MagicMock:
@@ -457,4 +465,127 @@ class TestPortalReadDetail:
         """A non-owned / unknown / soft-deleted submission → generic 404."""
         with patch.object(HomeworkRepository, "get_owned", return_value=None):
             resp = await client.get(f"/api/v1/portal/submissions/{uuid.uuid4()}")
+        assert resp.status_code == 404
+
+
+def _base_url(authored_document_id: uuid.UUID) -> str:
+    return f"/api/v1/portal/tasks/{authored_document_id}/base"
+
+
+class TestPortalTaskBaseDownload:
+    """KD18 P5: presigned download of a project task's active base ORIGINAL.
+
+    Bearer-session + enrollment-scoped counterpart of the mode-1 API-key route;
+    access failures collapse to a generic 404, a visible task with no READY base
+    yet returns a DISTINCT 404.
+    """
+
+    async def test_ready_base_returns_presigned_original(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """An enrolled student, project task, READY base → 200 + presigned URL."""
+        root = uuid.uuid4()
+        url = "https://s3.local/course-materials/bases/original.zip?sig=abc"
+        mock_s3.generate_presigned_get_url = AsyncMock(return_value=url)
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+            patch.object(
+                ProjectBaseRepository,
+                "get_latest_ready",
+                return_value=_mock_base("bases/original.zip"),
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        assert resp.json() == {"original_url": url}
+        # Presigns the ORIGINAL archive_key (never the normalized snapshot, KD17).
+        mock_s3.generate_presigned_get_url.assert_awaited_once_with(
+            "bases/original.zip"
+        )
+
+    async def test_no_ready_base_distinct_404(self, client: AsyncClient) -> None:
+        """Visible project task but no READY base → DISTINCT 404 (not generic)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+            patch.object(ProjectBaseRepository, "get_latest_ready", return_value=None),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "No base is available for this task yet."
+
+    async def test_not_enrolled_generic_404(self, client: AsyncClient) -> None:
+        """Not enrolled → generic 'Task not found.' (never leaks existence)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(
+                StudentEnrollmentRepository, "is_enrolled", return_value=False
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_non_project_task_404(self, client: AsyncClient) -> None:
+        """A non-project task carries no base → generic 404."""
+        with patch.object(
+            AuthoredDocumentRepository,
+            "get_by_id",
+            return_value=_mock_task_doc(course_root_id=uuid.uuid4(), task_type="task"),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_unknown_task_404(self, client: AsyncClient) -> None:
+        with patch.object(AuthoredDocumentRepository, "get_by_id", return_value=None):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+
+    async def test_foreign_tenant_404(self, client: AsyncClient) -> None:
+        """A task whose course is in another tenant → generic 404."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(uuid.uuid4()),  # different tenant
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
         assert resp.status_code == 404

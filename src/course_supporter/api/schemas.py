@@ -1255,6 +1255,21 @@ class PortalSubmissionDetail(BaseModel):
     original_filename: str | None = None
 
 
+class PortalBaseDownload(BaseModel):
+    """Presigned download of a project task's active base ORIGINAL (KD18 P5).
+
+    The student downloads the AUTHOR's original base archive (not the normalized
+    snapshot, KD17) to build their submission. Served on demand by the portal
+    base route so the tree descriptor stays cheap — no presigned URL is baked
+    into every task node. The active base is the latest READY version.
+    """
+
+    original_url: str = Field(
+        description="Fresh presigned GET of the active (latest READY) base "
+        "original archive."
+    )
+
+
 class PortalMediaResponse(BaseModel):
     """How to render a material to the student, originals-only (Phase 6 T3).
 

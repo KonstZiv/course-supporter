@@ -9,6 +9,7 @@ the QQ5 enqueue helper) owns the transaction boundary.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import func, select
@@ -94,6 +95,25 @@ class ProjectBaseRepository:
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list_for_documents(
+        self, authored_document_ids: Sequence[uuid.UUID]
+    ) -> list[ProjectBase]:
+        """All base versions for a SET of documents, in one query (KD18 P5).
+
+        Backs the portal materials descriptor: the tree resolves the active
+        base for every project task in a single round-trip, then groups by
+        ``authored_document_id`` in Python (``latest`` = MAX version,
+        ``latest_ready`` = MAX version among READY) — mirroring the per-document
+        :meth:`get_latest` / :meth:`get_latest_ready` semantics without an N+1.
+        Empty input → empty list (no query issued).
+        """
+        if not authored_document_ids:
+            return []
+        stmt = select(ProjectBase).where(
+            ProjectBase.authored_document_id.in_(authored_document_ids)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def find_by_snapshot_hash(
         self, authored_document_id: uuid.UUID, snapshot_hash: str

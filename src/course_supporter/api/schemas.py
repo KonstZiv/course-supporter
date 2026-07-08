@@ -1236,12 +1236,46 @@ class PortalSubmissionListItem(BaseModel):
     original_filename: str | None = None
 
 
+class PortalDeltaReceipt(BaseModel):
+    """I2 delta counters + staleness for a project submission (KD18 P5).
+
+    Derived on read (KD-P3-B) from the persisted base + submission manifests —
+    the DB stores manifests, not counts, and ``compute_delta`` is BE-only. The
+    student sees how their submission diverged from the base and whether the
+    base has since moved on. Null on the parent detail for a non-project
+    submission (no delta concept) — a DISTINCT state from an all-zero delta.
+
+    The hygiene level (normalizer-excluded new files) is deliberately NOT
+    surfaced to the student.
+    """
+
+    changed: int = Field(
+        description="Files present in both base and submission with different content."
+    )
+    new: int = Field(description="Files added relative to the base.")
+    deleted: int = Field(description="Base files absent from the submission.")
+    base_version: int | None = Field(
+        default=None,
+        description="Version of the base this submission was built on; null when "
+        "no base was attached.",
+    )
+    latest_version: int | None = Field(
+        default=None,
+        description="Latest READY base version now; null when no base was attached.",
+    )
+    is_stale: bool = Field(
+        description="True when a newer READY base exists than the one built on "
+        "(a signal, not a blocker)."
+    )
+
+
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
     The student sees ``status`` / ``score`` / ``verdict`` / ``review_markdown``
     only. The internal trace (``review_result`` / ``safety_result`` /
-    ``sanity_result``) is NEVER serialized here.
+    ``sanity_result``) is NEVER serialized here. A project submission also
+    carries the ``delta`` receipt (KD18 P5); it is null for a non-project one.
     """
 
     id: uuid.UUID
@@ -1253,6 +1287,26 @@ class PortalSubmissionDetail(BaseModel):
     )
     created_at: datetime
     original_filename: str | None = None
+    delta: PortalDeltaReceipt | None = Field(
+        default=None,
+        description="I2 delta receipt (KD18 P5) for a project submission — "
+        "counters + staleness; null for a non-project submission.",
+    )
+
+
+class PortalBaseDownload(BaseModel):
+    """Presigned download of a project task's active base ORIGINAL (KD18 P5).
+
+    The student downloads the AUTHOR's original base archive (not the normalized
+    snapshot, KD17) to build their submission. Served on demand by the portal
+    base route so the tree descriptor stays cheap — no presigned URL is baked
+    into every task node. The active base is the latest READY version.
+    """
+
+    original_url: str = Field(
+        description="Fresh presigned GET of the active (latest READY) base "
+        "original archive."
+    )
 
 
 class PortalMediaResponse(BaseModel):
@@ -1344,12 +1398,39 @@ class PortalSubmissionOverlay(BaseModel):
     )
 
 
+class PortalTaskBase(BaseModel):
+    """Active base-archive descriptor for a project task (KD18 P5).
+
+    Attached to a project ``PortalMaterialItem`` when a base version exists.
+    ``state == 'ready'`` describes the active (latest READY) version: the
+    student may submit and ``snapshot_hash`` is the auto-echo source the portal
+    sends back on submit. ``pending`` / ``failed`` describes the latest version
+    when none is READY yet — submit is blocked and ``snapshot_hash`` is null.
+
+    A project task with NO base attached carries ``base = null`` on the item —
+    a DISTINCT state (submit allowed, everything is new), never collapsed into
+    a non-ready ``state``.
+    """
+
+    version: int = Field(description="1-based version of the described base.")
+    snapshot_hash: str | None = Field(
+        default=None,
+        description="Echo-match hash of the active READY base (the portal sends "
+        "it back automatically on submit); null unless ``state`` is ``ready``.",
+    )
+    state: Literal["pending", "ready", "failed"] = Field(
+        description="Lifecycle of the described base version."
+    )
+
+
 class PortalMaterialItem(BaseModel):
     """One document in the course tree — a reading material or a task.
 
     ``kind`` discriminates (mirroring the T3 descriptor so the FE consumes one
     flat contract): ``material`` (``task_type`` IS NULL) carries no overlay;
     ``task`` (``task_type`` IS NOT NULL) carries the submission overlay.
+    ``task_type`` and ``base`` (KD18 P5) let the portal render the project
+    affordance (base download + echo) without a second call.
     """
 
     id: uuid.UUID
@@ -1362,6 +1443,17 @@ class PortalMaterialItem(BaseModel):
     )
     source_type: str = Field(description="video / presentation / text / web / audio.")
     order: int = Field(description="0-based position among sibling documents.")
+    task_type: str | None = Field(
+        default=None,
+        description="Assignment type when ``kind=task`` (e.g. ``project``); null "
+        "for a material.",
+    )
+    base: PortalTaskBase | None = Field(
+        default=None,
+        description="Active base descriptor (KD18 P5) — present only for a "
+        "project task WITH a base; null for a base-less project task, a "
+        "non-project task, or a material.",
+    )
     overlay: PortalSubmissionOverlay | None = Field(
         default=None,
         description="Submission overlay — present iff ``kind=task``, else null.",

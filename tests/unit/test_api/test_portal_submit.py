@@ -32,6 +32,7 @@ from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
@@ -70,6 +71,13 @@ def _mock_root_node(tenant_id: uuid.UUID) -> MagicMock:
     node.tenant_id = tenant_id
     node.parent_id = None
     return node
+
+
+def _mock_base(archive_key: str = "bases/original.zip") -> MagicMock:
+    base = MagicMock()
+    base.archive_key = archive_key
+    base.state = "ready"
+    return base
 
 
 def _mock_summary(status: str = "ready") -> MagicMock:
@@ -325,6 +333,9 @@ def _mock_reviewed_submission() -> MagicMock:
     sub.sanity_result = {"verdict": "match", "confidence": 0.9}
     sub.created_at = datetime.now(UTC)
     sub.original_filename = "solution.py"
+    # Non-project submission → no snapshot manifest, so the detail delta is None.
+    sub.snapshot_manifest = None
+    sub.base_id = None
     return sub
 
 
@@ -411,7 +422,8 @@ class TestPortalReadDetail:
         assert resp.status_code == 200
         data = resp.json()
 
-        # Exactly the curated fields — and nothing else.
+        # Exactly the curated fields — and nothing else. A non-project
+        # submission carries delta=None (KD18 P5 nested-nullable).
         assert set(data) == {
             "id",
             "status",
@@ -420,11 +432,13 @@ class TestPortalReadDetail:
             "review_markdown",
             "created_at",
             "original_filename",
+            "delta",
         }
         assert data["status"] == "completed"
         assert data["score"] == 87
         assert data["verdict"] == {"passed": True, "correctness": "correct"}
         assert data["review_markdown"] == "## Good work\nWell done."
+        assert data["delta"] is None
 
         # The internal trace must NOT appear anywhere in the response body.
         body = resp.text
@@ -445,6 +459,8 @@ class TestPortalReadDetail:
         sub.review_result = None
         sub.created_at = datetime.now(UTC)
         sub.original_filename = "solution.py"
+        sub.snapshot_manifest = None  # non-project → delta None
+        sub.base_id = None
         with patch.object(HomeworkRepository, "get_owned", return_value=sub):
             resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
         assert resp.status_code == 200
@@ -452,9 +468,265 @@ class TestPortalReadDetail:
         assert data["verdict"] is None
         assert data["score"] is None
         assert data["review_markdown"] is None
+        assert data["delta"] is None
 
     async def test_not_owned_404(self, client: AsyncClient) -> None:
         """A non-owned / unknown / soft-deleted submission → generic 404."""
         with patch.object(HomeworkRepository, "get_owned", return_value=None):
             resp = await client.get(f"/api/v1/portal/submissions/{uuid.uuid4()}")
+        assert resp.status_code == 404
+
+
+class TestPortalSubmissionDelta:
+    """KD18 P5: the I2 delta receipt (counters + staleness), derived on read.
+
+    ``manifest_from_jsonb`` / ``compute_delta`` are patched at the route module
+    to pin the receipt WIRING (row -> counts + staleness) without constructing a
+    full normalizer manifest; the byte-level delta itself is the normalizer's
+    own tested concern.
+    """
+
+    _MOD = "course_supporter.api.routes.portal_submissions"
+
+    def _project_sub(
+        self, *, base_id: uuid.UUID | None, snapshot_manifest: dict | None
+    ) -> MagicMock:
+        sub = MagicMock()
+        sub.id = uuid.uuid4()
+        sub.status = "completed"
+        sub.score = 90
+        sub.review_markdown = "ok"
+        sub.review_result = None
+        sub.created_at = datetime.now(UTC)
+        sub.original_filename = "proj.zip"
+        sub.authored_document_id = uuid.uuid4()
+        sub.base_id = base_id
+        sub.snapshot_manifest = snapshot_manifest
+        return sub
+
+    async def test_base_set_counts_and_stale(self, client: AsyncClient) -> None:
+        """base_id set → compute_delta counts + staleness (base v1 < latest v3)."""
+        sub = self._project_sub(base_id=uuid.uuid4(), snapshot_manifest={"schema": 1})
+        base = MagicMock()
+        base.manifest = {"schema": 1}
+        base.version = 1
+        latest = MagicMock()
+        latest.version = 3
+        fake_delta = MagicMock()
+        fake_delta.changed = ("a.py", "b.py")
+        fake_delta.new = ("c.py",)
+        fake_delta.deleted = ()
+        with (
+            patch.object(HomeworkRepository, "get_owned", return_value=sub),
+            patch.object(ProjectBaseRepository, "get_by_id", return_value=base),
+            patch.object(
+                ProjectBaseRepository, "get_latest_ready", return_value=latest
+            ),
+            patch(f"{self._MOD}.manifest_from_jsonb", return_value=MagicMock()),
+            patch(f"{self._MOD}.compute_delta", return_value=fake_delta),
+        ):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        assert resp.json()["delta"] == {
+            "changed": 2,
+            "new": 1,
+            "deleted": 0,
+            "base_version": 1,
+            "latest_version": 3,
+            "is_stale": True,
+        }
+
+    async def test_base_set_not_stale_when_built_on_latest(
+        self, client: AsyncClient
+    ) -> None:
+        """base v2 == latest v2 → is_stale False."""
+        sub = self._project_sub(base_id=uuid.uuid4(), snapshot_manifest={"schema": 1})
+        base = MagicMock()
+        base.manifest = {"schema": 1}
+        base.version = 2
+        latest = MagicMock()
+        latest.version = 2
+        fake_delta = MagicMock()
+        fake_delta.changed = ()
+        fake_delta.new = ()
+        fake_delta.deleted = ("gone.py",)
+        with (
+            patch.object(HomeworkRepository, "get_owned", return_value=sub),
+            patch.object(ProjectBaseRepository, "get_by_id", return_value=base),
+            patch.object(
+                ProjectBaseRepository, "get_latest_ready", return_value=latest
+            ),
+            patch(f"{self._MOD}.manifest_from_jsonb", return_value=MagicMock()),
+            patch(f"{self._MOD}.compute_delta", return_value=fake_delta),
+        ):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        delta = resp.json()["delta"]
+        assert delta["deleted"] == 1
+        assert delta["base_version"] == 2
+        assert delta["latest_version"] == 2
+        assert delta["is_stale"] is False
+
+    async def test_no_base_all_new_null_staleness(self, client: AsyncClient) -> None:
+        """Project submission, base_id None → all-new, null staleness."""
+        sub = self._project_sub(base_id=None, snapshot_manifest={"schema": 1})
+        sub_manifest = MagicMock()
+        sub_manifest.included = ("a.py", "b.py", "c.py")  # 3 new
+        with (
+            patch.object(HomeworkRepository, "get_owned", return_value=sub),
+            patch(f"{self._MOD}.manifest_from_jsonb", return_value=sub_manifest),
+        ):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.json()["delta"] == {
+            "changed": 0,
+            "new": 3,
+            "deleted": 0,
+            "base_version": None,
+            "latest_version": None,
+            "is_stale": False,
+        }
+
+    async def test_base_row_gone_falls_back_to_all_new(
+        self, client: AsyncClient
+    ) -> None:
+        """base_id set but the base row vanished → defensive all-new, no error."""
+        sub = self._project_sub(base_id=uuid.uuid4(), snapshot_manifest={"schema": 1})
+        sub_manifest = MagicMock()
+        sub_manifest.included = ("only.py",)
+        with (
+            patch.object(HomeworkRepository, "get_owned", return_value=sub),
+            patch.object(ProjectBaseRepository, "get_by_id", return_value=None),
+            patch(f"{self._MOD}.manifest_from_jsonb", return_value=sub_manifest),
+        ):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        assert resp.json()["delta"] == {
+            "changed": 0,
+            "new": 1,
+            "deleted": 0,
+            "base_version": None,
+            "latest_version": None,
+            "is_stale": False,
+        }
+
+
+def _base_url(authored_document_id: uuid.UUID) -> str:
+    return f"/api/v1/portal/tasks/{authored_document_id}/base"
+
+
+class TestPortalTaskBaseDownload:
+    """KD18 P5: presigned download of a project task's active base ORIGINAL.
+
+    Bearer-session + enrollment-scoped counterpart of the mode-1 API-key route;
+    access failures collapse to a generic 404, a visible task with no READY base
+    yet returns a DISTINCT 404.
+    """
+
+    async def test_ready_base_returns_presigned_original(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """An enrolled student, project task, READY base → 200 + presigned URL."""
+        root = uuid.uuid4()
+        url = "https://s3.local/course-materials/bases/original.zip?sig=abc"
+        mock_s3.generate_presigned_get_url = AsyncMock(return_value=url)
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+            patch.object(
+                ProjectBaseRepository,
+                "get_latest_ready",
+                return_value=_mock_base("bases/original.zip"),
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        assert resp.json() == {"original_url": url}
+        # Presigns the ORIGINAL archive_key (never the normalized snapshot, KD17).
+        mock_s3.generate_presigned_get_url.assert_awaited_once_with(
+            "bases/original.zip"
+        )
+
+    async def test_no_ready_base_distinct_404(self, client: AsyncClient) -> None:
+        """Visible project task but no READY base → DISTINCT 404 (not generic)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+            patch.object(ProjectBaseRepository, "get_latest_ready", return_value=None),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "No base is available for this task yet."
+
+    async def test_not_enrolled_generic_404(self, client: AsyncClient) -> None:
+        """Not enrolled → generic 'Task not found.' (never leaks existence)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(
+                StudentEnrollmentRepository, "is_enrolled", return_value=False
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_non_project_task_404(self, client: AsyncClient) -> None:
+        """A non-project task carries no base → generic 404."""
+        with patch.object(
+            AuthoredDocumentRepository,
+            "get_by_id",
+            return_value=_mock_task_doc(course_root_id=uuid.uuid4(), task_type="task"),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_unknown_task_404(self, client: AsyncClient) -> None:
+        with patch.object(AuthoredDocumentRepository, "get_by_id", return_value=None):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+
+    async def test_foreign_tenant_404(self, client: AsyncClient) -> None:
+        """A task whose course is in another tenant → generic 404."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(uuid.uuid4()),  # different tenant
+            ),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
         assert resp.status_code == 404

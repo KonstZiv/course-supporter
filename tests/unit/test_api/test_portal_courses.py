@@ -18,10 +18,12 @@ from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_student, get_session
+from course_supporter.api.routes.portal_courses import _base_block
 from course_supporter.auth.context import StudentContext
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import MaterialState
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
@@ -167,12 +169,37 @@ def _sub(
     return sub
 
 
+def _base(
+    *,
+    authored_document_id: uuid.UUID,
+    version: int,
+    state: str,
+    snapshot_hash: str | None = None,
+) -> MagicMock:
+    """A ProjectBase row for the grouped descriptor query (KD18 P5)."""
+    base = MagicMock()
+    base.authored_document_id = authored_document_id
+    base.version = version
+    base.state = state
+    base.snapshot_hash = snapshot_hash
+    return base
+
+
 def _materials_url(root_id: uuid.UUID) -> str:
     return f"/api/v1/portal/courses/{root_id}/materials"
 
 
-def _gate_ok(root: MagicMock, subtree: list[MagicMock], submissions: list[MagicMock]):
-    """Patch the gate + sources to resolve `root`/`subtree`/`submissions`."""
+def _gate_ok(
+    root: MagicMock,
+    subtree: list[MagicMock],
+    submissions: list[MagicMock],
+    base_rows: list[MagicMock] | None = None,
+):
+    """Patch the gate + sources to resolve root/subtree/submissions/bases.
+
+    ``base_rows`` seeds ``ProjectBaseRepository.list_for_documents`` (KD18 P5,
+    the grouped base query); default empty = no base attached to any task.
+    """
     return (
         patch.object(CourseNodeRepository, "get_by_id", return_value=root),
         patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
@@ -181,6 +208,11 @@ def _gate_ok(root: MagicMock, subtree: list[MagicMock], submissions: list[MagicM
             HomeworkRepository,
             "list_active_submissions_in_course",
             return_value=submissions,
+        ),
+        patch.object(
+            ProjectBaseRepository,
+            "list_for_documents",
+            return_value=base_rows or [],
         ),
     )
 
@@ -197,8 +229,8 @@ class TestPortalMaterialsTree:
             score=80,
             review_result={"verdict": {"passed": True, "correctness": "correct"}},
         )
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [sub])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [sub])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         assert resp.status_code == 200
         body = resp.json()
@@ -220,8 +252,8 @@ class TestPortalMaterialsTree:
         """A task with no submissions → status none, last/best absent."""
         task = _doc(task_type="project", filename="proj.zip")
         root = _node(documents=[task])
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         assert resp.status_code == 200
         overlay = resp.json()["documents"][0]["overlay"]
@@ -235,8 +267,10 @@ class TestPortalMaterialsTree:
         latest = _sub(authored_document_id=task.id, status="reviewing")
         high = _sub(authored_document_id=task.id, status="completed", score=90)
         low = _sub(authored_document_id=task.id, status="delivered", score=55)
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [latest, high, low])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(
+            root, [root], [latest, high, low]
+        )
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         overlay = resp.json()["documents"][0]["overlay"]
         assert overlay["submission_status"] == "pending"  # latest is reviewing
@@ -248,8 +282,8 @@ class TestPortalMaterialsTree:
         task = _doc(task_type="task")
         root = _node(documents=[task])
         failed = _sub(authored_document_id=task.id, status="failed")
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [failed])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [failed])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         overlay = resp.json()["documents"][0]["overlay"]
         # Error terminal surfaces as "error" (DD-6-D de-collapse); a failed
@@ -272,8 +306,8 @@ class TestPortalMaterialsTree:
         task = _doc(task_type="task")
         root = _node(documents=[task])
         attempt = _sub(authored_document_id=task.id, status=terminal)
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [attempt])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [attempt])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         overlay = resp.json()["documents"][0]["overlay"]
         assert overlay["submission_status"] == "error"
@@ -297,8 +331,10 @@ class TestPortalMaterialsTree:
             score=70,
             review_result={"verdict": {"passed": True, "correctness": "correct"}},
         )
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [latest, reviewed])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(
+            root, [root], [latest, reviewed]
+        )
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         overlay = resp.json()["documents"][0]["overlay"]
         assert overlay["submission_status"] == "error"  # latest drives status
@@ -319,8 +355,8 @@ class TestPortalMaterialsTree:
         )
         child = _node(title="Section 1", order=0, parent_id=uuid.uuid4())
         root = _node(documents=[visible, gone, pending_doc], children=[child])
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         body = resp.json()
         labels = [d["label"] for d in body["documents"]]
@@ -331,8 +367,8 @@ class TestPortalMaterialsTree:
         """A document with no filename → '{source_type} #{order}'."""
         doc = _doc(task_type=None, filename=None, source_type="web", order=3)
         root = _node(documents=[doc])
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         assert resp.json()["documents"][0]["label"] == "web #3"
 
@@ -350,8 +386,8 @@ class TestPortalMaterialsTree:
                 "denoised_score": 70,
             },
         )
-        get_by_id, enrolled, subtree, subs = _gate_ok(root, [root], [sub])
-        with get_by_id, enrolled, subtree, subs:
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [sub])
+        with get_by_id, enrolled, subtree, subs, bases:
             resp = await client.get(_materials_url(root.id))
         assert "SECRET INTERNAL TRACE" not in resp.text
         assert "denoised_score" not in resp.text
@@ -395,3 +431,152 @@ class TestPortalMaterialsGate:
         ):
             resp = await client.get(_materials_url(node.id))
         assert resp.status_code == 404
+
+
+class TestPortalTaskBaseDescriptor:
+    """KD18 P5: a project task carries task_type + its active base descriptor.
+
+    ``base = null`` (no base attached) and ``base.state != 'ready'`` (a base
+    exists but is not usable) are DISTINCT states, never collapsed.
+    """
+
+    async def test_ready_base_carries_hash_and_version(
+        self, client: AsyncClient
+    ) -> None:
+        """A READY base → state ready, snapshot_hash set (the auto-echo source)."""
+        task = _doc(task_type="project", filename="proj.zip")
+        root = _node(documents=[task])
+        rows = [
+            _base(
+                authored_document_id=task.id,
+                version=1,
+                state="ready",
+                snapshot_hash="h1",
+            )
+        ]
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(
+            root, [root], [], base_rows=rows
+        )
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        item = resp.json()["documents"][0]
+        assert item["task_type"] == "project"
+        assert item["base"] == {"version": 1, "snapshot_hash": "h1", "state": "ready"}
+
+    async def test_active_base_is_latest_ready_over_newer_pending(
+        self, client: AsyncClient
+    ) -> None:
+        """A newer pending v2 does not shadow the active READY v1 (echo source)."""
+        task = _doc(task_type="project", filename="proj.zip")
+        root = _node(documents=[task])
+        rows = [
+            _base(
+                authored_document_id=task.id,
+                version=1,
+                state="ready",
+                snapshot_hash="h1",
+            ),
+            _base(authored_document_id=task.id, version=2, state="pending"),
+        ]
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(
+            root, [root], [], base_rows=rows
+        )
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.json()["documents"][0]["base"] == {
+            "version": 1,
+            "snapshot_hash": "h1",
+            "state": "ready",
+        }
+
+    @pytest.mark.parametrize("state", ["pending", "failed"])
+    async def test_not_ready_base_blocks_with_null_hash(
+        self, client: AsyncClient, state: str
+    ) -> None:
+        """A base with no READY version → latest state, snapshot_hash null."""
+        task = _doc(task_type="project", filename="proj.zip")
+        root = _node(documents=[task])
+        rows = [_base(authored_document_id=task.id, version=3, state=state)]
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(
+            root, [root], [], base_rows=rows
+        )
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.json()["documents"][0]["base"] == {
+            "version": 3,
+            "snapshot_hash": None,
+            "state": state,
+        }
+
+    async def test_no_base_attached_is_null_not_a_state(
+        self, client: AsyncClient
+    ) -> None:
+        """A project task with no base → base null (distinct from non-ready)."""
+        task = _doc(task_type="project", filename="proj.zip")
+        root = _node(documents=[task])
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        item = resp.json()["documents"][0]
+        assert item["task_type"] == "project"
+        assert item["base"] is None
+
+    async def test_material_carries_null_task_type_and_base(
+        self, client: AsyncClient
+    ) -> None:
+        """A reading material → task_type null, base null (never a base)."""
+        material = _doc(task_type=None, filename="intro.pdf")
+        root = _node(documents=[material])
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        item = resp.json()["documents"][0]
+        assert item["task_type"] is None
+        assert item["base"] is None
+
+
+class TestBaseBlockHelper:
+    """The pure ``_base_block`` recipe (KD18 P5), in isolation."""
+
+    def test_no_versions_is_none(self) -> None:
+        assert _base_block([]) is None
+
+    def test_ready_only(self) -> None:
+        doc_id = uuid.uuid4()
+        block = _base_block(
+            [
+                _base(
+                    authored_document_id=doc_id,
+                    version=1,
+                    state="ready",
+                    snapshot_hash="h1",
+                )
+            ]
+        )
+        assert block is not None
+        assert (block.version, block.snapshot_hash, block.state) == (1, "h1", "ready")
+
+    def test_latest_ready_wins_over_newer_pending(self) -> None:
+        doc_id = uuid.uuid4()
+        block = _base_block(
+            [
+                _base(
+                    authored_document_id=doc_id,
+                    version=1,
+                    state="ready",
+                    snapshot_hash="h1",
+                ),
+                _base(authored_document_id=doc_id, version=2, state="pending"),
+            ]
+        )
+        assert block is not None
+        assert (block.version, block.snapshot_hash, block.state) == (1, "h1", "ready")
+
+    @pytest.mark.parametrize("state", ["pending", "failed"])
+    def test_non_ready_latest(self, state: str) -> None:
+        doc_id = uuid.uuid4()
+        block = _base_block(
+            [_base(authored_document_id=doc_id, version=5, state=state)]
+        )
+        assert block is not None
+        assert (block.version, block.snapshot_hash, block.state) == (5, None, state)

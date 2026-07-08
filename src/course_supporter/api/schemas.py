@@ -1344,12 +1344,39 @@ class PortalSubmissionOverlay(BaseModel):
     )
 
 
+class PortalTaskBase(BaseModel):
+    """Active base-archive descriptor for a project task (KD18 P5).
+
+    Attached to a project ``PortalMaterialItem`` when a base version exists.
+    ``state == 'ready'`` describes the active (latest READY) version: the
+    student may submit and ``snapshot_hash`` is the auto-echo source the portal
+    sends back on submit. ``pending`` / ``failed`` describes the latest version
+    when none is READY yet — submit is blocked and ``snapshot_hash`` is null.
+
+    A project task with NO base attached carries ``base = null`` on the item —
+    a DISTINCT state (submit allowed, everything is new), never collapsed into
+    a non-ready ``state``.
+    """
+
+    version: int = Field(description="1-based version of the described base.")
+    snapshot_hash: str | None = Field(
+        default=None,
+        description="Echo-match hash of the active READY base (the portal sends "
+        "it back automatically on submit); null unless ``state`` is ``ready``.",
+    )
+    state: Literal["pending", "ready", "failed"] = Field(
+        description="Lifecycle of the described base version."
+    )
+
+
 class PortalMaterialItem(BaseModel):
     """One document in the course tree — a reading material or a task.
 
     ``kind`` discriminates (mirroring the T3 descriptor so the FE consumes one
     flat contract): ``material`` (``task_type`` IS NULL) carries no overlay;
     ``task`` (``task_type`` IS NOT NULL) carries the submission overlay.
+    ``task_type`` and ``base`` (KD18 P5) let the portal render the project
+    affordance (base download + echo) without a second call.
     """
 
     id: uuid.UUID
@@ -1362,6 +1389,17 @@ class PortalMaterialItem(BaseModel):
     )
     source_type: str = Field(description="video / presentation / text / web / audio.")
     order: int = Field(description="0-based position among sibling documents.")
+    task_type: str | None = Field(
+        default=None,
+        description="Assignment type when ``kind=task`` (e.g. ``project``); null "
+        "for a material.",
+    )
+    base: PortalTaskBase | None = Field(
+        default=None,
+        description="Active base descriptor (KD18 P5) — present only for a "
+        "project task WITH a base; null for a base-less project task, a "
+        "non-project task, or a material.",
+    )
     overlay: PortalSubmissionOverlay | None = Field(
         default=None,
         description="Submission overlay — present iff ``kind=task``, else null.",

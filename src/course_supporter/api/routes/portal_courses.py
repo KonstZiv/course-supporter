@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -39,8 +39,10 @@ from course_supporter.api.schemas import (
     PortalMaterialItem,
     PortalMaterialTreeNode,
     PortalSubmissionOverlay,
+    PortalTaskBase,
 )
 from course_supporter.auth.context import StudentContext
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
@@ -48,7 +50,9 @@ from course_supporter.storage.orm import (
     CourseNode,
     HomeworkSubmission,
     MaterialState,
+    ProjectBase,
 )
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
@@ -146,11 +150,65 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
     )
 
 
+def _base_block(versions: list[ProjectBase]) -> PortalTaskBase | None:
+    """Resolve the active base descriptor for one project task (KD18 P5).
+
+    ``latest_ready`` = MAX version among READY, ``latest`` = MAX version —
+    mirroring ``ProjectBaseRepository.get_latest_ready`` / ``get_latest`` over a
+    pre-fetched version list (one grouped query, no N+1). No versions → ``None``
+    (no base attached — a DISTINCT state from a non-ready base, never collapsed).
+    A READY version exists → the active base (``state='ready'``, ``snapshot_hash``
+    set = the auto-echo source). Else the latest is ``pending`` / ``failed``
+    (``snapshot_hash`` null, submit blocked; BE-409 stays authoritative).
+    """
+    if not versions:
+        return None
+    ready = [b for b in versions if b.state == "ready"]
+    if ready:
+        active = max(ready, key=lambda b: b.version)
+        return PortalTaskBase(
+            version=active.version,
+            snapshot_hash=active.snapshot_hash,
+            state="ready",
+        )
+    latest = max(versions, key=lambda b: b.version)
+    # DB CHECK constrains state to the three literals; with no READY version the
+    # latest is pending | failed. The cast narrows the ORM's plain ``str`` column.
+    return PortalTaskBase(
+        version=latest.version,
+        snapshot_hash=None,
+        state=cast(Literal["pending", "failed"], latest.state),
+    )
+
+
+def _project_task_ids(node: CourseNode) -> set[uuid.UUID]:
+    """Collect ids of non-deleted PROJECT task documents in a subtree (KD18 P5).
+
+    Drives the single grouped base query: non-project tasks and materials carry
+    no base and are never queried.
+    """
+    ids: set[uuid.UUID] = set()
+    for doc in node.documents:
+        if doc.deleted_at is None and doc.task_type == AssignmentType.PROJECT.value:
+            ids.add(doc.id)
+    for child in node.children:
+        if child.deleted_at is None:
+            ids |= _project_task_ids(child)
+    return ids
+
+
 def _project_document(
     doc: AuthoredDocument,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
+    bases: dict[uuid.UUID, PortalTaskBase | None],
 ) -> PortalMaterialItem:
-    """Project one document to the curated item, attaching a task overlay."""
+    """Project one document to the curated item, attaching a task overlay.
+
+    A project task also carries ``task_type`` and its active ``base`` descriptor
+    (KD18 P5) so the portal renders the base-download + echo affordance without a
+    second call. ``base`` is null for a base-less project task (resolved to None
+    in the pre-fetched map), a non-project task, or a material.
+    """
     is_task = doc.task_type is not None
     overlay = _build_overlay(overlays.get(doc.id, [])) if is_task else None
     return PortalMaterialItem(
@@ -163,6 +221,8 @@ def _project_document(
         ),
         source_type=doc.source_type,
         order=doc.order,
+        task_type=doc.task_type,
+        base=bases.get(doc.id),
         overlay=overlay,
     )
 
@@ -170,6 +230,7 @@ def _project_document(
 def _project_node(
     node: CourseNode,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
+    bases: dict[uuid.UUID, PortalTaskBase | None],
 ) -> PortalMaterialTreeNode:
     """Recursively project a CourseNode subtree to the curated tree.
 
@@ -179,7 +240,7 @@ def _project_node(
     their cascade-deleted subtrees) are skipped.
     """
     documents = [
-        _project_document(doc, overlays)
+        _project_document(doc, overlays, bases)
         for doc in sorted(
             (
                 d
@@ -190,7 +251,7 @@ def _project_node(
         )
     ]
     children = [
-        _project_node(child, overlays)
+        _project_node(child, overlays, bases)
         for child in node.children
         if child.deleted_at is None
     ]
@@ -254,6 +315,20 @@ async def get_portal_course_materials(
     for attempt in attempts:
         overlays[attempt.authored_document_id].append(attempt)
 
+    # Resolve the active base for every project task in one grouped query
+    # (KD18 P5), then group by document in Python — same no-N+1 shape as the
+    # overlay above. A project task with no base resolves to None (base-less).
+    project_ids = _project_task_ids(subtree[0])
+    base_rows = await ProjectBaseRepository(session).list_for_documents(
+        sorted(project_ids)
+    )
+    versions_by_doc: dict[uuid.UUID, list[ProjectBase]] = defaultdict(list)
+    for row in base_rows:
+        versions_by_doc[row.authored_document_id].append(row)
+    bases: dict[uuid.UUID, PortalTaskBase | None] = {
+        doc_id: _base_block(versions_by_doc.get(doc_id, [])) for doc_id in project_ids
+    }
+
     # get_subtree returns the roots of the loaded set; for a single course root
     # there is exactly one — the requested root.
-    return _project_node(subtree[0], overlays)
+    return _project_node(subtree[0], overlays, bases)

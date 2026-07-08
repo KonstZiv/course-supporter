@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -41,6 +41,7 @@ from course_supporter.api.schemas import (
     PresignedUrlResponse,
     ProcessingEstimate,
     ProjectBaseAttachResponse,
+    ProjectBaseManifestResponse,
     ProjectBaseStateResponse,
 )
 from course_supporter.api.upload_validation import check_platform
@@ -58,6 +59,7 @@ from course_supporter.language import (
     normalize_and_validate,
 )
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
+from course_supporter.normalizer import manifest_from_jsonb
 from course_supporter.security import AUTHORED_POLICY, run_stage1
 from course_supporter.security.exceptions import (
     ErrorCategory,
@@ -879,7 +881,7 @@ async def get_project_base_manifest(
     document_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
-) -> dict[str, Any]:
+) -> ProjectBaseManifestResponse:
     """The latest READY base version's manifest (KD18 P2, author-only).
 
     Returns the algorithmic manifest exactly as the base-normalize worker stored
@@ -888,6 +890,11 @@ async def get_project_base_manifest(
     API-key ``GET /base``, because the manifest is the full file listing. 404 if
     the document has no READY base (a pending / failed version carries no
     manifest).
+
+    DD-6-V: typed as the P1 ``Manifest`` dataclass (reconstructed from JSONB via
+    the reviver) instead of an opaque ``dict[str, Any]`` — a single source of
+    truth for the FE consumer (P6). The wire-shape is unchanged: FastAPI
+    serializes the frozen dataclass byte-identically to the stored JSONB.
     """
     document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
@@ -899,7 +906,7 @@ async def get_project_base_manifest(
         raise HTTPException(
             status_code=404, detail="No ready base manifest for this document."
         )
-    return base.manifest
+    return manifest_from_jsonb(base.manifest)
 
 
 @router.get("/documents/{document_id}")

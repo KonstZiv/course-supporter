@@ -225,6 +225,9 @@ class TestGetBaseManifest:
         assert manifest["total_files"] == 4
         assert manifest["included"][0]["cls"] == "text"
         assert manifest["excluded"][0]["reason"] == "denylist_dir"
+        # DD-6-V: typing the route as the P1 Manifest dataclass must NOT change
+        # the wire-shape — the served body is byte-identical to the stored JSONB.
+        assert manifest == _READY_MANIFEST
 
     async def test_no_ready_404(
         self,

@@ -15,6 +15,7 @@ from course_supporter.language import (
     normalize_and_validate,
 )
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
+from course_supporter.normalizer import Manifest
 from course_supporter.storage.course_node_repository import SummaryStatus
 
 # --- Material Tree Nodes ---
@@ -680,6 +681,41 @@ class ProjectBaseDescriptorResponse(BaseModel):
     original_url: str = Field(
         description="Presigned GET URL of the original base archive."
     )
+
+
+class ProjectBaseStateResponse(BaseModel):
+    """Response for GET /documents/{document_id}/base (KD18 P6, author).
+
+    The author-monitoring read-surface: the LATEST base version REGARDLESS of
+    state (``get_latest``), deliberately NOT the mode-1 student descriptor's
+    latest-ready-else-latest. After a re-upload the author must see the fresh
+    version's ``pending`` / ``failed`` progress, not an older READY version
+    masking it — the opposite goal of ``GET /homework/tasks/{id}/base``, which
+    needs a *usable* READY base for the student. ``failure_reason`` is non-null
+    only for ``failed``; ``snapshot_hash`` is null until ``ready``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    version: int = Field(description="1-based version number for this document.")
+    state: str = Field(description="Normalization state: pending | ready | failed.")
+    failure_reason: str | None = Field(
+        default=None,
+        description="Human-readable reason; non-null only when state='failed'.",
+    )
+    snapshot_hash: str | None = Field(
+        default=None,
+        description="Aggregate snapshot hash; null until state='ready'.",
+    )
+
+
+# KD18 P6 (DD-6-V): the base-manifest response IS the P1 ``Manifest`` dataclass —
+# a single source of truth, not a hand-maintained Pydantic duplicate (Rule 1).
+# FastAPI serializes the frozen dataclass byte-identically to the stored JSONB
+# (its StrEnum members render as their string value); the route reconstructs the
+# dataclass from JSONB via the P1 reviver so the return is a typed ``Manifest``,
+# not an opaque ``dict[str, Any]``.
+type ProjectBaseManifestResponse = Manifest
 
 
 class ConfirmUploadRequest(BaseModel):

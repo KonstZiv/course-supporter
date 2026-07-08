@@ -116,6 +116,7 @@ async def _seed(
     *,
     ready: bool,
     archive_key: str = "k/v1/original.zip",
+    fail_reason: str | None = None,
 ) -> uuid.UUID:
     async with factory() as session:
         repo = ProjectBaseRepository(session)
@@ -129,6 +130,8 @@ async def _seed(
                 snapshot_hash="c" * 64,
                 manifest=_READY_MANIFEST,
             )
+        elif fail_reason is not None:
+            await repo.mark_failed(base.id, failure_reason=fail_reason)
         await session.commit()
         return base.id
 
@@ -222,6 +225,9 @@ class TestGetBaseManifest:
         assert manifest["total_files"] == 4
         assert manifest["included"][0]["cls"] == "text"
         assert manifest["excluded"][0]["reason"] == "denylist_dir"
+        # DD-6-V: typing the route as the P1 Manifest dataclass must NOT change
+        # the wire-shape — the served body is byte-identical to the stored JSONB.
+        assert manifest == _READY_MANIFEST
 
     async def test_no_ready_404(
         self,
@@ -244,3 +250,127 @@ class TestGetBaseManifest:
         async with _client() as client:
             resp = await client.get(f"/api/v1/documents/{doc_id}/base/manifest")
         assert resp.status_code == 404
+
+
+class TestGetProjectBaseState:
+    """GET /documents/{id}/base (PrepDep, KD18 P6) — author state read-surface.
+
+    ``get_latest`` (any state), NOT ``get_latest_ready``: the author monitors
+    THIS upload's normalization, so a fresh pending / failed v2 must NOT be
+    masked by an older READY v1. This is the only author-facing surface
+    carrying ``failure_reason``.
+    """
+
+    async def test_pending_returns_state_no_hash_no_reason(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        doc_id = project_env["doc_id"]
+        await _seed(session_factory, doc_id, ready=False)
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["version"] == 1
+        assert body["state"] == "pending"
+        assert body["snapshot_hash"] is None
+        assert body["failure_reason"] is None
+
+    async def test_ready_returns_hash_and_state(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        doc_id = project_env["doc_id"]
+        await _seed(session_factory, doc_id, ready=True)
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["state"] == "ready"
+        assert body["snapshot_hash"] == "c" * 64
+        assert body["failure_reason"] is None
+
+    async def test_failed_returns_reason(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        doc_id = project_env["doc_id"]
+        await _seed(
+            session_factory, doc_id, ready=False, fail_reason="declared size exceeded"
+        )
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["state"] == "failed"
+        assert body["failure_reason"] == "declared size exceeded"
+        assert body["snapshot_hash"] is None
+
+    async def test_latest_pending_wins_over_ready(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """READY v1 + pending v2 → the state is the FRESH v2 (get_latest).
+
+        The exact inverse of ``TestGetTaskBase.test_ready_wins_over_later_pending``
+        (the student descriptor). A re-upload's progress must never be masked
+        by the previous active READY version.
+        """
+        doc_id = project_env["doc_id"]
+        await _seed(session_factory, doc_id, ready=True)
+        await _seed(
+            session_factory, doc_id, ready=False, archive_key="k/v2/original.zip"
+        )
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["version"] == 2
+        assert body["state"] == "pending"
+        assert body["snapshot_hash"] is None
+
+    async def test_no_base_404_structured_body(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+    ) -> None:
+        doc_id = project_env["doc_id"]
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "NO_BASE_ATTACHED"
+
+    async def test_unknown_document_404(self, _wire: AsyncMock) -> None:
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{uuid.uuid4()}/base")
+        assert resp.status_code == 404
+
+    async def test_requires_prep_scope(
+        self,
+        _wire: AsyncMock,
+        project_env: dict[str, uuid.UUID],
+    ) -> None:
+        """A check-only (mode-1) key cannot reach the author state surface."""
+
+        async def _check_only_tenant() -> TenantContext:
+            return TenantContext(
+                tenant_id=project_env["tenant_id"],
+                tenant_name="pb-read",
+                scopes=["check"],
+                plan_id="basic",
+                key_prefix="cs_test",
+            )
+
+        app.dependency_overrides[get_current_tenant] = _check_only_tenant
+        doc_id = project_env["doc_id"]
+        async with _client() as client:
+            resp = await client.get(f"/api/v1/documents/{doc_id}/base")
+        assert resp.status_code == 403

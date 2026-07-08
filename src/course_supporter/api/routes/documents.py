@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -41,6 +41,8 @@ from course_supporter.api.schemas import (
     PresignedUrlResponse,
     ProcessingEstimate,
     ProjectBaseAttachResponse,
+    ProjectBaseManifestResponse,
+    ProjectBaseStateResponse,
 )
 from course_supporter.api.upload_validation import check_platform
 from course_supporter.auth.context import TenantContext
@@ -57,6 +59,7 @@ from course_supporter.language import (
     normalize_and_validate,
 )
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
+from course_supporter.normalizer import manifest_from_jsonb
 from course_supporter.security import AUTHORED_POLICY, run_stage1
 from course_supporter.security.exceptions import (
     ErrorCategory,
@@ -839,12 +842,46 @@ async def attach_project_base(
     )
 
 
+@router.get("/documents/{document_id}/base")
+async def get_project_base_state(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> ProjectBaseStateResponse:
+    """The latest base version's state for author monitoring (KD18 P6).
+
+    Returns the LATEST version REGARDLESS of state (``get_latest`` — NOT
+    ``get_latest_ready``) so a freshly re-uploaded ``pending`` / ``failed`` v2
+    is not masked by an older READY v1: the author is monitoring THIS upload's
+    normalization, the opposite goal of the mode-1 student descriptor
+    (``GET /homework/tasks/{id}/base``, which needs a usable READY base). This
+    is the only author-facing surface carrying ``failure_reason`` — the manifest
+    route is READY-only, so ``pending`` / ``failed`` states render from here.
+    404 if the document has no base at all.
+    """
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    base = await ProjectBaseRepository(session).get_latest(document.id)
+    if base is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "NO_BASE_ATTACHED",
+                "details": "no base archive is attached to this task",
+            },
+        )
+    return ProjectBaseStateResponse.model_validate(base)
+
+
 @router.get("/documents/{document_id}/base/manifest")
 async def get_project_base_manifest(
     document_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
-) -> dict[str, Any]:
+) -> ProjectBaseManifestResponse:
     """The latest READY base version's manifest (KD18 P2, author-only).
 
     Returns the algorithmic manifest exactly as the base-normalize worker stored
@@ -853,6 +890,11 @@ async def get_project_base_manifest(
     API-key ``GET /base``, because the manifest is the full file listing. 404 if
     the document has no READY base (a pending / failed version carries no
     manifest).
+
+    DD-6-V: typed as the P1 ``Manifest`` dataclass (reconstructed from JSONB via
+    the reviver) instead of an opaque ``dict[str, Any]`` — a single source of
+    truth for the FE consumer (P6). The wire-shape is unchanged: FastAPI
+    serializes the frozen dataclass byte-identically to the stored JSONB.
     """
     document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
@@ -864,7 +906,7 @@ async def get_project_base_manifest(
         raise HTTPException(
             status_code=404, detail="No ready base manifest for this document."
         )
-    return base.manifest
+    return manifest_from_jsonb(base.manifest)
 
 
 @router.get("/documents/{document_id}")

@@ -147,11 +147,11 @@ providers:
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028
       - id: deepseek-v4-pro
-        # "Smart" / deep-reasoning tier. Durable regular rate $1.74/$3.48
-        # per 1M (this entry); the prior 75% promo expired 2026-05-31, and a
-        # rolling promo at $0.435/$0.87 was observed live 2026-06-05 — registry
-        # keeps the durable rate per the cross-vendor convention (avoid silent
-        # post-promo jumps; precedent: deepseek-v4-flash + qwen3.7-max). Context
+        # "Smart" / deep-reasoning tier. $0.435/$0.87 per 1M — verified
+        # 2026-07-09 against DeepSeek official pricing: the prior 75% promo
+        # became the permanent list rate after the old $1.74/$3.48 durable
+        # rate was retired 2026-05-31, so promo and durable now coincide
+        # (supersedes the earlier "keep durable, ignore promo" note). Context
         # 1M / max output 384K per the official DeepSeek docs verified 2026-06-05;
         # the conservative ``max_output_tokens`` here (65536) mirrors the video
         # Pass 2a ladder pin — the model's true output ceiling is far higher,
@@ -167,8 +167,8 @@ providers:
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.00174
-        cost_per_1k_out: 0.00348
+        cost_per_1k_in: 0.000435
+        cost_per_1k_out: 0.00087
       - id: deepseek-chat
         # DEPRECATED by DeepSeek (maps to deepseek-v4-flash non-thinking).
         # Retained for legacy ModelRouter action references.
@@ -257,16 +257,16 @@ providers:
         cost_per_1k_out: 0.006
       - id: qwen3-vl-32b-instruct
         # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
-        # PROVISIONAL pricing — values reflect DashScope International
-        # Singapore tier public docs; eu-central-1 MaaS workspace
-        # pricing may differ and should be reconciled after the first
-        # production billing cycle.
+        # Pricing verified 2026-07-09 against DashScope Model Studio
+        # (EU / Frankfurt endpoint): $0.16/$0.64 per 1M — flat rate (not
+        # tiered), supersedes the earlier PROVISIONAL Singapore-tier estimate.
+        # Retires 2026-10-10 → DD-2.4-X.
         capabilities: [vision, structured_output, long_context]
         max_context: 131072
         max_output_tokens: 8192
         unit_type: tokens
-        cost_per_1k_in: 0.00076
-        cost_per_1k_out: 0.00228
+        cost_per_1k_in: 0.00016
+        cost_per_1k_out: 0.00064
 
   whisper:
     type: transcription

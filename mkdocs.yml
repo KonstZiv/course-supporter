@@ -1,0 +1,28 @@
+site_name: Course Supporter — Документація
+site_url: https://about.pythoncourse.me/
+site_description: Документація платформи Course Supporter
+
+theme:
+  name: material
+  language: uk            # Ukrainian UI strings; default palette (no palette:)
+
+markdown_extensions:
+  - attr_list             # stable {#id} anchors (e.g. error codes)
+  - toc:
+      permalink: true     # permanent heading anchors
+
+plugins:
+  - search                # built-in Material search
+  - mermaid2              # diagram content (Phase 2)
+  - panzoom               # zoomable diagrams/images (Phase 2)
+
+# Root docs/index.md is a redirect / -> /uk/, intentionally kept out of nav.
+not_in_nav: |
+  /index.md
+
+nav:
+  - Головна: uk/index.md
+  - Для авторів: uk/authors/index.md
+  - Для студентів: uk/students/index.md
+  - Коди помилок: uk/errors/index.md
+  - API: uk/api/index.md

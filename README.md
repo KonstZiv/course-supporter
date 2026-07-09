@@ -1,11 +1,10 @@
 [![CI](https://github.com/KonstZiv/course-supporter/actions/workflows/ci.yaml/badge.svg)](https://github.com/KonstZiv/course-supporter/actions/workflows/ci.yaml)
-[![Docs](https://github.com/KonstZiv/course-supporter/actions/workflows/docs.yml/badge.svg)](https://kostyantynzivenko.github.io/course-supporter/)
 
 # Course Supporter
 
 AI-powered system for transforming course materials into structured learning plans with automated mentoring.
 
-**[Documentation](https://kostyantynzivenko.github.io/course-supporter/)** | **[API (live)](https://api.pythoncourse.me/docs)**
+**[API (live)](https://api.pythoncourse.me/docs)**
 
 ---
 
@@ -48,12 +47,3 @@ make check                     # ruff + mypy + pytest (full check)
 make all                       # format + full check
 uv run pytest -k "test_name"   # run single test
 ```
-
-## Architecture
-
-See the [full documentation](https://kostyantynzivenko.github.io/course-supporter/) for:
-
-- [Architecture & ERD](https://kostyantynzivenko.github.io/course-supporter/architecture/erd/)
-- [Architecture Decisions](https://kostyantynzivenko.github.io/course-supporter/architecture/decisions/)
-- [Sprint Roadmap](https://kostyantynzivenko.github.io/course-supporter/sprints/)
-- [Deployment Guide](https://kostyantynzivenko.github.io/course-supporter/development/deployment/)

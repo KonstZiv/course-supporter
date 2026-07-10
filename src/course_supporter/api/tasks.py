@@ -234,6 +234,7 @@ async def arq_ingest_material(
                         "detection_progress_write_failed",
                         current=current,
                         total=total,
+                        exc_info=True,
                     )
 
             progress_token = set_progress_writer(_detection_progress)

@@ -16,10 +16,11 @@ empirically calibrated on real video during the vd era; a full
 re-calibration sweep is deferred to DD-2.4-B (trigger: production
 code-slide loss).
 
-Two perf refinements over the reference: optical-flow coherence is
-computed on a downscaled grayscale (scale-tolerant; only at boundary
-candidates), and frame decodes are cached (read-once) rather than
-re-``imread`` per comparison.
+Perf refinements over the reference: SSIM and optical-flow coherence are
+computed on a downscaled grayscale (both scale-tolerant), frame decodes
+are cached (read-once) rather than re-``imread`` per comparison, and the
+dedup metrics are evaluated lazily (cheapest-first, short-circuit) so the
+heavy SSIM runs only on the narrow ambiguous band that reaches it.
 
 PiP responsibility split: this step *detects* the box and returns it;
 the output JPEGs stay **raw** (unmasked). The mask is applied internally
@@ -31,6 +32,7 @@ itself when building the vision call.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -52,9 +54,11 @@ from course_supporter.ingestion.video_pipeline.schemas import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
+    from course_supporter.service_logging import ProgressWriter
 
 logger = structlog.get_logger()
 
@@ -101,6 +105,13 @@ class SamplingParams:
     # is scale-tolerant, so this is a free speedup at boundary candidates.
     flow_downscale_max: int = 480
 
+    # Downscaled SSIM target (longest side, px). SSIM is a smoothed
+    # structural measure and does not carry the mouse-highlight vote (on a
+    # static slide SSIM ≈ 0.99 → no vote), so evaluating it on a half-size
+    # copy is safe. 960 = half of a 1080p longest side. colour_hist / Canny
+    # / pixel_diff stay full-res — they hold the highlight vote (DD-2.4-B).
+    metric_downscale_max: int = 960
+
 
 _DEFAULT_PARAMS = SamplingParams()
 _DECODE_CACHE_SIZE = 8  # bounds memory: ~prev+cur working set, sequential access
@@ -110,6 +121,7 @@ _PIP_MASK_GRAY = 128  # neutral grey written over a PiP region before metrics
 _FLOW_MIN_MAGNITUDE_PX = 1.0  # per-pixel flow magnitude that counts as motion
 _FLOW_MIN_SIGNIFICANT_PX = 100  # min moving pixels for a meaningful flow reading
 _PIP_MIN_ZONE_MOTION = 1.0  # min mean zone motion to treat a zone as a PiP candidate
+_PROGRESS_MIN_INTERVAL_SEC = 2.0  # throttle between stage-progress writes (seconds)
 
 
 class _Rect(NamedTuple):
@@ -146,6 +158,7 @@ class _DecodeCache:
         self._maxsize = maxsize
         self._bgr: OrderedDict[Path, Any] = OrderedDict()
         self._gray: OrderedDict[Path, Any] = OrderedDict()
+        self._gray_small: OrderedDict[Path, Any] = OrderedDict()
 
     def bgr(self, path: Path) -> Any:
         cached = self._bgr.get(path)
@@ -173,16 +186,28 @@ class _DecodeCache:
             self._gray.popitem(last=False)
         return gray
 
+    def gray_small(self, path: Path, max_side: int) -> Any:
+        """Downscaled copy of the cached gray frame (metric-path, SSIM only).
+
+        Derived from the already-decoded full gray via ``_downscale`` — no
+        re-``imread``. ``max_side`` is constant per run (``metric_downscale_max``)
+        so path-keying is sufficient. Same bound as the other caches: at
+        half-size the extra footprint is <= 1/4 of the gray working set, well
+        under the DD-2.4-C memory ceiling.
+        """
+        cached = self._gray_small.get(path)
+        if cached is not None:
+            self._gray_small.move_to_end(path)
+            return cached
+        gray = self.gray(path)
+        small = None if gray is None else _downscale(gray, max_side)
+        self._gray_small[path] = small
+        if len(self._gray_small) > self._maxsize:
+            self._gray_small.popitem(last=False)
+        return small
+
 
 # ── per-frame metrics ──────────────────────────────────────────────────
-
-
-class _FrameMetrics(NamedTuple):
-    dhash_dist: float
-    pixel_diff: float
-    color_hist: float
-    ssim: float
-    edge_diff: float
 
 
 def _compute_dhash(gray: Any, hash_size: int) -> Any:
@@ -262,37 +287,85 @@ def _downscale(gray: Any, max_side: int) -> Any:
     return cv2.resize(gray, (round(w * scale), round(h * scale)))
 
 
-def _compare_frames(
+def _dhash_distance(prev: _Entry, cur: _Entry, p: SamplingParams) -> float:
+    """Normalised dHash distance in [0, 1]; 1.0 if either frame is undecodable."""
+    if prev.dhash is None or cur.dhash is None:
+        return 1.0  # undecodable frame → treat as changed (keep, safe)
+    return float((prev.dhash - cur.dhash) / (p.hash_size * p.hash_size))
+
+
+def _pixel_diff(gray1: Any, gray2: Any, p: SamplingParams) -> float:
+    """Fraction of pixels whose intensity delta exceeds the noise floor."""
+    changed = int(np.count_nonzero(cv2.absdiff(gray1, gray2) > p.pixel_noise_floor))
+    return float(changed / (gray1.shape[0] * gray1.shape[1]))
+
+
+def _edge_diff(gray1: Any, gray2: Any) -> float:
+    """Fraction of Canny edge pixels that changed between the two frames."""
+    edges1, edges2 = cv2.Canny(gray1, 50, 150), cv2.Canny(gray2, 50, 150)
+    edge_changed = int(np.count_nonzero(cv2.absdiff(edges1, edges2)))
+    max_edges = max(int(np.count_nonzero(edges1)), int(np.count_nonzero(edges2)), 1)
+    return edge_changed / max_edges
+
+
+def _keep_frame(
     cache: _DecodeCache,
     prev: _Entry,
     cur: _Entry,
     p: SamplingParams,
-) -> _FrameMetrics:
-    """All 5 dedup metrics between two frames (PiP-masked, cached decode)."""
-    max_bits = p.hash_size * p.hash_size
-    if prev.dhash is None or cur.dhash is None:
-        dhash_dist = 1.0  # undecodable frame → treat as changed (keep, safe)
-    else:
-        dhash_dist = float((prev.dhash - cur.dhash) / max_bits)
+) -> bool:
+    """Tiered keep/drop decision, computing metrics cheapest-first.
+
+    Boolean-identical to the eager 5-metric vote: metrics are ordered by
+    cost (dHash precomputed → pixel_diff → colour_hist → Canny → SSIM) and
+    the loop exits as soon as the outcome is fixed — a running quorum of
+    ``min_votes`` forces KEEP, and votes-plus-max-remaining below
+    ``min_votes`` forces DROP. Ordering changes *when* we stop, never the
+    decision (votes are non-negative), so SSIM (the heaviest metric) runs
+    only on the narrow ambiguous band that actually reaches it.
+    """
+    # Tier 1: a single strong signal (dHash or pixel_diff) → keep.
+    dhash_dist = _dhash_distance(prev, cur, p)
+    if dhash_dist > p.tier1_dhash:
+        return True
 
     bgr1, bgr2 = cache.bgr(prev.path), cache.bgr(cur.path)
     if bgr1 is None or bgr2 is None:
-        return _FrameMetrics(dhash_dist, 1.0, 1.0, 0.0, 1.0)
+        return True  # undecodable frame → treat as changed (keep, safe)
     gray1, gray2 = cache.gray(prev.path), cache.gray(cur.path)
 
-    abs_diff = cv2.absdiff(gray1, gray2)
-    changed = int(np.count_nonzero(abs_diff > p.pixel_noise_floor))
-    pixel_diff = changed / (gray1.shape[0] * gray1.shape[1])
+    pixel = _pixel_diff(gray1, gray2, p)
+    if pixel > p.tier1_pixel_diff:
+        return True
 
-    color_hist = _color_hist_distance(bgr1, bgr2)
-    ssim = _compute_ssim(gray1, gray2)
+    # Tier 2: keep if >= min_votes of the 5 metrics vote "changed". Votes
+    # accumulate in cost order; short-circuit on a reached quorum or on a
+    # quorum that is unreachable even if every remaining metric votes.
+    votes = int(dhash_dist > p.vote_dhash) + int(pixel > p.vote_pixel_diff)
+    remaining = 3  # colour_hist, edge_diff, ssim
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
 
-    edges1, edges2 = cv2.Canny(gray1, 50, 150), cv2.Canny(gray2, 50, 150)
-    edge_changed = int(np.count_nonzero(cv2.absdiff(edges1, edges2)))
-    max_edges = max(int(np.count_nonzero(edges1)), int(np.count_nonzero(edges2)), 1)
-    edge_diff = edge_changed / max_edges
+    votes += int(_color_hist_distance(bgr1, bgr2) > p.vote_color_hist)
+    remaining -= 1
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
 
-    return _FrameMetrics(dhash_dist, pixel_diff, color_hist, ssim, edge_diff)
+    votes += int(_edge_diff(gray1, gray2) > p.vote_edge_diff)
+    remaining -= 1
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
+
+    small1 = cache.gray_small(prev.path, p.metric_downscale_max)
+    small2 = cache.gray_small(cur.path, p.metric_downscale_max)
+    votes += int(_compute_ssim(small1, small2) < p.vote_ssim)
+    return votes >= p.min_votes
 
 
 # ── PiP detection ──────────────────────────────────────────────────────
@@ -369,31 +442,27 @@ def _dedup_voting(
     entries: list[_Entry],
     p: SamplingParams,
     mask: _Rect | None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> list[_Entry]:
     """Drop redundant frames vs the last *kept* frame (tiered voting).
 
     Tier 1: a single strong signal (dHash or pixel_diff) → keep. Tier 2:
     >= ``min_votes`` of the 5 metrics vote "changed" → keep (catches
     subtle code-slide changes a single metric misses).
+
+    ``progress`` (if given) is called ``(frames_considered, total)`` after
+    each comparison — the sole progress signal of this CPU-bound stage.
     """
     if not entries:
         return []
     cache = _DecodeCache(mask)
     kept = [entries[0]]
-    for cur in entries[1:]:
-        m = _compare_frames(cache, kept[-1], cur, p)
-        if m.dhash_dist > p.tier1_dhash or m.pixel_diff > p.tier1_pixel_diff:
+    total = len(entries)
+    for considered, cur in enumerate(entries[1:], start=2):
+        if _keep_frame(cache, kept[-1], cur, p):
             kept.append(cur)
-            continue
-        votes = (
-            (m.dhash_dist > p.vote_dhash)
-            + (m.pixel_diff > p.vote_pixel_diff)
-            + (m.color_hist > p.vote_color_hist)
-            + (m.ssim < p.vote_ssim)
-            + (m.edge_diff > p.vote_edge_diff)
-        )
-        if votes >= p.min_votes:
-            kept.append(cur)
+        if progress is not None:
+            progress(considered, total)
     return kept
 
 
@@ -558,12 +627,48 @@ def _resolution(file_metadata: VideoFileMetadata, first_frame: Path) -> tuple[in
     return int(w), int(h)
 
 
+def _make_progress_bridge(
+    writer: ProgressWriter,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    min_interval_sec: float = _PROGRESS_MIN_INTERVAL_SEC,
+) -> Callable[[int, int], None]:
+    """Wrap an async progress ``writer`` as a throttled sync callback.
+
+    Invoked from the dedup worker thread; schedules ``writer(current, total)``
+    on the event loop via ``run_coroutine_threadsafe`` — fire-and-forget and
+    best-effort (a progress-write failure never fails the ingest). Throttled to
+    at most one write per ``min_interval_sec``; the first and the final
+    (``current == total``) call always pass.
+    """
+    last = 0.0
+
+    def report(current: int, total: int) -> None:
+        nonlocal last
+        now = time.monotonic()
+        if current != total and now - last < min_interval_sec:
+            return
+        last = now
+        coro = writer(current, total)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # Loop closed / shutting down (e.g. worker redeploy mid-dedup):
+            # scheduling raises synchronously in this worker thread. Progress
+            # is best-effort and must never fail the ingest, so swallow it and
+            # close the un-scheduled coroutine to avoid a "never awaited" warning.
+            coro.close()
+
+    return report
+
+
 def _pip_and_dedup(
     raw_paths: list[Path],
     p: SamplingParams,
     width: int,
     height: int,
     interval: float,
+    progress: Callable[[int, int], None] | None = None,
 ) -> tuple[PiPMask | None, list[_Entry]]:
     """Sync block: PiP detect + dHash + dedup voting (run off the loop)."""
     pip_mask = _detect_pip(raw_paths, width, height)
@@ -576,7 +681,7 @@ def _pip_and_dedup(
         entries.append(
             _Entry(path=path, timestamp_sec=round(i * interval, 2), dhash=dhash)
         )
-    deduped = _dedup_voting(entries, p, mask)
+    deduped = _dedup_voting(entries, p, mask, progress)
     return pip_mask, deduped
 
 
@@ -605,8 +710,20 @@ async def detect(
     width, height = _resolution(file_metadata, raw_paths[0])
     interval = 1.0 / p.fps
 
+    # Per-frame progress for this CPU-bound stage: the worker installs an async
+    # writer in the context; bridge it to a throttled sync callback that the
+    # off-loop dedup can fire via ``run_coroutine_threadsafe`` (best-effort).
+    from course_supporter.service_logging import get_progress_writer
+
+    writer = get_progress_writer()
+    progress = (
+        _make_progress_bridge(writer, asyncio.get_running_loop())
+        if writer is not None
+        else None
+    )
+
     pip_mask, deduped = await asyncio.to_thread(
-        _pip_and_dedup, raw_paths, p, width, height, interval
+        _pip_and_dedup, raw_paths, p, width, height, interval, progress
     )
     filled = await _fill_gaps(deduped, video_path, frames_dir / "gap_fill", p)
     scenes = await asyncio.to_thread(_segment_scenes, filled, p, _mask_rect(pip_mask))

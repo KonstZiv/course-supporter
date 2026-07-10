@@ -18,10 +18,10 @@ ModelRouter, STTRouter, and VD pipeline components.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import TYPE_CHECKING
+from contextvars import ContextVar, Token
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
@@ -117,6 +117,36 @@ def set_job_from_arq(job_id: uuid.UUID) -> None:
     the same worker.
     """
     _current_job_id.set(job_id)
+
+
+# ── Stage-progress writer (worker → CPU-bound ingestion stages) ──
+
+# An async ``(current, total) -> None`` closure the ARQ worker installs so a
+# CPU-bound stage (video detection) can report per-frame progress without
+# importing the DB/session layer — it only calls the opaque writer. The
+# closure owns the session factory + job_id; ``None`` means "no reporting"
+# (tests, direct calls). Best-effort: the writer swallows its own errors.
+ProgressWriter = Callable[[int, int], Coroutine[Any, Any, None]]
+_current_progress_writer: ContextVar[ProgressWriter | None] = ContextVar(
+    "current_progress_writer", default=None
+)
+
+
+def set_progress_writer(
+    writer: ProgressWriter | None,
+) -> Token[ProgressWriter | None]:
+    """Install a stage-progress writer for the current task; return a reset token."""
+    return _current_progress_writer.set(writer)
+
+
+def reset_progress_writer(token: Token[ProgressWriter | None]) -> None:
+    """Reset the stage-progress writer to its previous value."""
+    _current_progress_writer.reset(token)
+
+
+def get_progress_writer() -> ProgressWriter | None:
+    """Read the current stage-progress writer from context (``None`` if unset)."""
+    return _current_progress_writer.get()
 
 
 # ── Persist to DB ──

@@ -177,14 +177,6 @@ class _DecodeCache:
 # ── per-frame metrics ──────────────────────────────────────────────────
 
 
-class _FrameMetrics(NamedTuple):
-    dhash_dist: float
-    pixel_diff: float
-    color_hist: float
-    ssim: float
-    edge_diff: float
-
-
 def _compute_dhash(gray: Any, hash_size: int) -> Any:
     """dHash of an (already PiP-masked) grayscale frame via imagehash.
 
@@ -262,37 +254,83 @@ def _downscale(gray: Any, max_side: int) -> Any:
     return cv2.resize(gray, (round(w * scale), round(h * scale)))
 
 
-def _compare_frames(
+def _dhash_distance(prev: _Entry, cur: _Entry, p: SamplingParams) -> float:
+    """Normalised dHash distance in [0, 1]; 1.0 if either frame is undecodable."""
+    if prev.dhash is None or cur.dhash is None:
+        return 1.0  # undecodable frame → treat as changed (keep, safe)
+    return float((prev.dhash - cur.dhash) / (p.hash_size * p.hash_size))
+
+
+def _pixel_diff(gray1: Any, gray2: Any, p: SamplingParams) -> float:
+    """Fraction of pixels whose intensity delta exceeds the noise floor."""
+    changed = int(np.count_nonzero(cv2.absdiff(gray1, gray2) > p.pixel_noise_floor))
+    return float(changed / (gray1.shape[0] * gray1.shape[1]))
+
+
+def _edge_diff(gray1: Any, gray2: Any) -> float:
+    """Fraction of Canny edge pixels that changed between the two frames."""
+    edges1, edges2 = cv2.Canny(gray1, 50, 150), cv2.Canny(gray2, 50, 150)
+    edge_changed = int(np.count_nonzero(cv2.absdiff(edges1, edges2)))
+    max_edges = max(int(np.count_nonzero(edges1)), int(np.count_nonzero(edges2)), 1)
+    return edge_changed / max_edges
+
+
+def _keep_frame(
     cache: _DecodeCache,
     prev: _Entry,
     cur: _Entry,
     p: SamplingParams,
-) -> _FrameMetrics:
-    """All 5 dedup metrics between two frames (PiP-masked, cached decode)."""
-    max_bits = p.hash_size * p.hash_size
-    if prev.dhash is None or cur.dhash is None:
-        dhash_dist = 1.0  # undecodable frame → treat as changed (keep, safe)
-    else:
-        dhash_dist = float((prev.dhash - cur.dhash) / max_bits)
+) -> bool:
+    """Tiered keep/drop decision, computing metrics cheapest-first.
+
+    Boolean-identical to the eager 5-metric vote: metrics are ordered by
+    cost (dHash precomputed → pixel_diff → colour_hist → Canny → SSIM) and
+    the loop exits as soon as the outcome is fixed — a running quorum of
+    ``min_votes`` forces KEEP, and votes-plus-max-remaining below
+    ``min_votes`` forces DROP. Ordering changes *when* we stop, never the
+    decision (votes are non-negative), so SSIM (the heaviest metric) runs
+    only on the narrow ambiguous band that actually reaches it.
+    """
+    # Tier 1: a single strong signal (dHash or pixel_diff) → keep.
+    dhash_dist = _dhash_distance(prev, cur, p)
+    if dhash_dist > p.tier1_dhash:
+        return True
 
     bgr1, bgr2 = cache.bgr(prev.path), cache.bgr(cur.path)
     if bgr1 is None or bgr2 is None:
-        return _FrameMetrics(dhash_dist, 1.0, 1.0, 0.0, 1.0)
+        return True  # undecodable frame → treat as changed (keep, safe)
     gray1, gray2 = cache.gray(prev.path), cache.gray(cur.path)
 
-    abs_diff = cv2.absdiff(gray1, gray2)
-    changed = int(np.count_nonzero(abs_diff > p.pixel_noise_floor))
-    pixel_diff = changed / (gray1.shape[0] * gray1.shape[1])
+    pixel = _pixel_diff(gray1, gray2, p)
+    if pixel > p.tier1_pixel_diff:
+        return True
 
-    color_hist = _color_hist_distance(bgr1, bgr2)
-    ssim = _compute_ssim(gray1, gray2)
+    # Tier 2: keep if >= min_votes of the 5 metrics vote "changed". Votes
+    # accumulate in cost order; short-circuit on a reached quorum or on a
+    # quorum that is unreachable even if every remaining metric votes.
+    votes = int(dhash_dist > p.vote_dhash) + int(pixel > p.vote_pixel_diff)
+    remaining = 3  # colour_hist, edge_diff, ssim
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
 
-    edges1, edges2 = cv2.Canny(gray1, 50, 150), cv2.Canny(gray2, 50, 150)
-    edge_changed = int(np.count_nonzero(cv2.absdiff(edges1, edges2)))
-    max_edges = max(int(np.count_nonzero(edges1)), int(np.count_nonzero(edges2)), 1)
-    edge_diff = edge_changed / max_edges
+    votes += int(_color_hist_distance(bgr1, bgr2) > p.vote_color_hist)
+    remaining -= 1
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
 
-    return _FrameMetrics(dhash_dist, pixel_diff, color_hist, ssim, edge_diff)
+    votes += int(_edge_diff(gray1, gray2) > p.vote_edge_diff)
+    remaining -= 1
+    if votes >= p.min_votes:
+        return True
+    if votes + remaining < p.min_votes:
+        return False
+
+    votes += int(_compute_ssim(gray1, gray2) < p.vote_ssim)
+    return votes >= p.min_votes
 
 
 # ── PiP detection ──────────────────────────────────────────────────────
@@ -381,18 +419,7 @@ def _dedup_voting(
     cache = _DecodeCache(mask)
     kept = [entries[0]]
     for cur in entries[1:]:
-        m = _compare_frames(cache, kept[-1], cur, p)
-        if m.dhash_dist > p.tier1_dhash or m.pixel_diff > p.tier1_pixel_diff:
-            kept.append(cur)
-            continue
-        votes = (
-            (m.dhash_dist > p.vote_dhash)
-            + (m.pixel_diff > p.vote_pixel_diff)
-            + (m.color_hist > p.vote_color_hist)
-            + (m.ssim < p.vote_ssim)
-            + (m.edge_diff > p.vote_edge_diff)
-        )
-        if votes >= p.min_votes:
+        if _keep_frame(cache, kept[-1], cur, p):
             kept.append(cur)
     return kept
 

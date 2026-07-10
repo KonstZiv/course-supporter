@@ -144,18 +144,19 @@ class TestDetectTimeoutWiring:
 
 class TestMetricsAndPip:
     def test_compare_identical_low_change(self, tmp_path: Path) -> None:
+        """Identical frames: zero pixel change, near-perfect SSIM."""
         a = _write_noise(tmp_path / "a.jpg", 1)
         cache = detection._DecodeCache(None)
-        m = detection._compare_frames(cache, _entry(a, 0.0), _entry(a, 2.0), _PARAMS)
-        assert m.pixel_diff == 0.0
-        assert m.ssim > 0.99
+        gray = cache.gray(a)
+        assert detection._pixel_diff(gray, gray, _PARAMS) == 0.0
+        assert detection._compute_ssim(gray, gray) > 0.99
 
     def test_compare_distinct_high_change(self, tmp_path: Path) -> None:
+        """Opposite-colour frames: large pixel change."""
         a = _write_solid(tmp_path / "a.jpg", (255, 0, 0))
         b = _write_solid(tmp_path / "b.jpg", (0, 0, 255))
         cache = detection._DecodeCache(None)
-        m = detection._compare_frames(cache, _entry(a, 0.0), _entry(b, 2.0), _PARAMS)
-        assert m.pixel_diff > 0.5
+        assert detection._pixel_diff(cache.gray(a), cache.gray(b), _PARAMS) > 0.5
 
     def test_pip_none_without_motion(self, tmp_path: Path) -> None:
         """Static identical frames → no PiP corner detected."""

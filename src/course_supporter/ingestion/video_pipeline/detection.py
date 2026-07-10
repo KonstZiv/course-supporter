@@ -32,6 +32,7 @@ itself when building the vision call.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -53,9 +54,11 @@ from course_supporter.ingestion.video_pipeline.schemas import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
+    from course_supporter.service_logging import ProgressWriter
 
 logger = structlog.get_logger()
 
@@ -118,6 +121,7 @@ _PIP_MASK_GRAY = 128  # neutral grey written over a PiP region before metrics
 _FLOW_MIN_MAGNITUDE_PX = 1.0  # per-pixel flow magnitude that counts as motion
 _FLOW_MIN_SIGNIFICANT_PX = 100  # min moving pixels for a meaningful flow reading
 _PIP_MIN_ZONE_MOTION = 1.0  # min mean zone motion to treat a zone as a PiP candidate
+_PROGRESS_MIN_INTERVAL_SEC = 2.0  # throttle between stage-progress writes (seconds)
 
 
 class _Rect(NamedTuple):
@@ -438,20 +442,27 @@ def _dedup_voting(
     entries: list[_Entry],
     p: SamplingParams,
     mask: _Rect | None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> list[_Entry]:
     """Drop redundant frames vs the last *kept* frame (tiered voting).
 
     Tier 1: a single strong signal (dHash or pixel_diff) → keep. Tier 2:
     >= ``min_votes`` of the 5 metrics vote "changed" → keep (catches
     subtle code-slide changes a single metric misses).
+
+    ``progress`` (if given) is called ``(frames_considered, total)`` after
+    each comparison — the sole progress signal of this CPU-bound stage.
     """
     if not entries:
         return []
     cache = _DecodeCache(mask)
     kept = [entries[0]]
-    for cur in entries[1:]:
+    total = len(entries)
+    for considered, cur in enumerate(entries[1:], start=2):
         if _keep_frame(cache, kept[-1], cur, p):
             kept.append(cur)
+        if progress is not None:
+            progress(considered, total)
     return kept
 
 
@@ -616,12 +627,40 @@ def _resolution(file_metadata: VideoFileMetadata, first_frame: Path) -> tuple[in
     return int(w), int(h)
 
 
+def _make_progress_bridge(
+    writer: ProgressWriter,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    min_interval_sec: float = _PROGRESS_MIN_INTERVAL_SEC,
+) -> Callable[[int, int], None]:
+    """Wrap an async progress ``writer`` as a throttled sync callback.
+
+    Invoked from the dedup worker thread; schedules ``writer(current, total)``
+    on the event loop via ``run_coroutine_threadsafe`` — fire-and-forget and
+    best-effort (a progress-write failure never fails the ingest). Throttled to
+    at most one write per ``min_interval_sec``; the first and the final
+    (``current == total``) call always pass.
+    """
+    last = 0.0
+
+    def report(current: int, total: int) -> None:
+        nonlocal last
+        now = time.monotonic()
+        if current != total and now - last < min_interval_sec:
+            return
+        last = now
+        asyncio.run_coroutine_threadsafe(writer(current, total), loop)
+
+    return report
+
+
 def _pip_and_dedup(
     raw_paths: list[Path],
     p: SamplingParams,
     width: int,
     height: int,
     interval: float,
+    progress: Callable[[int, int], None] | None = None,
 ) -> tuple[PiPMask | None, list[_Entry]]:
     """Sync block: PiP detect + dHash + dedup voting (run off the loop)."""
     pip_mask = _detect_pip(raw_paths, width, height)
@@ -634,7 +673,7 @@ def _pip_and_dedup(
         entries.append(
             _Entry(path=path, timestamp_sec=round(i * interval, 2), dhash=dhash)
         )
-    deduped = _dedup_voting(entries, p, mask)
+    deduped = _dedup_voting(entries, p, mask, progress)
     return pip_mask, deduped
 
 
@@ -663,8 +702,20 @@ async def detect(
     width, height = _resolution(file_metadata, raw_paths[0])
     interval = 1.0 / p.fps
 
+    # Per-frame progress for this CPU-bound stage: the worker installs an async
+    # writer in the context; bridge it to a throttled sync callback that the
+    # off-loop dedup can fire via ``run_coroutine_threadsafe`` (best-effort).
+    from course_supporter.service_logging import get_progress_writer
+
+    writer = get_progress_writer()
+    progress = (
+        _make_progress_bridge(writer, asyncio.get_running_loop())
+        if writer is not None
+        else None
+    )
+
     pip_mask, deduped = await asyncio.to_thread(
-        _pip_and_dedup, raw_paths, p, width, height, interval
+        _pip_and_dedup, raw_paths, p, width, height, interval, progress
     )
     filled = await _fill_gaps(deduped, video_path, frames_dir / "gap_fill", p)
     scenes = await asyncio.to_thread(_segment_scenes, filled, p, _mask_rect(pip_mask))

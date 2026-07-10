@@ -10,6 +10,7 @@ high-edge "code-like" frame survives dedup).
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 from pathlib import Path
@@ -67,6 +68,45 @@ class TestDedupVoting:
         a = _write_solid(tmp_path / "a.jpg", (10, 10, 10))
         kept = detection._dedup_voting([_entry(a, 0.0)], _PARAMS, None)
         assert len(kept) == 1
+
+
+class TestDedupProgress:
+    def test_reports_progress_per_considered_frame(self, tmp_path: Path) -> None:
+        """`_dedup_voting` reports (considered, total) after each comparison."""
+        entries = [
+            _entry(_write_solid(tmp_path / f"f{i}.jpg", (i * 20, 40, 40)), float(i))
+            for i in range(4)
+        ]
+        calls: list[tuple[int, int]] = []
+        detection._dedup_voting(
+            entries, _PARAMS, None, lambda c, t: calls.append((c, t))
+        )
+        assert calls == [(2, 4), (3, 4), (4, 4)]
+
+    def test_no_callback_is_safe(self, tmp_path: Path) -> None:
+        """Absent a callback, dedup runs unchanged (default None)."""
+        a = _write_solid(tmp_path / "a.jpg", (10, 10, 10))
+        b = _write_solid(tmp_path / "b.jpg", (10, 10, 10))
+        kept = detection._dedup_voting([_entry(a, 0.0), _entry(b, 2.0)], _PARAMS, None)
+        assert len(kept) == 1
+
+
+class TestProgressWriterContext:
+    async def test_contextvar_roundtrip(self) -> None:
+        """set/get/reset of the progress writer are isolated per context."""
+        from course_supporter import service_logging
+
+        assert service_logging.get_progress_writer() is None
+
+        async def writer(current: int, total: int) -> None:
+            return None
+
+        token = service_logging.set_progress_writer(writer)
+        try:
+            assert service_logging.get_progress_writer() is writer
+        finally:
+            service_logging.reset_progress_writer(token)
+        assert service_logging.get_progress_writer() is None
 
 
 class TestSceneSegmentation:
@@ -247,3 +287,35 @@ class TestDetectRealVideo:
         # The high-edge bars frame (mid video, ~3-6 s) survived dedup.
         mid = [f for f in all_frames if 3_000 <= f.frame_position_ms <= 6_000]
         assert mid, "high-edge bars frame was dropped by dedup"
+
+    async def test_progress_bridge_reaches_writer(
+        self,
+        code_slides_video: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The off-loop dedup bridges frame progress to the context writer.
+
+        Exercises the full cross-thread path (``run_coroutine_threadsafe`` from
+        the ``to_thread`` dedup back onto the loop) with a fake async writer —
+        no DB. The final report is always ``(total, total)``.
+        """
+        from course_supporter import service_logging
+
+        calls: list[tuple[int, int]] = []
+
+        async def writer(current: int, total: int) -> None:
+            calls.append((current, total))
+
+        meta = VideoFileMetadata(duration_ms=9_000, codec="h264", resolution="320x240")
+        work = tmp_path / "work"
+        work.mkdir()
+
+        token = service_logging.set_progress_writer(writer)
+        try:
+            await detection.detect(code_slides_video, meta, work)
+        finally:
+            service_logging.reset_progress_writer(token)
+        await asyncio.sleep(0.2)  # let scheduled progress coroutines drain
+
+        assert calls, "no progress reported"
+        assert calls[-1][0] == calls[-1][1]  # final report is (total, total)

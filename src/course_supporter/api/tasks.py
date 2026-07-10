@@ -18,7 +18,9 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
+    reset_progress_writer,
     set_job_from_arq,
+    set_progress_writer,
     set_tenant_from_job,
 )
 
@@ -207,16 +209,47 @@ async def arq_ingest_material(
                 msg = f"Unsupported source_type: {source_type}"
                 raise ValueError(msg) from None
 
-            async with _resolve_s3_url(entry, s3) as resolved:
-                doc = await processor.process_raw(resolved, router=router)
-                # Task 2.4.14 — propagate the resolved course language into
-                # the SourceDocument so Pass 2a can pin its output language
-                # to the course (NOT to the input). ``entry.language`` is
-                # the canonical 639-3 code already resolved above (entry
-                # override → root.default_language). Post task-2.4.13
-                # rooted courses always have it; ``None`` remains a
-                # defensive sentinel handled by the prompt fallback gate.
-                doc.language = entry.language
+            # Stage-progress writer for the CPU-bound video detection stage
+            # (Krok 3): its own short-lived session, scoped tightly around
+            # ``process_raw`` (only ``detection.detect`` reads it, via the
+            # progress ContextVar). Best-effort — a write failure is swallowed
+            # so progress never fails the ingest.
+            async def _detection_progress(current: int, total: int) -> None:
+                try:
+                    async with session_factory() as progress_session:
+                        progress_repo = JobRepository(progress_session)
+                        await progress_repo.update_stage(jid, "detecting")
+                        await progress_repo.update_stage_progress(
+                            jid,
+                            {
+                                "stage": "detecting",
+                                "current": current,
+                                "total": total,
+                                "unit": "frames",
+                            },
+                        )
+                        await progress_session.commit()
+                except Exception:  # best-effort progress; never fail the ingest
+                    log.warning(
+                        "detection_progress_write_failed",
+                        current=current,
+                        total=total,
+                    )
+
+            progress_token = set_progress_writer(_detection_progress)
+            try:
+                async with _resolve_s3_url(entry, s3) as resolved:
+                    doc = await processor.process_raw(resolved, router=router)
+                    # Task 2.4.14 — propagate the resolved course language into
+                    # the SourceDocument so Pass 2a can pin its output language
+                    # to the course (NOT to the input). ``entry.language`` is
+                    # the canonical 639-3 code already resolved above (entry
+                    # override → root.default_language). Post task-2.4.13
+                    # rooted courses always have it; ``None`` remains a
+                    # defensive sentinel handled by the prompt fallback gate.
+                    doc.language = entry.language
+            finally:
+                reset_progress_writer(progress_token)
 
             # ── Stage 2 — LLM safety check (Phase 2.1 C6, KD-2.1-P) ──
             # Defense-in-depth: authored raw text may carry prompt

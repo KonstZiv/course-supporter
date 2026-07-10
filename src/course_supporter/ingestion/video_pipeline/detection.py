@@ -16,10 +16,11 @@ empirically calibrated on real video during the vd era; a full
 re-calibration sweep is deferred to DD-2.4-B (trigger: production
 code-slide loss).
 
-Two perf refinements over the reference: optical-flow coherence is
-computed on a downscaled grayscale (scale-tolerant; only at boundary
-candidates), and frame decodes are cached (read-once) rather than
-re-``imread`` per comparison.
+Perf refinements over the reference: SSIM and optical-flow coherence are
+computed on a downscaled grayscale (both scale-tolerant), frame decodes
+are cached (read-once) rather than re-``imread`` per comparison, and the
+dedup metrics are evaluated lazily (cheapest-first, short-circuit) so the
+heavy SSIM runs only on the narrow ambiguous band that reaches it.
 
 PiP responsibility split: this step *detects* the box and returns it;
 the output JPEGs stay **raw** (unmasked). The mask is applied internally
@@ -101,6 +102,13 @@ class SamplingParams:
     # is scale-tolerant, so this is a free speedup at boundary candidates.
     flow_downscale_max: int = 480
 
+    # Downscaled SSIM target (longest side, px). SSIM is a smoothed
+    # structural measure and does not carry the mouse-highlight vote (on a
+    # static slide SSIM ≈ 0.99 → no vote), so evaluating it on a half-size
+    # copy is safe. 960 = half of a 1080p longest side. colour_hist / Canny
+    # / pixel_diff stay full-res — they hold the highlight vote (DD-2.4-B).
+    metric_downscale_max: int = 960
+
 
 _DEFAULT_PARAMS = SamplingParams()
 _DECODE_CACHE_SIZE = 8  # bounds memory: ~prev+cur working set, sequential access
@@ -146,6 +154,7 @@ class _DecodeCache:
         self._maxsize = maxsize
         self._bgr: OrderedDict[Path, Any] = OrderedDict()
         self._gray: OrderedDict[Path, Any] = OrderedDict()
+        self._gray_small: OrderedDict[Path, Any] = OrderedDict()
 
     def bgr(self, path: Path) -> Any:
         cached = self._bgr.get(path)
@@ -172,6 +181,26 @@ class _DecodeCache:
         if len(self._gray) > self._maxsize:
             self._gray.popitem(last=False)
         return gray
+
+    def gray_small(self, path: Path, max_side: int) -> Any:
+        """Downscaled copy of the cached gray frame (metric-path, SSIM only).
+
+        Derived from the already-decoded full gray via ``_downscale`` — no
+        re-``imread``. ``max_side`` is constant per run (``metric_downscale_max``)
+        so path-keying is sufficient. Same bound as the other caches: at
+        half-size the extra footprint is <= 1/4 of the gray working set, well
+        under the DD-2.4-C memory ceiling.
+        """
+        cached = self._gray_small.get(path)
+        if cached is not None:
+            self._gray_small.move_to_end(path)
+            return cached
+        gray = self.gray(path)
+        small = None if gray is None else _downscale(gray, max_side)
+        self._gray_small[path] = small
+        if len(self._gray_small) > self._maxsize:
+            self._gray_small.popitem(last=False)
+        return small
 
 
 # ── per-frame metrics ──────────────────────────────────────────────────
@@ -329,7 +358,9 @@ def _keep_frame(
     if votes + remaining < p.min_votes:
         return False
 
-    votes += int(_compute_ssim(gray1, gray2) < p.vote_ssim)
+    small1 = cache.gray_small(prev.path, p.metric_downscale_max)
+    small2 = cache.gray_small(cur.path, p.metric_downscale_max)
+    votes += int(_compute_ssim(small1, small2) < p.vote_ssim)
     return votes >= p.min_votes
 
 

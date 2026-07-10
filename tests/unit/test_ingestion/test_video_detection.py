@@ -164,6 +164,14 @@ class TestMetricsAndPip:
         b = _write_solid(tmp_path / "b.jpg", (40, 40, 40))
         assert detection._detect_pip([a, b], 320, 240) is None
 
+    def test_gray_small_downscales_and_caches(self, tmp_path: Path) -> None:
+        """gray_small yields a bounded half-size gray copy and caches it."""
+        a = _write_noise(tmp_path / "a.jpg", 7)  # 240x320 → longest side 320
+        cache = detection._DecodeCache(None)
+        small = cache.gray_small(a, 160)
+        assert max(small.shape[:2]) == 160
+        assert cache.gray_small(a, 160) is small  # cached, no recompute
+
     def test_downscale_bounds_longest_side(self) -> None:
         big = np.zeros((1080, 1920), dtype=np.uint8)
         out = detection._downscale(big, 480)

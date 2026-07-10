@@ -649,7 +649,15 @@ def _make_progress_bridge(
         if current != total and now - last < min_interval_sec:
             return
         last = now
-        asyncio.run_coroutine_threadsafe(writer(current, total), loop)
+        coro = writer(current, total)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # Loop closed / shutting down (e.g. worker redeploy mid-dedup):
+            # scheduling raises synchronously in this worker thread. Progress
+            # is best-effort and must never fail the ingest, so swallow it and
+            # close the un-scheduled coroutine to avoid a "never awaited" warning.
+            coro.close()
 
     return report
 

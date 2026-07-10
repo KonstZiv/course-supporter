@@ -90,6 +90,21 @@ class TestDedupProgress:
         kept = detection._dedup_voting([_entry(a, 0.0), _entry(b, 2.0)], _PARAMS, None)
         assert len(kept) == 1
 
+    def test_bridge_swallows_closed_loop(self) -> None:
+        """A closed loop makes scheduling raise; the bridge must swallow it.
+
+        Best-effort guarantee: a worker shutdown racing the dedup must never
+        surface as an ingest failure.
+        """
+        loop = asyncio.new_event_loop()
+        loop.close()
+
+        async def writer(current: int, total: int) -> None:
+            return None
+
+        bridge = detection._make_progress_bridge(writer, loop, min_interval_sec=0.0)
+        bridge(1, 1)  # must not raise on a closed loop
+
 
 class TestProgressWriterContext:
     async def test_contextvar_roundtrip(self) -> None:

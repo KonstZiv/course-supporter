@@ -625,7 +625,7 @@ class PresignedUrlRequest(BaseModel):
         description="MIME type of the file to upload.",
     )
     source_type: SourceType = Field(
-        description="Material type (video, presentation, text).",
+        description="Material type (video, presentation, text, web, audio, code).",
     )
     size_bytes: int | None = Field(
         default=None,
@@ -727,7 +727,7 @@ class ConfirmUploadRequest(BaseModel):
         description="S3 object key returned by upload-url endpoint.",
     )
     source_type: SourceType = Field(
-        description="Material type (video, presentation, text).",
+        description="Material type (video, presentation, text, web, audio, code).",
     )
     material_role: MaterialRole = Field(
         default=MaterialRole.EDUCATIONAL,

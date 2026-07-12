@@ -97,6 +97,21 @@ class TestGeneratePresignedGetUrl:
         call_kwargs = client._client.generate_presigned_url.call_args
         assert call_kwargs.kwargs["ExpiresIn"] == 120
 
+    async def test_content_disposition_signed_when_set(self) -> None:
+        """content_disposition signs ResponseContentDisposition (R3 code path)."""
+        client = _make_client()
+        client._client.generate_presigned_url = AsyncMock(return_value="url")
+
+        await client.generate_presigned_get_url(
+            "key",
+            content_disposition='attachment; filename="script.py"',
+        )
+
+        params = client._client.generate_presigned_url.call_args.kwargs["Params"]
+        assert params["ResponseContentDisposition"] == (
+            'attachment; filename="script.py"'
+        )
+
     async def test_raises_without_init(self) -> None:
         """Raises RuntimeError if client not initialized."""
         client = S3Client("http://x", "a", "b", "c")

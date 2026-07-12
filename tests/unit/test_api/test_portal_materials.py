@@ -159,6 +159,27 @@ class TestPortalMediaDescriptor:
         assert body["url"] == "https://signed/tenants/t/v.mp4"
         assert body["slide_urls"] is None
 
+    async def test_code_returns_attachment_disposition(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """R3/R7 (task-code-materials): code media is signed download-only."""
+        material = _mock_material(
+            source_type="code",
+            source_url="http://localhost:9000/bucket/tenants/t/script.py",
+        )
+        material.filename = "script.py"
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/script.py")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kind"] == "file"
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert call.kwargs["content_disposition"] == (
+            'attachment; filename="script.py"'
+        )
+
     async def test_presentation_returns_slide_urls(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:

@@ -25,10 +25,12 @@ supplemented by the describe call; doc-level concepts = KD-2.1-O
 union+dedup over segments. ``file_path`` (fourth anchor kind) is set
 per segment in Pass 2b.
 
-Inclusion in THIS commit = ``extract_archive_safely(classify=True)``
-INCLUDED verdicts (extension whitelist + magic). The typicality module
-(F3: dir-denylist layer + file layer + ``kept_single_max_bytes``)
-refines inclusion in the task's commit 5.
+Inclusion = ``extract_archive_safely(classify=True)`` INCLUDED
+verdicts (extension whitelist + magic) refined by the typicality
+filter (:mod:`course_supporter.ingestion.code_typicality`, F3): the
+KD18 dir-denylist layer + the file layer (lockfiles / minified /
+vendored) + the 4 MiB ``kept_single`` sanitary cap (F7). Non-custom
+files go description-only — never rejected (R5).
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from course_supporter.ingestion.code_skeleton import (
     render_llm_skeleton,
     verbatim_skeleton,
 )
+from course_supporter.ingestion.code_typicality import assess
 from course_supporter.ingestion.schemas import (
     CodeSegmentDescription,
     CodeSkeletonResult,
@@ -122,6 +125,7 @@ class CodeProcessor(MaterialProcessor):
     """
 
     _excluded: list[dict[str, Any]]
+    _description_only: list[dict[str, Any]]
 
     async def process_raw(
         self,
@@ -144,25 +148,53 @@ class CodeProcessor(MaterialProcessor):
                 "(all archive entries were excluded)"
             )
 
+        # Typicality partition (F2/F3/F7): custom files become verbatim
+        # segments; typical/library files and files over the 4 MiB
+        # sanitary cap go DESCRIPTION-ONLY — fully outside the reference
+        # text, recorded in DocumentSummary.structure with the reason and
+        # logged loudly per file (the material is never rejected, R5).
+        # One policy for a single file and a project alike (a single file
+        # is the degenerate one-member project).
+        description_only: list[dict[str, Any]] = []
         chunks: list[ContentChunk] = []
-        for idx, (member_path, body) in enumerate(members):
+        for member_path, body in members:
+            verdict = assess(member_path, len(body))
+            if not verdict.is_custom:
+                description_only.append(
+                    {
+                        "path": member_path,
+                        "size": len(body),
+                        "reason": verdict.reason,
+                        "disposition": verdict.disposition,
+                    }
+                )
+                logger.warning(
+                    "code_file_description_only",
+                    file_path=member_path,
+                    size_bytes=len(body),
+                    disposition=verdict.disposition,
+                    reason=verdict.reason,
+                )
+                continue
             text = body.decode("utf-8", errors="replace")
             chunks.append(
                 ContentChunk(
                     chunk_type=ChunkType.CODE_FILE,
                     text=_file_header(member_path) + text,
-                    index=idx,
+                    index=len(chunks),
                     metadata={
                         "file_path": member_path,
                         "size_bytes": len(body),
                     },
                 )
             )
+        self._description_only = description_only
 
         logger.info(
             "code_processing_done",
             source_url=source.source_url,
             chunk_count=len(chunks),
+            description_only_count=len(description_only),
             excluded_count=len(self._excluded),
         )
 
@@ -171,7 +203,10 @@ class CodeProcessor(MaterialProcessor):
             source_url=source.source_url,
             title=source.filename or path.stem,
             chunks=chunks,
-            metadata={"excluded_entries": self._excluded},
+            metadata={
+                "excluded_entries": self._excluded,
+                "description_only_entries": description_only,
+            },
         )
 
     def _load_members(
@@ -239,13 +274,34 @@ class CodeProcessor(MaterialProcessor):
         LLM-emitting processors go through).
         """
         reference = doc.assemble_text()
-        if not reference.strip():
+        chunks = [c for c in doc.chunks if c.text]
+        if not chunks:
+            if not doc.metadata.get("description_only_entries"):
+                raise ProcessingError(
+                    "Cannot run Pass 2a on empty document (no content chunks)"
+                )
+            # All files went description-only (e.g. one oversize file, R5:
+            # the material is NOT rejected): a zero-segment draft is a
+            # valid FULL-COVER state; the summary speaks from structure.
+            structure = self._build_structure(doc, [])
+            summary = await self._summarise(doc, [], [], structure, router)
+            draft = DocumentSummaryDraft.model_validate(
+                {
+                    "title": (summary.title or doc.title)[:_TITLE_MAX],
+                    "description": summary.description,
+                    "main_concepts": [],
+                    "secondary_concepts": [],
+                    "segments": [],
+                }
+            )
+            draft.structure = structure
+            return draft
+        if not reference.strip():  # pragma: no cover - defensive
             raise ProcessingError(
                 "Cannot run Pass 2a on empty document (no content chunks)"
             )
         language = display_name(doc.language) if doc.language else None
 
-        chunks = [c for c in doc.chunks if c.text]
         offsets = self._chunk_offsets(chunks, reference)
 
         # Step 1 — per-file skeleton + describe (bounded concurrency,
@@ -479,6 +535,15 @@ class CodeProcessor(MaterialProcessor):
             }
             for c in chunks
         ]
+        for do_entry in doc.metadata.get("description_only_entries", []):
+            entries.append(
+                {
+                    "path": do_entry["path"],
+                    "size": do_entry["size"],
+                    "cls": "description_only",
+                    "reason": do_entry["reason"],
+                }
+            )
         for exc_entry in doc.metadata.get("excluded_entries", []):
             entries.append(
                 {

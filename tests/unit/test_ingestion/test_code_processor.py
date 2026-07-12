@@ -152,6 +152,41 @@ class TestProcessRaw:
         with pytest.raises(ProcessingError, match="no includable source files"):
             await CodeProcessor().process_raw(_mock_source(str(archive)))
 
+    async def test_typicality_partition_description_only(self, tmp_path: Path) -> None:
+        """F2/F3/F7: typical + oversize files go description-only."""
+        from course_supporter.ingestion.code_typicality import (
+            KEPT_SINGLE_MAX_BYTES,
+        )
+
+        archive = tmp_path / "project.zip"
+        _write_zip(
+            archive,
+            {
+                "src/app.py": _PY_BODY.encode(),
+                "node_modules/lodash/index.js": b"module.exports = {}\n",
+                "package-lock.json": b'{"lockfileVersion": 3}\n',
+                "data/dump.sql": b"-- huge\n" * (KEPT_SINGLE_MAX_BYTES // 8 + 1),
+            },
+        )
+        doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        # Only the custom file becomes a chunk/segment.
+        assert [c.metadata["file_path"] for c in doc.chunks] == ["src/app.py"]
+        entries = doc.metadata["description_only_entries"]
+        by_path = {e["path"]: e for e in entries}
+        assert by_path["node_modules/lodash/index.js"]["disposition"] == "typical"
+        assert by_path["package-lock.json"]["disposition"] == "typical"
+        assert by_path["data/dump.sql"]["disposition"] == "oversize"
+
+    async def test_single_typical_file_not_rejected(self, tmp_path: Path) -> None:
+        """R5: one policy for a single file; the material is NOT rejected."""
+        f = tmp_path / "package-lock.json"
+        f.write_bytes(b'{"lockfileVersion": 3}\n')
+        doc = await CodeProcessor().process_raw(
+            _mock_source(str(f), filename="package-lock.json")
+        )
+        assert doc.chunks == []
+        assert len(doc.metadata["description_only_entries"]) == 1
+
 
 class TestOffsets:
     def test_full_cover_over_assemble_text(self) -> None:
@@ -260,6 +295,61 @@ class TestTwoStepGeneration:
         )
         with pytest.raises(ProcessingError, match="empty document"):
             await CodeProcessor().process_macro(doc, AsyncMock())
+
+    async def test_all_description_only_yields_zero_segment_draft(
+        self, tmp_path: Path
+    ) -> None:
+        """R5: all files description-only → summary-only material, no reject."""
+        f = tmp_path / "package-lock.json"
+        f.write_bytes(b'{"lockfileVersion": 3}\n')
+        processor = CodeProcessor()
+        doc = await processor.process_raw(
+            _mock_source(str(f), filename="package-lock.json")
+        )
+        router = _stage_router({"code_summary": _SUMMARY_PAYLOAD})
+        draft = await processor.process_macro(doc, router)
+
+        assert draft.segments == []
+        assert draft.title == "Lesson project"
+        assert draft.structure is not None
+        (entry,) = draft.structure["entries"]
+        assert entry["cls"] == "description_only"
+        assert entry["path"] == "package-lock.json"
+        # No skeleton/describe calls — only the ONE summary call.
+        stages = [c.args[0] for c in router.execute_for_stage.await_args_list]
+        assert stages == ["code_summary"]
+
+    async def test_structure_carries_all_three_classes(self, tmp_path: Path) -> None:
+        archive = tmp_path / "p.zip"
+        _write_zip(
+            archive,
+            {
+                "src/app.py": _PY_BODY.encode(),
+                # json extension passes the archive whitelist, so the
+                # lockfile reaches (and is caught by) the typicality
+                # file layer; a *.lock name would already be excluded
+                # at the archive layer (forbidden_type) — same outcome,
+                # different reason.
+                "package-lock.json": b'{"lockfileVersion": 3}\n',
+                "tool.exe": b"MZ\x90\x00bin",
+            },
+        )
+        processor = CodeProcessor()
+        doc = await processor.process_raw(_mock_source(str(archive)))
+        router = _stage_router(
+            {
+                "code_segment_description": _DESCRIBE_PAYLOAD,
+                "code_summary": _SUMMARY_PAYLOAD,
+            }
+        )
+        draft = await processor.process_macro(doc, router)
+        assert draft.structure is not None
+        cls_by_path = {e["path"]: e["cls"] for e in draft.structure["entries"]}
+        assert cls_by_path == {
+            "src/app.py": "included",
+            "package-lock.json": "description_only",
+            "tool.exe": "excluded",
+        }
 
 
 class TestProcessDetail:

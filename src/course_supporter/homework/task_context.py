@@ -13,6 +13,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.homework.task_text import stitch_task_text
 from course_supporter.storage.orm import DocumentSegment, DocumentSummary
 
 
@@ -45,5 +46,8 @@ async def load_task_context(
         .order_by(DocumentSegment.order)
     )
     text_result = await session.execute(text_stmt)
-    task_text = "\n\n".join(c for c in text_result.scalars().all() if c)
+    # Budgeted stitch (task-code-materials commit 6): code segments are
+    # verbatim source files — the unguarded join would blow the mentor
+    # stages' context windows on project-sized tasks.
+    task_text = stitch_task_text(text_result.scalars().all())
     return summary.title or "", summary.description or "", task_text

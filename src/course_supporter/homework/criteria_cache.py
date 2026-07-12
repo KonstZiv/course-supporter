@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.homework.task_text import stitch_task_text
 from course_supporter.storage.orm import (
     AuthoredDocument,
     DocumentSegment,
@@ -169,7 +170,9 @@ class CriteriaCacheService:
             .order_by(DocumentSegment.order)
         )
         result = await self._session.execute(stmt)
-        return "\n\n".join(content for content in result.scalars().all() if content)
+        # Budgeted stitch — same guard as load_task_context (the private
+        # twin must not stay unguarded; task-code-materials commit 6).
+        return stitch_task_text(result.scalars().all())
 
 
 def build_criteria_cache_service(

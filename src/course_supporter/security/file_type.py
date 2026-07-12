@@ -110,6 +110,38 @@ _EXTENSION_TO_MIME_FAMILIES: dict[str, tuple[str, ...]] = {
     "ipynb": ("application/json", "text/"),
     "py": ("text/",),
     "js": ("application/javascript", "application/x-javascript", "text/"),
+    # Source-code extensions (task-code-materials R2 broad list; each
+    # entry is gated by TestPolicyConsistency against CODE_EXTENSIONS).
+    # libmagic detects code content as text/x-<lang> or text/plain, so
+    # ("text/",) is the baseline; entries with known non-text detections
+    # list the extra families explicitly.
+    "mjs": ("text/", "application/javascript"),
+    "cjs": ("text/", "application/javascript"),
+    "jsx": ("text/",),
+    "ts": ("text/",),
+    "tsx": ("text/",),
+    "java": ("text/",),
+    "kt": ("text/",),
+    "kts": ("text/",),
+    "cs": ("text/",),
+    "go": ("text/",),
+    "rs": ("text/",),
+    "php": ("text/",),
+    "rb": ("text/",),
+    "c": ("text/",),
+    "h": ("text/",),
+    "cpp": ("text/",),
+    "hpp": ("text/",),
+    "cc": ("text/",),
+    "swift": ("text/",),
+    "dart": ("text/",),
+    "css": ("text/",),
+    "scss": ("text/",),
+    "yaml": ("text/", "application/yaml", "application/x-yaml"),
+    "yml": ("text/", "application/yaml", "application/x-yaml"),
+    "toml": ("text/", "application/toml"),
+    "sql": ("text/", "application/sql"),
+    "sh": ("text/",),
 }
 
 

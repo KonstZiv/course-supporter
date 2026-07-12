@@ -22,10 +22,12 @@ driver for tenant-specific overrides emerges.
 ## Vision §KD14 policy table (this module's source of truth)
 
 * **authored**: video (mp4/mov/avi/mkv/webm) + audio
-  (mp3/wav/m4a/ogg/flac) + documents (pdf/pptx/md/docx/txt/html).
-  100 MB default cap, 5 GB for video. No archives. No LLM safety
-  check (trusted author). Charset-strict off (legacy encodings
-  tolerated).
+  (mp3/wav/m4a/ogg/flac) + documents (pdf/pptx/md/docx/txt/html)
+  + source code (:data:`CODE_EXTENSIONS`, task-code-materials R2)
+  + ``zip`` for code project archives (R1). 100 MB default cap,
+  5 GB for video, 200 MB unzipped / depth 1 for archives. LLM
+  safety check enabled (KD-2.1-P defense-in-depth).
+  Charset-strict off (legacy encodings tolerated).
 * **homework**: pdf/md/txt/py/ipynb/zip/gz/tgz. 1 MB cap. Archives
   capped at 10 MB unzipped, 3 levels nesting. LLM safety check
   enabled (Stage 2). Charset-strict on (modern UTF-8 baseline).
@@ -49,6 +51,71 @@ _VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset(
 # document default. ``None`` on the policy means no presentation override
 # applies (e.g. homework, where ``pdf`` stays on the default cap).
 _PRESENTATION_EXTENSIONS: Final[frozenset[str]] = frozenset({"pdf", "pptx", "ppt"})
+
+# Source-code extensions accepted in the authored context for
+# ``source_type=code`` materials (task-code-materials, ratified R2:
+# deterministic typicality downstream, broad language list day 1).
+# Public: the upload light-gate (api/routes/documents.py) and the
+# typicality filter consume this set; policy whitelist membership is
+# derived from it so the two stay in lock-step. Every entry must exist
+# in ``_EXTENSION_TO_MIME_FAMILIES`` (TestPolicyConsistency gate).
+# Inclusion-vs-description-only is NOT decided here — that is the
+# typicality filter's job; this set only bounds the transport surface.
+CODE_EXTENSIONS: Final[frozenset[str]] = frozenset(
+    {
+        # Python
+        "py",
+        "ipynb",
+        # JavaScript / TypeScript
+        "js",
+        "mjs",
+        "cjs",
+        "jsx",
+        "ts",
+        "tsx",
+        # Java / Kotlin
+        "java",
+        "kt",
+        "kts",
+        # C#
+        "cs",
+        # Go
+        "go",
+        # Rust
+        "rs",
+        # PHP
+        "php",
+        # Ruby
+        "rb",
+        # C / C++
+        "c",
+        "h",
+        "cpp",
+        "hpp",
+        "cc",
+        # Swift
+        "swift",
+        # Dart
+        "dart",
+        # Web / markup — html-as-code is the ratified defect-#9 case
+        # (a lesson .html whose intent is a code example, taken verbatim);
+        # the author declares the intent via source_type=code.
+        "html",
+        "htm",
+        # Web / styling companions of code lessons
+        "css",
+        "scss",
+        # Data / config companions of code lessons
+        "json",
+        "xml",
+        "yaml",
+        "yml",
+        "toml",
+        "sql",
+        # Shell
+        "sh",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,13 +205,24 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
             # both so the policy/MIME consistency gate stays green.
             "htm",
             "markdown",
+            # code archive (task-code-materials R1: single file OR .zip).
+            # zip only — tar.gz/tgz/gz stay excluded from authored; the
+            # code upload light-gate accepts the zip kind exclusively.
+            "zip",
         }
-    ),
+    )
+    # Source-code extensions (R2 broad list) ride the same whitelist so
+    # Stage 1 and the code light-gate share one source of truth.
+    | CODE_EXTENSIONS,
     max_file_size_bytes=100 * 1024 * 1024,
     max_video_size_bytes=5 * 1024 * 1024 * 1024,
     max_presentation_size_bytes=50 * 1024 * 1024,
-    max_archive_unzipped_bytes=None,
-    max_archive_nesting_depth=None,
+    # Archive knobs mirror _PROJECT_NORMALIZE_LIMITS (normalizer/models.py):
+    # same author-curated-project envelope as KD18 base archives. Depth 1 =
+    # top-level archive only; a nested archive rejects (strict Stage 1) or
+    # is excluded (classify mode), never recursed — bomb vector unreachable.
+    max_archive_unzipped_bytes=200 * 1024 * 1024,
+    max_archive_nesting_depth=1,
     enable_llm_safety_check=True,
     enable_charset_strict=False,
 )

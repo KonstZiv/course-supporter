@@ -15,6 +15,7 @@ import pytest
 from course_supporter.security.file_type import _EXTENSION_TO_MIME_FAMILIES
 from course_supporter.security.policies import (
     AUTHORED_POLICY,
+    CODE_EXTENSIONS,
     HOMEWORK_POLICY,
     ContextPolicy,
     get_max_size_for_extension,
@@ -51,18 +52,26 @@ class TestAuthoredPolicy:
             "htm",
         } <= AUTHORED_POLICY.allowed_extensions
 
-    def test_no_archive_extensions(self) -> None:
-        # Authored context does not accept archive uploads.
-        assert {"zip", "gz", "tgz"} & AUTHORED_POLICY.allowed_extensions == set()
+    def test_extensions_include_code(self) -> None:
+        # task-code-materials R2: the broad code list rides the whitelist.
+        assert AUTHORED_POLICY.allowed_extensions >= CODE_EXTENSIONS
+
+    def test_zip_only_archive_extension(self) -> None:
+        # task-code-materials R1: zip accepted for code project archives;
+        # tar-family stays excluded from authored (light-gate is zip-only).
+        assert "zip" in AUTHORED_POLICY.allowed_extensions
+        assert {"gz", "tgz"} & AUTHORED_POLICY.allowed_extensions == set()
 
     def test_size_limits(self) -> None:
         assert AUTHORED_POLICY.max_file_size_bytes == 100 * 1024 * 1024
         assert AUTHORED_POLICY.max_video_size_bytes == 5 * 1024 * 1024 * 1024
         assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
 
-    def test_archive_disabled(self) -> None:
-        assert AUTHORED_POLICY.max_archive_unzipped_bytes is None
-        assert AUTHORED_POLICY.max_archive_nesting_depth is None
+    def test_archive_caps(self) -> None:
+        # Mirror _PROJECT_NORMALIZE_LIMITS (normalizer/models.py): same
+        # author-curated-project envelope as KD18 base archives.
+        assert AUTHORED_POLICY.max_archive_unzipped_bytes == 200 * 1024 * 1024
+        assert AUTHORED_POLICY.max_archive_nesting_depth == 1
 
     def test_safety_and_charset_flags(self) -> None:
         assert AUTHORED_POLICY.enable_llm_safety_check is True

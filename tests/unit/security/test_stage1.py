@@ -148,12 +148,20 @@ class TestWhitelistCheck:
             run_stage1(filename="malware.exe", content=PE_BYTES, context="homework")
         assert exc_info.value.category is ErrorCategory.FORBIDDEN_TYPE
 
-    def test_authored_zip_rejected_forbidden(self) -> None:
-        # AUTHORED_POLICY does not whitelist archives; even a clean
-        # zip must reject before archive recursion runs.
+    def test_authored_zip_clean_passes(self) -> None:
+        # task-code-materials R1: zip is whitelisted for authored (code
+        # project archives) with the 200 MB / depth-1 caps; a clean zip
+        # now recurses through the archive layer instead of rejecting.
         z = _make_zip([("hello.txt", CLEAN_TEXT_UTF8)])
+        result = run_stage1(filename="bundle.zip", content=z, context="authored")
+        assert result.archive_entries is not None
+        assert {e.arcname for e in result.archive_entries} == {"hello.txt"}
+
+    def test_authored_targz_rejected_forbidden(self) -> None:
+        # tar-family stays excluded from authored (zip-only, R1); the
+        # whitelist rejects before archive recursion runs.
         with pytest.raises(SecurityRejectedError) as exc_info:
-            run_stage1(filename="bundle.zip", content=z, context="authored")
+            run_stage1(filename="bundle.tgz", content=b"stub", context="authored")
         assert exc_info.value.category is ErrorCategory.FORBIDDEN_TYPE
 
     def test_homework_no_extension_rejected_forbidden(self) -> None:

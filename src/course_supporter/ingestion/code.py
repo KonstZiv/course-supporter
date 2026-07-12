@@ -435,6 +435,11 @@ class CodeProcessor(MaterialProcessor):
         llm_skeleton = await self._llm_skeleton(path, ext, body, router)
         if llm_skeleton is not None:
             skeleton_text, llm_core = llm_skeleton
+            # Namespace core: prefer the LLM-extracted one (it parsed the
+            # actual language structure); on this rung the deterministic
+            # ``core`` is only the file-stem fallback (AST/regex did not
+            # apply here), so it backstops an empty LLM namespace rather
+            # than competing with a richer one.
             return skeleton_text, llm_core or core
 
         return minimum_skeleton(path, body, size_bytes=size), core

@@ -46,6 +46,7 @@ class SourceType(StrEnum):
     TEXT = "text"
     WEB = "web"
     AUDIO = "audio"
+    CODE = "code"
 
 
 class MaterialRole(StrEnum):

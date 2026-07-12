@@ -32,10 +32,12 @@ class TestSourceType:
         assert SourceType.PRESENTATION == "presentation"
         assert SourceType.TEXT == "text"
         assert SourceType.WEB == "web"
+        assert SourceType.AUDIO == "audio"
+        assert SourceType.CODE == "code"
 
     def test_source_type_matches_orm_enum(self) -> None:
         """SourceType values match ORM source_type_enum."""
-        assert len(SourceType) == 5
+        assert len(SourceType) == 6
 
 
 class TestChunkType:

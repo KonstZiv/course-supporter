@@ -378,6 +378,7 @@ class AuthoredDocument(SoftDeleteMixin, Base):
             "text",
             "web",
             "audio",
+            "code",
             name="source_type_enum",
             create_type=False,
         )

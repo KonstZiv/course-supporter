@@ -120,7 +120,9 @@ def normalize_archive(
     for entry in classified:
         path = canonicalize_path(entry.arcname)
         if denylist_prefix(path) is not None:
-            denied.append((path, len(entry.content)))
+            # declared_size == len(content) for read entries; for a
+            # DENYLIST_SKIP entry (never read, №14) it is the only size.
+            denied.append((path, entry.declared_size))
         else:
             survivors.append((path, entry))
     excluded_denylist = collapse_denylist(denied)
@@ -167,6 +169,19 @@ def normalize_archive(
                     reason=ExcludedReason.NESTED_ARCHIVE,
                     entries=1,
                     size=len(entry.content),
+                )
+            )
+        elif verdict is EntryVerdict.DENYLIST_SKIP:
+            # Defensive: with the canonical ``denylist_prefix`` matcher a
+            # skipped entry always matches the denylist pre-split above
+            # and never reaches this loop. A broader custom matcher
+            # would land here; map it to its own excluded row.
+            excluded_other.append(
+                ExcludedEntry(
+                    path=path,
+                    reason=ExcludedReason.DENYLIST_DIR,
+                    entries=1,
+                    size=entry.declared_size,
                 )
             )
         else:

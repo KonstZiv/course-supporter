@@ -251,10 +251,13 @@ class CodeProcessor(MaterialProcessor):
             if entry.verdict == "included":
                 included.append((entry.arcname, entry.content))
             else:
+                # declared_size == len(content) for read verdicts; a
+                # DENYLIST_SKIP entry is never read (№14), so the
+                # header-declared size is the only one available.
                 excluded.append(
                     {
                         "path": entry.arcname,
-                        "size": len(entry.content),
+                        "size": entry.declared_size,
                         "reason": entry.verdict.value,
                     }
                 )

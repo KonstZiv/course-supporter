@@ -116,6 +116,7 @@ def _mock_entry(
     entry.order = order
     entry.state = state
     entry.error_message = error_message
+    entry.error_category = None
     entry.job_id = job_id
     entry.processing_estimate = None
     entry.deleted_at = None
@@ -131,6 +132,7 @@ def _mock_job(job_id: uuid.UUID | None = None) -> MagicMock:
     """Create a mock Job returned by enqueue_ingestion."""
     job = MagicMock()
     job.id = job_id or uuid.uuid4()
+    job.error_category = None
     return job
 
 

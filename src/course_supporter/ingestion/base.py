@@ -38,11 +38,27 @@ from course_supporter.models.source import SourceDocument
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.security.exceptions import ErrorCategory
     from course_supporter.storage.orm import AuthoredDocument
 
 
 class ProcessingError(Exception):
     """Raised when a processor fails to process source material."""
+
+
+class CategorisedProcessingError(ProcessingError):
+    """ProcessingError carrying a structural async-error code (F4).
+
+    task-code-materials / DD-2.3-AH: the ``category`` (a security
+    :class:`~course_supporter.security.exceptions.ErrorCategory`) rides
+    the failure path into ``Job.error_category`` +
+    ``AuthoredDocument.error_category`` so the author UI resolves a
+    stable message instead of parsing free-text ``error_message``.
+    """
+
+    def __init__(self, category: ErrorCategory, message: str) -> None:
+        super().__init__(message)
+        self.category = category
 
 
 class UnsupportedFormatError(ProcessingError):

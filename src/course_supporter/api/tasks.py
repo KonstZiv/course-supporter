@@ -12,6 +12,7 @@ import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.ingestion.base import CategorisedProcessingError
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
@@ -474,10 +475,17 @@ async def arq_ingest_material(
             return
         except Exception as exc:
             await session.rollback()
+            # F4: a categorised processing failure (empty document, empty
+            # presentation segment, ...) carries its structural code into
+            # the persisted error_category; everything else stays NULL.
+            category = (
+                exc.category if isinstance(exc, CategorisedProcessingError) else None
+            )
             await callback.on_failure(
                 job_id=jid,
                 material_id=mid,
                 error_message=str(exc),
+                error_category=category,
             )
             log.error("ingestion_failed", error=str(exc))
             return

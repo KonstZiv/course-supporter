@@ -12,6 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs import JobType, validate_job_type
+from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.storage.orm import CourseNode, Job
 
 logger = structlog.get_logger()
@@ -89,15 +90,20 @@ class JobRepository:
         status: str,
         *,
         error_message: str | None = None,
+        error_category: ErrorCategory | None = None,
         now: datetime | None = None,
     ) -> Job:
         """Transition job to a new status with validation.
 
         Args:
+            error_category: Optional structural async-error code (F4);
+                write-site validated (must be a security ErrorCategory
+                member) and stored as its ``.value`` string.
             now: Override for current time (useful for testing).
 
         Raises:
-            ValueError: If the transition is not allowed.
+            ValueError: If the transition is not allowed, or when
+                ``error_category`` is not an ``ErrorCategory``.
         """
         job = await self.get_by_id(job_id)
         if job is None:
@@ -129,6 +135,16 @@ class JobRepository:
             values["completed_at"] = now
             if error_message is not None:
                 values["error_message"] = error_message
+            if error_category is not None:
+                # Write-site validation (ratified Q4): the column is a
+                # plain String; only enum members may reach it.
+                if not isinstance(error_category, ErrorCategory):
+                    msg = (
+                        "error_category must be an ErrorCategory, "
+                        f"got {error_category!r}"
+                    )
+                    raise ValueError(msg)
+                values["error_category"] = error_category.value
 
         stmt = update(Job).where(Job.id == job_id).values(**values)
         await self._session.execute(stmt)

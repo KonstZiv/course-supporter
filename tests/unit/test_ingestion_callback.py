@@ -160,7 +160,7 @@ class TestOnFailure:
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
         job_repo.update_status.assert_awaited_once_with(
-            jid, "failed", error_message=error
+            jid, "failed", error_message=error, error_category=None
         )
 
     async def test_material_updated_to_error(self) -> None:
@@ -180,7 +180,7 @@ class TestOnFailure:
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
         entry_cls.return_value.fail_processing.assert_awaited_once_with(
-            mid, error_message=error
+            mid, error_message=error, error_category=None
         )
 
     async def test_commits_in_three_durable_tiers(self) -> None:
@@ -500,7 +500,9 @@ class TestOnFailureResilience:
             )
 
         # Terminal write committed (Tier 1); the cleanup tier still commits.
-        repo.update_status.assert_awaited_once_with(jid, "failed", error_message=error)
+        repo.update_status.assert_awaited_once_with(
+            jid, "failed", error_message=error, error_category=None
+        )
         assert session.commit.await_count == 2
         session.rollback.assert_awaited()
         # log.exception keeps the traceback for the unexpected failure (💡-A).
@@ -541,9 +543,11 @@ class TestOnFailureResilience:
 
         # Material visibility persisted before the cascade blew up.
         entry_cls.return_value.fail_processing.assert_awaited_once_with(
-            mid, error_message=error
+            mid, error_message=error, error_category=None
         )
-        repo.update_status.assert_awaited_once_with(jid, "failed", error_message=error)
+        repo.update_status.assert_awaited_once_with(
+            jid, "failed", error_message=error, error_category=None
+        )
         # Tier 1 (terminal) + Tier 2 (visibility) both committed; Tier 3 failed.
         assert session.commit.await_count == 2
         # log.exception keeps the traceback for the unexpected failure (💡-A).

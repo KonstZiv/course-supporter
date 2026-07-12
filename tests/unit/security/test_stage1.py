@@ -439,6 +439,9 @@ class TestErrorCategoryPublicContract:
         # STAGE2_REJECTED per KD-2.1-P (LLM verdict ``is_safe=False``).
         # + 1 Phase 2.3 #6 addition: SLIDE_COUNT_LIMIT per KD-2.3-M
         # (presentation slide-count cap; reuses SecurityRejectedError).
+        # + 2 task-code-materials F4 additions: EMPTY_DOCUMENT +
+        # PRESENTATION_EMPTY_SEGMENT (async structural codes persisted
+        # to error_category by the ingestion failure callback).
         assert {c.value for c in ErrorCategory} == {
             "size_limit",
             "forbidden_type",
@@ -451,6 +454,8 @@ class TestErrorCategoryPublicContract:
             "symlink_violation",
             "stage2_rejected",
             "slide_count_limit",
+            "empty_document",
+            "presentation_empty_segment",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))

@@ -353,6 +353,10 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
     )
+    error_category: str | None = Field(
+        default=None,
+        description="Structural async-error code (F4), if categorised.",
+    )
     created_at: datetime = Field(description="When this entry was created.")
 
 
@@ -472,6 +476,10 @@ class AuthoredDocumentResponse(BaseModel):
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
+    )
+    error_category: str | None = Field(
+        default=None,
+        description="Structural async-error code (F4), if categorised.",
     )
     job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."
@@ -603,6 +611,7 @@ class JobResponse(BaseModel):
     stage_progress: dict[str, Any] | None = None
     result_data: dict[str, Any] | None = None
     error_message: str | None
+    error_category: str | None = None
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

@@ -43,6 +43,7 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
     MaterialProcessor,
     ProcessingError,
     UnsupportedFormatError,
@@ -76,6 +77,7 @@ from course_supporter.models.source import (
     SourceType,
 )
 from course_supporter.security.archive import extract_archive_safely
+from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.file_type import extension_of
 from course_supporter.security.policies import AUTHORED_POLICY
 
@@ -143,9 +145,10 @@ class CodeProcessor(MaterialProcessor):
         members = self._load_members(source, path)
 
         if not members:
-            raise ProcessingError(
+            raise CategorisedProcessingError(
+                ErrorCategory.EMPTY_DOCUMENT,
                 "Code material contains no includable source files "
-                "(all archive entries were excluded)"
+                "(all archive entries were excluded)",
             )
 
         # Typicality partition (F2/F3/F7): custom files become verbatim
@@ -277,8 +280,9 @@ class CodeProcessor(MaterialProcessor):
         chunks = [c for c in doc.chunks if c.text]
         if not chunks:
             if not doc.metadata.get("description_only_entries"):
-                raise ProcessingError(
-                    "Cannot run Pass 2a on empty document (no content chunks)"
+                raise CategorisedProcessingError(
+                    ErrorCategory.EMPTY_DOCUMENT,
+                    "Cannot run Pass 2a on empty document (no content chunks)",
                 )
             # All files went description-only (e.g. one oversize file, R5:
             # the material is NOT rejected): a zero-segment draft is a
@@ -297,8 +301,9 @@ class CodeProcessor(MaterialProcessor):
             draft.structure = structure
             return draft
         if not reference.strip():  # pragma: no cover - defensive
-            raise ProcessingError(
-                "Cannot run Pass 2a on empty document (no content chunks)"
+            raise CategorisedProcessingError(
+                ErrorCategory.EMPTY_DOCUMENT,
+                "Cannot run Pass 2a on empty document (no content chunks)",
             )
         language = display_name(doc.language) if doc.language else None
 

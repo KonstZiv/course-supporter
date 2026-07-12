@@ -49,6 +49,13 @@ stages:
   safety_check_authored:
     prompt_ref: "prompts/safety_check_authored/v1.md"
     requires: [structured_output]
+    # F6 (task-code-materials, ratified 2026-07-12): oversize authored
+    # input (large code/text/web surfaces) skips the 131k rungs and lands
+    # on the 1M gemini rung instead of being silently provider-truncated.
+    # Applies to ALL authored source types — accepted deliberately as an
+    # improvement. Last-resort byte backstop (1.5 MiB + loud warning)
+    # lives at the call site (api/tasks.py:_bound_safety_text).
+    input_budget_ratio: 0.5
     ladder:
       - provider: mistral
         model: mistral-small-latest

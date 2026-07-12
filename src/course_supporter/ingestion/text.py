@@ -10,8 +10,8 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
     MaterialProcessor,
-    ProcessingError,
     UnsupportedFormatError,
 )
 from course_supporter.ingestion.paragraph_anchors import compute_paragraph_anchors
@@ -27,6 +27,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.security.exceptions import ErrorCategory
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
@@ -280,7 +281,7 @@ class TextProcessor(MaterialProcessor):
         text = doc.assemble_text()
         if not text.strip():
             msg = "Cannot run Pass 2a on empty document (no content chunks)"
-            raise ProcessingError(msg)
+            raise CategorisedProcessingError(ErrorCategory.EMPTY_DOCUMENT, msg)
         reference_text_length = len(text)
         parsed: dict[str, DocumentSummaryDraft] = {}
 

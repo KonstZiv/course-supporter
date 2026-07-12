@@ -108,6 +108,7 @@ def _mock_job(
     job.stage_progress = None
     job.result_data = None
     job.error_message = None
+    job.error_category = None
     job.queued_at = datetime.now(UTC)
     job.started_at = None
     job.completed_at = None

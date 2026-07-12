@@ -124,7 +124,10 @@ class IngestionCallback:
             # update is guarded.
             try:
                 await job_repo.update_status(
-                    job_id, "failed", error_message=error_message
+                    job_id,
+                    "failed",
+                    error_message=error_message,
+                    error_category=error_category,
                 )
                 await session.commit()
             except ValueError as exc:
@@ -151,7 +154,9 @@ class IngestionCallback:
             try:
                 entry_repo = AuthoredDocumentRepository(session)
                 await entry_repo.fail_processing(
-                    material_id, error_message=error_message
+                    material_id,
+                    error_message=error_message,
+                    error_category=error_category,
                 )
                 await session.commit()
             except Exception as exc:

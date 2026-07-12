@@ -56,6 +56,7 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
     MaterialProcessor,
     ProcessingError,
     UnsupportedFormatError,
@@ -73,6 +74,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.security.exceptions import ErrorCategory
 
 if TYPE_CHECKING:
     from course_supporter.llm.router import ModelRouter
@@ -559,11 +561,15 @@ class PresentationProcessor(MaterialProcessor):
                 if seg.start_slide <= s <= seg.end_slide
             ]
             if not idxs:
-                raise ProcessingError(
+                # Structural code (F4 / DD-2.3-AH): the category now rides
+                # error_category; the legacy string prefix stays in the
+                # message for log/operator continuity.
+                raise CategorisedProcessingError(
+                    ErrorCategory.PRESENTATION_EMPTY_SEGMENT,
                     f"PRESENTATION_EMPTY_SEGMENT: Pass 2a segment slides "
                     f"[{seg.start_slide}-{seg.end_slide}] contains no "
                     f"extractable text (all slides image-only); cannot map "
-                    f"to char offsets for Pass 2b slicing."
+                    f"to char offsets for Pass 2b slicing.",
                 )
             drafts.append(
                 DocumentSegmentDraft(

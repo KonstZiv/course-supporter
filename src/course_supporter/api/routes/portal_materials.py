@@ -124,6 +124,17 @@ async def get_portal_material(
     # external link (YouTube/web) returned verbatim, never proxied through S3.
     key = s3.extract_key(material.source_url)
     if key is not None:
+        if material.source_type == "code":
+            # R3/R7 (task-code-materials): code is download-only — the
+            # presigned URL is signed with an attachment disposition so
+            # the browser never renders it in-page (single file and
+            # archive alike). The filename rides the header when known.
+            filename = (material.filename or key.rsplit("/", 1)[-1]).replace('"', "")
+            url = await s3.generate_presigned_get_url(
+                key,
+                content_disposition=f'attachment; filename="{filename}"',
+            )
+            return PortalMediaResponse(kind="file", url=url)
         url = await s3.generate_presigned_get_url(key)
         return PortalMediaResponse(kind="file", url=url)
 

@@ -57,16 +57,22 @@ class SegmentAnchor:
       ``end_slide``.
     - ``"paragraph"`` — text/web, paragraph ordinals (``int``; chunk-level
       coarse address per DD-3.3a-A): ``start_paragraph`` / ``end_paragraph``.
+    - ``"file"`` — code (task-code-materials), the source-file path: a
+      SINGLE value in :attr:`file_path` (one included file = one segment,
+      so there is no start/end pair; the numeric bounds stay ``None``).
 
     ``start`` / ``end`` may still be ``None`` -- notably for a text/web
     segment whose paragraph ordinal could not be computed (KD-C empty
     anchor): the anchor is ``("paragraph", None, None)``, so the consumer
     still knows it is a text material even without exact bounds.
+    ``file_path`` defaults to ``None`` so the existing positional
+    3-argument constructions stay valid for the three numeric kinds.
     """
 
-    kind: Literal["time", "slide", "paragraph"]
+    kind: Literal["time", "slide", "paragraph", "file"]
     start: float | int | None
     end: float | int | None
+    file_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,17 +109,25 @@ def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
     """Build the SegmentAnchor for a result row from its ``source_type``.
 
     ``kind`` follows ``source_type`` (always defined); the matching bound
-    pair is then read off the projected row (the six anchor scalars are
-    always in the SELECT). For a text/web segment whose paragraph ordinal
-    was never computed (KD-C), the pair is ``(None, None)`` but ``kind``
-    stays ``"paragraph"``.
+    scalars are then read off the projected row (the seven anchor scalars
+    are always in the SELECT). For a text/web segment whose paragraph
+    ordinal was never computed (KD-C), the pair is ``(None, None)`` but
+    ``kind`` stays ``"paragraph"``.
+
+    Every branch is EXPLICIT (task-code-materials ratification): a new
+    source_type without a branch here fails loudly instead of silently
+    mis-mapping into the paragraph kind.
     """
     if source_type in ("video", "audio"):
         return SegmentAnchor("time", row.start_time_sec, row.end_time_sec)
     if source_type == "presentation":
         return SegmentAnchor("slide", row.start_slide, row.end_slide)
-    # text / web — paragraph ordinals (may be None at the KD-C edge).
-    return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
+    if source_type == "code":
+        return SegmentAnchor("file", None, None, file_path=row.file_path)
+    if source_type in ("text", "web"):
+        # paragraph ordinals (may be None at the KD-C edge).
+        return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
+    raise ValueError(f"no anchor mapping for source_type {source_type!r}")
 
 
 class DocumentSegmentRepository:
@@ -216,16 +230,18 @@ class DocumentSegmentRepository:
                     visual_content=[
                         ref.model_dump() for ref in (draft.visual_content or [])
                     ],
-                    # Positional anchors (Phase 3.3a) — the source-type-specific
-                    # position the pipeline computed on the draft, now persisted
-                    # (previously dropped here). Exactly one pair is non-None per
-                    # source_type; the rest stay None.
+                    # Positional anchors (Phase 3.3a; 4th kind task-code-
+                    # materials) — the source-type-specific position the
+                    # pipeline computed on the draft, now persisted. Exactly
+                    # one anchor is non-None per source_type (three numeric
+                    # pairs + the single-column file_path); the rest stay None.
                     start_time_sec=draft.start_time_sec,
                     end_time_sec=draft.end_time_sec,
                     start_slide=draft.start_slide,
                     end_slide=draft.end_slide,
                     start_paragraph=draft.start_paragraph,
                     end_paragraph=draft.end_paragraph,
+                    file_path=draft.file_path,
                 )
             )
 
@@ -316,14 +332,16 @@ class DocumentSegmentRepository:
             DocumentSegment.main_concepts.label("main_concepts"),
             DocumentSegment.secondary_concepts.label("secondary_concepts"),
             DocumentSegment.content_char_count.label("char_count"),
-            # Six anchor scalars are always selected (cheap); _resolve_anchor
-            # reads the pair matching the source_type-derived kind.
+            # Seven anchor scalars are always selected (cheap);
+            # _resolve_anchor reads the one(s) matching the
+            # source_type-derived kind.
             DocumentSegment.start_time_sec.label("start_time_sec"),
             DocumentSegment.end_time_sec.label("end_time_sec"),
             DocumentSegment.start_slide.label("start_slide"),
             DocumentSegment.end_slide.label("end_slide"),
             DocumentSegment.start_paragraph.label("start_paragraph"),
             DocumentSegment.end_paragraph.label("end_paragraph"),
+            DocumentSegment.file_path.label("file_path"),
         )
         if include_content:
             stmt = stmt.add_columns(DocumentSegment.content.label("content"))

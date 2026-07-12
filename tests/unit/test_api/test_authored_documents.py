@@ -116,6 +116,7 @@ def _mock_entry(
     entry.order = order
     entry.state = state
     entry.error_message = error_message
+    entry.error_category = None
     entry.job_id = job_id
     entry.processing_estimate = None
     entry.deleted_at = None
@@ -131,6 +132,7 @@ def _mock_job(job_id: uuid.UUID | None = None) -> MagicMock:
     """Create a mock Job returned by enqueue_ingestion."""
     job = MagicMock()
     job.id = job_id or uuid.uuid4()
+    job.error_category = None
     return job
 
 
@@ -460,6 +462,135 @@ class TestCreateDocument:
                 },
             )
         assert resp.status_code == 201
+
+
+class TestCodeUploadRouting:
+    """task-code-materials commit 3 — multipart light-gate for source_type=code.
+
+    Code uploads (single source file or a .zip project archive) bypass the
+    fail-closed ``run_stage1`` (base-attach precedent): extension routing +
+    size cap only. Content safety is the async Stage-2 check; the archive
+    sandbox is ``extract_archive_safely`` inside the CodeProcessor worker.
+    """
+
+    async def test_code_single_file_201_skips_stage1(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="code",
+            source_url="http://localhost:9000/course-materials/key/script.py",
+            filename="script.py",
+        )
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1) as stage1_mock,
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "code"},
+                files={
+                    "file": (
+                        "script.py",
+                        io.BytesIO(b'print("hello")\n'),
+                        "text/x-python",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+        stage1_mock.assert_not_called()
+        mock_s3.upload_smart.assert_awaited_once()
+
+    async def test_code_zip_archive_201_skips_stage1(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="code",
+            source_url="http://localhost:9000/course-materials/key/project.zip",
+            filename="project.zip",
+        )
+        job = _mock_job()
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1) as stage1_mock,
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "code"},
+                files={
+                    "file": (
+                        "project.zip",
+                        io.BytesIO(b"PK\x03\x04 stub"),
+                        "application/zip",
+                    )
+                },
+            )
+        assert resp.status_code == 201
+        stage1_mock.assert_not_called()
+
+    async def test_code_non_code_extension_400_forbidden(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # The light gate still rejects extensions outside CODE_EXTENSIONS/zip.
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents",
+            data={"source_type": "code"},
+            files={
+                "file": ("movie.mp4", io.BytesIO(b"\x00\x00"), "video/mp4"),
+            },
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["code"] == "SECURITY_REJECTED"
+        assert detail["category"] == "forbidden_type"
+
+    async def test_zip_with_non_code_source_type_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        # zip exists in the authored whitelist ONLY for code — a zip declared
+        # as any other source_type has no processor; deterministic fast-fail.
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents",
+            data={"source_type": "text"},
+            files={
+                "file": ("bundle.zip", io.BytesIO(b"PK\x03\x04"), "application/zip"),
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "ARCHIVE_REQUIRES_CODE"
+
+    async def test_code_requires_file_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents",
+            data={
+                "source_type": "code",
+                "source_url": "https://example.com/script.py",
+            },
+        )
+        assert resp.status_code == 422
+        assert "requires a file upload" in resp.json()["detail"]
 
 
 class TestPresentationSlideCountInspection:

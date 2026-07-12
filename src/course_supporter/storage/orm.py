@@ -378,6 +378,7 @@ class AuthoredDocument(SoftDeleteMixin, Base):
             "text",
             "web",
             "audio",
+            "code",
             name="source_type_enum",
             create_type=False,
         )
@@ -471,6 +472,15 @@ class AuthoredDocument(SoftDeleteMixin, Base):
 
     # ── Errors ──
     error_message: Mapped[str | None] = mapped_column(Text)
+    error_category: Mapped[str | None] = mapped_column(
+        String(50),
+        comment="Structural async-error code (task-code-materials F4 / "
+        "DD-2.3-AH): security ErrorCategory .value as a plain string — "
+        "no PG enum (avoids both the non-droppable-enum trap and a "
+        "cross-layer ORM import; the repo has TWO ErrorCategory classes, "
+        "this stores security/exceptions.py's). Validated at the write "
+        "site. NULL = uncategorised / legacy failure.",
+    )
 
     # ── Stage 2 safety verdict (KD-2.1-P) ──
     safety_result: Mapped[dict[str, Any] | None] = mapped_column(
@@ -620,6 +630,18 @@ class DocumentSummary(SoftDeleteMixin, Base):
         "DB enum type identifier preserved per Phase 1 C2 lock.",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
+    structure: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="Code-material project tree (task-code-materials, "
+        "operator-ratified structure-in-Summary): entries with path / "
+        "cls / size, exclusion reason for typical files. Populated by "
+        "code from the extraction manifest — source → representation; "
+        "the KD18 manifest artifact stays canonical in its own contour. "
+        "NULL for every non-code source_type. Persist-only for now "
+        "(no FE read surface in this task).",
+    )
     llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"),
         comment="FK to ExternalServiceCall that produced this summary. "
@@ -776,10 +798,11 @@ class DocumentSegment(SoftDeleteMixin, Base):
         "Mirrors the main_concepts JSONB+server_default mechanics; included "
         "in content_hash (KD-2.1-F) only when non-empty (task 2.4.6 D1).",
     )
-    # ─── Positional anchors (Phase 3.3a) ─────────
+    # ─── Positional anchors (Phase 3.3a; 4th kind task-code-materials) ──
     # Raw machine anchors for concept-navigation (vision §4) — the
     # source-type-specific position the pipeline already computes. Each
-    # row fills exactly ONE pair per source_type; the rest stay NULL.
+    # row fills exactly ONE anchor per source_type (three start/end pairs
+    # + the single-column ``file_path`` for code); the rest stay NULL.
     # Deliberately NOT in content_hash (compute_local_hash allowlist):
     # navigational metadata, not content identity — including them would
     # spuriously trigger NodeSummary cascade regeneration.
@@ -814,6 +837,14 @@ class DocumentSegment(SoftDeleteMixin, Base):
         Integer,
         comment="Text/web segment last paragraph ordinal (Phase 3.3a). NULL "
         "for audio/video/presentation.",
+    )
+    file_path: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Code segment source-file path, canonical POSIX relative "
+        "(task-code-materials; one included file = one segment, so a single "
+        "column — not a start/end pair). NULL for every non-code "
+        "source_type. Deliberately NOT in content_hash (see anchor block "
+        "note above).",
     )
     content_char_count: Mapped[int | None] = mapped_column(
         Integer,
@@ -936,6 +967,12 @@ class Job(SoftDeleteMixin, Base):
         JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"
     )
     error_message: Mapped[str | None] = mapped_column(Text)
+    error_category: Mapped[str | None] = mapped_column(
+        String(50),
+        comment="Structural async-error code (task-code-materials F4): "
+        "security ErrorCategory .value as a plain string; validated at "
+        "the write site. NULL = uncategorised / legacy failure.",
+    )
     queued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

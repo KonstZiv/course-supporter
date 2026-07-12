@@ -353,6 +353,10 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
     )
+    error_category: str | None = Field(
+        default=None,
+        description="Structural async-error code (F4), if categorised.",
+    )
     created_at: datetime = Field(description="When this entry was created.")
 
 
@@ -472,6 +476,10 @@ class AuthoredDocumentResponse(BaseModel):
     )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
+    )
+    error_category: str | None = Field(
+        default=None,
+        description="Structural async-error code (F4), if categorised.",
     )
     job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."
@@ -603,6 +611,7 @@ class JobResponse(BaseModel):
     stage_progress: dict[str, Any] | None = None
     result_data: dict[str, Any] | None = None
     error_message: str | None
+    error_category: str | None = None
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -625,7 +634,7 @@ class PresignedUrlRequest(BaseModel):
         description="MIME type of the file to upload.",
     )
     source_type: SourceType = Field(
-        description="Material type (video, presentation, text).",
+        description="Material type (video, presentation, text, web, audio, code).",
     )
     size_bytes: int | None = Field(
         default=None,
@@ -727,7 +736,7 @@ class ConfirmUploadRequest(BaseModel):
         description="S3 object key returned by upload-url endpoint.",
     )
     source_type: SourceType = Field(
-        description="Material type (video, presentation, text).",
+        description="Material type (video, presentation, text, web, audio, code).",
     )
     material_role: MaterialRole = Field(
         default=MaterialRole.EDUCATIONAL,

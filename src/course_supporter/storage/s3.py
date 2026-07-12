@@ -439,6 +439,7 @@ class S3Client:
         key: str,
         *,
         expires_in: int = PRESIGNED_GET_TTL_SEC,
+        content_disposition: str | None = None,
     ) -> str:
         """Generate a presigned GET URL for direct client read (Phase 6 T3).
 
@@ -454,6 +455,12 @@ class S3Client:
             key: Object key to sign for reading.
             expires_in: URL validity in seconds (default
                 :data:`PRESIGNED_GET_TTL_SEC` = 300 min, the flat KD17 TTL).
+            content_disposition: Optional ``Content-Disposition`` value
+                signed as ``ResponseContentDisposition`` — S3 then serves
+                the object with that header. ``None`` (default) keeps the
+                legacy behavior byte-identical for every existing caller.
+                Code materials pass ``attachment; ...`` per the ratified
+                R3 security norm (download-only, never rendered in-page).
 
         Returns:
             Presigned GET URL string.
@@ -462,9 +469,12 @@ class S3Client:
             msg = "S3Client not initialized. Use 'async with S3Client(...)'"
             raise RuntimeError(msg)
 
+        params: dict[str, str] = {"Bucket": self._bucket, "Key": key}
+        if content_disposition is not None:
+            params["ResponseContentDisposition"] = content_disposition
         url: str = await self._client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
+            Params=params,
             ExpiresIn=expires_in,
         )
         logger.info("s3_presigned_get_url", key=key, expires_in=expires_in)

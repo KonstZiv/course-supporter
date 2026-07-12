@@ -331,6 +331,56 @@ class TestGetUploadUrl:
         )
         assert resp.status_code == 422
 
+    async def test_code_extension_200(
+        self, client: AsyncClient, node_id: uuid.UUID, mock_s3: AsyncMock
+    ) -> None:
+        """A code extension passes the presigned fast-gate for source_type=code."""
+        mock_s3.generate_presigned_url = AsyncMock(return_value=_S3_PRESIGNED)
+        with patch.object(
+            CourseNodeRepository,
+            "get_by_id",
+            return_value=_mock_node(node_id=node_id),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/upload-url",
+                json={
+                    "filename": "script.py",
+                    "content_type": "text/x-python",
+                    "source_type": "code",
+                },
+            )
+        assert resp.status_code == 200
+
+    async def test_code_with_non_code_extension_400(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """source_type=code with a non-code extension fast-fails pre-PUT."""
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents/upload-url",
+            json={
+                "filename": "movie.mp4",
+                "content_type": "video/mp4",
+                "source_type": "code",
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["category"] == "forbidden_type"
+
+    async def test_zip_with_non_code_source_type_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """zip is code-only — fast-fail BEFORE the client PUTs the bytes."""
+        resp = await client.post(
+            f"/api/v1/nodes/{node_id}/documents/upload-url",
+            json={
+                "filename": "bundle.zip",
+                "content_type": "application/zip",
+                "source_type": "text",
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "ARCHIVE_REQUIRES_CODE"
+
     async def test_404_node_not_found(self, client: AsyncClient) -> None:
         """Non-existent node returns 404."""
         with patch.object(CourseNodeRepository, "get_by_id", return_value=None):
@@ -392,6 +442,70 @@ class TestConfirmUpload:
 
         assert resp.status_code == 201
         assert resp.json()["job_id"] == str(job.id)
+
+    async def test_code_confirm_201_skips_stage1(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """confirm_upload mirrors the multipart code light-gate (no Stage 1)."""
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3.get_object = AsyncMock(return_value=b'print("hello")\n')
+        mock_s3._endpoint_url = "http://localhost:9000"
+        mock_s3._bucket = "course-materials"
+        entry = _mock_entry(node_id=node_id)
+        job = _mock_job()
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/script.py"
+
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(RUN_STAGE1_AT_DOCUMENTS) as stage1_mock,
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={
+                    "key": key,
+                    "source_type": "code",
+                },
+            )
+
+        assert resp.status_code == 201
+        stage1_mock.assert_not_called()
+
+    async def test_code_confirm_zip_with_non_code_source_type_422(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """The zip↔code invariant holds on confirm even if upload-url was raced."""
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3._endpoint_url = "http://localhost:9000"
+        mock_s3._bucket = "course-materials"
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/bundle.zip"
+
+        with patch.object(
+            CourseNodeRepository,
+            "get_by_id",
+            return_value=_mock_node(node_id=node_id),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={
+                    "key": key,
+                    "source_type": "text",
+                },
+            )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "ARCHIVE_REQUIRES_CODE"
 
     async def test_403_wrong_tenant_prefix(
         self,

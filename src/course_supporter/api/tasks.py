@@ -6,12 +6,13 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.ingestion.base import CategorisedProcessingError
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
@@ -87,6 +88,37 @@ async def _resolve_s3_url(
             except Exception:
                 log = structlog.get_logger()
                 log.warning("s3_temp_cleanup_failed", path=str(temp_path))
+
+
+# F6 backstop byte-cap on the Stage 2 safety surface (task-code-materials,
+# operator-ratified 2026-07-12): 1.5 MiB keeps ~11% headroom under the
+# 0.5-ratio 1M-rung estimator ceiling (0.5 * 1,048,576 tokens ~= 1.67 MiB
+# ASCII at chars/3.5), absorbing the estimator's token-count variance.
+# Normal oversize handling is the ladder's input_budget_ratio (skip to the
+# 1M rung); this cap is last resort only and warns loudly with
+# covered/total so the truncation is never silent.
+_SAFETY_TEXT_MAX_BYTES: Final[int] = int(1.5 * 1024 * 1024)
+
+
+def _bound_safety_text(text: str, *, log: Any) -> str:
+    """Apply the F6 last-resort byte cap to the Stage 2 safety surface.
+
+    Under the cap the text passes through byte-identical. Over the cap,
+    Stage 2 sees the first 1.5 MiB (cut at a char boundary) and a loud
+    warning records covered vs total bytes — the vetted-prefix /
+    unvetted-tail divergence is a conscious, visible trade-off.
+    """
+    raw = text.encode("utf-8")
+    if len(raw) <= _SAFETY_TEXT_MAX_BYTES:
+        return text
+    bounded = raw[:_SAFETY_TEXT_MAX_BYTES].decode("utf-8", errors="ignore")
+    log.warning(
+        "stage2_safety_text_truncated",
+        covered_bytes=len(bounded.encode("utf-8")),
+        total_bytes=len(raw),
+        cap_bytes=_SAFETY_TEXT_MAX_BYTES,
+    )
+    return bounded
 
 
 async def arq_ingest_material(
@@ -286,7 +318,15 @@ async def arq_ingest_material(
             # includes the visual-scene descriptions, which the narrowed
             # transcript-only assemble_text() reference excludes (task 2.4.5) —
             # so on-screen slide text/code is never un-vetted by Stage 2.
-            submission_text = doc.safety_text()
+            #
+            # F6 (task-code-materials, ratified): the normal oversize path is
+            # ``input_budget_ratio: 0.5`` on the safety_check_authored ladder
+            # — oversize input skips the 131k rungs and lands on the 1M rung.
+            # The byte backstop below is LAST RESORT only: input beyond even
+            # the 1M-rung budget is truncated to the first 1.5 MiB (~11%
+            # headroom under the 0.5-ratio 1M-rung estimator ceiling) with a
+            # loud covered/total warning — never a silent degradation.
+            submission_text = _bound_safety_text(doc.safety_text(), log=log)
             safety_result = await run_stage2_safety_check(
                 submission_text,
                 router=stage_router,
@@ -340,6 +380,9 @@ async def arq_ingest_material(
                 main_concepts=summary_draft.main_concepts,
                 secondary_concepts=summary_draft.secondary_concepts,
                 content_char_count=derived_char_count,
+                # task-code-materials: value-generic — None for every
+                # non-code processor; CodeProcessor sets the project tree.
+                structure=summary_draft.structure,
             )
             log.info(
                 "pass_2a_complete",
@@ -432,10 +475,17 @@ async def arq_ingest_material(
             return
         except Exception as exc:
             await session.rollback()
+            # F4: a categorised processing failure (empty document, empty
+            # presentation segment, ...) carries its structural code into
+            # the persisted error_category; everything else stays NULL.
+            category = (
+                exc.category if isinstance(exc, CategorisedProcessingError) else None
+            )
             await callback.on_failure(
                 job_id=jid,
                 material_id=mid,
                 error_message=str(exc),
+                error_category=category,
             )
             log.error("ingestion_failed", error=str(exc))
             return

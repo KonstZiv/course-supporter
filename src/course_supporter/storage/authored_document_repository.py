@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.models.source import AssignmentType, MaterialRole
+from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
 
@@ -292,22 +293,32 @@ class AuthoredDocumentRepository:
         entry_id: uuid.UUID,
         *,
         error_message: str,
+        error_category: ErrorCategory | None = None,
     ) -> AuthoredDocument:
         """Mark entry as failed processing.
 
-        Clears pending receipt and sets error_message.
+        Clears pending receipt and sets error_message (+ the optional
+        structural error_category, F4 — write-site validated, stored as
+        the enum ``.value`` string).
 
         Args:
             entry_id: Entry to update.
             error_message: Human-readable error description.
+            error_category: Optional structural async-error code.
 
         Raises:
-            ValueError: If entry not found.
+            ValueError: If entry not found, or when ``error_category``
+                is not an ``ErrorCategory``.
         """
         entry = await self._require(entry_id)
         entry.job_id = None
         entry.pending_since = None
         entry.error_message = error_message
+        if error_category is not None:
+            if not isinstance(error_category, ErrorCategory):
+                msg = f"error_category must be an ErrorCategory, got {error_category!r}"
+                raise ValueError(msg)
+            entry.error_category = error_category.value
         await self._session.flush()
         return entry
 

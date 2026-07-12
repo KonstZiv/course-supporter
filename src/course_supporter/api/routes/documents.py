@@ -66,7 +66,10 @@ from course_supporter.security.exceptions import (
     SecurityRejectedError,
 )
 from course_supporter.security.file_type import extension_of
-from course_supporter.security.policies import get_max_size_for_extension
+from course_supporter.security.policies import (
+    CODE_EXTENSIONS,
+    get_max_size_for_extension,
+)
 from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.authored_document_repository import (
@@ -122,6 +125,48 @@ async def _read_upload_capped(file: UploadFile, cap: int) -> bytes:
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _enforce_code_routing(source_type: SourceType, upload_ext: str) -> None:
+    """Enforce the code↔extension routing invariant on both upload paths.
+
+    Two directions (task-code-materials commit 3):
+
+    * ``source_type=code`` accepts only a source-file extension
+      (:data:`CODE_EXTENSIONS`) or a ``.zip`` project archive (R1).
+    * ``.zip`` exists in the authored whitelist ONLY for code — a zip
+      declared as any other source_type has no processor and would die
+      async; fail it fast and deterministically here instead.
+
+    Raises:
+        HTTPException: 400 SECURITY_REJECTED / FORBIDDEN_TYPE when a
+            code upload carries a non-code extension; 422 structured
+            when an archive is declared as a non-code source_type.
+    """
+    if source_type == SourceType.CODE:
+        if upload_ext != "zip" and upload_ext not in CODE_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "SECURITY_REJECTED",
+                    "category": ErrorCategory.FORBIDDEN_TYPE.value,
+                    "details": (
+                        f"extension {upload_ext!r} is not a recognised source-code "
+                        f"extension or .zip archive for source_type 'code'"
+                    ),
+                },
+            )
+    elif upload_ext == "zip":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "ARCHIVE_REQUIRES_CODE",
+                "details": (
+                    "archive uploads are accepted only as source_type='code' "
+                    "project archives"
+                ),
+            },
+        )
 
 
 def _processing_estimate() -> ProcessingEstimate:
@@ -332,7 +377,10 @@ async def create_document(
     arq: ArqDep,
     source_type: Annotated[
         SourceType,
-        Form(description="Document type: video, presentation, text, or web."),
+        Form(
+            description="Document type: video, presentation, text, web, "
+            "audio, or code.",
+        ),
     ],
     material_role: Annotated[
         MaterialRole,
@@ -361,7 +409,8 @@ async def create_document(
             description=(
                 "File upload (multipart). Accepted formats: "
                 "presentation (pdf, pptx), text (md, txt, docx, html), "
-                "video (mp4, webm, mkv, avi). "
+                "video (mp4, webm, mkv, avi), audio (mp3, wav, m4a, ogg, "
+                "flac), code (source files or a .zip project archive). "
                 "Required if source_url is not provided."
             ),
         ),
@@ -407,6 +456,13 @@ async def create_document(
         except (InvalidLanguageError, LanguageNotAllowedError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if source_type == SourceType.CODE and file is None:
+        raise HTTPException(
+            status_code=422,
+            detail="source_type 'code' requires a file upload "
+            "(single source file or a .zip project archive).",
+        )
+
     if file is not None:
         if source_type == SourceType.WEB:
             raise HTTPException(
@@ -422,6 +478,7 @@ async def create_document(
         # see POST-MERGE-NOTES "Ratified whitelist drift").
         upload_filename = file.filename or "upload"
         upload_ext = extension_of(upload_filename)
+        _enforce_code_routing(source_type, upload_ext)
         # Pre-read size check — fast-fails clearly oversize files BEFORE
         # ``await file.read()`` loads bytes into memory (per pre-flight §6.2
         # large-file memory observation; 5 GB video cap is operational
@@ -441,22 +498,33 @@ async def create_document(
             )
         upload_content = await file.read()
         await file.seek(0)
-        try:
-            run_stage1(
-                filename=upload_filename,
-                content=upload_content,
-                context="authored",
-            )
-            _enforce_presentation_slide_cap(source_type, upload_ext, upload_content)
-        except SecurityRejectedError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "SECURITY_REJECTED",
-                    "category": exc.category.value,
-                    "details": exc.detail,
-                },
-            ) from exc
+        if source_type == SourceType.CODE:
+            # Light gate (task-code-materials R8, base-attach precedent
+            # documents.py attach_project_base): extension routing + size
+            # cap only. The fail-closed ``run_stage1`` is deliberately NOT
+            # on this path — its strict archive branch would reject a real
+            # project's non-allowlisted members (lockfiles, dotfiles); the
+            # structural sandbox is ``extract_archive_safely(classify=...)``
+            # inside the CodeProcessor worker, and content safety is the
+            # async Stage-2 check over the raw assembled text (F6).
+            pass
+        else:
+            try:
+                run_stage1(
+                    filename=upload_filename,
+                    content=upload_content,
+                    context="authored",
+                )
+                _enforce_presentation_slide_cap(source_type, upload_ext, upload_content)
+            except SecurityRejectedError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "SECURITY_REJECTED",
+                        "category": exc.category.value,
+                        "details": exc.detail,
+                    },
+                ) from exc
 
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
@@ -587,6 +655,10 @@ async def get_upload_url(
                 ),
             },
         )
+    # Code routing invariant — fast-fail BEFORE the client PUTs MB+ of
+    # content that confirm_upload would reject anyway (UX parity with the
+    # ext-allowlist check above).
+    _enforce_code_routing(body.source_type, upload_ext)
 
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
 
@@ -648,6 +720,7 @@ async def confirm_upload(
     # creation. Closes DD-1.2-4 — confirm_upload was Stage-1-less
     # since Phase 1.2 (KD14 explicit gap noted in §6.1(a) ratify).
     upload_ext = extension_of(actual_filename)
+    _enforce_code_routing(body.source_type, upload_ext)
     max_size = get_max_size_for_extension(upload_ext, AUTHORED_POLICY)
     content_length = head_response["ContentLength"]
     if content_length > max_size:
@@ -664,22 +737,28 @@ async def confirm_upload(
         )
 
     body_bytes = await s3.get_object(body.key)
-    try:
-        run_stage1(
-            filename=actual_filename,
-            content=body_bytes,
-            context="authored",
-        )
-        _enforce_presentation_slide_cap(body.source_type, upload_ext, body_bytes)
-    except SecurityRejectedError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "SECURITY_REJECTED",
-                "category": exc.category.value,
-                "details": exc.detail,
-            },
-        ) from exc
+    if body.source_type == SourceType.CODE:
+        # Light gate (task-code-materials R8): mirror of the multipart
+        # create_document code branch — extension routing + size cap only;
+        # ``run_stage1`` deliberately skipped (see create_document).
+        pass
+    else:
+        try:
+            run_stage1(
+                filename=actual_filename,
+                content=body_bytes,
+                context="authored",
+            )
+            _enforce_presentation_slide_cap(body.source_type, upload_ext, body_bytes)
+        except SecurityRejectedError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "SECURITY_REJECTED",
+                    "category": exc.category.value,
+                    "details": exc.detail,
+                },
+            ) from exc
 
     s3_url = s3.get_object_url(body.key)
 

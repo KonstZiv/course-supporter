@@ -72,6 +72,7 @@ class TestCreateProcessors:
             SourceType.TEXT,
             SourceType.WEB,
             SourceType.AUDIO,
+            SourceType.CODE,
         }
 
     def test_video_maps_to_video_pipeline_processor(self) -> None:

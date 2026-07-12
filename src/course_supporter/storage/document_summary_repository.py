@@ -19,6 +19,7 @@ blast-radius assessment; Phase 2.1 is not that phase.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,6 +80,7 @@ class DocumentSummaryRepository:
         main_concepts: list[str],
         secondary_concepts: list[str],
         content_char_count: int,
+        structure: dict[str, Any] | None = None,
     ) -> DocumentSummary:
         """Insert a new DocumentSummary and cascade-invalidate content_hash.
 
@@ -141,6 +143,9 @@ class DocumentSummaryRepository:
             main_concepts=main_concepts,
             secondary_concepts=secondary_concepts,
             content_char_count=content_char_count,
+            # task-code-materials: project tree for code materials;
+            # None for every other source type (persist-only for now).
+            structure=structure,
             status="ready",
         )
         self._session.add(summary)

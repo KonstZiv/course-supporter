@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -533,6 +534,7 @@ async def _seed_segment(
     end_slide: int | None = None,
     start_paragraph: int | None = None,
     end_paragraph: int | None = None,
+    file_path: str | None = None,
 ) -> DocumentSegment:
     """Create one DocumentSegment with explicit concepts + anchors."""
     seg = DocumentSegment(
@@ -551,6 +553,7 @@ async def _seed_segment(
         end_slide=end_slide,
         start_paragraph=start_paragraph,
         end_paragraph=end_paragraph,
+        file_path=file_path,
     )
     if deleted:
         seg.deleted_at = datetime.now(UTC)
@@ -835,6 +838,48 @@ class TestSearchByConcepts:
         assert vhit.anchor == SegmentAnchor("time", 12.5, 47.0)
         assert phit.anchor == SegmentAnchor("slide", 3, 5)
         assert thit.anchor == SegmentAnchor("paragraph", 2, 4)
+
+    async def test_code_anchor_kind_file_path(
+        self, db_session: AsyncSession, seed_tenant: Tenant
+    ) -> None:
+        """Code segment → ('file', None, None, file_path=...) anchor.
+
+        task-code-materials ratify: the fourth anchor kind is the single
+        ``file_path`` column; the numeric bounds stay None and exactly one
+        anchor is non-null on the row.
+        """
+        root = await _seed_root(db_session, seed_tenant, title="C")
+        doc = await _seed_material(db_session, root, root, source_type="code")
+        summary = await _seed_summary(db_session, doc, root)
+        seg = await _seed_segment(
+            db_session,
+            summary,
+            root,
+            main=["nav"],
+            file_path="src/app.py",
+        )
+        # Exactly-one-anchor invariant at the ORM row level.
+        assert seg.file_path == "src/app.py"
+        assert seg.start_time_sec is None and seg.end_time_sec is None
+        assert seg.start_slide is None and seg.end_slide is None
+        assert seg.start_paragraph is None and seg.end_paragraph is None
+
+        repo = DocumentSegmentRepository(db_session)
+        (hit,) = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
+        assert hit.anchor == SegmentAnchor("file", None, None, file_path="src/app.py")
+
+    def test_unknown_source_type_fails_loud(self) -> None:
+        """Bare paragraph fallback is forbidden (task-code-materials ratify).
+
+        A future source_type without an explicit _resolve_anchor branch
+        must raise, never silently mis-map into the paragraph kind.
+        """
+        from course_supporter.storage.document_segment_repository import (
+            _resolve_anchor,
+        )
+
+        with pytest.raises(ValueError, match="no anchor mapping"):
+            _resolve_anchor("hologram", MagicMock())
 
     async def test_paragraph_edge_anchor_kind_kept(
         self, db_session: AsyncSession, seed_tenant: Tenant

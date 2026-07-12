@@ -100,6 +100,11 @@ class ErrorCategory(StrEnum):
     SYMLINK_VIOLATION = "symlink_violation"
     STAGE2_REJECTED = "stage2_rejected"
     SLIDE_COUNT_LIMIT = "slide_count_limit"
+    # Async ingestion structural codes (task-code-materials F4 /
+    # DD-2.3-AH): persisted to Job/AuthoredDocument.error_category by the
+    # failure callback so the author UI can map them to stable messages.
+    EMPTY_DOCUMENT = "empty_document"
+    PRESENTATION_EMPTY_SEGMENT = "presentation_empty_segment"
 
 
 class SecurityRejectedError(Exception):

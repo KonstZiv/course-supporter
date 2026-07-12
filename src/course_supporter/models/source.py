@@ -80,6 +80,7 @@ class ChunkType(StrEnum):
     HEADING = "heading"
     WEB_CONTENT = "web_content"
     VISUAL_SCENE = "visual_scene"
+    CODE_FILE = "code_file"
 
 
 class ContentChunk(BaseModel):
@@ -154,7 +155,13 @@ class SourceDocument(BaseModel):
         * video additionally excludes ``VISUAL_SCENE`` chunks (task 2.4.5)
           so the bridge maps over the transcript word-stream alone;
         * text / web / presentation keep the paragraph-style "\\n\\n"
-          separator preserving authored chunk boundaries.
+          separator preserving authored chunk boundaries;
+        * code (task-code-materials F1) also joins with "\\n\\n" — but the
+          branch is EXPLICIT, not a fall-through: each ``CODE_FILE``
+          chunk's text is ``path-header + raw file body`` and the
+          CodeProcessor computes segment offsets deterministically over
+          this exact join (offsets are never LLM-emitted for code), so
+          the separator here is load-bearing offset arithmetic.
         """
         if self.source_type == SourceType.VIDEO:
             return " ".join(
@@ -162,6 +169,8 @@ class SourceDocument(BaseModel):
                 for chunk in self.chunks
                 if chunk.text and chunk.chunk_type != ChunkType.VISUAL_SCENE
             )
+        if self.source_type == SourceType.CODE:
+            return "\n\n".join(chunk.text for chunk in self.chunks if chunk.text)
         separator = " " if self.source_type == SourceType.AUDIO else "\n\n"
         return separator.join(chunk.text for chunk in self.chunks if chunk.text)
 
@@ -174,12 +183,16 @@ class SourceDocument(BaseModel):
         visual-scene descriptions that reproduce on-screen slide text/code —
         so this method returns the complete surface.
 
-        Default ``== assemble_text()``: audio / text / web / presentation are
-        single-stream, so their safety surface already equals the mapping
-        reference (zero behaviour change). The video override is
-        byte-identical to the pre-task-2.4.5 ``assemble_text`` (a ``"\\n\\n"``
-        join of ALL chunks, transcript + visual), so the Stage 2 safety
-        surface is unchanged by the 2.4.5 reference rework.
+        Default ``== assemble_text()``: audio / text / web / presentation /
+        code are single-stream, so their safety surface already equals the
+        mapping reference (zero behaviour change). For code this IS the
+        ratified F6 contract: safety sees the raw typicality-filtered full
+        text — never a skeleton (defense-in-depth); the byte backstop and
+        the ladder ``input_budget_ratio`` live at the safety call site and
+        stage config, not here. The video override is byte-identical to
+        the pre-task-2.4.5 ``assemble_text`` (a ``"\\n\\n"`` join of ALL
+        chunks, transcript + visual), so the Stage 2 safety surface is
+        unchanged by the 2.4.5 reference rework.
         """
         if self.source_type == SourceType.VIDEO:
             return "\n\n".join(chunk.text for chunk in self.chunks if chunk.text)

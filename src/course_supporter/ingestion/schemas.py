@@ -55,6 +55,8 @@ still run unconditionally.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
@@ -198,6 +200,16 @@ class DocumentSegmentDraft(BaseModel):
             "audio/video/presentation."
         ),
     )
+    file_path: str | None = Field(
+        default=None,
+        description=(
+            "Canonical POSIX-relative source-file path — the fourth "
+            "positional-anchor kind (task-code-materials): one included "
+            "file = one segment, so a single column, not a start/end "
+            "pair. Populated for the code source type in Pass 2b; "
+            "``None`` for text/web/audio/video/presentation."
+        ),
+    )
     noisy: bool = Field(
         default=False,
         description=(
@@ -279,6 +291,17 @@ class DocumentSummaryDraft(BaseModel):
         description=(
             "Child segment drafts. Pass 2a may emit empty list; "
             "Pass 2b appends drafts before ORM materialisation."
+        ),
+    )
+    structure: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Code-material project tree (task-code-materials): entries "
+            "with path / cls / size + exclusion reason. SERVER-SIDE only "
+            "— never LLM-emitted; CodeProcessor sets it from the "
+            "extraction manifest after parsing, and ``api/tasks.py`` "
+            "threads it into ``DocumentSummaryRepository.create``. "
+            "``None`` for every non-code source type."
         ),
     )
 
@@ -928,3 +951,129 @@ class PresentationPass2aResult(BaseModel):
                 f"last.end_slide={actual_last} != n_slides={expected}"
             )
         return self
+
+
+# Code source-type schemas (task-code-materials).
+#
+# The code pipeline diverges from every other source type: segmentation
+# is DETERMINISTIC (one included file = one segment; offsets computed in
+# code, never LLM-emitted — ratified F1), so there is no Pass 2a mapping
+# schema. The LLM stages are:
+#
+# * ``code_skeleton_extraction`` — rung 3 of the per-file extraction
+#   ladder (AST → regex → LLM → deterministic minimum, R4); output is
+#   :class:`CodeSkeletonResult`.
+# * ``code_segment_description`` — one cheap call per included file
+#   (input = the file's skeleton); output is
+#   :class:`CodeSegmentDescription`. ``title`` is NOT asked — it is the
+#   deterministic file name (ratified segment model).
+# * ``code_summary`` — ONE large-window call per document (input =
+#   project structure + the ready per-file descriptions, NOT skeletons);
+#   output is :class:`CodeSummaryResult`. Doc-level concepts are NOT
+#   asked — aggregated via the KD-2.1-O union+dedup pattern.
+
+
+class CodeSkeletonDeclaration(BaseModel):
+    """One declaration in an LLM-extracted code skeleton."""
+
+    kind: str = Field(
+        description=(
+            "Declaration kind: module/class/widget/function/method/"
+            "constant/table/index/property."
+        ),
+    )
+    name: str = Field(description="Declaration identifier, verbatim.")
+    parent: str | None = Field(
+        default=None,
+        description="Enclosing declaration name, or null for top-level.",
+    )
+    signature: str = Field(
+        description="Header line(s) verbatim, collapsed to one line.",
+    )
+    docstring: str | None = Field(
+        default=None,
+        description="Verbatim docstring/doc-comment for THIS declaration.",
+    )
+
+
+class CodeSkeletonResult(BaseModel):
+    """LLM output of the ``code_skeleton_extraction`` stage.
+
+    Calibrated by the task spike (SPIKE-code-materials-results.md):
+    gemini-3.1-flash-lite primary → deepseek-v4-flash fallback, both
+    100% JSON-valid on the fixture set. The 8192-byte skeleton cap is
+    enforced CODE-SIDE after rendering (ratified: the model's own cap
+    compliance is not trusted), so no size validator lives here.
+    """
+
+    language: str = Field(description="Lowercase language name.")
+    module_namespace: list[str] = Field(
+        default_factory=list,
+        description="Top-level namespace/module names, outermost first.",
+    )
+    imports: list[str] = Field(
+        default_factory=list,
+        description="Imported module/package identifiers, verbatim.",
+    )
+    declarations: list[CodeSkeletonDeclaration] = Field(
+        default_factory=list,
+        description="Declarations in source order.",
+    )
+    leading_comments: str | None = Field(
+        default=None,
+        description="Verbatim file-leading comment block, or null.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when the model stopped at a declaration boundary.",
+    )
+
+
+class CodeSegmentDescription(BaseModel):
+    """LLM output of the per-file ``code_segment_description`` stage.
+
+    ``title`` is deliberately absent — the segment title is the
+    deterministic file name (ratified segment model; truncate to the
+    ORM ``String(128)`` at the bridge). Concepts: the deterministic
+    namespace core is rendered into the prompt and the LLM verifies /
+    supplements — never invents (prompt hard rule).
+    """
+
+    description: str = Field(
+        max_length=512,
+        description=(
+            "1-2 sentence description of what this source file "
+            "contains / teaches (not a paraphrase of the code)."
+        ),
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings taught/central in this file.",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings mentioned but not central.",
+    )
+
+
+class CodeSummaryResult(BaseModel):
+    """LLM output of the ONE per-document ``code_summary`` stage.
+
+    Mirrors the audio/presentation doc-level contract: title nullable
+    (≤128), description required (≤512). Segments/concepts are NOT
+    emitted here — segmentation is deterministic and doc-level concepts
+    aggregate from per-file descriptions (KD-2.1-O).
+    """
+
+    title: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Doc-level title for the code material (≤128 chars).",
+    )
+    description: str = Field(
+        max_length=512,
+        description=(
+            "Doc-level description (2-3 sentences): what the project/"
+            "file is, its stack, and what it demonstrates."
+        ),
+    )

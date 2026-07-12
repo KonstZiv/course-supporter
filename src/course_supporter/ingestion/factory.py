@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from course_supporter.ingestion.audio import AudioProcessor
+from course_supporter.ingestion.code import CodeProcessor
 from course_supporter.ingestion.heavy_steps import ScrapeWebFunc
 from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.text import TextProcessor
@@ -90,6 +91,10 @@ def create_processors(
         SourceType.WEB: WebProcessor(
             scrape_func=heavy.scrape_web,
         ),
+        # task-code-materials: unconditional like TEXT/WEB — the LLM
+        # stages arrive via the process_macro router argument, no
+        # constructor deps.
+        SourceType.CODE: CodeProcessor(),
     }
 
     # AUDIO needs STT (stage 1) + a Redis inter-stage carrier; it also takes

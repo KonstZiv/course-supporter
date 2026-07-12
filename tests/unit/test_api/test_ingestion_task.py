@@ -628,3 +628,43 @@ class TestArqIngestMaterial:
 
         mock_persist.assert_not_awaited()
         mock_entry_cls.return_value.set_slide_keys.assert_not_awaited()
+
+
+class TestBoundSafetyText:
+    """F6 last-resort byte cap on the Stage 2 safety surface."""
+
+    def test_under_cap_passes_through_byte_identical(self) -> None:
+        from course_supporter.api.tasks import _bound_safety_text
+
+        log = MagicMock()
+        text = "print('hello')\n" * 100
+        assert _bound_safety_text(text, log=log) is text
+        log.warning.assert_not_called()
+
+    def test_over_cap_truncates_and_warns_covered_total(self) -> None:
+        from course_supporter.api.tasks import (
+            _SAFETY_TEXT_MAX_BYTES,
+            _bound_safety_text,
+        )
+
+        log = MagicMock()
+        text = "x" * (_SAFETY_TEXT_MAX_BYTES + 1000)
+        bounded = _bound_safety_text(text, log=log)
+        assert len(bounded.encode()) == _SAFETY_TEXT_MAX_BYTES
+        log.warning.assert_called_once()
+        kwargs = log.warning.call_args.kwargs
+        assert kwargs["covered_bytes"] == _SAFETY_TEXT_MAX_BYTES
+        assert kwargs["total_bytes"] == _SAFETY_TEXT_MAX_BYTES + 1000
+
+    def test_multibyte_char_boundary_survives(self) -> None:
+        from course_supporter.api.tasks import (
+            _SAFETY_TEXT_MAX_BYTES,
+            _bound_safety_text,
+        )
+
+        log = MagicMock()
+        text = "я" * _SAFETY_TEXT_MAX_BYTES  # 2 bytes per char → over cap
+        bounded = _bound_safety_text(text, log=log)
+        assert len(bounded.encode()) <= _SAFETY_TEXT_MAX_BYTES
+        # No replacement chars from a split multi-byte sequence.
+        assert "�" not in bounded

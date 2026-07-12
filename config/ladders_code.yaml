@@ -1,0 +1,63 @@
+# Code source-type stages (task-code-materials).
+#
+# Rung composition for code_skeleton_extraction is spike-ratified
+# (SPIKE-code-materials-results.md + operator gate 2026-07-12):
+# gemini-3.1-flash-lite primary (15-25x faster, 5/5 valid, verbatim
+# 43/43) -> deepseek-v4-flash fallback (recall 1.0, cap-disciplined,
+# provider diversity). gemini-2.5-flash EXCLUDED (4/5 fenced + hard
+# fail on the largest fixture). No third LLM rung — the deterministic
+# minimum rung of the R4 ladder sits below in code.
+#
+# The ratified 8192-byte per-file skeleton cap is enforced CODE-SIDE
+# for every rung (ingestion/code_skeleton.py:cap_skeleton) — the spike
+# showed model-side cap compliance cannot be trusted.
+#
+# input_budget_ratio: 0.5 everywhere (repo convention; methodist
+# precedent). An oversize input skips rungs; a file that skips ALL
+# LLM rungs degrades to the deterministic minimum skeleton (code-side),
+# NOT to a bigger model.
+#
+# code_segment_description mirrors the skeleton rungs (same cheap-tier
+# role, same providers). code_summary mirrors methodist_bottomup (the
+# existing thinking large-window convention — ONE synthesis call over
+# prepared inputs; ratified two-step generation).
+
+stages:
+  code_skeleton_extraction:
+    prompt_ref: "prompts/code_skeleton_extraction/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    ladder:
+      - provider: gemini
+        model: gemini-3.1-flash-lite
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192
+
+  code_segment_description:
+    prompt_ref: "prompts/code_segment_description/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    ladder:
+      - provider: gemini
+        model: gemini-3.1-flash-lite
+        max_output_tokens: 4096
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 4096
+
+  code_summary:
+    prompt_ref: "prompts/code_summary/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 8192
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-flash
+        max_output_tokens: 8192

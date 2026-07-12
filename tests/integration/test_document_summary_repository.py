@@ -65,6 +65,41 @@ class TestCreate:
         assert summary.secondary_concepts == ["AST"]
         assert summary.content_char_count == 1234
         assert summary.status == "ready"
+        # task-code-materials: structure defaults to None for non-code.
+        assert summary.structure is None
+
+    async def test_create_persists_code_structure(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """task-code-materials: the code project tree persists as JSONB."""
+        repo = DocumentSummaryRepository(db_session)
+        structure = {
+            "entries": [
+                {"path": "src/app.py", "size": 42, "cls": "included", "reason": None},
+                {
+                    "path": "vendor.zip",
+                    "size": 7,
+                    "cls": "excluded",
+                    "reason": "nested_archive",
+                },
+            ]
+        }
+
+        summary = await repo.create(
+            authored_document_id=seed_material_entry.id,
+            title="Lesson project",
+            description="Code material.",
+            main_concepts=[],
+            secondary_concepts=[],
+            content_char_count=42,
+            structure=structure,
+        )
+        await db_session.flush()
+        await db_session.refresh(summary)
+        assert summary.structure == structure
 
     async def test_create_invalidates_parent_chain_content_hash(
         self,

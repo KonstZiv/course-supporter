@@ -86,14 +86,20 @@ _MODIFIERS = (
     r"|final|static|sealed|partial|async)"
 )
 _DECL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    # line start + optional export/default/visibility modifiers
     r"^[ \t]*(?:"
     r"(?:export[ \t]+)?(?:default[ \t]+)?" + _MODIFIERS + r"?[ \t]*"
     r"(?:"
+    # type-introducing keywords: `class Foo`, `interface Bar`, `type Baz` ...
     r"(?:class|interface|struct|enum|trait|record|type|namespace)[ \t]+\w+"
+    # JS/TS function declarations: `function f`, `export async function* g`
     r"|(?:export[ \t]+)?(?:async[ \t]+)?function[ \t*]*\w*"
+    # Go functions incl. receiver methods: `func Name(`, `func (r T) Name(`
     r"|func[ \t]+(?:\([^)]*\)[ \t]*)?\w+"
+    # JS/TS arrow-function bindings: `const fmt = (n) =>`, `let h: T = x =>`
     r"|(?:const|let|var)[ \t]+\w+[ \t]*(?::[^=]+)?"
     r"=[ \t]*(?:async[ \t]*)?(?:\([^)]*\)|\w+)[ \t]*=>"
+    # Java/C#/C++ method headers: `public List<T> items(...` (modifier-led)
     r"|" + _MODIFIERS + r"[ \t][\w<>\[\],. \t]+\([^;{]*"
     r")"
     r")",

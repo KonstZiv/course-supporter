@@ -47,6 +47,7 @@ from course_supporter.security.exceptions import (
     SecurityRejectedError,
 )
 from course_supporter.security.normalization import normalize_filename
+from course_supporter.security.policies import CODE_EXTENSIONS
 
 # libmagic database is loaded once per instance. Keeping the two
 # concerns (mime / encoding) on separate instances avoids parsing
@@ -56,23 +57,28 @@ _MAGIC_MIME = magic.Magic(mime=True)
 _MAGIC_ENCODING = magic.Magic(mime_encoding=True)
 
 
-# Map known filename extensions to acceptable MIME-type family
-# prefixes. The mismatch check accepts content whose detected MIME
-# starts with any listed family for the given extension; that
+# Map DOCUMENT / MEDIA filename extensions to acceptable MIME-type
+# family prefixes. The mismatch check accepts content whose detected
+# MIME starts with any listed family for the given extension; that
 # tolerance lets libmagic's detailed detection (``application/zip``
 # for ``.pptx``, exact subtype for office formats) match the
-# extension's broader expectation. Whitelist-based context policy
-# (commit f) then decides which extensions are allowed where.
+# extension's broader expectation.
+#
+# CODE / TEXT-SOURCE extensions (``CODE_EXTENSIONS``) are DELIBERATELY
+# ABSENT: they are validated by the textual invariant in
+# :func:`verify_extension_matches_content` (content must be text, not a
+# binary blob), NOT by an exact MIME family. A hand-maintained family
+# table for source code is a footgun -- it silently discarded all
+# TypeScript (libmagic fingerprints ``.ts`` as ``application/javascript``,
+# which no ``("text/",)`` entry accepted; the №17 blocker). This table
+# is the single source of truth for document/media types only; code is
+# governed solely by ``CODE_EXTENSIONS`` membership.
 _EXTENSION_TO_MIME_FAMILIES: dict[str, tuple[str, ...]] = {
     "pdf": ("application/pdf",),
     "txt": ("text/",),
     "md": ("text/",),
     "markdown": ("text/",),
-    "html": ("text/",),
-    "htm": ("text/",),
     "csv": ("text/", "application/csv"),
-    "json": ("application/json", "text/"),
-    "xml": ("application/xml", "text/xml", "text/"),
     "doc": ("application/msword", "application/cdfv2"),
     "docx": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -107,41 +113,6 @@ _EXTENSION_TO_MIME_FAMILIES: dict[str, tuple[str, ...]] = {
     "mov": ("video/quicktime", "video/mp4"),
     "avi": ("video/x-msvideo",),
     "mkv": ("video/x-matroska", "video/webm"),
-    "ipynb": ("application/json", "text/"),
-    "py": ("text/",),
-    "js": ("application/javascript", "application/x-javascript", "text/"),
-    # Source-code extensions (task-code-materials R2 broad list; each
-    # entry is gated by TestPolicyConsistency against CODE_EXTENSIONS).
-    # libmagic detects code content as text/x-<lang> or text/plain, so
-    # ("text/",) is the baseline; entries with known non-text detections
-    # list the extra families explicitly.
-    "mjs": ("text/", "application/javascript"),
-    "cjs": ("text/", "application/javascript"),
-    "jsx": ("text/",),
-    "ts": ("text/",),
-    "tsx": ("text/",),
-    "java": ("text/",),
-    "kt": ("text/",),
-    "kts": ("text/",),
-    "cs": ("text/",),
-    "go": ("text/",),
-    "rs": ("text/",),
-    "php": ("text/",),
-    "rb": ("text/",),
-    "c": ("text/",),
-    "h": ("text/",),
-    "cpp": ("text/",),
-    "hpp": ("text/",),
-    "cc": ("text/",),
-    "swift": ("text/",),
-    "dart": ("text/",),
-    "css": ("text/",),
-    "scss": ("text/",),
-    "yaml": ("text/", "application/yaml", "application/x-yaml"),
-    "yml": ("text/", "application/yaml", "application/x-yaml"),
-    "toml": ("text/", "application/toml"),
-    "sql": ("text/", "application/sql"),
-    "sh": ("text/",),
 }
 
 
@@ -213,13 +184,29 @@ def extension_of(filename: str) -> str:
 def verify_extension_matches_content(filename: str, content: bytes) -> None:
     """Raise :class:`SecurityRejectedError` if extension/content disagree.
 
-    Empty content is rejected with ``MAGIC_MISMATCH`` -- a file
-    claiming any extension but carrying zero bytes can not be
-    validated against its declared type.
+    Two invariants, chosen per extension class (№17):
 
-    Filenames without a recognised extension are rejected with
-    ``FORBIDDEN_TYPE`` -- the whitelist resolution in commit (f)
-    expects a recognised extension to map to allowed MIME types.
+    * **Code / text-source extensions** (:data:`CODE_EXTENSIONS`): the
+      content must be TEXTUAL, not a binary blob. Verified through
+      :func:`detect_charset` -- libmagic returns an encoding for text and
+      ``None`` for binary. An exact MIME-family match is the WRONG test
+      for source code: libmagic fingerprints e.g. TypeScript / JSX as
+      ``application/javascript`` (a textual type absent from any
+      hand-maintained family table), so a family match silently discarded
+      every ``.ts`` file in a real lesson (the №17 blocker). The charset
+      probe still rejects a masked binary -- a PE / ELF carrying a
+      ``.py`` name is classified ``binary`` -> ``None`` -> reject.
+
+    * **Document / media extensions** (``pdf`` / ``png`` / ``docx`` /
+      ...): the detected MIME must start with an expected family from
+      :data:`_EXTENSION_TO_MIME_FAMILIES`. Here the exact match IS the
+      point of the check -- "is this really a PDF?" catches a PNG renamed
+      to ``.pdf``.
+
+    Empty content is rejected with ``MAGIC_MISMATCH`` -- a file claiming
+    any extension but carrying zero bytes cannot be validated against its
+    declared type. Filenames without a recognised extension are rejected
+    with ``FORBIDDEN_TYPE``.
 
     Args:
         filename: User-supplied filename. NFKC normalization is
@@ -232,7 +219,8 @@ def verify_extension_matches_content(filename: str, content: bytes) -> None:
 
     Raises:
         SecurityRejectedError: with category ``MAGIC_MISMATCH`` on
-            empty content or extension/content disagreement;
+            empty content, a masked binary under a code extension, or a
+            document/media extension/content disagreement;
             ``FORBIDDEN_TYPE`` on missing or unrecognised extension.
     """
     if not content:
@@ -247,6 +235,20 @@ def verify_extension_matches_content(filename: str, content: bytes) -> None:
             ErrorCategory.FORBIDDEN_TYPE,
             f"missing or unrecognised extension in {filename!r}",
         )
+
+    if ext in CODE_EXTENSIONS:
+        # Textual invariant: a charset is present iff libmagic classifies
+        # the content as text (binary -> None). See the docstring for why
+        # an exact MIME-family match is the wrong test for source code.
+        if detect_charset(content) is None:
+            raise SecurityRejectedError(
+                ErrorCategory.MAGIC_MISMATCH,
+                (
+                    f"code extension {ext!r} in {filename!r} carries "
+                    f"binary (non-text) content"
+                ),
+            )
+        return
 
     expected_families = _EXTENSION_TO_MIME_FAMILIES.get(ext)
     if expected_families is None:

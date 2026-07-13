@@ -79,7 +79,10 @@ from course_supporter.models.source import (
 from course_supporter.normalizer.classify import denylist_prefix
 from course_supporter.security.archive import EntryVerdict, extract_archive_safely
 from course_supporter.security.exceptions import ErrorCategory
-from course_supporter.security.file_type import extension_of
+from course_supporter.security.file_type import (
+    extension_of,
+    verify_extension_matches_content,
+)
 from course_supporter.security.policies import AUTHORED_POLICY
 
 if TYPE_CHECKING:
@@ -224,7 +227,21 @@ class CodeProcessor(MaterialProcessor):
         raw = path.read_bytes()
         if extension_of(path.name) == "zip":
             return self._extract_zip(raw)
-        return [(source.filename or path.name, raw)]
+        name = source.filename or path.name
+        if raw:
+            # №17: the solo path enforces the SAME textual invariant as
+            # the in-archive classify path (verify_extension_matches_content
+            # runs inside extract_archive_safely). A binary mislabeled with
+            # a code extension must not be segmented verbatim into the
+            # reference text — a non-text solo file raises MAGIC_MISMATCH,
+            # handled by the ingestion security-reject branch. The ``if
+            # raw`` guard mirrors the classify path, which short-circuits
+            # empty content to INCLUDED (archive.py, before verify is ever
+            # called) rather than rejecting it — so empty files are treated
+            # identically on both paths. Calling verify unconditionally
+            # would REJECT empty solo files and diverge from the archive.
+            verify_extension_matches_content(name, raw)
+        return [(name, raw)]
 
     def _extract_zip(self, raw: bytes) -> list[tuple[str, bytes]]:
         """Classify-mode member loop (KD18 machinery, reused as-is).

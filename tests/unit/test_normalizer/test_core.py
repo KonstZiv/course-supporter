@@ -77,6 +77,28 @@ class TestCleanProject:
         assert classes["src/main.py"] is EntryClass.TEXT
         assert classes["db/schema.sql"] is EntryClass.TEXT
 
+    def test_typescript_included_as_text_project_contour(self) -> None:
+        # №17 cross-contour: the same magic check runs in the KD18
+        # normalizer (project base/submission). Real TypeScript fingerprints
+        # as application/javascript; before the textual-invariant fix it was
+        # magic_mismatch -> EXCLUDED, so a student's TS submission lost every
+        # .ts from its canonical snapshot and base+delta compared configs.
+        real_ts = (
+            b"import { Component } from '@angular/core';\n"
+            b"export class AppComponent {}\n"
+        )
+        snap = normalize_archive(
+            _zip([("src/main.ts", real_ts), ("README.md", b"# x\n")]),
+            archive_kind="zip",
+        )
+        assert {e.path for e in snap.manifest.included} == {
+            "src/main.ts",
+            "README.md",
+        }
+        assert snap.manifest.excluded == ()
+        classes = {e.path: e.cls for e in snap.manifest.included}
+        assert classes["src/main.ts"] is EntryClass.TEXT
+
     def test_totals(self) -> None:
         entries = [("a.py", b"xx"), ("b.md", b"yyy")]
         snap = normalize_archive(_zip(entries), archive_kind="zip")

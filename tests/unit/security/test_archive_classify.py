@@ -230,22 +230,51 @@ class TestClassifyConversions:
 
 
 class TestClassifyMagicGate:
-    def test_whitelisted_libmagic_unrecognised_is_included(self) -> None:
-        # These extensions are whitelisted but absent from the magic
-        # layer's family table -> verify raises FORBIDDEN_TYPE, which is
-        # NOT a content mismatch, so the entry must be INCLUDED.
+    def test_code_extensions_included_via_textual_invariant(self) -> None:
+        # №17 regression. Code extensions are validated by the textual
+        # invariant (content is text, not a binary blob), NOT an exact
+        # MIME-family match. REAL TypeScript is the load-bearing case:
+        # libmagic fingerprints it as application/javascript, which the
+        # old family table (("text/",)) rejected -> every .ts silently
+        # excluded from a real Angular lesson. The fixtures below carry
+        # REAL content (a trivial "const x = 1;" is too short for libmagic
+        # to fingerprint and hid this bug for a full release).
+        real_ts = (
+            b"import { Component } from '@angular/core';\n"
+            b"import { bootstrapApplication } from '@angular/platform-browser';\n\n"
+            b"@Component({ selector: 'app-root', template: '<h1>Hi</h1>' })\n"
+            b"export class AppComponent {}\n\n"
+            b"bootstrapApplication(AppComponent);\n"
+        )
         archive = _zip_fixture(
             [
-                ("q.sql", b"SELECT 1;\n"),
-                ("conf.yaml", b"key: value\n"),
-                ("main.go", b"package main\n"),
-                ("app.ts", b"const x = 1;\n"),
-                ("pyproject.toml", b"[tool]\n"),
+                ("q.sql", b"SELECT id, name FROM users WHERE active = true;\n"),
+                ("conf.yaml", b"name: app\nversion: 1.0.0\nsteps:\n  - build\n"),
+                ("main.go", b'package main\n\nimport "fmt"\n\nfunc main() {}\n'),
+                ("app.ts", real_ts),
+                ("pyproject.toml", b"[tool.ruff]\nline-length = 88\n"),
             ]
         )
         entries = _by_name(_classify(archive, allowed_extensions=_MIXED_WHITELIST))
         for name in ("q.sql", "conf.yaml", "main.go", "app.ts", "pyproject.toml"):
-            assert entries[name].verdict is EntryVerdict.INCLUDED
+            assert entries[name].verdict is EntryVerdict.INCLUDED, name
+
+    def test_masked_binary_under_code_extension_still_magic_mismatch(self) -> None:
+        # The textual invariant must not weaken the masked-binary defense:
+        # a PE/ELF carrying a code extension is binary -> excluded.
+        archive = _zip_fixture(
+            [
+                ("evil.ts", PE_BYTES),
+                ("evil.py", ELF_BYTES),
+                ("ok.ts", b"export const x = 1;\n"),
+            ]
+        )
+        entries = _by_name(
+            _classify(archive, allowed_extensions=frozenset({"ts", "py"}))
+        )
+        assert entries["evil.ts"].verdict is EntryVerdict.MAGIC_MISMATCH
+        assert entries["evil.py"].verdict is EntryVerdict.MAGIC_MISMATCH
+        assert entries["ok.ts"].verdict is EntryVerdict.INCLUDED
 
     def test_empty_whitelisted_file_is_included(self) -> None:
         # Empty content has no magic to check -- not a mismatch.

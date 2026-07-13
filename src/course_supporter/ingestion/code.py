@@ -57,6 +57,13 @@ from course_supporter.ingestion.code_skeleton import (
     render_llm_skeleton,
     verbatim_skeleton,
 )
+from course_supporter.ingestion.code_structure import (
+    CodeStructureReason,
+    denylist_token,
+    reason_for_verdict,
+    render_structure_block,
+    structure_reason,
+)
 from course_supporter.ingestion.code_typicality import assess
 from course_supporter.ingestion.schemas import (
     CodeSegmentDescription,
@@ -76,7 +83,10 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
-from course_supporter.normalizer.classify import denylist_prefix
+from course_supporter.normalizer.classify import (
+    collapse_denylist,
+    denylist_prefix,
+)
 from course_supporter.security.archive import EntryVerdict, extract_archive_safely
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.file_type import (
@@ -109,6 +119,30 @@ _TITLE_MAX = 128
 
 def _file_header(path: str) -> str:
     return f"{_HEADER_PREFIX}{path}{_HEADER_SUFFIX}"
+
+
+def _excluded_row(
+    path: str,
+    size: int,
+    reason: CodeStructureReason,
+    detail: str | None = None,
+    *,
+    entries: int = 1,
+) -> dict[str, Any]:
+    """Build one excluded ``structure`` row — typed on ``CodeStructureReason``.
+
+    This is where №19's no-raw-passthrough invariant lives: ``reason`` is
+    the ENUM, never a ``str``, so ``entry.verdict.value`` fails ``mypy``
+    at the call site rather than leaking into the prompt again. ``entries``
+    is the count of raw files the row stands for (``1`` per file; the
+    collapsed count for a denylist directory).
+    """
+    return {
+        "path": path,
+        "size": size,
+        "reason": structure_reason(reason, detail),
+        "entries": entries,
+    }
 
 
 def _strip_fences(content: str) -> str:
@@ -202,6 +236,9 @@ class CodeProcessor(MaterialProcessor):
             source_url=source.source_url,
             chunk_count=len(chunks),
             description_only_count=len(description_only),
+            # Row count, not raw file count (№19: denylist junk collapses to
+            # one row per dir/leaf) — the live-gate reads this drop directly;
+            # the true excluded file count is the sum of each row's ``entries``.
             excluded_count=len(self._excluded),
         )
 
@@ -247,16 +284,19 @@ class CodeProcessor(MaterialProcessor):
         """Classify-mode member loop (KD18 machinery, reused as-is).
 
         INCLUDED verdicts become segments; every other verdict is
-        recorded for ``DocumentSummary.structure``. Denylist junk is
-        skipped BEFORE resource accounting via the canonical KD18
-        matcher (№14: never unpacked, never counted in depth/size/
-        ratio) and lands as an excluded row with the unified
-        ``denylist_dir: <prefix>`` reason. Structural anti-bomb guards
-        still raise (``SecurityRejectedError`` → generic failure path
-        with the structural error-code).
+        recorded for ``DocumentSummary.structure`` through the code
+        contour's own reason vocabulary (:mod:`code_structure`, №19) —
+        never the raw ``EntryVerdict`` value. Denylist junk is skipped
+        BEFORE resource accounting via the canonical KD18 matcher (№14:
+        never unpacked, never counted in depth/size/ratio) and is then
+        COLLAPSED to one row per directory (or leaf) exactly like the
+        normalizer, so hundreds of ``__MACOSX/._*`` twins do not flood
+        the tree. Structural anti-bomb guards still raise
+        (``SecurityRejectedError`` → generic failure path).
         """
         included: list[tuple[str, bytes]] = []
         excluded: list[dict[str, Any]] = []
+        denied: list[tuple[str, int]] = []
         unzipped = AUTHORED_POLICY.max_archive_unzipped_bytes
         depth = AUTHORED_POLICY.max_archive_nesting_depth
         if unzipped is None or depth is None:  # pragma: no cover - policy invariant
@@ -273,25 +313,39 @@ class CodeProcessor(MaterialProcessor):
             if entry.verdict is EntryVerdict.INCLUDED:
                 included.append((entry.arcname, entry.content))
             elif entry.verdict is EntryVerdict.DENYLIST_SKIP:
-                # Reason grammar "<enum-token>: <detail>" — the same
-                # dictionary the typicality partition writes (№14,
-                # DD-CM-B-ready). declared_size: the entry was never
-                # read, the header-declared size is the only one.
-                excluded.append(
-                    {
-                        "path": entry.arcname,
-                        "size": entry.declared_size,
-                        "reason": f"denylist_dir: {denylist_prefix(entry.arcname)}",
-                    }
-                )
+                # Collected for a post-loop collapse (mirror of the
+                # normalizer's collapse_denylist). declared_size: the
+                # entry was never read, the header value is the only one.
+                denied.append((entry.arcname, entry.declared_size))
             else:
+                # Explicit translation of the foreign EntryVerdict into
+                # the code contour's own token — never the raw .value
+                # (that was №19: forbidden_type leaked into the prompt and
+                # told the model ".gitignore is forbidden"). Total map;
+                # a new reachable verdict raises rather than leaking.
                 excluded.append(
-                    {
-                        "path": entry.arcname,
-                        "size": entry.declared_size,
-                        "reason": entry.verdict.value,
-                    }
+                    _excluded_row(
+                        entry.arcname,
+                        entry.declared_size,
+                        reason_for_verdict(entry.verdict),
+                    )
                 )
+        # Collapse denylist junk like the normalizer: one row per denied
+        # prefix (dir) or leaf (file), with an entries count. collapse_denylist
+        # returns the normalizer's ExcludedEntry whose ``.reason`` is that
+        # layer's INTERNAL TRANSPORT enum (ExcludedReason.DENYLIST_DIR) —
+        # do NOT propagate it. We derive our OWN dir/file token from the
+        # prefix shape; putting the foreign enum straight into structure is
+        # exactly the №19 bug being fixed here (do not "simplify" to row.reason).
+        for row in collapse_denylist(denied):
+            excluded.append(
+                _excluded_row(
+                    row.path,
+                    row.size,
+                    denylist_token(row.path),
+                    entries=row.entries,
+                )
+            )
         self._excluded = excluded
         return included
 
@@ -589,12 +643,15 @@ class CodeProcessor(MaterialProcessor):
                 }
             )
         for exc_entry in doc.metadata.get("excluded_entries", []):
+            # ``entries`` (the collapsed file count) rides only on excluded
+            # rows — included / description_only stay 1-per-file (№19).
             entries.append(
                 {
                     "path": exc_entry["path"],
                     "size": exc_entry["size"],
                     "cls": "excluded",
                     "reason": exc_entry["reason"],
+                    "entries": exc_entry.get("entries", 1),
                 }
             )
         return {"entries": entries}
@@ -608,12 +665,12 @@ class CodeProcessor(MaterialProcessor):
         router: StageRouter,
     ) -> CodeSummaryResult:
         """ONE large-window ``code_summary`` call (ratified two-step)."""
-        structure_block = "\n".join(
-            f"{e['path']} ({e['size']} B, {e['cls']}"
-            + (f": {e['reason']}" if e["reason"] else "")
-            + ")"
-            for e in structure["entries"]
-        )
+        # LLM layer (№19): the model gets the CONSEQUENCE, not the raw
+        # token, and the excluded set is aggregated to one line per kind —
+        # never the internal reason token, never a service-file path. The
+        # persisted DB structure stays full per-file; this collapse is the
+        # prompt's alone.
+        structure_block = render_structure_block(structure["entries"])
         descriptions_block = "\n\n".join(
             f"[{c.metadata['file_path']}]\n{d.description}\n"
             f"concepts: {', '.join(d.main_concepts) or '—'}"

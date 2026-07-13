@@ -148,8 +148,11 @@ class TestProcessRaw:
         assert paths == ["src/app.py", "lib/service.rb"]
         excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
         assert excluded == {
-            "tools/helper.exe": "forbidden_type",
-            "bin/tool.exe": "denylist_dir: bin/",
+            # №19: not the strict contour's "forbidden_type" (nothing is
+            # forbidden here — it is simply not code).
+            "tools/helper.exe": "non_code_type",
+            # denylist collapsed to the directory prefix (bare token).
+            "bin/": "denylist_dir",
         }
 
     async def test_zip_with_no_includable_files_raises(self, tmp_path: Path) -> None:
@@ -183,10 +186,9 @@ class TestProcessRaw:
         # unpacked) — it lands in excluded_entries with the unified
         # reason, not in the typicality partition.
         assert "node_modules/lodash/index.js" not in by_path
+        # №19: collapsed to the directory prefix, one row, bare token.
         excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
-        assert excluded["node_modules/lodash/index.js"] == (
-            "denylist_dir: node_modules/"
-        )
+        assert excluded == {"node_modules/": "denylist_dir"}
         assert by_path["package-lock.json"]["disposition"] == "typical"
         assert by_path["data/dump.sql"]["disposition"] == "oversize"
 
@@ -223,12 +225,19 @@ class TestProcessRaw:
         )
         doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
         assert [c.metadata["file_path"] for c in doc.chunks] == ["app/src/main.js"]
-        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        # №19 acceptance #1 + #4: denylist junk collapses to ONE row per
+        # directory (entries = the file count it stands for), a leaf file
+        # keeps its own row with the honest ``denylist_file`` token — the
+        # two __MACOSX/ AppleDouble twins are now a single row, and
+        # .DS_Store is no longer mislabelled a directory.
+        excluded = {
+            e["path"]: (e["reason"], e["entries"])
+            for e in doc.metadata["excluded_entries"]
+        }
         assert excluded == {
-            f"app/{cache}/chunk-ABC.js": "denylist_dir: app/.angular/",
-            f"__MACOSX/app/{cache}/._chunk-ABC.js": "denylist_dir: __MACOSX/",
-            "__MACOSX/app/._main.js": "denylist_dir: __MACOSX/",
-            ".DS_Store": "denylist_dir: .DS_Store",
+            ".DS_Store": ("denylist_file", 1),
+            "__MACOSX/": ("denylist_dir", 2),
+            "app/.angular/": ("denylist_dir", 1),
         }
         assert doc.metadata["description_only_entries"] == []
 
@@ -512,6 +521,65 @@ class TestTwoStepGeneration:
             "package-lock.json": "description_only",
             "tool.exe": "excluded",
         }
+
+    async def test_structure_block_shows_consequences_not_mechanism(
+        self, tmp_path: Path
+    ) -> None:
+        """№19 acceptance #3: the LLM input carries consequences, not tokens.
+
+        We change the model's INPUT here; unit assertions on the persisted
+        structure would not show it. Capture the exact ``structure_block``
+        the ``code_summary`` call receives and prove it leaks neither an
+        internal reason token nor a service-file path, while still naming
+        the dependency (package-lock.json) the model must see.
+        """
+        from course_supporter.ingestion.code_structure import CodeStructureReason
+
+        apple_double = bytes.fromhex("00051607") + b"\x00\x02" + b"\x00" * 60
+        archive = tmp_path / "lesson.zip"
+        _write_zip(
+            archive,
+            {
+                "app/main.py": _PY_BODY.encode(),
+                "package-lock.json": b'{"lockfileVersion": 3}\n',
+                "a/.gitignore": b"node_modules\n",
+                "b/.gitignore": b"dist\n",
+                "favicon.ico": b"\x00\x00\x01\x00",
+                "__MACOSX/app/._main.py": apple_double,
+                "__MACOSX/._x.py": apple_double,
+                ".vscode/settings.json": b'{"editor.tabSize": 2}\n',
+                ".DS_Store": b"\x00\x01Bud1",
+            },
+        )
+        processor = CodeProcessor()
+        doc = await processor.process_raw(_mock_source(str(archive)))
+        router = _stage_router(
+            {
+                "code_segment_description": _DESCRIBE_PAYLOAD,
+                "code_summary": _SUMMARY_PAYLOAD,
+            }
+        )
+        await processor.process_macro(doc, router)
+
+        summary_call = next(
+            c
+            for c in router.execute_for_stage.await_args_list
+            if c.args[0] == "code_summary"
+        )
+        block = summary_call.kwargs["structure_block"]
+
+        # Consequences the model can act on.
+        assert "пропущено" in block
+        assert "Не є кодом" in block
+        assert "package-lock.json" in block  # dependency, per-file by name
+        # No machine token, no service-file path.
+        for reason in CodeStructureReason:
+            assert reason.value not in block, reason
+        for service_path in ("__MACOSX", ".DS_Store", ".vscode"):
+            assert service_path not in block, service_path
+        # The DB structure stays FULL per-file (aggregation is prompt-only).
+        exc_paths = {e["path"] for e in doc.metadata["excluded_entries"]}
+        assert {"__MACOSX/", ".vscode/", ".DS_Store"} <= exc_paths
 
 
 class TestProcessDetail:

@@ -31,6 +31,11 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Final, Literal
 
+from course_supporter.ingestion.code_structure import (
+    CodeStructureReason,
+    denylist_token,
+    structure_reason,
+)
 from course_supporter.normalizer.classify import denylist_prefix
 
 # F7 (ratified): generous per-file sanitary cap. Empirical grounding
@@ -96,31 +101,46 @@ def assess(path: str, size_bytes: int) -> TypicalityVerdict:
     Anything that no convention-certain pattern demotes stays custom
     (ratified asymmetry: doubtful → include).
     """
-    # Reason grammar "<token>: <detail>" — one dictionary shared with
-    # the extraction-skip rows in DocumentSummary.structure (№14,
-    # DD-CM-B-ready); ``denylist_dir`` mirrors the manifest's
-    # ExcludedReason token.
+    # Reason grammar "<token>: <detail>" — every token is drawn from the
+    # code contour's single reason vocabulary (:mod:`code_structure`, №19),
+    # never a raw string. The denylist branch here is effectively dead in
+    # the archive contour (denylist entries are skipped at extraction), so
+    # it only fires for a solo denylist upload; it still splits dir/leaf
+    # for truthfulness (a leaf .DS_Store is not a directory).
     prefix = denylist_prefix(path)
     if prefix is not None:
-        return TypicalityVerdict("typical", f"denylist_dir: {prefix}")
+        return TypicalityVerdict(
+            "typical", structure_reason(denylist_token(prefix), prefix)
+        )
 
     parts = PurePosixPath(path).parts
     for segment in parts[:-1]:
         if segment.lower() in _VENDORED_DIRS:
-            return TypicalityVerdict("typical", f"vendored_dir: {segment}")
+            return TypicalityVerdict(
+                "typical",
+                structure_reason(CodeStructureReason.VENDORED_DIR, segment),
+            )
 
     basename = parts[-1].lower() if parts else path.lower()
     if basename in _LOCKFILE_NAMES:
-        return TypicalityVerdict("typical", f"lockfile: {basename}")
+        return TypicalityVerdict(
+            "typical", structure_reason(CodeStructureReason.LOCKFILE, basename)
+        )
     for suffix in _GENERATED_SUFFIXES:
         if basename.endswith(suffix):
-            return TypicalityVerdict("typical", f"generated_artifact: *{suffix}")
+            return TypicalityVerdict(
+                "typical",
+                structure_reason(CodeStructureReason.GENERATED_ARTIFACT, f"*{suffix}"),
+            )
 
     if size_bytes > KEPT_SINGLE_MAX_BYTES:
         return TypicalityVerdict(
             "oversize",
-            f"oversize: file size {size_bytes} B exceeds the "
-            f"{KEPT_SINGLE_MAX_BYTES} B per-file cap",
+            structure_reason(
+                CodeStructureReason.OVERSIZE,
+                f"file size {size_bytes} B exceeds the "
+                f"{KEPT_SINGLE_MAX_BYTES} B per-file cap",
+            ),
         )
 
     return TypicalityVerdict("custom", None)

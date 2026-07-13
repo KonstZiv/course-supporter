@@ -705,6 +705,9 @@ class TestIncidentFormDepth:
                 _incident_form_zip(),
                 archive_kind="zip",
                 max_unzipped_size=_DEFAULT_BUDGET,
+                # Archive-RECURSION cap mirroring the production
+                # authored envelope (max_archive_nesting_depth=1,
+                # top-level only) — NOT the №14 directory-depth limit.
                 max_nesting_depth=1,
                 allowed_extensions=frozenset({"txt", "pdf"}),
                 classify=True,
@@ -729,6 +732,9 @@ class TestIncidentFormDepth:
                 _incident_form_zip(),
                 archive_kind="zip",
                 max_unzipped_size=_DEFAULT_BUDGET,
+                # Archive-RECURSION cap mirroring the production
+                # authored envelope (max_archive_nesting_depth=1,
+                # top-level only) — NOT the №14 directory-depth limit.
                 max_nesting_depth=1,
                 allowed_extensions=frozenset({"txt", "pdf"}),
                 classify=True,

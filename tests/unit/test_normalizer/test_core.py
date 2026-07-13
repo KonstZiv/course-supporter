@@ -105,6 +105,47 @@ class TestCleanProject:
         assert snap.manifest.total_files == 2
         assert snap.manifest.total_bytes == 5
 
+    def test_twelve_delta_extensions_classified_text_and_extracted(self) -> None:
+        # №18 regression (the defect itself): every extension the author
+        # can upload as code but the normalizer used to miss (BINARY ->
+        # no text -> Mentor blind) must classify as TEXT *and* actually
+        # extract to text end-to-end. Real content per extension
+        # (impl-rules#13: no stubs) — libmagic is not consulted for the
+        # class (ExtensionClassifier is extension-driven), but the
+        # extractor decodes the real bytes.
+        from course_supporter.normalizer.extract import DefaultTextExtractor
+
+        bodies = {
+            "app.cc": b"#include <iostream>\nint main() { std::cout << 1; }\n",
+            "bundle.cjs": b"const x = 1;\nmodule.exports = { x };\n",
+            "main.dart": b"void main() {\n  print('hi');\n}\n",
+            "app.h": b"#ifndef A_H\n#define A_H\nvoid greet(void);\n#endif\n",
+            "app.hpp": b"#pragma once\n#include <string>\nclass App {};\n",
+            "index.htm": b"<!DOCTYPE html>\n<html><body><p>hi</p></body></html>\n",
+            "widget.jsx": b"import React from 'react';\nexport const W = () => <b/>;\n",
+            "Main.kt": b'package app\n\nfun main() {\n    println("hi")\n}\n',
+            "build.kts": b'val greeting = "hi"\nprintln(greeting)\n',
+            "esm.mjs": b"export const x = 1;\nexport function f() { return x; }\n",
+            "App.swift": b'import Foundation\n\nprint("hi")\n',
+            "app.tsx": (
+                b"import React from 'react';\n"
+                b"export const A: React.FC = () => <div/>;\n"
+            ),
+        }
+        snap = normalize_archive(_zip(list(bodies.items())), archive_kind="zip")
+        classes = {e.path: e.cls for e in snap.manifest.included}
+        assert set(classes) == set(bodies), snap.manifest.excluded
+        extractor = DefaultTextExtractor()
+        for path, raw in bodies.items():
+            # (2) classification: every delta ext is TEXT now.
+            assert classes[path] is EntryClass.TEXT, path
+            # (3) end-to-end: the extractor returns the code text, not
+            # None — this is the actual fix (classification alone proves
+            # nothing without extraction).
+            extracted = extractor.extract(classes[path], raw)
+            assert extracted is not None, path
+            assert extracted == raw.decode("utf-8"), path
+
 
 class TestDenylist:
     def test_dir_collapsed_survivors_intact(self) -> None:

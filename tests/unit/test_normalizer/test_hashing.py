@@ -56,3 +56,23 @@ class TestAggregateHashDeterminism:
 
     def test_empty_included_hashes_empty_blob(self) -> None:
         assert compute_aggregate_hash([]) == hashlib.sha256(b"").hexdigest()
+
+    def test_cls_does_not_affect_hash(self) -> None:
+        # №18 permanent guarantee (mirror of №14's denylist hash-neutrality
+        # lock): the entry class is NOT part of aggregate_hash, so any
+        # classification change (e.g. .tsx BINARY -> TEXT) over the SAME
+        # bytes yields the SAME snapshot_hash and cannot break echo-match.
+        # This makes P1's report finding a standing invariant, not a
+        # one-off conclusion.
+        for other in (EntryClass.BINARY, EntryClass.DOCUMENT):
+            as_text = [
+                ManifestEntry(path="a.tsx", size=2, hash="h1", cls=EntryClass.TEXT),
+                ManifestEntry(path="b.png", size=2, hash="h2", cls=EntryClass.TEXT),
+            ]
+            reclassified = [
+                ManifestEntry(path="a.tsx", size=2, hash="h1", cls=other),
+                ManifestEntry(path="b.png", size=2, hash="h2", cls=other),
+            ]
+            assert compute_aggregate_hash(as_text) == compute_aggregate_hash(
+                reclassified
+            ), other

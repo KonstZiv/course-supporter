@@ -241,3 +241,23 @@ class TestPolicyConsistency:
             f"code extensions {leaked!r} must not carry a family-map entry; "
             f"they are validated by the textual invariant"
         )
+
+    def test_code_extensions_are_text_in_normalizer(self) -> None:
+        # №18 footgun guard (mirror of the family-map guard above):
+        # everything the AUTHOR can upload as code, the student project
+        # normalizer MUST read as text — else the Mentor reviews a
+        # submission without seeing the changed code (that was the defect:
+        # .tsx/.jsx/... classified BINARY -> no text extraction). The
+        # invariant is tautological under the derived-union construction
+        # in classify.py, and that is exactly why it is valuable: it
+        # guards the CONSTRUCTION, not the values. If someone "simplifies"
+        # the union back to a hand-maintained list, this fails at CI.
+        from course_supporter.normalizer.classify import _TEXT_EXTS
+
+        missing = CODE_EXTENSIONS - _TEXT_EXTS
+        assert missing == set(), (
+            f"code extensions {missing!r} are not read as text by the "
+            f"normalizer; the Mentor would review submissions without "
+            f"their code (see _TEXT_EXTS = _NORMALIZER_TEXT_EXTS | "
+            f"CODE_EXTENSIONS in normalizer/classify.py)"
+        )

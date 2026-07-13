@@ -23,10 +23,13 @@ from course_supporter.normalizer.models import (
     ExcludedEntry,
     ExcludedReason,
 )
+from course_supporter.security.policies import CODE_EXTENSIONS
 
 # ── Extension → class map ──────────────────────────────────────────
 
-_TEXT_EXTS: Final[frozenset[str]] = frozenset(
+# The normalizer's OWN, self-sufficient set of extensions read as text.
+# Complete on its own — it does not depend on the author-upload surface.
+_NORMALIZER_TEXT_EXTS: Final[frozenset[str]] = frozenset(
     {
         "py",
         "js",
@@ -58,6 +61,25 @@ _TEXT_EXTS: Final[frozenset[str]] = frozenset(
         "ipynb",
     }
 )
+
+# №18: the student project contour (normalizer) must read as text
+# everything the author contour lets an author upload as code, or the
+# Mentor reviews a submission without seeing the changed code (that was
+# the defect — .tsx/.jsx/... classified BINARY -> no text extraction).
+# The union is MONOTONIC and deliberately one-directional: it only ADDS
+# CODE_EXTENSIONS on top of the normalizer's self-sufficient base.
+#   * Widening CODE_EXTENSIONS auto-widens the normalizer (desired).
+#   * Narrowing CODE_EXTENSIONS removes NOTHING here — the base stands
+#     alone, so e.g. html leaving CODE_EXTENSIONS (if html-as-code ever
+#     becomes its own source_type) cannot silently stop the normalizer
+#     reading HTML submissions.
+# py/js/ts appearing in both sets is NOT drift-duplication: "the
+# normalizer reads .py as text" and "an author may upload .py as code"
+# are two independent truths; the union only forbids the second from
+# falling out of the first. The invariant CODE_EXTENSIONS <= _TEXT_EXTS
+# holds structurally (locked by TestCodeExtensionsAreText).
+_TEXT_EXTS: Final[frozenset[str]] = _NORMALIZER_TEXT_EXTS | CODE_EXTENSIONS
+
 _DOCUMENT_EXTS: Final[frozenset[str]] = frozenset({"docx", "pdf"})
 
 # The normalizer's own allowlist, passed to ``extract_archive_safely``

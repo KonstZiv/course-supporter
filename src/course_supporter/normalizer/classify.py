@@ -112,9 +112,32 @@ _DENYLIST_EXACT: Final[frozenset[str]] = frozenset(
         ".gradle",
         "bin",
         "obj",
+        # №14 expansion (operator-ratified 2026-07-12; prod blast-radius
+        # on stored KD18 manifests verified empty before changing the
+        # canonical list): OS junk that Finder/Explorer packs into
+        # archives and framework caches that push honest lesson
+        # archives over structural limits.
+        "__MACOSX",
+        ".Trashes",
+        ".angular",
+        ".next",
+        ".nuxt",
+        ".cxx",
+        ".externalNativeBuild",
+        "captures",
     }
 )
-_DENYLIST_GLOBS: Final[tuple[str, ...]] = ("*.egg-info",)
+_DENYLIST_GLOBS: Final[tuple[str, ...]] = (
+    "*.egg-info",
+    # №14 expansion — file-name patterns, matched per segment (so an
+    # AppleDouble companion matches both as a leaf and as a directory).
+    "._*",  # AppleDouble companions (macOS / iPadOS Finder family)
+    "~$*",  # MS Office lock files
+    ".Trash-*",  # per-user trash dirs (Linux desktop convention)
+    "Thumbs.db",
+    "Desktop.ini",
+    "local.properties",
+)
 
 
 def _is_denied_segment(segment: str) -> bool:

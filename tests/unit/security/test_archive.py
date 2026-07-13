@@ -715,10 +715,38 @@ class TestIncidentFormDepth:
         # was rejected wholesale on the __MACOSX depth-9 arcname).
         assert by_name["app/src/main.txt"] is EntryVerdict.INCLUDED
         assert by_name["app/readme.pdf"] is EntryVerdict.INCLUDED
-        # Finder junk surfaces as content verdicts here; commit 2 turns
-        # these into DENYLIST_SKIP via the canonical matcher.
+        # Finder junk surfaces as content verdicts here; the canonical
+        # matcher (next test) turns these into DENYLIST_SKIP.
         assert by_name["__MACOSX/app/._readme.pdf"] is EntryVerdict.MAGIC_MISMATCH
         assert by_name[".DS_Store"] is EntryVerdict.FORBIDDEN_TYPE
+
+    def test_incident_form_junk_skipped_with_canonical_matcher(self) -> None:
+        """№14 regress: the incident archive passes; junk is skipped."""
+        from course_supporter.normalizer.classify import denylist_prefix
+
+        entries = list(
+            extract_archive_safely(
+                _incident_form_zip(),
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=1,
+                allowed_extensions=frozenset({"txt", "pdf"}),
+                classify=True,
+                skip_matcher=denylist_prefix,
+            )
+        )
+        verdicts = {e.arcname: e.verdict for e in entries}
+        assert verdicts["app/src/main.txt"] is EntryVerdict.INCLUDED
+        assert verdicts["app/readme.pdf"] is EntryVerdict.INCLUDED
+        junk = {n for n, v in verdicts.items() if v is EntryVerdict.DENYLIST_SKIP}
+        assert junk == {
+            f"app/{_INCIDENT_CACHE}/chunk-ABC.txt",
+            f"__MACOSX/app/{_INCIDENT_CACHE}/._chunk-ABC.txt",
+            "__MACOSX/app/._readme.pdf",
+            ".DS_Store",
+        }
+        # Nothing beyond the two honest files and the four junk rows.
+        assert len(verdicts) == 6
 
 
 # ── Recursive extraction ───────────────────────────────────────────

@@ -76,7 +76,8 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
-from course_supporter.security.archive import extract_archive_safely
+from course_supporter.normalizer.classify import denylist_prefix
+from course_supporter.security.archive import EntryVerdict, extract_archive_safely
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.file_type import extension_of
 from course_supporter.security.policies import AUTHORED_POLICY
@@ -229,10 +230,13 @@ class CodeProcessor(MaterialProcessor):
         """Classify-mode member loop (KD18 machinery, reused as-is).
 
         INCLUDED verdicts become segments; every other verdict is
-        recorded for ``DocumentSummary.structure``. Structural
-        anti-bomb guards still raise (``SecurityRejectedError`` →
-        generic failure path; structural error-code lands in the
-        task's commit 7).
+        recorded for ``DocumentSummary.structure``. Denylist junk is
+        skipped BEFORE resource accounting via the canonical KD18
+        matcher (№14: never unpacked, never counted in depth/size/
+        ratio) and lands as an excluded row with the unified
+        ``denylist_dir: <prefix>`` reason. Structural anti-bomb guards
+        still raise (``SecurityRejectedError`` → generic failure path
+        with the structural error-code).
         """
         included: list[tuple[str, bytes]] = []
         excluded: list[dict[str, Any]] = []
@@ -247,13 +251,23 @@ class CodeProcessor(MaterialProcessor):
             max_nesting_depth=depth,
             allowed_extensions=AUTHORED_POLICY.allowed_extensions,
             classify=True,
+            skip_matcher=denylist_prefix,
         ):
-            if entry.verdict == "included":
+            if entry.verdict is EntryVerdict.INCLUDED:
                 included.append((entry.arcname, entry.content))
+            elif entry.verdict is EntryVerdict.DENYLIST_SKIP:
+                # Reason grammar "<enum-token>: <detail>" — the same
+                # dictionary the typicality partition writes (№14,
+                # DD-CM-B-ready). declared_size: the entry was never
+                # read, the header-declared size is the only one.
+                excluded.append(
+                    {
+                        "path": entry.arcname,
+                        "size": entry.declared_size,
+                        "reason": f"denylist_dir: {denylist_prefix(entry.arcname)}",
+                    }
+                )
             else:
-                # declared_size == len(content) for read verdicts; a
-                # DENYLIST_SKIP entry is never read (№14), so the
-                # header-declared size is the only one available.
                 excluded.append(
                     {
                         "path": entry.arcname,

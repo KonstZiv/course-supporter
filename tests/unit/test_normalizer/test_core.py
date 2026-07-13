@@ -103,6 +103,53 @@ class TestDenylist:
         with zipfile.ZipFile(io.BytesIO(snap.canonical_zip)) as zf:
             assert zf.namelist() == ["src/main.py"]
 
+    def test_denylist_junk_is_hash_neutral(self) -> None:
+        # №14 skip-before-accounting lock: adding denylist junk to an
+        # archive changes NOTHING in the snapshot_hash (excluded rows
+        # never participate in the aggregate hash).
+        clean = [("src/main.py", b"print(1)\n"), ("README.md", b"# T\n")]
+        junk = [
+            ("node_modules/lodash/index.js", b"module.exports = {}\n"),
+            ("__MACOSX/src/._main.py", b"\x00\x05\x16\x07" + b"\x00" * 60),
+        ]
+        clean_snap = normalize_archive(_zip(clean), archive_kind="zip")
+        dirty_snap = normalize_archive(_zip(clean + junk), archive_kind="zip")
+        assert dirty_snap.snapshot_hash == clean_snap.snapshot_hash
+        assert {e.path for e in dirty_snap.manifest.included} == {
+            "README.md",
+            "src/main.py",
+        }
+        reasons = {e.path: e.reason for e in dirty_snap.manifest.excluded}
+        assert reasons == {
+            "node_modules/": ExcludedReason.DENYLIST_DIR,
+            "__MACOSX/": ExcludedReason.DENYLIST_DIR,
+        }
+
+    def test_denylist_junk_exempt_from_unpack_guards(self) -> None:
+        # №14: junk under a denylist prefix is never unpacked, so it
+        # cannot trip the level-1 accounting guards it used to trip
+        # (here: directory depth and the declared-total budget).
+        deep = "node_modules/" + "/".join("abcdefghijklmnopqr") + "/x.js"
+        big = b"\x00" * (2 * 1024 * 1024)
+        limits = NormalizerLimits(raw_max_unzipped_bytes=1024 * 1024)
+        snap = normalize_archive(
+            _zip(
+                [
+                    ("src/main.py", b"print(1)\n"),
+                    (deep, b"deep\n"),
+                    ("node_modules/blob.js", big),
+                ]
+            ),
+            archive_kind="zip",
+            limits=limits,
+        )
+        assert {e.path for e in snap.manifest.included} == {"src/main.py"}
+        row = snap.manifest.excluded[0]
+        assert row.path == "node_modules/"
+        assert row.entries == 2
+        # Sizes come from the declared header (entries never read).
+        assert row.size == len(big) + len(b"deep\n")
+
 
 class TestVerdictMapping:
     def test_non_whitelisted_ext_included_as_binary(self) -> None:

@@ -110,6 +110,13 @@ def normalize_archive(
             max_nesting_depth=limits.raw_max_nesting_depth,
             allowed_extensions=KNOWN_EXTENSIONS,
             classify=True,
+            # №14 skip-before-accounting: denylist junk is never
+            # unpacked and never counted toward the level-1 unpack
+            # guards. Skipped entries arrive as DENYLIST_SKIP yields
+            # with declared_size and are captured by the same denylist
+            # pre-split below — hash-neutral for a given included set
+            # (excluded rows never participate in the aggregate hash).
+            skip_matcher=denylist_prefix,
         )
     )
 

@@ -198,6 +198,31 @@ class TestArchiveExtraction:
             "notes.md",
         }
 
+    def test_homework_zip_denylist_junk_skipped_with_matcher(self) -> None:
+        # №14: a mac-packed student zip (__MACOSX/ AppleDouble junk)
+        # used to fail-close on FORBIDDEN_TYPE; with the canonical
+        # matcher injected by the worker, junk is silently dropped and
+        # only the honest solution survives.
+        from course_supporter.normalizer.classify import denylist_prefix
+
+        z = _make_zip(
+            [
+                ("solution.py", b'print("hello")\n'),
+                ("__MACOSX/._solution.py", b"\x00\x05\x16\x07" + b"\x00" * 60),
+                (".DS_Store", b"\x00\x01Bud1"),
+            ]
+        )
+        with pytest.raises(SecurityRejectedError):
+            run_stage1(filename="hw.zip", content=z, context="homework")
+        result = run_stage1(
+            filename="hw.zip",
+            content=z,
+            context="homework",
+            archive_skip_matcher=denylist_prefix,
+        )
+        assert result.archive_entries is not None
+        assert {e.arcname for e in result.archive_entries} == {"solution.py"}
+
     def test_homework_zip_with_forbidden_entry_rejected(self) -> None:
         z = _make_zip([("malware.exe", PE_BYTES)])
         with pytest.raises(SecurityRejectedError) as exc_info:

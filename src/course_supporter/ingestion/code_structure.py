@@ -194,7 +194,15 @@ def _cap(clause: str) -> str:
     return clause[:1].upper() + clause[1:] if clause else clause
 
 
-def _distinct_basenames(rows: Sequence[Mapping[str, Any]], limit: int = 5) -> str:
+# Cap on distinct non-code basenames named in one aggregated line — enough
+# for the model to recognise the kind (.gitignore, favicon.ico, …) without
+# turning the count line back into a path list.
+_MAX_DISTINCT_BASENAMES: Final[int] = 5
+
+
+def _distinct_basenames(
+    rows: Sequence[Mapping[str, Any]], limit: int = _MAX_DISTINCT_BASENAMES
+) -> str:
     names = sorted({PurePosixPath(str(r["path"])).name for r in rows})
     head = ", ".join(names[:limit])
     return head + ", …" if len(names) > limit else head

@@ -66,6 +66,7 @@ import structlog
 
 from course_supporter.security.archive import (
     ExtractedFile,
+    SkipMatcher,
     extract_archive_safely,
 )
 from course_supporter.security.exceptions import (
@@ -162,6 +163,7 @@ def run_stage1(
     filename: str,
     content: bytes,
     context: Literal["authored", "homework"],
+    archive_skip_matcher: SkipMatcher | None = None,
 ) -> Stage1Result:
     """Run the synchronous Stage 1 pipeline; raise on first violation.
 
@@ -174,6 +176,14 @@ def run_stage1(
         context: ``"authored"`` (course author uploads) or
             ``"homework"`` (student submissions). Resolves the
             active :class:`ContextPolicy`.
+        archive_skip_matcher: Optional denylist skip gate for the
+            archive branch (№14): matched entries are silently
+            dropped before resource accounting instead of
+            fail-closing the whole upload on junk (``__MACOSX/``,
+            ``node_modules/`` …). Callers inject the canonical
+            normalizer ``denylist_prefix`` — the security layer
+            keeps zero upward imports. Ignored for non-archive
+            uploads.
 
     Returns:
         :class:`Stage1Result` populated only when every check
@@ -229,6 +239,7 @@ def run_stage1(
                 archive_kind=archive_kind,
                 policy=policy,
                 context=context,
+                skip_matcher=archive_skip_matcher,
             )
 
         nfc_text: str | None = None
@@ -271,13 +282,17 @@ def _handle_archive_input(
     archive_kind: Literal["zip", "tar.gz"],
     policy: ContextPolicy,
     context: Literal["authored", "homework"],
+    skip_matcher: SkipMatcher | None,
 ) -> Stage1Result:
     """Drain the archive iterator eagerly; raise on first violation.
 
     Iterating eagerly is intentional: the all-or-nothing contract
     means a partial yield must never reach Stage 2. ``tuple(...)``
     forces every entry through the same byte budget and per-entry
-    structural checks before the result is built.
+    structural checks before the result is built. With a
+    ``skip_matcher`` the strict extractor silently drops denylist
+    junk before accounting (№14) — ``archive_entries`` carries only
+    the surviving files.
     """
     if (
         policy.max_archive_unzipped_bytes is None
@@ -301,6 +316,7 @@ def _handle_archive_input(
             max_unzipped_size=policy.max_archive_unzipped_bytes,
             max_nesting_depth=policy.max_archive_nesting_depth,
             allowed_extensions=policy.allowed_extensions,
+            skip_matcher=skip_matcher,
         )
     )
 

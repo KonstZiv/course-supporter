@@ -16,6 +16,8 @@ Attack vectors covered:
 * Whitelist propagation through recursion
 * Extension/content mismatch inside archive
 * Empty archive
+* Denylist skip (№14): hostility rejects even inside the skip zone;
+  skipped entries are exempt from all resource accounting
 """
 
 import io
@@ -25,6 +27,7 @@ import zipfile
 import pytest
 
 from course_supporter.security.archive import (
+    EntryVerdict,
     ExtractedFile,
     _validate_arcname,
     extract_archive_safely,
@@ -358,15 +361,15 @@ class TestSymlinkRejection:
 
 class TestNestingDepth:
     def test_directory_depth_at_limit_accepted(self) -> None:
-        # depth = 8 (eight slashes after rstrip).
-        deep = "a/b/c/d/e/f/g/h/leaf.txt"
+        # depth = 16 (sixteen slashes after rstrip) — №14 raised from 8.
+        deep = "/".join("abcdefghijklmnop") + "/leaf.txt"
         archive = _zip_fixture([(deep, b"hi")])
         files = _extract(archive)
         assert files[0].arcname == deep
 
     def test_directory_depth_exceeded_rejected(self) -> None:
-        # depth = 9 → reject.
-        too_deep = "a/b/c/d/e/f/g/h/i/leaf.txt"
+        # depth = 17 → reject.
+        too_deep = "/".join("abcdefghijklmnopq") + "/leaf.txt"
         archive = _zip_fixture([(too_deep, b"hi")])
         with pytest.raises(SecurityRejectedError) as exc_info:
             _extract(archive)
@@ -394,6 +397,362 @@ class TestNestingDepth:
             )
         assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
         assert "nesting" in exc_info.value.detail.lower()
+
+
+# ── Denylist skip (№14 jurisdiction split) ─────────────────────────
+
+
+def _junk_matcher(arcname: str) -> str | None:
+    """Minimal skip matcher: everything under top-level ``junk/``."""
+    return "junk/" if arcname.startswith("junk/") else None
+
+
+class TestDenylistSkip:
+    def test_classify_yields_denylist_skip_with_declared_size(self) -> None:
+        archive = _zip_fixture([("junk/lib.txt", b"x" * 64), ("kept.txt", b"hello")])
+        entries = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                classify=True,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        by_name = {e.arcname: e for e in entries}
+        skipped = by_name["junk/lib.txt"]
+        assert skipped.verdict is EntryVerdict.DENYLIST_SKIP
+        assert skipped.content == b""
+        assert skipped.declared_size == 64
+        kept = by_name["kept.txt"]
+        assert kept.verdict is EntryVerdict.INCLUDED
+        assert kept.declared_size == len(b"hello")
+
+    def test_strict_mode_silently_drops_skip_zone(self) -> None:
+        # junk/evil.exe would raise FORBIDDEN_TYPE without the matcher.
+        archive = _zip_fixture([("junk/evil.exe", PE_BYTES), ("kept.txt", b"hello")])
+        with pytest.raises(SecurityRejectedError):
+            _extract(archive)
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_skip_zone_exempt_from_declared_total_budget(self) -> None:
+        # Without the matcher the declared-total pre-check rejects.
+        big = b"\x00" * (2 * _DEFAULT_BUDGET)
+        archive = _zip_fixture([("junk/blob.txt", big), ("kept.txt", b"hi")])
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            _extract(archive)
+        assert "declared total" in exc_info.value.detail
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_skip_zone_exempt_from_per_entry_cap_and_ratio(self) -> None:
+        # 600 KB of zeros: over the per-entry cap (budget // 2 = 512 KB)
+        # AND >100x deflate ratio — both accounting guards. A skipped
+        # entry is never read, so neither fires.
+        big = b"\x00" * (600 * 1024)
+        archive = _zip_fixture(
+            [("junk/zeros.txt", big), ("kept.txt", b"hi")],
+            compression=zipfile.ZIP_DEFLATED,
+        )
+        with pytest.raises(SecurityRejectedError):
+            _extract(archive)
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_skip_zone_exempt_from_directory_depth(self) -> None:
+        deep = "junk/" + "/".join("abcdefghijklmnopqr") + "/leaf.txt"
+        archive = _zip_fixture([(deep, b"x"), ("kept.txt", b"hi")])
+        with pytest.raises(SecurityRejectedError):
+            _extract(archive)
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_depth_still_enforced_outside_skip_zone(self) -> None:
+        too_deep = "/".join("abcdefghijklmnopq") + "/leaf.txt"
+        archive = _zip_fixture([(too_deep, b"x")])
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            list(
+                extract_archive_safely(
+                    archive,
+                    archive_kind="zip",
+                    max_unzipped_size=_DEFAULT_BUDGET,
+                    max_nesting_depth=3,
+                    allowed_extensions=_DEFAULT_WHITELIST,
+                    skip_matcher=_junk_matcher,
+                )
+            )
+        assert "directory depth" in exc_info.value.detail.lower()
+
+    def test_deep_directory_entry_still_checked_outside_skip(self) -> None:
+        # A pure directory entry (trailing slash) beyond the limit
+        # rejects outside the skip zone, passes inside it.
+        deep_dir = "/".join("abcdefghijklmnopqr") + "/"
+        rejected = _zip_fixture([(deep_dir, b""), ("kept.txt", b"hi")])
+        with pytest.raises(SecurityRejectedError):
+            list(
+                extract_archive_safely(
+                    rejected,
+                    archive_kind="zip",
+                    max_unzipped_size=_DEFAULT_BUDGET,
+                    max_nesting_depth=3,
+                    allowed_extensions=_DEFAULT_WHITELIST,
+                    skip_matcher=_junk_matcher,
+                )
+            )
+        accepted = _zip_fixture([("junk/" + deep_dir, b""), ("kept.txt", b"hi")])
+        files = list(
+            extract_archive_safely(
+                accepted,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_hostile_traversal_inside_skip_zone_rejects(self) -> None:
+        archive = _zip_fixture([("junk/../../etc/passwd", b"x")])
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            list(
+                extract_archive_safely(
+                    archive,
+                    archive_kind="zip",
+                    max_unzipped_size=_DEFAULT_BUDGET,
+                    max_nesting_depth=3,
+                    allowed_extensions=_DEFAULT_WHITELIST,
+                    skip_matcher=_junk_matcher,
+                )
+            )
+        assert "traversal" in exc_info.value.detail.lower()
+
+    def test_zip_symlink_inside_skip_zone_rejects(self) -> None:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            info = zipfile.ZipInfo("junk/evil-link")
+            info.external_attr = 0o120777 << 16  # S_IFLNK | 0o777
+            zf.writestr(info, b"target")
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            list(
+                extract_archive_safely(
+                    buf.getvalue(),
+                    archive_kind="zip",
+                    max_unzipped_size=_DEFAULT_BUDGET,
+                    max_nesting_depth=3,
+                    allowed_extensions=_DEFAULT_WHITELIST,
+                    skip_matcher=_junk_matcher,
+                )
+            )
+        assert "non-regular" in exc_info.value.detail.lower()
+
+    def test_tar_special_member_inside_skip_zone_rejects(self) -> None:
+        archive = _tar_gz_with_special_member("junk/dev", tarfile.CHRTYPE)
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            list(
+                extract_archive_safely(
+                    archive,
+                    archive_kind="tar.gz",
+                    max_unzipped_size=_DEFAULT_BUDGET,
+                    max_nesting_depth=3,
+                    allowed_extensions=_DEFAULT_WHITELIST,
+                    skip_matcher=_junk_matcher,
+                )
+            )
+        assert "non-regular" in exc_info.value.detail.lower()
+
+    def test_tar_skip_zone_yields_declared_size(self) -> None:
+        archive = _tar_gz_fixture([("junk/lib.txt", b"z" * 32), ("kept.txt", b"ok")])
+        entries = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="tar.gz",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                classify=True,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        by_name = {e.arcname: e for e in entries}
+        assert by_name["junk/lib.txt"].verdict is EntryVerdict.DENYLIST_SKIP
+        assert by_name["junk/lib.txt"].declared_size == 32
+        assert by_name["kept.txt"].verdict is EntryVerdict.INCLUDED
+
+    def test_nested_archive_inside_skip_zone_not_opened(self) -> None:
+        # Strict mode without the matcher recurses into junk/inner.zip
+        # and rejects the .exe inside; with the matcher the nested
+        # archive is dropped before the recursion gate — never opened.
+        inner = _zip_fixture([("malware.exe", PE_BYTES)])
+        archive = _zip_fixture(
+            [("junk/inner.zip", inner), ("kept.txt", b"kept text\n")]
+        )
+        with pytest.raises(SecurityRejectedError):
+            _extract(archive)
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=_junk_matcher,
+            )
+        )
+        assert [f.arcname for f in files] == ["kept.txt"]
+
+    def test_canonical_denylist_prefix_matcher(self) -> None:
+        # Integration lock: the production matcher (KD18 canonical
+        # denylist) plugs straight into the kwarg.
+        from course_supporter.normalizer.classify import denylist_prefix
+
+        archive = _zip_fixture(
+            [
+                ("node_modules/pkg/index.txt", b"module text\n"),
+                ("src.txt", b"source text\n"),
+            ]
+        )
+        files = list(
+            extract_archive_safely(
+                archive,
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                max_nesting_depth=3,
+                allowed_extensions=_DEFAULT_WHITELIST,
+                skip_matcher=denylist_prefix,
+            )
+        )
+        assert [f.arcname for f in files] == ["src.txt"]
+
+
+# ── Incident-form fixture (№14 regression precursor) ───────────────
+
+# AppleDouble header bytes — what macOS Finder actually writes into
+# __MACOSX/._* companion entries.
+_APPLE_DOUBLE = bytes.fromhex("00051607") + b"\x00\x02\x00\x00" + b"\x00" * 60
+
+# The framework-cache subtree of the 2026-07-12 prod incident: 8 levels
+# deep on its own; the __MACOSX/ prefix pushed its mirror to depth 9.
+_INCIDENT_CACHE = ".angular/cache/21.1.4/app/vite/deps_ssr/chunks"
+
+
+def _incident_form_zip() -> bytes:
+    """Synthetic mirror of the prod-incident archive shape (№14).
+
+    A real lesson archive packed "as is" on macOS: honest sources at
+    the top, Finder junk (``__MACOSX/`` AppleDouble companions) layered
+    OVER a framework cache that is itself 8 levels deep — the deepest
+    arcname reaches depth 9, which the pre-№14 depth-8 guard rejected
+    wholesale.
+    """
+    return _zip_fixture(
+        [
+            ("app/src/main.txt", b"honest lesson source\n"),
+            ("app/readme.pdf", PDF_BYTES),
+            (f"app/{_INCIDENT_CACHE}/chunk-ABC.txt", b"generated vite chunk\n"),
+            (f"__MACOSX/app/{_INCIDENT_CACHE}/._chunk-ABC.txt", _APPLE_DOUBLE),
+            ("__MACOSX/app/._readme.pdf", _APPLE_DOUBLE),
+            (".DS_Store", b"\x00\x01Bud1"),
+        ]
+    )
+
+
+class TestIncidentFormDepth:
+    """The prod-incident SHAPE passes the raised depth limit structurally."""
+
+    def test_incident_form_passes_structurally_at_depth_16(self) -> None:
+        entries = list(
+            extract_archive_safely(
+                _incident_form_zip(),
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                # Archive-RECURSION cap mirroring the production
+                # authored envelope (max_archive_nesting_depth=1,
+                # top-level only) — NOT the №14 directory-depth limit.
+                max_nesting_depth=1,
+                allowed_extensions=frozenset({"txt", "pdf"}),
+                classify=True,
+            )
+        )
+        by_name = {e.arcname: e.verdict for e in entries}
+        # Honest content survives; nothing raises (pre-№14 this archive
+        # was rejected wholesale on the __MACOSX depth-9 arcname).
+        assert by_name["app/src/main.txt"] is EntryVerdict.INCLUDED
+        assert by_name["app/readme.pdf"] is EntryVerdict.INCLUDED
+        # Finder junk surfaces as content verdicts here; the canonical
+        # matcher (next test) turns these into DENYLIST_SKIP.
+        assert by_name["__MACOSX/app/._readme.pdf"] is EntryVerdict.MAGIC_MISMATCH
+        assert by_name[".DS_Store"] is EntryVerdict.FORBIDDEN_TYPE
+
+    def test_incident_form_junk_skipped_with_canonical_matcher(self) -> None:
+        """№14 regress: the incident archive passes; junk is skipped."""
+        from course_supporter.normalizer.classify import denylist_prefix
+
+        entries = list(
+            extract_archive_safely(
+                _incident_form_zip(),
+                archive_kind="zip",
+                max_unzipped_size=_DEFAULT_BUDGET,
+                # Archive-RECURSION cap mirroring the production
+                # authored envelope (max_archive_nesting_depth=1,
+                # top-level only) — NOT the №14 directory-depth limit.
+                max_nesting_depth=1,
+                allowed_extensions=frozenset({"txt", "pdf"}),
+                classify=True,
+                skip_matcher=denylist_prefix,
+            )
+        )
+        verdicts = {e.arcname: e.verdict for e in entries}
+        assert verdicts["app/src/main.txt"] is EntryVerdict.INCLUDED
+        assert verdicts["app/readme.pdf"] is EntryVerdict.INCLUDED
+        junk = {n for n, v in verdicts.items() if v is EntryVerdict.DENYLIST_SKIP}
+        assert junk == {
+            f"app/{_INCIDENT_CACHE}/chunk-ABC.txt",
+            f"__MACOSX/app/{_INCIDENT_CACHE}/._chunk-ABC.txt",
+            "__MACOSX/app/._readme.pdf",
+            ".DS_Store",
+        }
+        # Nothing beyond the two honest files and the four junk rows.
+        assert len(verdicts) == 6
 
 
 # ── Recursive extraction ───────────────────────────────────────────

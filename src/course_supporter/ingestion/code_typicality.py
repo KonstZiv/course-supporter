@@ -96,26 +96,30 @@ def assess(path: str, size_bytes: int) -> TypicalityVerdict:
     Anything that no convention-certain pattern demotes stays custom
     (ratified asymmetry: doubtful → include).
     """
+    # Reason grammar "<token>: <detail>" — one dictionary shared with
+    # the extraction-skip rows in DocumentSummary.structure (№14,
+    # DD-CM-B-ready); ``denylist_dir`` mirrors the manifest's
+    # ExcludedReason token.
     prefix = denylist_prefix(path)
     if prefix is not None:
-        return TypicalityVerdict("typical", f"denylist dir: {prefix}")
+        return TypicalityVerdict("typical", f"denylist_dir: {prefix}")
 
     parts = PurePosixPath(path).parts
     for segment in parts[:-1]:
         if segment.lower() in _VENDORED_DIRS:
-            return TypicalityVerdict("typical", f"vendored dir: {segment}")
+            return TypicalityVerdict("typical", f"vendored_dir: {segment}")
 
     basename = parts[-1].lower() if parts else path.lower()
     if basename in _LOCKFILE_NAMES:
         return TypicalityVerdict("typical", f"lockfile: {basename}")
     for suffix in _GENERATED_SUFFIXES:
         if basename.endswith(suffix):
-            return TypicalityVerdict("typical", f"generated artifact: *{suffix}")
+            return TypicalityVerdict("typical", f"generated_artifact: *{suffix}")
 
     if size_bytes > KEPT_SINGLE_MAX_BYTES:
         return TypicalityVerdict(
             "oversize",
-            f"file size {size_bytes} B exceeds the "
+            f"oversize: file size {size_bytes} B exceeds the "
             f"{KEPT_SINGLE_MAX_BYTES} B per-file cap",
         )
 

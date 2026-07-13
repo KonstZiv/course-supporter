@@ -563,6 +563,7 @@ async def arq_process_homework(
         resolve_webhook_url,
     )
     from course_supporter.models.source import AssignmentType
+    from course_supporter.normalizer.classify import denylist_prefix
     from course_supporter.security.archive import extract_submission_content
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import (
@@ -724,10 +725,15 @@ async def arq_process_homework(
                     # HOMEWORK_POLICY caps at 1 MB so the in-memory read above is
                     # safe (per Phase 1.2 §6.2 option a ratify).
                     try:
+                        # №14: denylist junk inside a student zip
+                        # (__MACOSX/, node_modules/ …) is skipped before
+                        # accounting instead of fail-closing the whole
+                        # submission on a mac-packed archive.
                         stage1_result = run_stage1(
                             filename=submission.original_filename or file_path.name,
                             content=file_bytes,
                             context="homework",
+                            archive_skip_matcher=denylist_prefix,
                         )
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult

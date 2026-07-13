@@ -136,15 +136,20 @@ class TestProcessRaw:
             {
                 "src/app.py": _PY_BODY.encode(),
                 "lib/service.rb": _RB_BODY.encode(),
+                "tools/helper.exe": b"MZ\x90\x00binary",
+                # `bin` is a KD18 denylist segment — skipped at
+                # extraction (№14), never unpacked; unified reason.
                 "bin/tool.exe": b"MZ\x90\x00binary",
             },
         )
         doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
         paths = [c.metadata["file_path"] for c in doc.chunks]
         assert paths == ["src/app.py", "lib/service.rb"]
-        excluded = doc.metadata["excluded_entries"]
-        assert [e["path"] for e in excluded] == ["bin/tool.exe"]
-        assert excluded[0]["reason"] == "forbidden_type"
+        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        assert excluded == {
+            "tools/helper.exe": "forbidden_type",
+            "bin/tool.exe": "denylist_dir: bin/",
+        }
 
     async def test_zip_with_no_includable_files_raises(self, tmp_path: Path) -> None:
         archive = tmp_path / "junk.zip"
@@ -173,7 +178,14 @@ class TestProcessRaw:
         assert [c.metadata["file_path"] for c in doc.chunks] == ["src/app.py"]
         entries = doc.metadata["description_only_entries"]
         by_path = {e["path"]: e for e in entries}
-        assert by_path["node_modules/lodash/index.js"]["disposition"] == "typical"
+        # node_modules is skipped at EXTRACTION now (№14, never
+        # unpacked) — it lands in excluded_entries with the unified
+        # reason, not in the typicality partition.
+        assert "node_modules/lodash/index.js" not in by_path
+        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        assert excluded["node_modules/lodash/index.js"] == (
+            "denylist_dir: node_modules/"
+        )
         assert by_path["package-lock.json"]["disposition"] == "typical"
         assert by_path["data/dump.sql"]["disposition"] == "oversize"
 
@@ -186,6 +198,38 @@ class TestProcessRaw:
         )
         assert doc.chunks == []
         assert len(doc.metadata["description_only_entries"]) == 1
+
+    async def test_incident_form_archive_processes_clean(self, tmp_path: Path) -> None:
+        """№14 regress: the prod-incident archive shape passes end-to-end.
+
+        A macOS-packed lesson (``__MACOSX/`` AppleDouble companions over
+        an 8-level ``.angular/cache``) used to die wholesale on the
+        depth guard; now the junk is skipped before accounting and only
+        honest sources become segments.
+        """
+        apple_double = bytes.fromhex("00051607") + b"\x00\x02" + b"\x00" * 60
+        cache = ".angular/cache/21.1.4/app/vite/deps_ssr/chunks"
+        archive = tmp_path / "lesson.zip"
+        _write_zip(
+            archive,
+            {
+                "app/src/main.js": b"export const answer = 42;\n",
+                f"app/{cache}/chunk-ABC.js": b"// generated vite chunk\n",
+                f"__MACOSX/app/{cache}/._chunk-ABC.js": apple_double,
+                "__MACOSX/app/._main.js": apple_double,
+                ".DS_Store": b"\x00\x01Bud1",
+            },
+        )
+        doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        assert [c.metadata["file_path"] for c in doc.chunks] == ["app/src/main.js"]
+        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        assert excluded == {
+            f"app/{cache}/chunk-ABC.js": "denylist_dir: app/.angular/",
+            f"__MACOSX/app/{cache}/._chunk-ABC.js": "denylist_dir: __MACOSX/",
+            "__MACOSX/app/._main.js": "denylist_dir: __MACOSX/",
+            ".DS_Store": "denylist_dir: .DS_Store",
+        }
+        assert doc.metadata["description_only_entries"] == []
 
 
 class TestOffsets:

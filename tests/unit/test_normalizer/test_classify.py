@@ -75,6 +75,41 @@ class TestDenylistComponentMatch:
         # .venv (outer) wins over node_modules (inner); one prefix.
         assert denylist_prefix("a/.venv/lib/node_modules/x.js") == "a/.venv/"
 
+    def test_no14_expansion_dirs(self) -> None:
+        # №14 (operator-ratified 2026-07-12): OS junk + framework caches.
+        assert denylist_prefix("__MACOSX/app/._readme.pdf") == "__MACOSX/"
+        assert denylist_prefix("lesson/.angular/cache/x.js") == "lesson/.angular/"
+        assert denylist_prefix("app/.next/static/c.js") == "app/.next/"
+        assert denylist_prefix("app/.nuxt/dist/c.js") == "app/.nuxt/"
+        assert denylist_prefix("proj/.cxx/abi/x.o") == "proj/.cxx/"
+        assert denylist_prefix("a/.externalNativeBuild/x") == (
+            "a/.externalNativeBuild/"
+        )
+        assert denylist_prefix("captures/screen.png") == "captures/"
+        assert denylist_prefix("vol/.Trashes/501/f.txt") == "vol/.Trashes/"
+
+    def test_no14_expansion_file_globs(self) -> None:
+        # AppleDouble companions match as a leaf AND as any segment.
+        assert denylist_prefix("app/._main.js") == "app/._main.js"
+        assert denylist_prefix("~$report.docx") == "~$report.docx"
+        assert denylist_prefix("home/.Trash-1000/f.txt") == "home/.Trash-1000/"
+        assert denylist_prefix("pics/Thumbs.db") == "pics/Thumbs.db"
+        assert denylist_prefix("Desktop.ini") == "Desktop.ini"
+        assert denylist_prefix("android/local.properties") == (
+            "android/local.properties"
+        )
+
+    def test_no14_expansion_lookalikes_not_matched(self) -> None:
+        # Component equality / per-segment glob: near-misses stay clean.
+        for path in (
+            "my.angular/file.js",  # not the `.angular` segment
+            ".angularx/f.js",
+            "src/handler_.py",  # `._*` anchors at the segment start
+            "notes/thumbs.db.md",
+            "capturesx/f.png",
+        ):
+            assert denylist_prefix(path) is None, path
+
 
 class TestCollapseDenylist:
     def test_two_files_same_prefix_one_row(self) -> None:

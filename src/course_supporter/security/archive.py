@@ -8,10 +8,10 @@ each entry syntactically and structurally before yielding.
 ## Defense layers
 
 1. **Path traversal** -- arcname syntactic validation: empty, null
-   byte, backslash, leading ``/``, ``..`` segments, directory depth
-   ``> _MAX_DIRECTORY_DEPTH`` (8) all raise ``ARCHIVE_VIOLATION``.
-   ``zipfile.extractall`` / ``tarfile.extractall`` are explicitly
-   not used; iteration is manual per entry.
+   byte, backslash, leading ``/``, ``..`` segments all raise
+   ``ARCHIVE_VIOLATION``. ``zipfile.extractall`` /
+   ``tarfile.extractall`` are explicitly not used; iteration is
+   manual per entry.
 
 2. **Bombs (memory)** -- four checks per archive_kind:
 
@@ -38,8 +38,9 @@ each entry syntactically and structurally before yielding.
 5. **Nesting depth** -- two limits:
 
    * Directory depth within a single archive: ``arcname.count("/")
-     > _MAX_DIRECTORY_DEPTH`` (8) rejects (DoS guard, vision §KD14
-     ambiguous).
+     > _MAX_DIRECTORY_DEPTH`` (16) rejects (DoS/sanity guard, not a
+     security boundary; applied only to entries that survive the
+     skip gate, see layer 9).
    * Archive-within-archive recursion: caller-supplied
      ``max_nesting_depth``. Semantics: ``current_depth >=
      max_nesting_depth`` raises. With ``max_nesting_depth=3`` per
@@ -65,6 +66,19 @@ each entry syntactically and structurally before yielding.
 8. **PAX header validation** -- *deferred*. Modern tar PAX-header
    attacks are rare; MVP ships without explicit PAX vetting. See
    POST-MR-NOTES forward-looking note.
+
+9. **Denylist skip (№14 jurisdiction split)** -- the member loop
+   separates HOSTILITY (traversal / symlink / device: whole-archive
+   reject, even for entries under a skip prefix -- an archive
+   showing attack markers deserves no trust) from UNTIDINESS
+   (denylist prefixes via the caller-supplied ``skip_matcher``:
+   the entry is dropped BEFORE resource accounting -- never read,
+   never counted toward directory depth, per-entry caps,
+   compression ratio, or the declared-size pre-check). Per-member
+   check order: hostility -> skip -> accounting -> extraction.
+   Skipping tightens rather than weakens the bomb defense: the best
+   protection against a bomb inside ``node_modules`` is to never
+   decompress it at all.
 """
 
 from __future__ import annotations
@@ -74,7 +88,7 @@ import io
 import stat
 import tarfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -101,10 +115,21 @@ from course_supporter.security.schemas import (
 
 logger = structlog.get_logger()
 
-# Hardcoded directory-depth limit (DoS guard). Vision §KD14 says
-# "max depth 3" without specifying directory vs archive recursion;
-# we apply directory depth as a separate, generous cap.
-_MAX_DIRECTORY_DEPTH = 8
+# Hardcoded directory-depth limit. A sanity/DoS guard, NOT a security
+# boundary -- bombs are stopped by the byte budget / compression-ratio /
+# per-entry caps. Honest Java packages and monorepos reach 10-12
+# levels; 16 leaves headroom now that denylist junk is skipped before
+# accounting (№14: raised from 8 after a real lesson archive was
+# rejected because __MACOSX/ over .angular/cache pushed it to depth 9).
+_MAX_DIRECTORY_DEPTH = 16
+
+# A skip matcher decides, per NFKC-normalized arcname, whether the entry
+# sits under a denylisted prefix (untidiness jurisdiction, №14): it
+# returns the matched prefix, or None to process the entry normally.
+# The canonical production matcher is the normalizer's
+# ``denylist_prefix`` -- injected by callers so the security layer keeps
+# zero upward imports.
+SkipMatcher = Callable[[str], str | None]
 
 # Compression-ratio threshold above which an archive entry (ZIP) or
 # the whole archive (tar.gz) is treated as a bomb.
@@ -164,6 +189,11 @@ class EntryVerdict(StrEnum):
     """Entry is itself an archive; in classify mode it is NOT opened
     (the nested-archive bomb vector stays unreachable) -- strict mode
     recurses into it instead."""
+    DENYLIST_SKIP = "denylist_skip"
+    """Entry sits under a caller-supplied skip prefix (untidiness
+    jurisdiction, №14). It is never opened: ``content`` is empty and
+    ``declared_size`` carries the header-declared size. Strict mode
+    silently drops the entry instead of yielding."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,16 +211,25 @@ class ClassifiedEntry:
         arcname: NFKC-normalized, path-validated archive entry name.
         content: Full decompressed bytes. For ``NESTED_ARCHIVE`` this
             is the nested archive's own raw bytes -- it is never
-            opened, so the caller hashes it as an opaque blob.
+            opened, so the caller hashes it as an opaque blob. For
+            ``DENYLIST_SKIP`` it is always empty (the entry is never
+            read).
         depth: Archive-recursion depth. Always the top level in
             classify mode, since nested archives are not opened.
         verdict: The content-gate outcome (:class:`EntryVerdict`).
+        declared_size: Uncompressed size in bytes. Equals
+            ``len(content)`` for every read verdict; for
+            ``DENYLIST_SKIP`` the entry is never read, so this is the
+            archive-header-declared size -- trusted for
+            manifest/structure reporting only, never for budget
+            accounting.
     """
 
     arcname: str
     content: bytes
     depth: int
     verdict: EntryVerdict
+    declared_size: int
 
 
 class _Budget:
@@ -224,6 +263,7 @@ def extract_archive_safely(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     classify: Literal[False] = False,
+    skip_matcher: SkipMatcher | None = None,
 ) -> Iterator[ExtractedFile]: ...
 
 
@@ -236,6 +276,7 @@ def extract_archive_safely(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     classify: Literal[True],
+    skip_matcher: SkipMatcher | None = None,
 ) -> Iterator[ClassifiedEntry]: ...
 
 
@@ -247,6 +288,7 @@ def extract_archive_safely(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     classify: bool = False,
+    skip_matcher: SkipMatcher | None = None,
 ) -> Iterator[ExtractedFile | ClassifiedEntry]:
     """Iterate validated files from an archive; raise on first violation.
 
@@ -268,6 +310,19 @@ def extract_archive_safely(
             (``zip`` / ``gz`` / ``tgz``) are recognised structurally
             and recursed regardless of membership; the contents
             inside them must satisfy this whitelist.
+        skip_matcher: Optional per-entry skip gate (№14 jurisdiction
+            split). Called with the NFKC-normalized arcname; a
+            non-None return (the matched denylist prefix) drops the
+            entry BEFORE resource accounting: it is never read and
+            does not count toward directory depth, per-entry caps,
+            compression ratio, or the declared-size pre-check.
+            Hostility checks still run first and reject the whole
+            archive even inside the skip zone. In classify mode a
+            skipped entry surfaces as a ``DENYLIST_SKIP`` verdict
+            carrying ``declared_size``; in strict mode it is silently
+            dropped. The canonical production matcher is the
+            normalizer's ``denylist_prefix``, injected by the caller
+            so this module keeps zero upward imports.
 
     Yields:
         :class:`ExtractedFile` per non-archive, non-directory entry,
@@ -308,6 +363,7 @@ def extract_archive_safely(
         allowed_extensions=allowed_extensions,
         current_depth=0,
         classify=classify,
+        skip_matcher=skip_matcher,
     )
 
 
@@ -324,6 +380,7 @@ def _extract_recursive(
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
+    skip_matcher: SkipMatcher | None,
 ) -> Iterator[ExtractedFile | ClassifiedEntry]:
     if current_depth >= max_nesting_depth:
         raise SecurityRejectedError(
@@ -341,6 +398,7 @@ def _extract_recursive(
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
             classify=classify,
+            skip_matcher=skip_matcher,
         )
     elif archive_kind == "tar.gz":
         yield from _extract_tar_gz(
@@ -351,6 +409,7 @@ def _extract_recursive(
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
             classify=classify,
+            skip_matcher=skip_matcher,
         )
     else:
         raise SecurityRejectedError(
@@ -368,6 +427,7 @@ def _extract_zip(
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
+    skip_matcher: SkipMatcher | None,
 ) -> Iterator[ExtractedFile | ClassifiedEntry]:
     try:
         zf = zipfile.ZipFile(io.BytesIO(archive_bytes))
@@ -381,8 +441,15 @@ def _extract_zip(
         infos = zf.infolist()
         per_entry_cap = max(max_unzipped_size // 2, 1)
 
-        # Pre-extract: total declared uncompressed size.
-        declared_total = sum(info.file_size for info in infos)
+        # Pre-extract: total declared uncompressed size. Skip-zone
+        # entries are exempt from accounting (№14), matched on the same
+        # NFKC-normalized name the in-loop gate uses.
+        declared_total = sum(
+            info.file_size
+            for info in infos
+            if skip_matcher is None
+            or skip_matcher(normalize_filename(info.filename)) is None
+        )
         if declared_total > max_unzipped_size:
             raise SecurityRejectedError(
                 ErrorCategory.ARCHIVE_VIOLATION,
@@ -391,18 +458,38 @@ def _extract_zip(
             )
 
         for info in infos:
+            # Per-member jurisdiction order (№14): hostility -> skip ->
+            # accounting -> extraction. Hostile shapes reject the whole
+            # archive even under a skip prefix.
             arcname = _validate_arcname(info.filename)
+            skip_prefix = skip_matcher(arcname) if skip_matcher is not None else None
 
             if info.is_dir():
-                continue  # path validated above; no content to yield
+                if skip_prefix is None:
+                    _check_directory_depth(info.filename)
+                continue  # hostility validated above; no content to yield
 
-            # Symlink / device / fifo defense via Unix mode bits.
+            # Symlink / device / fifo defense via Unix mode bits --
+            # hostility, so it runs before the skip gate.
             mode = (info.external_attr >> 16) & _ZIP_MODE_MASK
             if mode and mode not in {_ZIP_MODE_REGULAR, _ZIP_MODE_DIRECTORY}:
                 raise SecurityRejectedError(
                     ErrorCategory.ARCHIVE_VIOLATION,
                     f"non-regular zip entry {arcname!r} (Unix mode {mode:#o})",
                 )
+
+            if skip_prefix is not None:
+                if classify:
+                    yield ClassifiedEntry(
+                        arcname=arcname,
+                        content=b"",
+                        depth=current_depth,
+                        verdict=EntryVerdict.DENYLIST_SKIP,
+                        declared_size=info.file_size,
+                    )
+                continue
+
+            _check_directory_depth(info.filename)
 
             # Per-entry size cap (asymmetric bomb defense).
             if info.file_size > per_entry_cap:
@@ -442,6 +529,7 @@ def _extract_zip(
                 max_nesting_depth=max_nesting_depth,
                 allowed_extensions=allowed_extensions,
                 classify=classify,
+                skip_matcher=skip_matcher,
             )
 
 
@@ -454,6 +542,7 @@ def _extract_tar_gz(
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
+    skip_matcher: SkipMatcher | None,
 ) -> Iterator[ExtractedFile | ClassifiedEntry]:
     try:
         tf = tarfile.open(  # noqa: SIM115 — context manager handled below
@@ -470,8 +559,13 @@ def _extract_tar_gz(
         members = tf.getmembers()
         per_entry_cap = max(max_unzipped_size // 2, 1)
 
-        # Pre-extract: total declared size.
-        declared_total = sum(m.size for m in members)
+        # Pre-extract: total declared size (skip-zone entries exempt,
+        # №14 -- same normalization as the in-loop gate).
+        declared_total = sum(
+            m.size
+            for m in members
+            if skip_matcher is None or skip_matcher(normalize_filename(m.name)) is None
+        )
         if declared_total > max_unzipped_size:
             raise SecurityRejectedError(
                 ErrorCategory.ARCHIVE_VIOLATION,
@@ -490,18 +584,37 @@ def _extract_tar_gz(
                 )
 
         for member in members:
+            # Per-member jurisdiction order (№14): hostility -> skip ->
+            # accounting -> extraction (mirror of the zip loop).
             arcname = _validate_arcname(member.name)
+            skip_prefix = skip_matcher(arcname) if skip_matcher is not None else None
 
             if member.isdir():
+                if skip_prefix is None:
+                    _check_directory_depth(member.name)
                 continue
 
             # Reject anything other than regular files. Symlinks,
-            # hard links, devices, FIFOs, sparse files all rejected.
+            # hard links, devices, FIFOs, sparse files all rejected --
+            # hostility, so it runs before the skip gate.
             if member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}:
                 raise SecurityRejectedError(
                     ErrorCategory.ARCHIVE_VIOLATION,
                     f"non-regular tar entry {arcname!r} type {member.type!r}",
                 )
+
+            if skip_prefix is not None:
+                if classify:
+                    yield ClassifiedEntry(
+                        arcname=arcname,
+                        content=b"",
+                        depth=current_depth,
+                        verdict=EntryVerdict.DENYLIST_SKIP,
+                        declared_size=member.size,
+                    )
+                continue
+
+            _check_directory_depth(member.name)
 
             if member.size > per_entry_cap:
                 raise SecurityRejectedError(
@@ -528,6 +641,7 @@ def _extract_tar_gz(
                 max_nesting_depth=max_nesting_depth,
                 allowed_extensions=allowed_extensions,
                 classify=classify,
+                skip_matcher=skip_matcher,
             )
 
 
@@ -541,6 +655,7 @@ def _yield_or_recurse(
     max_nesting_depth: int,
     allowed_extensions: frozenset[str],
     classify: bool,
+    skip_matcher: SkipMatcher | None,
 ) -> Iterator[ExtractedFile | ClassifiedEntry]:
     """Yield ``content`` as an entry, or recurse if it's an archive.
 
@@ -563,6 +678,7 @@ def _yield_or_recurse(
                 content=content,
                 depth=depth,
                 verdict=EntryVerdict.NESTED_ARCHIVE,
+                declared_size=len(content),
             )
             return
         yield from _extract_recursive(
@@ -574,6 +690,7 @@ def _yield_or_recurse(
             allowed_extensions=allowed_extensions,
             current_depth=depth + 1,
             classify=classify,
+            skip_matcher=skip_matcher,
         )
         return
 
@@ -585,6 +702,7 @@ def _yield_or_recurse(
                 content=content,
                 depth=depth,
                 verdict=EntryVerdict.FORBIDDEN_TYPE,
+                declared_size=len(content),
             )
             return
         raise SecurityRejectedError(
@@ -611,6 +729,7 @@ def _yield_or_recurse(
                 content=content,
                 depth=depth,
                 verdict=EntryVerdict.INCLUDED,
+                declared_size=len(content),
             )
             return
         try:
@@ -626,6 +745,7 @@ def _yield_or_recurse(
                 content=content,
                 depth=depth,
                 verdict=verdict,
+                declared_size=len(content),
             )
             return
         yield ClassifiedEntry(
@@ -633,6 +753,7 @@ def _yield_or_recurse(
             content=content,
             depth=depth,
             verdict=EntryVerdict.INCLUDED,
+            declared_size=len(content),
         )
         return
 
@@ -659,14 +780,16 @@ def _archive_kind_for_arcname(arcname: str) -> str | None:
 
 
 def _validate_arcname(arcname: str) -> str:
-    """Validate arcname syntactically; return NFKC-normalized form.
+    """Validate arcname against hostile shapes; return NFKC-normalized form.
 
-    Defenses applied in this order (cheap-fail-fast):
-    empty, null byte, backslash, leading ``/``, ``..`` segment,
-    directory depth. Returns the NFKC-normalized arcname for
-    downstream callers; depth count and structural checks operate
-    on the pre-normalized string so attempts to encode ``..`` as
-    compatibility characters do not bypass the path check.
+    Hostility jurisdiction only (№14 split): empty, null byte,
+    backslash, leading ``/``, ``..`` segment -- cheap-fail-fast order.
+    Directory depth is resource accounting, not hostility; it lives in
+    :func:`_check_directory_depth` and runs only for entries that
+    survive the skip gate. Structural checks operate on the
+    pre-normalized string so attempts to encode ``..`` as
+    compatibility characters do not bypass the path check; the
+    NFKC-normalized arcname is returned for downstream callers.
     """
     if not arcname:
         raise SecurityRejectedError(
@@ -696,6 +819,17 @@ def _validate_arcname(arcname: str) -> str:
             f"path traversal in arcname {arcname!r}",
         )
 
+    return normalize_filename(arcname)
+
+
+def _check_directory_depth(arcname: str) -> None:
+    """Reject arcnames nested deeper than ``_MAX_DIRECTORY_DEPTH``.
+
+    Resource accounting, not a hostility gate (№14): callers run this
+    only for entries that survive the skip gate. Operates on the
+    pre-normalized string for the same bypass-resistance reasoning as
+    :func:`_validate_arcname`.
+    """
     cleaned = arcname.rstrip("/")
     depth = cleaned.count("/")
     if depth > _MAX_DIRECTORY_DEPTH:
@@ -703,8 +837,6 @@ def _validate_arcname(arcname: str) -> str:
             ErrorCategory.ARCHIVE_VIOLATION,
             f"arcname {arcname!r} directory depth {depth} > {_MAX_DIRECTORY_DEPTH}",
         )
-
-    return normalize_filename(arcname)
 
 
 def _read_chunked(stream: IO[bytes], budget: _Budget) -> bytes:

@@ -110,6 +110,13 @@ def normalize_archive(
             max_nesting_depth=limits.raw_max_nesting_depth,
             allowed_extensions=KNOWN_EXTENSIONS,
             classify=True,
+            # №14 skip-before-accounting: denylist junk is never
+            # unpacked and never counted toward the level-1 unpack
+            # guards. Skipped entries arrive as DENYLIST_SKIP yields
+            # with declared_size and are captured by the same denylist
+            # pre-split below — hash-neutral for a given included set
+            # (excluded rows never participate in the aggregate hash).
+            skip_matcher=denylist_prefix,
         )
     )
 
@@ -120,7 +127,9 @@ def normalize_archive(
     for entry in classified:
         path = canonicalize_path(entry.arcname)
         if denylist_prefix(path) is not None:
-            denied.append((path, len(entry.content)))
+            # declared_size == len(content) for read entries; for a
+            # DENYLIST_SKIP entry (never read, №14) it is the only size.
+            denied.append((path, entry.declared_size))
         else:
             survivors.append((path, entry))
     excluded_denylist = collapse_denylist(denied)
@@ -167,6 +176,19 @@ def normalize_archive(
                     reason=ExcludedReason.NESTED_ARCHIVE,
                     entries=1,
                     size=len(entry.content),
+                )
+            )
+        elif verdict is EntryVerdict.DENYLIST_SKIP:
+            # Defensive: with the canonical ``denylist_prefix`` matcher a
+            # skipped entry always matches the denylist pre-split above
+            # and never reaches this loop. A broader custom matcher
+            # would land here; map it to its own excluded row.
+            excluded_other.append(
+                ExcludedEntry(
+                    path=path,
+                    reason=ExcludedReason.DENYLIST_DIR,
+                    entries=1,
+                    size=entry.declared_size,
                 )
             )
         else:

@@ -330,6 +330,25 @@ class TestProcessRaw:
         excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
         assert excluded == {"evil.py": "magic_mismatch"}
 
+    async def test_solo_empty_code_file_consistent_with_archive(
+        self, tmp_path: Path
+    ) -> None:
+        """№17 empty-file consistency: empty solo file is included, not rejected.
+
+        The in-archive classify path short-circuits empty content to
+        INCLUDED before the magic check (test_archive_classify's
+        ``test_empty_whitelisted_file_is_included``). The solo ``if raw``
+        guard mirrors that — an empty ``__init__.py`` uploaded solo must
+        NOT raise; both paths treat empty identically.
+        """
+        solo = tmp_path / "__init__.py"
+        solo.write_bytes(b"")
+        doc = await CodeProcessor().process_raw(
+            _mock_source(str(solo), filename="__init__.py")
+        )
+        assert [c.metadata["file_path"] for c in doc.chunks] == ["__init__.py"]
+        assert doc.metadata["excluded_entries"] == []
+
 
 class TestOffsets:
     def test_full_cover_over_assemble_text(self) -> None:

@@ -234,8 +234,12 @@ class CodeProcessor(MaterialProcessor):
             # runs inside extract_archive_safely). A binary mislabeled with
             # a code extension must not be segmented verbatim into the
             # reference text — a non-text solo file raises MAGIC_MISMATCH,
-            # handled by the ingestion security-reject branch. Empty solo
-            # files mirror the classify path (empty -> included, no magic).
+            # handled by the ingestion security-reject branch. The ``if
+            # raw`` guard mirrors the classify path, which short-circuits
+            # empty content to INCLUDED (archive.py, before verify is ever
+            # called) rather than rejecting it — so empty files are treated
+            # identically on both paths. Calling verify unconditionally
+            # would REJECT empty solo files and diverge from the archive.
             verify_extension_matches_content(name, raw)
         return [(name, raw)]
 

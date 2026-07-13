@@ -148,8 +148,11 @@ class TestProcessRaw:
         assert paths == ["src/app.py", "lib/service.rb"]
         excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
         assert excluded == {
-            "tools/helper.exe": "forbidden_type",
-            "bin/tool.exe": "denylist_dir: bin/",
+            # №19: not the strict contour's "forbidden_type" (nothing is
+            # forbidden here — it is simply not code).
+            "tools/helper.exe": "non_code_type",
+            # denylist collapsed to the directory prefix (bare token).
+            "bin/": "denylist_dir",
         }
 
     async def test_zip_with_no_includable_files_raises(self, tmp_path: Path) -> None:
@@ -183,10 +186,9 @@ class TestProcessRaw:
         # unpacked) — it lands in excluded_entries with the unified
         # reason, not in the typicality partition.
         assert "node_modules/lodash/index.js" not in by_path
+        # №19: collapsed to the directory prefix, one row, bare token.
         excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
-        assert excluded["node_modules/lodash/index.js"] == (
-            "denylist_dir: node_modules/"
-        )
+        assert excluded == {"node_modules/": "denylist_dir"}
         assert by_path["package-lock.json"]["disposition"] == "typical"
         assert by_path["data/dump.sql"]["disposition"] == "oversize"
 
@@ -223,12 +225,19 @@ class TestProcessRaw:
         )
         doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
         assert [c.metadata["file_path"] for c in doc.chunks] == ["app/src/main.js"]
-        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        # №19 acceptance #1 + #4: denylist junk collapses to ONE row per
+        # directory (entries = the file count it stands for), a leaf file
+        # keeps its own row with the honest ``denylist_file`` token — the
+        # two __MACOSX/ AppleDouble twins are now a single row, and
+        # .DS_Store is no longer mislabelled a directory.
+        excluded = {
+            e["path"]: (e["reason"], e["entries"])
+            for e in doc.metadata["excluded_entries"]
+        }
         assert excluded == {
-            f"app/{cache}/chunk-ABC.js": "denylist_dir: app/.angular/",
-            f"__MACOSX/app/{cache}/._chunk-ABC.js": "denylist_dir: __MACOSX/",
-            "__MACOSX/app/._main.js": "denylist_dir: __MACOSX/",
-            ".DS_Store": "denylist_dir: .DS_Store",
+            ".DS_Store": ("denylist_file", 1),
+            "__MACOSX/": ("denylist_dir", 2),
+            "app/.angular/": ("denylist_dir", 1),
         }
         assert doc.metadata["description_only_entries"] == []
 

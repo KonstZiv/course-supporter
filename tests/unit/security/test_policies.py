@@ -203,24 +203,41 @@ class TestPresentationSizeResolver:
 
 
 class TestPolicyConsistency:
-    """Lock: every extension in either policy MUST exist in the
-    file_type module's MIME map.
+    """Lock: every policy extension MUST be validatable by
+    ``verify_extension_matches_content`` -- either as a CODE extension
+    (textual invariant) or via a ``_EXTENSION_TO_MIME_FAMILIES`` entry
+    (document/media exact-family match).
 
-    Drift between the two would cause runtime ``FORBIDDEN_TYPE``
-    rejections of legitimate uploads (the policy whitelists an
-    extension, but ``verify_extension_matches_content`` rejects it
-    because the MIME map has no entry). This test catches the drift
-    at CI time instead of in production.
+    Drift would cause runtime ``FORBIDDEN_TYPE`` rejections of
+    legitimate uploads (the policy whitelists an extension, but the
+    verifier has no branch for it). This test catches the drift at CI
+    time instead of in production (№17: a code extension that is neither
+    in ``CODE_EXTENSIONS`` nor the MIME map would silently fail).
     """
 
     @pytest.mark.parametrize(
         "policy", [AUTHORED_POLICY, HOMEWORK_POLICY], ids=["authored", "homework"]
     )
-    def test_all_policy_extensions_exist_in_file_type_map(
-        self, policy: ContextPolicy
-    ) -> None:
-        missing = policy.allowed_extensions - set(_EXTENSION_TO_MIME_FAMILIES)
-        assert missing == set(), (
-            f"{policy.name} policy lists extensions {missing!r} that have no "
-            f"entry in _EXTENSION_TO_MIME_FAMILIES"
+    def test_all_policy_extensions_are_verifiable(self, policy: ContextPolicy) -> None:
+        # A code extension is handled by the textual invariant, not the
+        # family map; a document/media extension needs a map entry.
+        uncovered = (
+            policy.allowed_extensions
+            - set(_EXTENSION_TO_MIME_FAMILIES)
+            - CODE_EXTENSIONS
+        )
+        assert uncovered == set(), (
+            f"{policy.name} policy lists extensions {uncovered!r} that are "
+            f"neither CODE_EXTENSIONS (textual invariant) nor in "
+            f"_EXTENSION_TO_MIME_FAMILIES (exact-family)"
+        )
+
+    def test_code_extensions_absent_from_family_map(self) -> None:
+        # №17 footgun guard: a hand-maintained family entry for a code
+        # extension is what silently discarded TypeScript. Code is
+        # governed solely by the textual invariant — keep the map clean.
+        leaked = CODE_EXTENSIONS & set(_EXTENSION_TO_MIME_FAMILIES)
+        assert leaked == set(), (
+            f"code extensions {leaked!r} must not carry a family-map entry; "
+            f"they are validated by the textual invariant"
         )

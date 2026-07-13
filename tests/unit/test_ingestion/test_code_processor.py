@@ -24,6 +24,7 @@ from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatEr
 from course_supporter.ingestion.code import CodeProcessor
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import ChunkType, SourceDocument, SourceType
+from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 
 _PY_BODY = 'print("hello")\n'
 _RB_BODY = "# service\nclass PostService\nend\n"
@@ -230,6 +231,104 @@ class TestProcessRaw:
             ".DS_Store": "denylist_dir: .DS_Store",
         }
         assert doc.metadata["description_only_entries"] == []
+
+    async def test_angular_typescript_lesson_all_ts_become_segments(
+        self, tmp_path: Path
+    ) -> None:
+        """№17 regress: every .ts in a real Angular lesson is a segment.
+
+        Before the textual-invariant fix, libmagic fingerprinted each
+        .ts as application/javascript, the family table expected only
+        ("text/",), and all eight files were silently excluded as
+        magic_mismatch — the lesson kept only configs and templates.
+        """
+        component = (
+            b"import { Component } from '@angular/core';\n\n"
+            b"@Component({ selector: 'app-root', template: '<h1>Hi</h1>' })\n"
+            b"export class AppComponent {}\n"
+        )
+        routes = (
+            b"import { Routes } from '@angular/router';\n"
+            b"import { Home } from './home';\n\n"
+            b"export const routes: Routes = [{ path: '', component: Home }];\n"
+        )
+        ts_files = {
+            "src/main.ts": component,
+            "src/app/app.ts": component,
+            "src/app/app.config.ts": (
+                b"import { ApplicationConfig } from '@angular/core';\n"
+                b"export const appConfig: ApplicationConfig = { providers: [] };\n"
+            ),
+            "src/app/app.routes.ts": routes,
+            "src/app/app.spec.ts": (
+                b"import { TestBed } from '@angular/core/testing';\n"
+                b"describe('AppComponent', () => { it('works', () => {}); });\n"
+            ),
+            "src/app/first.ts": component,
+            "src/app/second.ts": routes,
+            "src/app/third.ts": component,
+        }
+        archive = tmp_path / "angular.zip"
+        _write_zip(
+            archive,
+            {
+                **ts_files,
+                # The configs/templates that WERE included before the fix.
+                "package.json": b'{\n  "name": "lesson"\n}\n',
+                "README.md": b"# Angular lesson\n",
+                "src/index.html": b"<!DOCTYPE html>\n<html><body></body></html>\n",
+                "src/styles.css": b"body { margin: 0; }\n",
+            },
+        )
+        doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        segmented = {c.metadata["file_path"] for c in doc.chunks}
+        assert set(ts_files) <= segmented, set(ts_files) - segmented
+        assert doc.metadata["excluded_entries"] == []
+
+    async def test_same_ts_file_solo_and_in_archive_agree(self, tmp_path: Path) -> None:
+        """№17 path-consistency: main.ts is included solo AND in-archive."""
+        body = (
+            b"import { Component } from '@angular/core';\n"
+            b"export class AppComponent {}\n"
+        )
+        solo = tmp_path / "main.ts"
+        solo.write_bytes(body)
+        solo_doc = await CodeProcessor().process_raw(
+            _mock_source(str(solo), filename="main.ts")
+        )
+        assert [c.metadata["file_path"] for c in solo_doc.chunks] == ["main.ts"]
+
+        archive = tmp_path / "p.zip"
+        _write_zip(archive, {"main.ts": body})
+        arc_doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        assert [c.metadata["file_path"] for c in arc_doc.chunks] == ["main.ts"]
+
+    async def test_solo_masked_binary_rejected_not_segmented(
+        self, tmp_path: Path
+    ) -> None:
+        """№17 textual-guard (solo): a binary named .py must not segment.
+
+        The solo path used to skip the magic check entirely, so a binary
+        would be decoded and dropped verbatim into the reference text.
+        """
+        pe = b"\x4d\x5a\x90\x00\x03\x00\x00\x00" + b"\x00" * 400
+        solo = tmp_path / "evil.py"
+        solo.write_bytes(pe)
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await CodeProcessor().process_raw(
+                _mock_source(str(solo), filename="evil.py")
+            )
+        assert exc_info.value.category is ErrorCategory.MAGIC_MISMATCH
+
+    async def test_archive_masked_binary_excluded(self, tmp_path: Path) -> None:
+        """№17 textual-guard (archive): a binary .py is excluded, not segmented."""
+        pe = b"\x4d\x5a\x90\x00\x03\x00\x00\x00" + b"\x00" * 400
+        archive = tmp_path / "p.zip"
+        _write_zip(archive, {"evil.py": pe, "ok.py": _PY_BODY.encode()})
+        doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        assert [c.metadata["file_path"] for c in doc.chunks] == ["ok.py"]
+        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        assert excluded == {"evil.py": "magic_mismatch"}
 
 
 class TestOffsets:

@@ -30,14 +30,22 @@ for the same reason deliberately refuses to carry ``FORBIDDEN_TYPE``:
   (a ``str``) fails ``mypy`` at the call site: the no-raw-passthrough
   invariant is held by the type-checker, not by a test.
 
-The LLM presentation layer (consequence, not mechanism; excluded-set
-aggregation) is added on top of this vocabulary in a later commit.
+On top of that vocabulary sits the LLM presentation layer — ``describe_for_llm``
+(token -> human consequence clause) and ``render_structure_block`` (the whole
+``structure_block`` the ``code_summary`` call sees). It gives the model the
+CONSEQUENCE, not the mechanism, and AGGREGATES the excluded set to one line
+per kind with counts, so the prompt is not flooded with hundreds of
+``__MACOSX/._*`` paths. The DB keeps the full per-file tree; this collapse
+lives only in the prompt (the three consumers, spoken to differently).
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
-from typing import Final
+from pathlib import PurePosixPath
+from typing import Any, Final
 
 from course_supporter.security.archive import EntryVerdict
 
@@ -120,9 +128,172 @@ def structure_reason(reason: CodeStructureReason, detail: str | None = None) -> 
     return f"{reason.value}: {detail}" if detail is not None else reason.value
 
 
+# ── LLM layer: consequence, not mechanism (ratified C + D1) ────────────
+
+# Token -> human consequence clause (lowercase; the renderer capitalises
+# at sentence start). The model must understand what it was NOT given and
+# why that is not a loss — never the internal token, never a raw verdict.
+_LLM_PHRASE: Final[dict[CodeStructureReason, str]] = {
+    CodeStructureReason.DENYLIST_DIR: (
+        "службова тека середовища/редактора — не частина матеріалу"
+    ),
+    CodeStructureReason.DENYLIST_FILE: (
+        "службовий файл середовища — не частина матеріалу"
+    ),
+    CodeStructureReason.NON_CODE_TYPE: "не є кодом",
+    CodeStructureReason.MAGIC_MISMATCH: "вміст не відповідає розширенню — пропущено",
+    CodeStructureReason.NESTED_ARCHIVE: "вкладений архів — не відкрито",
+    CodeStructureReason.VENDORED_DIR: "стороння бібліотека — подано лише описом",
+    CodeStructureReason.LOCKFILE: "залежності проєкту — подано лише описом",
+    CodeStructureReason.GENERATED_ARTIFACT: (
+        "згенерований артефакт — подано лише описом"
+    ),
+    CodeStructureReason.OVERSIZE: "завеликий файл — подано лише описом",
+}
+
+# Tokens that can appear on an ``excluded`` structure row. The remaining
+# four (vendored_dir / lockfile / generated_artifact / oversize) are
+# produced only by the typicality layer, which always yields
+# ``description_only`` — never ``excluded``. _aggregate_excluded guards
+# this loudly: a description-only token reaching the excluded set would
+# otherwise vanish from the prompt with no error (a silent drop — the very
+# class of bug this module exists to kill).
+_EXCLUDED_TOKENS: Final[frozenset[CodeStructureReason]] = frozenset(
+    {
+        CodeStructureReason.DENYLIST_DIR,
+        CodeStructureReason.DENYLIST_FILE,
+        CodeStructureReason.NON_CODE_TYPE,
+        CodeStructureReason.MAGIC_MISMATCH,
+        CodeStructureReason.NESTED_ARCHIVE,
+    }
+)
+
+
+def describe_for_llm(reason: CodeStructureReason) -> str:
+    """Token -> human consequence clause for the ``code_summary`` prompt.
+
+    The single explicit token->phrase mapping (ratified C). Callers add
+    counts / names around it; this returns the bare clause. Deliberately
+    contains no machine token substring, so the aggregated block cannot
+    leak one.
+    """
+    return _LLM_PHRASE[reason]
+
+
+def _reason_token(reason: str) -> CodeStructureReason:
+    """Recover the enum token from a persisted reason string.
+
+    Excluded rows carry a bare token; typicality (description-only) rows
+    carry ``"<token>: <detail>"``. We only ever parse strings that
+    :func:`structure_reason` produced, so the split is deterministic.
+    """
+    return CodeStructureReason(reason.split(":", 1)[0].strip())
+
+
+def _cap(clause: str) -> str:
+    return clause[:1].upper() + clause[1:] if clause else clause
+
+
+def _distinct_basenames(rows: Sequence[Mapping[str, Any]], limit: int = 5) -> str:
+    names = sorted({PurePosixPath(str(r["path"])).name for r in rows})
+    head = ", ".join(names[:limit])
+    return head + ", …" if len(names) > limit else head
+
+
+def render_structure_block(entries: Sequence[Mapping[str, Any]]) -> str:
+    """Render the ``structure_block`` the ``code_summary`` LLM call sees.
+
+    Three layers made concrete (D1): ``included`` and ``description_only``
+    stay PER-FILE (the model must see ``package-lock.json`` by name — it
+    is a project dependency), while ``excluded`` junk is AGGREGATED to one
+    line per kind with counts. The persisted DB tree stays full; this
+    collapse lives only in the prompt so the model gets the fact, not
+    hundreds of AppleDouble paths.
+    """
+    included: list[str] = []
+    description: list[str] = []
+    excluded: dict[CodeStructureReason, list[Mapping[str, Any]]] = defaultdict(list)
+
+    for entry in entries:
+        cls = entry["cls"]
+        path = str(entry["path"])
+        size = int(entry["size"])
+        if cls == "included":
+            included.append(f"{path} ({size} B)")
+        elif cls == "description_only":
+            clause = describe_for_llm(_reason_token(str(entry["reason"])))
+            description.append(f"{path} ({size} B) — {clause}")
+        elif cls == "excluded":
+            excluded[_reason_token(str(entry["reason"]))].append(entry)
+
+    lines = [*included, *description, *_aggregate_excluded(excluded)]
+    return "\n".join(lines)
+
+
+def _aggregate_excluded(
+    groups: Mapping[CodeStructureReason, Sequence[Mapping[str, Any]]],
+) -> list[str]:
+    """One consequence line per excluded kind (D1) — counts, never paths.
+
+    Service/environment junk (denylist dirs + leaf files) collapses into a
+    single line with directory and file counts; ``non_code_type`` lists
+    distinct basenames (they are informative — ``.gitignore`` tells the
+    model the project uses git); ``magic_mismatch`` / ``nested_archive``
+    report a count. ``entries`` on a collapsed denylist-dir row is the
+    number of files it stands for.
+    """
+    unexpected = sorted(
+        r.value for r, rows in groups.items() if rows and r not in _EXCLUDED_TOKENS
+    )
+    if unexpected:
+        raise ValueError(
+            f"excluded structure rows carry non-excluded reasons {unexpected}; "
+            "these tokens are description_only-only — routing one to excluded "
+            "would silently drop it from the prompt (loud guard, sibling of "
+            "reason_for_verdict)"
+        )
+
+    lines: list[str] = []
+
+    dirs = groups.get(CodeStructureReason.DENYLIST_DIR, ())
+    files = groups.get(CodeStructureReason.DENYLIST_FILE, ())
+    if dirs or files:
+        n_files = sum(int(r.get("entries", 1)) for r in dirs) + len(files)
+        parts = []
+        if dirs:
+            parts.append(f"тек: {len(dirs)}")
+        parts.append(f"файлів: {n_files}")
+        lines.append(
+            "Службові теки та файли середовища/редактора — "
+            f"пропущено ({', '.join(parts)})"
+        )
+
+    non_code = groups.get(CodeStructureReason.NON_CODE_TYPE, ())
+    if non_code:
+        clause = _cap(describe_for_llm(CodeStructureReason.NON_CODE_TYPE))
+        lines.append(
+            f"{clause} — пропущено (файлів: {len(non_code)}; "
+            f"{_distinct_basenames(non_code)})"
+        )
+
+    magic = groups.get(CodeStructureReason.MAGIC_MISMATCH, ())
+    if magic:
+        clause = _cap(describe_for_llm(CodeStructureReason.MAGIC_MISMATCH))
+        lines.append(f"{clause} (файлів: {len(magic)})")
+
+    nested = groups.get(CodeStructureReason.NESTED_ARCHIVE, ())
+    if nested:
+        clause = _cap(describe_for_llm(CodeStructureReason.NESTED_ARCHIVE))
+        lines.append(f"{clause} (шт.: {len(nested)})")
+
+    return lines
+
+
 __all__ = [
     "CodeStructureReason",
     "denylist_token",
+    "describe_for_llm",
     "reason_for_verdict",
+    "render_structure_block",
     "structure_reason",
 ]

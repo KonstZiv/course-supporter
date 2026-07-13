@@ -61,6 +61,7 @@ from course_supporter.ingestion.code_structure import (
     CodeStructureReason,
     denylist_token,
     reason_for_verdict,
+    render_structure_block,
     structure_reason,
 )
 from course_supporter.ingestion.code_typicality import assess
@@ -235,6 +236,9 @@ class CodeProcessor(MaterialProcessor):
             source_url=source.source_url,
             chunk_count=len(chunks),
             description_only_count=len(description_only),
+            # Row count, not raw file count (№19: denylist junk collapses to
+            # one row per dir/leaf) — the live-gate reads this drop directly;
+            # the true excluded file count is the sum of each row's ``entries``.
             excluded_count=len(self._excluded),
         )
 
@@ -661,12 +665,12 @@ class CodeProcessor(MaterialProcessor):
         router: StageRouter,
     ) -> CodeSummaryResult:
         """ONE large-window ``code_summary`` call (ratified two-step)."""
-        structure_block = "\n".join(
-            f"{e['path']} ({e['size']} B, {e['cls']}"
-            + (f": {e['reason']}" if e["reason"] else "")
-            + ")"
-            for e in structure["entries"]
-        )
+        # LLM layer (№19): the model gets the CONSEQUENCE, not the raw
+        # token, and the excluded set is aggregated to one line per kind —
+        # never the internal reason token, never a service-file path. The
+        # persisted DB structure stays full per-file; this collapse is the
+        # prompt's alone.
+        structure_block = render_structure_block(structure["entries"])
         descriptions_block = "\n\n".join(
             f"[{c.metadata['file_path']}]\n{d.description}\n"
             f"concepts: {', '.join(d.main_concepts) or '—'}"

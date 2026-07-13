@@ -13,7 +13,9 @@ import pytest
 from course_supporter.ingestion.code_structure import (
     CodeStructureReason,
     denylist_token,
+    describe_for_llm,
     reason_for_verdict,
+    render_structure_block,
     structure_reason,
 )
 from course_supporter.security.archive import EntryVerdict
@@ -76,3 +78,130 @@ class TestStructureReason:
             structure_reason(CodeStructureReason.LOCKFILE, "package-lock.json")
             == "lockfile: package-lock.json"
         )
+
+
+# The full structure of a macOS-packed lesson, in DB (per-file) shape.
+_STRUCTURE_ENTRIES = [
+    {"path": "src/app.py", "size": 100, "cls": "included", "reason": None},
+    {
+        "path": "package-lock.json",
+        "size": 24,
+        "cls": "description_only",
+        "reason": "lockfile: package-lock.json",
+    },
+    {
+        "path": "a/.gitignore",
+        "size": 10,
+        "cls": "excluded",
+        "reason": "non_code_type",
+        "entries": 1,
+    },
+    {
+        "path": "b/.gitignore",
+        "size": 10,
+        "cls": "excluded",
+        "reason": "non_code_type",
+        "entries": 1,
+    },
+    {
+        "path": "favicon.ico",
+        "size": 50,
+        "cls": "excluded",
+        "reason": "non_code_type",
+        "entries": 1,
+    },
+    {
+        "path": "__MACOSX/",
+        "size": 200,
+        "cls": "excluded",
+        "reason": "denylist_dir",
+        "entries": 5,
+    },
+    {
+        "path": ".vscode/",
+        "size": 80,
+        "cls": "excluded",
+        "reason": "denylist_dir",
+        "entries": 3,
+    },
+    {
+        "path": "app/.angular/",
+        "size": 40,
+        "cls": "excluded",
+        "reason": "denylist_dir",
+        "entries": 2,
+    },
+    {
+        "path": ".DS_Store",
+        "size": 6,
+        "cls": "excluded",
+        "reason": "denylist_file",
+        "entries": 1,
+    },
+    {
+        "path": "evil.py",
+        "size": 9,
+        "cls": "excluded",
+        "reason": "magic_mismatch",
+        "entries": 1,
+    },
+]
+
+
+class TestRenderStructureBlock:
+    def test_included_and_description_only_stay_per_file(self) -> None:
+        block = render_structure_block(_STRUCTURE_ENTRIES)
+        # included per-file; description_only by name + consequence (D1:
+        # the model must see package-lock.json — it is a dependency).
+        assert "src/app.py (100 B)" in block
+        assert "package-lock.json (24 B) — залежності проєкту" in block
+
+    def test_excluded_aggregated_with_counts(self) -> None:
+        block = render_structure_block(_STRUCTURE_ENTRIES)
+        # env junk: 3 dirs (5+3+2 files) + 1 leaf = 11 files, one line.
+        assert (
+            "Службові теки та файли середовища/редактора — "
+            "пропущено (тек: 3, файлів: 11)" in block
+        )
+        # non_code: 3 files, distinct basenames listed.
+        assert "Не є кодом — пропущено (файлів: 3; .gitignore, favicon.ico)" in block
+        assert "Вміст не відповідає розширенню — пропущено (файлів: 1)" in block
+
+    def test_block_leaks_no_internal_token(self) -> None:
+        # Acceptance #3: the model never sees a machine token.
+        block = render_structure_block(_STRUCTURE_ENTRIES)
+        for reason in CodeStructureReason:
+            assert reason.value not in block, reason
+
+    def test_block_leaks_no_service_path(self) -> None:
+        # Acceptance #3: no service-file PATH reaches the prompt — the
+        # denylist junk is counts only (basenames of non-code files like
+        # .gitignore are intentional per D1; service junk paths are not).
+        block = render_structure_block(_STRUCTURE_ENTRIES)
+        for service_path in ("__MACOSX", ".DS_Store", ".vscode", ".angular"):
+            assert service_path not in block, service_path
+
+    def test_phrase_has_no_token_substring(self) -> None:
+        # The token->phrase map must itself be token-free, else the block
+        # could leak one indirectly.
+        for reason in CodeStructureReason:
+            phrase = describe_for_llm(reason)
+            for other in CodeStructureReason:
+                assert other.value not in phrase
+
+    def test_description_only_token_on_excluded_row_raises(self) -> None:
+        # Loud guard (sibling of reason_for_verdict): the four typicality
+        # tokens are description_only-only. If a future change ever routed
+        # one to an excluded row it would silently vanish from the prompt —
+        # instead it raises. Locks the anti-silent-drop invariant.
+        rogue = [
+            {
+                "path": "vendor/lib.js",
+                "size": 10,
+                "cls": "excluded",
+                "reason": "lockfile",
+                "entries": 1,
+            }
+        ]
+        with pytest.raises(ValueError, match="non-excluded reasons"):
+            render_structure_block(rogue)

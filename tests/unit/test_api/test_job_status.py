@@ -25,7 +25,7 @@ STUB_TENANT = TenantContext(
 def _make_job_mock(
     *,
     job_id: uuid.UUID | None = None,
-    job_type: str = "ingest",
+    job_type: str = "document_processing",
     priority: str = "normal",
     status: str = "queued",
     tenant_id: uuid.UUID | None = None,
@@ -107,7 +107,7 @@ class TestGetJob:
             response = await client.get(f"/api/v1/jobs/{job.id}")
         data = response.json()
         assert data["id"] == str(job.id)
-        assert data["job_type"] == "ingest"
+        assert data["job_type"] == "document_processing"
         assert data["priority"] == "normal"
         assert data["status"] == "active"
         assert data["tenant_id"] == str(job.tenant_id)
@@ -194,13 +194,14 @@ class TestGetJobTenantIsolation:
 
 
 def _make_failed_ingest_job(
-    *, node_id: uuid.UUID | None = None, job_type: str = "ingest"
+    *, node_id: uuid.UUID | None = None, job_type: str = "document_processing"
 ) -> MagicMock:
     """Failed Job with ``input_params`` sufficient for the ingest dispatcher.
 
-    ``job_type`` defaults to ``"ingest"`` (the happy-path dispatcher arm);
-    pass another string to exercise the unsupported-type branch directly
-    instead of patching the attribute on the returned mock.
+    ``job_type`` defaults to ``"document_processing"`` (the happy-path
+    dispatcher arm → ``arq_ingest_material``); pass another string to
+    exercise the unsupported-type branch directly instead of patching the
+    attribute on the returned mock.
     """
     job = _make_job_mock(
         status="failed",
@@ -239,7 +240,7 @@ class TestReactivateJobHappyPath:
     async def test_arq_called_with_resolved_function_and_args(
         self, client: AsyncClient, mock_arq: MagicMock
     ) -> None:
-        """``ingest`` dispatcher calls ``arq_ingest_material`` with positional args."""
+        """document_processing dispatcher calls ``arq_ingest_material`` (positional)."""
         job = _make_failed_ingest_job()
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),

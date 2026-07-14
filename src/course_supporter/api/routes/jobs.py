@@ -14,6 +14,7 @@ from course_supporter.api.schemas import JobResponse
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.jobs import JobType
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import Job
 
@@ -45,13 +46,8 @@ class _ReenqueueDispatch(NamedTuple):
 def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
     """Map ``(job.job_type, job.input_params)`` → ARQ task call shape.
 
-    Transitional dispatch over the legacy ``job_type`` strings
-    currently emitted by ``enqueue.py``.
-    Phase 2.x rewrite of orchestrators to KD13's 4-value :class:`JobType`
-    enum will collapse this to a 4-case match (and will likely add a
-    ``s3_cleanup`` arm — currently the ``s3_cleanup_task`` worker
-    lands in commit (g) of task 0.3 and a future commit will register
-    the ``s3_cleanup`` enum value here).
+    Dispatch over the canonical :class:`JobType` values (matched by
+    enum member, not string literal — contract invariant #3).
 
     Raises :class:`HTTPException` (422) when:
 
@@ -64,7 +60,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
 
     try:
         match job.job_type:
-            case "ingest":
+            case JobType.DOCUMENT_PROCESSING:
                 return _ReenqueueDispatch(
                     arq_function="arq_ingest_material",
                     args=[
@@ -75,13 +71,13 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         job.priority,
                     ],
                 )
-            case "homework":
+            case JobType.HOMEWORK_PROCESSING:
                 return _ReenqueueDispatch(
                     arq_function="arq_process_homework",
                     args=[jid, p["submission_id"]],
                     queue_name="homework",
                 )
-            case "s3_cleanup":
+            case JobType.S3_CLEANUP:
                 # KD13 s3_cleanup_task uses kw-only args; carried via
                 # task_kwargs rather than positional ``args``.
                 return _ReenqueueDispatch(
@@ -92,7 +88,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         "job_id": jid,
                     },
                 )
-            case "node_summary_regeneration":
+            case JobType.NODE_SUMMARY_REGENERATION:
                 # Phase 3.2.4 — the methodist two-pass orchestrator
                 # job. ``vertex_node_id`` + ``force`` are recorded on
                 # original enqueue (``enqueue_node_summary_regeneration``)
@@ -113,8 +109,9 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                     status_code=422,
                     detail=(
                         f"Reactivate not supported for job_type="
-                        f"{job.job_type!r}. Supported types: ingest, "
-                        f"homework, s3_cleanup, node_summary_regeneration."
+                        f"{job.job_type!r}. Supported types: "
+                        f"document_processing, homework_processing, "
+                        f"s3_cleanup, node_summary_regeneration."
                     ),
                 )
     except KeyError as exc:

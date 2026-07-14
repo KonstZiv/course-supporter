@@ -205,7 +205,7 @@ async def committed_job_and_material(
         job = await job_repo.create(
             tenant_id=committed_seeds["tenant_id"],
             course_node_id=committed_seeds["course_node_id"],
-            job_type="ingest",
+            job_type="document_processing",
         )
         await job_repo.update_status(job.id, "active")
         await entry_repo.set_pending(committed_seeds["material_id"], job.id)

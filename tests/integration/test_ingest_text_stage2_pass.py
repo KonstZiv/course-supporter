@@ -95,7 +95,7 @@ async def test_stage2_pass_persists_verdict_and_runs_pass_2a(
         job = await job_repo.create(
             tenant_id=tid,
             course_node_id=nid,
-            job_type="ingest",
+            job_type="document_processing",
         )
         await session.commit()
         job_id = job.id

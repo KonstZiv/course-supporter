@@ -894,6 +894,18 @@ class Job(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Vocabulary CHECKs (L1a) — mirror of the migration constraints so
+        # ORM and DB agree. Canonical KD13 sets; the state machine lives in
+        # ``storage.job_repository`` (JobType / JOB_TRANSITIONS).
+        CheckConstraint(
+            "job_type IN ('document_processing', 'node_summary_regeneration', "
+            "'homework_processing', 's3_cleanup', 'base_normalize')",
+            name="ck_jobs_job_type",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'active', 'complete', 'failed', 'cancelled')",
+            name="ck_jobs_status",
+        ),
         {"comment": "Background task queue entries (ingestion, generation)"},
     )
 

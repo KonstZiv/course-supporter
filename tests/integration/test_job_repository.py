@@ -30,7 +30,7 @@ class TestJobCreate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         assert job.id is not None
@@ -49,7 +49,7 @@ class TestJobCreate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
             input_params=params,
         )
 
@@ -65,7 +65,7 @@ class TestJobCreate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         # Force reload from DB to see server_default
@@ -91,7 +91,7 @@ class TestJobLifecycleSuccess:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         assert job.status == "queued"
         assert job.started_at is None
@@ -115,7 +115,7 @@ class TestJobLifecycleSuccess:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         active_job = await repo.update_status(job.id, "active")
@@ -136,7 +136,7 @@ class TestJobLifecycleFailureRetry:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         # queued -> active
@@ -166,7 +166,7 @@ class TestJobTransitionValidation:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         with pytest.raises(ValueError, match="Invalid job status transition"):
@@ -186,7 +186,7 @@ class TestJobTransitionValidation:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         first = await repo.update_status(job.id, "active")
@@ -214,7 +214,7 @@ class TestJobQueries:
         job = await repo.create(
             tenant_id=seed_tenant.id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         found = await repo.get_by_id_for_tenant(job.id, seed_tenant.id)
@@ -231,7 +231,7 @@ class TestJobQueries:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
 
         wrong_tenant_id = uuid.uuid4()
@@ -252,14 +252,14 @@ class TestJobQueries:
             await repo.create(
                 tenant_id=seed_root_node.tenant_id,
                 course_node_id=seed_root_node.id,
-                job_type="ingest",
+                job_type="document_processing",
             )
 
         # Add 1 active (not counted)
         job_active = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         await repo.update_status(job_active.id, "active")
 
@@ -274,7 +274,7 @@ class TestJobQueries:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         assert job.arq_job_id is None
 
@@ -305,7 +305,7 @@ class TestJobReactivate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         await repo.set_arq_job_id(job.id, "arq:old:xyz")
         await repo.update_status(job.id, "active")
@@ -344,7 +344,7 @@ class TestJobReactivate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         # Simulate worker writing a checkpoint mid-flight
         progress = {"completed_segments": ["s1"], "next_offset": 4096}
@@ -386,7 +386,7 @@ class TestJobReactivate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         if blocking_status == "active":
             await repo.update_status(job.id, "active")
@@ -408,7 +408,7 @@ class TestJobReactivate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         await repo.update_status(job.id, "cancelled")
         with pytest.raises(ValueError, match="Cannot reactivate Job"):
@@ -432,7 +432,7 @@ class TestJobReactivate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         await repo.update_status(job.id, "active")
         await repo.update_status(job.id, "failed")
@@ -562,20 +562,22 @@ class TestGetActiveJobs:
         nid = seed_root_node.id
 
         active_one = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest"
+            tenant_id=tid, course_node_id=nid, job_type="document_processing"
         )
         await repo.update_status(active_one.id, "active")
         active_two = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest"
+            tenant_id=tid, course_node_id=nid, job_type="document_processing"
         )
         await repo.update_status(active_two.id, "active")
 
         # Stays queued — must be excluded.
-        queued = await repo.create(tenant_id=tid, course_node_id=nid, job_type="ingest")
+        queued = await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="document_processing"
+        )
 
         # Active but soft-deleted — must be excluded.
         deleted = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest"
+            tenant_id=tid, course_node_id=nid, job_type="document_processing"
         )
         await repo.update_status(deleted.id, "active")
         deleted_row = await repo.get_by_id(deleted.id)
@@ -603,7 +605,7 @@ class TestAdmissionAggregate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
             duration_sec=5400.0,
         )
 
@@ -619,7 +621,7 @@ class TestAdmissionAggregate:
         job = await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         fetched = await repo.get_by_id(job.id)
         assert fetched is not None
@@ -642,25 +644,40 @@ class TestAdmissionAggregate:
 
         # queued (counts) + active (counts)
         await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=1000.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=1000.0,
         )
         active = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=2000.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=2000.0,
         )
         await repo.update_status(active.id, "active")
 
         # complete / failed / cancelled — must NOT count.
         complete = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=9999.0,
         )
         await repo.update_status(complete.id, "active")
         await repo.update_status(complete.id, "complete")
         failed = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=9999.0,
         )
         await repo.update_status(failed.id, "failed")
         cancelled = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=9999.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=9999.0,
         )
         await repo.update_status(cancelled.id, "cancelled")
 
@@ -675,17 +692,22 @@ class TestAdmissionAggregate:
         nid = seed_root_node.id
 
         await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=1500.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=1500.0,
         )
         # Non-ingest job with a duration — excluded by job_type filter.
         await repo.create(
             tenant_id=tid,
             course_node_id=nid,
-            job_type="homework",
+            job_type="homework_processing",
             duration_sec=9999.0,
         )
         # Ingest job with NULL duration (non-video) — ignored by SUM.
-        await repo.create(tenant_id=tid, course_node_id=nid, job_type="ingest")
+        await repo.create(
+            tenant_id=tid, course_node_id=nid, job_type="document_processing"
+        )
 
         assert await repo.sum_active_ingest_duration_sec() == 1500.0
 
@@ -698,7 +720,10 @@ class TestAdmissionAggregate:
         nid = seed_root_node.id
 
         deleted = await repo.create(
-            tenant_id=tid, course_node_id=nid, job_type="ingest", duration_sec=4000.0
+            tenant_id=tid,
+            course_node_id=nid,
+            job_type="document_processing",
+            duration_sec=4000.0,
         )
         row = await repo.get_by_id(deleted.id)
         assert row is not None
@@ -724,7 +749,7 @@ class TestAdmissionAggregate:
         await repo.create(
             tenant_id=tid,
             course_node_id=nid,
-            job_type="ingest",
+            job_type="document_processing",
             input_params=params,
             duration_sec=3300.0,
         )
@@ -741,7 +766,7 @@ class TestAdmissionAggregate:
         await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
-            job_type="ingest",
+            job_type="document_processing",
             input_params={"material_id": str(mid), "source_type": "video"},
         )
         assert await repo.get_latest_ingest_duration_for_material(mid) is None

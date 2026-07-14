@@ -68,7 +68,7 @@ class TestHomeworkEnqueue:
 
         assert result is mock_job
         create_kwargs = job_cls.return_value.create.call_args.kwargs
-        assert create_kwargs["job_type"] == "homework"
+        assert create_kwargs["job_type"] == "homework_processing"
         assert create_kwargs["tenant_id"] == tenant_id
         assert create_kwargs["input_params"] == {"submission_id": str(submission_id)}
         # Links the submission to the job in the same (uncommitted) transaction.
@@ -152,7 +152,7 @@ class TestEnqueueIngestion:
         assert result is mock_job
         repo_cls.return_value.create.assert_awaited_once()
         create_kwargs = repo_cls.return_value.create.call_args.kwargs
-        assert create_kwargs["job_type"] == "ingest"
+        assert create_kwargs["job_type"] == "document_processing"
         assert create_kwargs["tenant_id"] == tenant_id
         assert create_kwargs["course_node_id"] == node_id
         assert create_kwargs["priority"] == "normal"

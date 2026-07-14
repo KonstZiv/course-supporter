@@ -11,6 +11,21 @@ from course_supporter.jobs.cancellation import (
     JobCancellationChecker,
     JobCancelledError,
 )
+from course_supporter.storage.job_repository import JOB_TRANSITIONS
+
+# Parametrise over EVERY real Job status (the machine keys) plus the
+# missing-row sentinel (None), instead of a hand-listed table. The dead
+# ``running`` token survived for years precisely because its test *looked*
+# exhaustive (queued/running/completed/cancelled) while omitting the live
+# statuses and inventing two that never existed. Deriving the cases from
+# ``JOB_TRANSITIONS`` means a status added by a later step (e.g. L2's
+# "subject vanished" terminal) is auto-covered without touching this file.
+_STATUSES: list[str | None] = [*JOB_TRANSITIONS, None]
+
+
+def _expected_cancelled(status: str | None) -> bool:
+    """The checker's rule: exactly ``cancelled`` and a missing row (None)."""
+    return status is None or status == "cancelled"
 
 
 def _make_session_returning(status: str | None) -> AsyncMock:
@@ -23,56 +38,29 @@ def _make_session_returning(status: str | None) -> AsyncMock:
 
 
 class TestIsCancelled:
-    """JobCancellationChecker.is_cancelled returns True for cancelled or missing."""
+    """is_cancelled is True for exactly ``cancelled`` and a missing row."""
 
-    async def test_queued_returns_false(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("queued"))
-        assert await chk.is_cancelled(uuid.uuid4()) is False
-
-    async def test_running_returns_false(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("running"))
-        assert await chk.is_cancelled(uuid.uuid4()) is False
-
-    async def test_completed_returns_false(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("completed"))
-        assert await chk.is_cancelled(uuid.uuid4()) is False
-
-    async def test_cancelled_returns_true(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("cancelled"))
-        assert await chk.is_cancelled(uuid.uuid4()) is True
-
-    async def test_missing_row_returns_true(self) -> None:
-        """Missing Job (scalar_one_or_none → None) treated as cancelled."""
-        chk = JobCancellationChecker(_make_session_returning(None))
-        assert await chk.is_cancelled(uuid.uuid4()) is True
+    @pytest.mark.parametrize("status", _STATUSES)
+    async def test_matches_rule(self, status: str | None) -> None:
+        chk = JobCancellationChecker(_make_session_returning(status))
+        assert await chk.is_cancelled(uuid.uuid4()) is _expected_cancelled(status)
 
 
 class TestRaiseIfCancelled:
-    """raise_if_cancelled raises JobCancelledError with reason field."""
+    """raise_if_cancelled raises (with the right reason) iff cancel-equivalent."""
 
-    async def test_queued_does_not_raise(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("queued"))
-        await chk.raise_if_cancelled(uuid.uuid4())  # no-op
-
-    async def test_running_does_not_raise(self) -> None:
-        chk = JobCancellationChecker(_make_session_returning("running"))
-        await chk.raise_if_cancelled(uuid.uuid4())  # no-op
-
-    async def test_cancelled_raises_with_status_reason(self) -> None:
+    @pytest.mark.parametrize("status", _STATUSES)
+    async def test_matches_rule(self, status: str | None) -> None:
         job_id = uuid.uuid4()
-        chk = JobCancellationChecker(_make_session_returning("cancelled"))
-        with pytest.raises(JobCancelledError) as exc_info:
-            await chk.raise_if_cancelled(job_id)
-        assert exc_info.value.job_id == job_id
-        assert exc_info.value.reason == "status=cancelled"
-
-    async def test_missing_raises_with_not_found_reason(self) -> None:
-        job_id = uuid.uuid4()
-        chk = JobCancellationChecker(_make_session_returning(None))
-        with pytest.raises(JobCancelledError) as exc_info:
-            await chk.raise_if_cancelled(job_id)
-        assert exc_info.value.job_id == job_id
-        assert exc_info.value.reason == "row not found"
+        chk = JobCancellationChecker(_make_session_returning(status))
+        if _expected_cancelled(status):
+            with pytest.raises(JobCancelledError) as exc_info:
+                await chk.raise_if_cancelled(job_id)
+            assert exc_info.value.job_id == job_id
+            expected_reason = "row not found" if status is None else "status=cancelled"
+            assert exc_info.value.reason == expected_reason
+        else:
+            await chk.raise_if_cancelled(job_id)  # no-op
 
 
 class TestJobCancelledError:

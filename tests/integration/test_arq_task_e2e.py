@@ -222,7 +222,7 @@ class TestArqIngestMaterialE2E:
             job = await job_repo.create(
                 tenant_id=tid,
                 course_node_id=nid,
-                job_type="ingest",
+                job_type="document_processing",
             )
             await session.commit()
             job_id = job.id
@@ -350,7 +350,7 @@ class TestArqIngestMaterialE2E:
             job = await job_repo.create(
                 tenant_id=tid,
                 course_node_id=nid,
-                job_type="ingest",
+                job_type="document_processing",
             )
             await session.commit()
             job_id = job.id
@@ -412,7 +412,7 @@ class TestArqIngestMaterialE2E:
             job = await job_repo.create(
                 tenant_id=tid,
                 course_node_id=nid,
-                job_type="ingest",
+                job_type="document_processing",
             )
             await session.commit()
             job_id = job.id

@@ -114,7 +114,7 @@ async def homework_seed(
         job = Job(
             tenant_id=tenant.id,
             course_node_id=node.id,
-            job_type="homework",
+            job_type="homework_processing",
             input_params={"submission_id": str(submission.id)},
             status="queued",
         )

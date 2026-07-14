@@ -51,14 +51,6 @@ from course_supporter.storage.orm import Job
 
 logger = structlog.get_logger(__name__)
 
-# Status values considered "in progress" — eligible for cancel sweep.
-# Includes both KD13's canonical "running" and the legacy "active"
-# string from the as-yet-unmigrated JOB_TRANSITIONS table (see task
-# 0.3 pre-flight: status name alignment is a separate Phase 2.x
-# chore). The third value will drop out of this tuple when that
-# rename lands and orchestrator call-sites switch to "running".
-_IN_PROGRESS_STATUSES: tuple[str, ...] = ("queued", "running", "active")
-
 
 class JobCancellationService:
     """Concrete :data:`OnCancelJobs` implementation.
@@ -71,13 +63,13 @@ class JobCancellationService:
     :data:`OnInvalidateHashes` shape shipped in 0.2.
 
     Idempotent on re-run: the status filter
-    (``IN ('queued', 'running', 'active')``) excludes already-
-    cancelled / completed Jobs, so a second invocation with the
-    same ``entity_ids`` is a no-op other than the log line. The
-    ``deleted_at IS NULL`` filter further guards against the soft-
-    delete trigger from task 0.1 — without it, a Job that was
-    already cancelled-and-soft-deleted in a prior cascade would
-    raise on UPDATE (the trigger blocks any column change other
+    (:data:`~course_supporter.storage.job_repository.IN_FLIGHT_STATUSES`
+    — ``queued`` / ``active``) excludes already-cancelled / completed
+    Jobs, so a second invocation with the same ``entity_ids`` is a no-op
+    other than the log line. The ``deleted_at IS NULL`` filter further
+    guards against the soft-delete trigger from task 0.1 — without it, a
+    Job that was already cancelled-and-soft-deleted in a prior cascade
+    would raise on UPDATE (the trigger blocks any column change other
     than ``deleted_at`` itself on soft-deleted rows).
     """
 
@@ -111,6 +103,15 @@ class JobCancellationService:
         if not entity_ids:
             return
 
+        # Lazy import breaks the jobs↔storage import cycle: ``jobs/__init__``
+        # eagerly imports this module, while ``storage.job_repository``
+        # imports the ``jobs`` package (JobType). A module-top import of the
+        # repository here would close that cycle at import time.
+        from course_supporter.storage.job_repository import (
+            IN_FLIGHT_STATUSES,
+            JobRepository,
+        )
+
         ts = now if now is not None else datetime.now(UTC)
 
         jsonb_clauses = [
@@ -120,7 +121,7 @@ class JobCancellationService:
 
         stmt = (
             select(Job)
-            .where(Job.status.in_(_IN_PROGRESS_STATUSES))
+            .where(Job.status.in_(IN_FLIGHT_STATUSES))
             .where(Job.deleted_at.is_(None))
             .where(
                 or_(
@@ -133,12 +134,15 @@ class JobCancellationService:
         result = await self._session.execute(stmt)
         jobs = list(result.scalars().all())
 
+        # Route every cancel through the status owner (contract §3
+        # "Ownership"): ``active -> cancelled`` is now a legal transition and
+        # ``update_status`` stamps ``completed_at`` as the termination time.
+        # N per-row calls replace the prior in-loop attr-assign + single
+        # flush; the width is node-subtree-bounded (the ``tenant_id`` OR-arm
+        # is unreachable — no caller roots the cascade on a Tenant).
+        repo = JobRepository(self._session)
         for job in jobs:
-            job.status = "cancelled"
-            job.completed_at = ts
-
-        if jobs:
-            await self._session.flush()
+            await repo.update_status(job.id, "cancelled", now=ts)
 
         logger.info(
             "job_cancellation_service.cancelled",

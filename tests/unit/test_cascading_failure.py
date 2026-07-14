@@ -1,9 +1,16 @@
-"""Tests for cascading job failure propagation (S3-019)."""
+"""Tests for cascading job failure propagation (S3-019).
+
+``propagate_failure`` no longer writes ``Job.status`` itself — since L1a the
+status owner is ``JobRepository.update_status`` (contract §3 "Ownership").
+These tests therefore assert on the OWNER calls (which dependent, to which
+status, with which error message) rather than on direct attribute mutation of
+the dependent mocks. ``update_status`` is spied so the propagation logic —
+which dependents are in-flight, the BFS order, dedup — is what is exercised.
+"""
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -38,7 +45,15 @@ class TestPropagateFailure:
 
     @pytest.fixture()
     def repo(self, session: AsyncMock) -> JobRepository:
-        return JobRepository(session)
+        r = JobRepository(session)
+        # Spy on the status owner: propagate_failure delegates the status
+        # write, so the unit under test here is the propagation graph walk.
+        r.update_status = AsyncMock()  # type: ignore[method-assign]
+        return r
+
+    @staticmethod
+    def _failed_ids(repo: JobRepository) -> set[uuid.UUID]:
+        return {c.args[0] for c in repo.update_status.await_args_list}  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_single_level(self, repo: JobRepository) -> None:
@@ -55,11 +70,10 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_b.id)
 
-        assert len(failed) == 1
-        assert failed[0] == job_a.id
-        assert job_a.status == "failed"
-        assert "failed" in job_a.error_message
-        assert isinstance(job_a.completed_at, datetime)
+        assert failed == [job_a.id]
+        call = repo.update_status.await_args  # type: ignore[attr-defined]
+        assert call.args == (job_a.id, "failed")
+        assert "failed" in call.kwargs["error_message"]
 
     @pytest.mark.asyncio
     async def test_multi_level(self, repo: JobRepository) -> None:
@@ -79,11 +93,8 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_c.id)
 
-        assert len(failed) == 2
-        assert job_b.id in failed
-        assert job_a.id in failed
-        assert job_b.status == "failed"
-        assert job_a.status == "failed"
+        assert set(failed) == {job_b.id, job_a.id}
+        assert self._failed_ids(repo) == {job_b.id, job_a.id}
 
     @pytest.mark.asyncio
     async def test_diamond_dependency(self, repo: JobRepository) -> None:
@@ -107,11 +118,10 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_d.id)
 
-        # A appears only once (already failed when C path reaches it)
-        assert job_b.id in failed
-        assert job_c.id in failed
-        assert job_a.id in failed
-        assert job_a.status == "failed"
+        # A appears only once (already seen when the C path reaches it).
+        assert set(failed) == {job_b.id, job_c.id, job_a.id}
+        assert self._failed_ids(repo) == {job_b.id, job_c.id, job_a.id}
+        assert repo.update_status.await_count == 3  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_already_completed_not_affected(self, repo: JobRepository) -> None:
@@ -128,8 +138,8 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_b.id)
 
-        assert len(failed) == 0
-        assert job_a.status == "complete"
+        assert failed == []
+        repo.update_status.assert_not_awaited()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_idempotent_on_already_failed(self, repo: JobRepository) -> None:
@@ -146,7 +156,8 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_b.id)
 
-        assert len(failed) == 0
+        assert failed == []
+        repo.update_status.assert_not_awaited()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_no_dependents(self, repo: JobRepository) -> None:
@@ -157,6 +168,7 @@ class TestPropagateFailure:
         failed = await repo.propagate_failure(job.id)
 
         assert failed == []
+        repo.update_status.assert_not_awaited()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_error_message_references_failed_job(
@@ -172,11 +184,12 @@ class TestPropagateFailure:
 
         await repo.propagate_failure(job_b.id)
 
-        assert str(job_b.id) in job_a.error_message
+        call = repo.update_status.await_args  # type: ignore[attr-defined]
+        assert str(job_b.id) in call.kwargs["error_message"]
 
     @pytest.mark.asyncio
     async def test_active_job_also_failed(self, repo: JobRepository) -> None:
-        """Active (running) jobs are also failed on dependency failure."""
+        """Active jobs are also failed on dependency failure."""
         job_b = _make_job(status="failed")
         job_a = _make_job(status="active", depends_on=[str(job_b.id)])
 
@@ -186,5 +199,6 @@ class TestPropagateFailure:
 
         failed = await repo.propagate_failure(job_b.id)
 
-        assert len(failed) == 1
-        assert job_a.status == "failed"
+        assert failed == [job_a.id]
+        call = repo.update_status.await_args  # type: ignore[attr-defined]
+        assert call.args == (job_a.id, "failed")

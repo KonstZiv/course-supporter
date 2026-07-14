@@ -104,7 +104,7 @@ class TestStageProgressRoundTrip:
         await db_session.flush()
         job = Job(
             tenant_id=tenant.id,
-            job_type="ingest",
+            job_type="document_processing",
             current_stage="pass_2b",
         )
         db_session.add(job)
@@ -131,7 +131,7 @@ class TestStageProgressRoundTrip:
         }
         job = Job(
             tenant_id=tenant.id,
-            job_type="ingest",
+            job_type="document_processing",
             stage_progress=progress,
         )
         db_session.add(job)
@@ -144,7 +144,7 @@ class TestStageProgressRoundTrip:
         tenant = Tenant(name=f"jrd-{uuid.uuid4().hex[:6]}")
         db_session.add(tenant)
         await db_session.flush()
-        job = Job(tenant_id=tenant.id, job_type="ingest")
+        job = Job(tenant_id=tenant.id, job_type="document_processing")
         db_session.add(job)
         await db_session.flush()
         await db_session.refresh(job)
@@ -165,7 +165,7 @@ class TestForeignKeyEnforcement:
         job = Job(
             tenant_id=tenant.id,
             course_node_id=uuid.uuid4(),  # not in course_nodes
-            job_type="ingest",
+            job_type="document_processing",
         )
         db_session.add(job)
         with pytest.raises(IntegrityError):
@@ -184,7 +184,7 @@ class TestForeignKeyEnforcement:
         job = Job(
             tenant_id=tenant.id,
             course_node_id=node.id,
-            job_type="ingest",
+            job_type="document_processing",
         )
         db_session.add(job)
         await db_session.flush()

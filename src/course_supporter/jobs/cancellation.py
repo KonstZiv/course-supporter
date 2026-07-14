@@ -2,7 +2,7 @@
 
 KD13 cancel-flow:
 
-1. Cascade transaction sets ``Job.status``: ``queued/running →
+1. Cascade transaction sets ``Job.status``: ``queued/active →
    cancelled`` in the same DB transaction as ``deleted_at`` (the
    actual flip lives in :class:`JobCancellationService`, commit (e)
    of task 0.3).

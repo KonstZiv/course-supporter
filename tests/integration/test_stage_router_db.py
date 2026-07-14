@@ -61,7 +61,7 @@ async def committed_job(
         job = Job(
             tenant_id=committed_seeds["tenant_id"],
             course_node_id=committed_seeds["course_node_id"],
-            job_type="ingest",
+            job_type="document_processing",
         )
         session.add(job)
         await session.flush()

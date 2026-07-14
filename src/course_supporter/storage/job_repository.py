@@ -17,14 +17,55 @@ from course_supporter.storage.orm import CourseNode, Job
 
 logger = structlog.get_logger()
 
-# Valid job status transitions
+# Valid job status transitions. Single source of truth for the state
+# machine (contract §3 "Ownership"): every status write goes through
+# ``update_status``, which consults this table.
+#
+# ``active → cancelled`` is legal: the soft-delete cascade terminalises
+# in-flight jobs (queued OR active) via the cancel sweep, and routing
+# that through ``update_status`` requires the transition the machine
+# would otherwise reject.
 JOB_TRANSITIONS: dict[str, set[str]] = {
     "queued": {"active", "cancelled", "failed"},
-    "active": {"complete", "failed"},
+    "active": {"complete", "failed", "cancelled"},
     "complete": set(),
     "failed": {"queued"},  # retry
     "cancelled": set(),
 }
+
+# Category per status — the ONE source from which the in-flight / at-rest
+# partitions are derived (contract Acceptance #3). Hand-maintained partition
+# copies drift silently: the dead ``running`` token survived for years inside
+# a duplicated tuple. The totality guard below fails loudly if a status is
+# added to ``JOB_TRANSITIONS`` without a category here — a new terminal (e.g.
+# L2's "subject vanished") cannot be forgotten the way ``running`` was.
+#
+# NOT derived from graph edges: ``failed → queued`` (retry) gives ``failed``
+# an outgoing edge, so "non-terminal = has outgoing edges" would wrongly file
+# ``failed`` as in-flight though no worker holds it (probe P3, ratified).
+_STATUS_CATEGORY: dict[str, str] = {
+    "queued": "in_flight",
+    "active": "in_flight",
+    "complete": "at_rest",
+    "failed": "at_rest",
+    "cancelled": "at_rest",
+}
+
+_uncategorised = set(JOB_TRANSITIONS) - set(_STATUS_CATEGORY)
+if _uncategorised:  # pragma: no cover — guarded by test_l1a_invariants
+    msg = (
+        f"JOB_TRANSITIONS statuses without a _STATUS_CATEGORY entry: "
+        f"{sorted(_uncategorised)}. Add each to _STATUS_CATEGORY "
+        f"('in_flight' or 'at_rest')."
+    )
+    raise RuntimeError(msg)
+
+IN_FLIGHT_STATUSES: frozenset[str] = frozenset(
+    s for s, cat in _STATUS_CATEGORY.items() if cat == "in_flight"
+)
+AT_REST_STATUSES: frozenset[str] = frozenset(
+    s for s, cat in _STATUS_CATEGORY.items() if cat == "at_rest"
+)
 
 
 class JobRepository:
@@ -52,13 +93,10 @@ class JobRepository:
     ) -> Job:
         """Create a new job record.
 
-        ``job_type`` accepts either a :class:`JobType` enum (KD13
-        canonical, recommended for new code) or a legacy ``str``
-        (transitional — Phase 2.x will rewrite call-sites). Legacy
-        strings emit a one-shot :class:`DeprecationWarning` per
-        distinct value via :func:`validate_job_type`. The strict
-        DB CHECK constraint that would reject legacy values is
-        deferred to Phase 2.x along with the call-site migration.
+        ``job_type`` accepts a :class:`JobType` enum (recommended) or a
+        ``str`` equal to a canonical value; :func:`validate_job_type`
+        raises ``ValueError`` on anything else, mirroring the DB CHECK
+        ``ck_jobs_job_type`` with a clean write-site error.
 
         ``duration_sec`` is the intake-probed source video duration
         (DD-3.3c-I-B); NULL for non-video ingests and non-ingest jobs.
@@ -145,6 +183,12 @@ class JobRepository:
                     )
                     raise ValueError(msg)
                 values["error_category"] = error_category.value
+        elif status == "cancelled":
+            # ``completed_at`` on ``cancelled`` is the time of TERMINATION,
+            # not of work (contract §3 "Meaning"). Kept a separate branch
+            # from the complete/failed set so the two axes never merge: a
+            # future terminal must not inherit completed_at by composition.
+            values["completed_at"] = now
 
         stmt = update(Job).where(Job.id == job_id).values(**values)
         await self._session.execute(stmt)
@@ -272,13 +316,17 @@ class JobRepository:
                 f"only 'failed' Jobs can be reactivated."
             )
             raise ValueError(msg)
-        job.status = "queued"
+        # Clear the per-retry fields here (reactivate keeps this) and route
+        # the transition through ``update_status`` so ``Job.status`` has a
+        # single writer. Generalising clear-on-requeue into ``update_status``
+        # for one consumer would be a premature abstraction; the owner writes
+        # only ``status``, reactivate writes only the non-status fields. The
+        # field-clears autoflush before ``update_status``'s own re-fetch.
         job.error_message = None
         job.started_at = None
         job.completed_at = None
         job.arq_job_id = None
-        await self._session.flush()
-        return job
+        return await self.update_status(job_id, "queued")
 
     async def store_result(
         self, job_id: uuid.UUID, result_data: dict[str, Any]
@@ -326,38 +374,6 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_active_generation_jobs(self, node_id: uuid.UUID) -> list[Job]:
-        """Get active generation jobs (queued or running) for a node."""
-        stmt = (
-            select(Job)
-            .where(
-                Job.course_node_id == node_id,
-                Job.status.in_(["queued", "active"]),
-                Job.job_type == "generate_structure",
-            )
-            .order_by(Job.queued_at)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_active_generation_jobs_in_tree(
-        self, node_ids: list[uuid.UUID]
-    ) -> list[Job]:
-        """Get active generation jobs targeting any node in the tree."""
-        if not node_ids:
-            return []
-        stmt = (
-            select(Job)
-            .where(
-                Job.course_node_id.in_(node_ids),
-                Job.status.in_(["queued", "active"]),
-                Job.job_type == "generate_structure",
-            )
-            .order_by(Job.queued_at)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
     async def propagate_failure(
         self, failed_job_id: uuid.UUID, *, error_message: str | None = None
     ) -> list[uuid.UUID]:
@@ -387,15 +403,15 @@ class JobRepository:
                 if job.id in seen:
                     continue
                 seen.add(job.id)
-                if job.status in ("queued", "active"):
-                    job.status = "failed"
-                    job.error_message = msg
-                    job.completed_at = datetime.now(UTC)
+                if job.status in IN_FLIGHT_STATUSES:
+                    # Route through the status owner: it stamps completed_at +
+                    # error_message on ``failed`` and validates the transition
+                    # (queued/active → failed are both legal). Per-row call =
+                    # per-row completed_at, matching the prior behaviour.
+                    await self.update_status(job.id, "failed", error_message=msg)
                     failed_ids.append(job.id)
                     queue.append(job.id)
 
-        if failed_ids:
-            await self._session.flush()
         return failed_ids
 
     async def _find_dependents(self, job_id: uuid.UUID) -> list[Job]:
@@ -431,19 +447,19 @@ class JobRepository:
 
         Feeds the DD-3.3c-I-B admission gate, which compares the returned
         seconds against ``intake_admission_max_pending_video_hours``.
-        Scope: ``job_type='ingest'`` jobs whose status is ``queued`` (the
-        document shows ``pending``) or ``active`` (processing), excluding
-        soft-deleted rows. NULL durations (non-video ingests, pre-DD-3.3c-I-B
-        rows) are ignored by ``SUM``; ``COALESCE`` returns ``0.0`` for an
-        empty queue.
+        Scope: ``job_type='document_processing'`` jobs whose status is
+        in-flight (``queued`` — the document shows ``pending`` — or
+        ``active`` — processing), excluding soft-deleted rows. NULL durations
+        (non-video ingests, pre-DD-3.3c-I-B rows) are ignored by ``SUM``;
+        ``COALESCE`` returns ``0.0`` for an empty queue.
 
-        Note the status set is ``('queued','active')`` — there is no
-        ``'pending'`` Job status (that is the AuthoredDocument state); the
-        queued Job is what the worker has not yet picked up.
+        The status set is :data:`IN_FLIGHT_STATUSES` (``queued`` / ``active``)
+        — there is no ``'pending'`` Job status (that is the AuthoredDocument
+        state); the queued Job is what the worker has not yet picked up.
         """
         stmt = select(func.coalesce(func.sum(Job.duration_sec), 0.0)).where(
-            Job.job_type == "ingest",
-            Job.status.in_(["queued", "active"]),
+            Job.job_type == JobType.DOCUMENT_PROCESSING,
+            Job.status.in_(IN_FLIGHT_STATUSES),
             Job.deleted_at.is_(None),
         )
         result = await self._session.execute(stmt)
@@ -466,7 +482,7 @@ class JobRepository:
         stmt = (
             select(Job.duration_sec)
             .where(
-                Job.job_type == "ingest",
+                Job.job_type == JobType.DOCUMENT_PROCESSING,
                 Job.input_params.contains({"material_id": str(material_id)}),
                 Job.duration_sec.is_not(None),
             )

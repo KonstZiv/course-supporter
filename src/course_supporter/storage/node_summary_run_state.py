@@ -16,8 +16,8 @@ read/write identical bytes. Schema decisions (Q-4 ratify, Phase 3.2.2):
 
 * ``current_stage`` is **NOT duplicated** here — it lives in the
   ``Job.current_stage`` column and would drift if mirrored.
-* Completion is signalled via ``Job.status='completed'``, never via a
-  ``current_stage='completed'`` sentinel value.
+* Completion is signalled via ``Job.status='complete'``, never via a
+  ``current_stage='complete'`` sentinel value.
 * ``pass1`` / ``pass2`` are per-node maps from ``uuid`` to one of four
   statuses: ``pending`` / ``done`` / ``skipped_memo`` / ``error``.
 * ``errors`` is an append-only list (resume sees the full history of

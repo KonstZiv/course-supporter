@@ -442,7 +442,7 @@ class TestCompleteProcessingStateTransition:
                 id=uuid.uuid4(),
                 tenant_id=tenant.id,
                 course_node_id=root.id,
-                job_type="ingest",
+                job_type="document_processing",
                 status="active",
             )
             session.add(job)
@@ -496,7 +496,7 @@ class TestCompleteProcessingStateTransition:
                 id=uuid.uuid4(),
                 tenant_id=tenant.id,
                 course_node_id=root.id,
-                job_type="ingest",
+                job_type="document_processing",
                 status="active",
             )
             session.add(job)

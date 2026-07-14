@@ -265,7 +265,7 @@ async def _seed_video_job(
         job = await JobRepository(session).create(
             tenant_id=committed_seeds["tenant_id"],
             course_node_id=committed_seeds["course_node_id"],
-            job_type="ingest",
+            job_type="document_processing",
         )
         await session.commit()
         return job.id

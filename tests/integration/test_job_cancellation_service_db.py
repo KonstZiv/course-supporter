@@ -50,7 +50,7 @@ class TestLookupPaths:
         job = Job(
             tenant_id=t1.id,
             course_node_id=None,
-            job_type="ingest",
+            job_type="document_processing",
             status="queued",
         )
         db_session.add(job)
@@ -69,8 +69,8 @@ class TestLookupPaths:
         job = Job(
             tenant_id=t2.id,
             course_node_id=n1.id,
-            job_type="ingest",
-            status="running",
+            job_type="document_processing",
+            status="active",
         )
         db_session.add(job)
         await db_session.flush()
@@ -89,14 +89,13 @@ class TestLookupPaths:
         """Jobs whose input_params @> {'course_node_id': <id>} also cancel.
 
         Covers legacy callsites where Job.course_node_id FK is NULL but
-        the JSONB carries the entity reference. Status here is the legacy
-        'active' alias (still in scope per pre-flight scope agreement).
+        the JSONB carries the entity reference.
         """
         _, t2, n1, _ = await _seed_two_tenants_two_nodes(db_session)
         job = Job(
             tenant_id=t2.id,
             course_node_id=None,
-            job_type="ingest",
+            job_type="document_processing",
             status="active",
             input_params={"course_node_id": str(n1.id), "extra": "x"},
         )
@@ -115,13 +114,13 @@ class TestLookupPaths:
 class TestExclusions:
     """Status filter + deleted_at filter exclude correct rows."""
 
-    async def test_completed_not_touched(self, db_session: AsyncSession) -> None:
+    async def test_complete_not_touched(self, db_session: AsyncSession) -> None:
         t1, _, _, _ = await _seed_two_tenants_two_nodes(db_session)
         job = Job(
             tenant_id=t1.id,
             course_node_id=None,
-            job_type="ingest",
-            status="completed",
+            job_type="document_processing",
+            status="complete",
         )
         db_session.add(job)
         await db_session.flush()
@@ -129,7 +128,7 @@ class TestExclusions:
         await JobCancellationService(db_session).cancel_jobs_for_entities([t1.id])
         await db_session.refresh(job)
 
-        assert job.status == "completed"
+        assert job.status == "complete"
 
     async def test_already_cancelled_idempotent(self, db_session: AsyncSession) -> None:
         """Re-running over an already-cancelled Job: completed_at unchanged."""
@@ -138,7 +137,7 @@ class TestExclusions:
         job = Job(
             tenant_id=t1.id,
             course_node_id=None,
-            job_type="ingest",
+            job_type="document_processing",
             status="cancelled",
             completed_at=original_ts,
         )
@@ -166,7 +165,7 @@ class TestExclusions:
         job = Job(
             tenant_id=t1.id,
             course_node_id=None,
-            job_type="ingest",
+            job_type="document_processing",
             status="active",
             deleted_at=datetime(2020, 1, 1, tzinfo=UTC),
         )
@@ -190,7 +189,7 @@ class TestScopeIsolation:
         job = Job(
             tenant_id=t2.id,
             course_node_id=n2.id,
-            job_type="ingest",
+            job_type="document_processing",
             status="queued",
         )
         db_session.add(job)
@@ -213,7 +212,7 @@ class TestIdempotency:
         job = Job(
             tenant_id=t1.id,
             course_node_id=None,
-            job_type="ingest",
+            job_type="document_processing",
             status="queued",
         )
         db_session.add(job)

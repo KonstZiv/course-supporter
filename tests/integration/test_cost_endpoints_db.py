@@ -121,7 +121,7 @@ async def cost_seed(
             return Job(
                 tenant_id=tenant.id,
                 course_node_id=course_node_id,
-                job_type="ingest",
+                job_type="document_processing",
             )
 
         job_r = _job(root.id)
@@ -305,7 +305,7 @@ class TestCostSummaryE2E:
             job = Job(
                 tenant_id=cost_seed["tenant_id"],  # type: ignore[arg-type]
                 course_node_id=cost_seed["root_id"],  # type: ignore[arg-type]
-                job_type="ingest",
+                job_type="document_processing",
             )
             session.add(job)
             await session.flush()
@@ -342,7 +342,7 @@ class TestCostSummaryE2E:
             job = Job(
                 tenant_id=cost_seed["tenant_id"],  # type: ignore[arg-type]
                 course_node_id=cost_seed["root_id"],  # type: ignore[arg-type]
-                job_type="ingest",
+                job_type="document_processing",
             )
             session.add(job)
             await session.flush()
@@ -508,7 +508,7 @@ class TestCostCourseE2E:
             intruder_job = Job(
                 tenant_id=other_tenant.id,
                 course_node_id=intruder_node.id,
-                job_type="ingest",
+                job_type="document_processing",
             )
             session.add(intruder_job)
             await session.flush()

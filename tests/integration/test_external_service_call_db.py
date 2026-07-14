@@ -104,7 +104,9 @@ class TestForeignKeyEnforcement:
         node = make_root_course_node(tenant_id=tenant.id, title="course", order=0)
         db_session.add(node)
         await db_session.flush()
-        job = Job(tenant_id=tenant.id, course_node_id=node.id, job_type="ingest")
+        job = Job(
+            tenant_id=tenant.id, course_node_id=node.id, job_type="document_processing"
+        )
         db_session.add(job)
         await db_session.flush()
         esc = ExternalServiceCall(
@@ -126,7 +128,7 @@ class TestForeignKeyEnforcement:
         tenant = Tenant(name=f"esc-{uuid.uuid4().hex[:6]}")
         db_session.add(tenant)
         await db_session.flush()
-        job = Job(tenant_id=tenant.id, job_type="ingest")
+        job = Job(tenant_id=tenant.id, job_type="document_processing")
         db_session.add(job)
         await db_session.flush()
         esc = ExternalServiceCall(

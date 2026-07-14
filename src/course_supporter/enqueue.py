@@ -115,7 +115,7 @@ async def enqueue_ingestion(
     job = await job_repo.create(
         tenant_id=tenant_id,
         course_node_id=node_id,
-        job_type="ingest",
+        job_type=JobType.DOCUMENT_PROCESSING,
         priority=priority.value,
         input_params={
             "material_id": str(material_id),
@@ -187,7 +187,7 @@ async def create_homework_job(
     """
     job = await JobRepository(session).create(
         tenant_id=tenant_id,
-        job_type="homework",
+        job_type=JobType.HOMEWORK_PROCESSING,
         input_params={
             "submission_id": str(submission_id),
         },

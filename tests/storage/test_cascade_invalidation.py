@@ -561,9 +561,9 @@ class TestKD13CancelHookIntegration:
                 id=uuid.uuid4(),
                 tenant_id=tenant.id,
                 course_node_id=child.id,
-                job_type="ingest",
+                job_type="document_processing",
                 priority="normal",
-                status="running",
+                status="active",
                 input_params={"course_node_id": str(child.id)},
             )
             session.add(job)

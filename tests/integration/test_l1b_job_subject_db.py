@@ -25,6 +25,7 @@ from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import CourseNode, Job, Tenant
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.job_factory import make_document_job as _doc_job
 
 pytestmark = pytest.mark.requires_db
 
@@ -39,25 +40,6 @@ async def _seed_tenant_node(session: AsyncSession) -> tuple[Tenant, CourseNode]:
     session.add(n)
     await session.flush()
     return t, n
-
-
-def _doc_job(
-    tenant_id: uuid.UUID,
-    node_id: uuid.UUID,
-    subject_id: uuid.UUID,
-    *,
-    status: str = "queued",
-    **kw: object,
-) -> Job:
-    return Job(
-        tenant_id=tenant_id,
-        course_node_id=node_id,
-        job_type="document_processing",
-        status=status,
-        subject_type="authored_document",
-        subject_id=subject_id,
-        **kw,
-    )
 
 
 class TestIdempotencyIndex:

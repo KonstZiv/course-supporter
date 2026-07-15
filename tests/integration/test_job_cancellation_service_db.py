@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.orm import CourseNode, Job, Tenant
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.job_factory import make_document_job as _doc_job
 
 pytestmark = pytest.mark.requires_db
 
@@ -37,29 +38,6 @@ async def _seed_tenant_node(session: AsyncSession) -> tuple[Tenant, CourseNode]:
     session.add(n1)
     await session.flush()
     return t1, n1
-
-
-def _doc_job(
-    tenant_id: uuid.UUID,
-    node_id: uuid.UUID,
-    subject_id: uuid.UUID,
-    *,
-    status: str = "queued",
-    **kw: object,
-) -> Job:
-    """A ``document_processing`` Job with a typed ``authored_document`` subject.
-
-    ``subject_type`` must pair with ``job_type`` per ``ck_jobs_subject_type_legal``.
-    """
-    return Job(
-        tenant_id=tenant_id,
-        course_node_id=node_id,
-        job_type="document_processing",
-        status=status,
-        subject_type="authored_document",
-        subject_id=subject_id,
-        **kw,
-    )
 
 
 class TestSubjectMatch:
@@ -103,6 +81,7 @@ class TestSubjectMatch:
         await db_session.refresh(job)
 
         assert job.status == "cancelled"
+        assert job.completed_at == FIXED_TS
 
     async def test_node_id_alone_does_not_cancel_document_job(
         self, db_session: AsyncSession

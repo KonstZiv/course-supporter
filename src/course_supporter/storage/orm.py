@@ -906,6 +906,45 @@ class Job(SoftDeleteMixin, Base):
             "status IN ('queued', 'active', 'complete', 'failed', 'cancelled')",
             name="ck_jobs_status",
         ),
+        # ── L1b: typed job subject (KD13 idempotency invariant) ──────────────
+        # Pair consistency + legal job_type↔subject_type set. Mirror of the
+        # frozen SQL in migration ``l1b_job_subject``; the whitelist below is
+        # the SQL twin of ``jobs.job_type.JOB_SUBJECT_TYPE_PAIRS`` (test-lock in
+        # test_l1b_invariants asserts the two agree — contract R3/R4).
+        CheckConstraint(
+            "(subject_type IS NULL) = (subject_id IS NULL)",
+            name="ck_jobs_subject_pair",
+        ),
+        CheckConstraint(
+            "(job_type = 'document_processing' "
+            "AND subject_type = 'authored_document') "
+            "OR (job_type = 'homework_processing' "
+            "AND subject_type = 'homework_submission') "
+            "OR (job_type = 'node_summary_regeneration' "
+            "AND subject_type = 'course_node') "
+            "OR (job_type = 'base_normalize' "
+            "AND subject_type = 'project_base') "
+            "OR subject_type IS NULL",
+            name="ck_jobs_subject_type_legal",
+        ),
+        # Idempotency: at most one in-flight job per subject. Partial-unique
+        # mirror of migration ``l1b_job_subject`` (frozen ``sa.text``; Alembic
+        # does not round-trip a partial WHERE — GIN 3.3b lesson — so the
+        # migration is hand-authored and this is the model-honesty twin). The
+        # status list duplicates ``IN_FLIGHT_STATUSES`` (job_repository); a
+        # derive-or-verify test-lock keeps them in step (contract R4). NO
+        # ``postgresql_nulls_not_distinct``: NULL subjects (s3_cleanup /
+        # unrecoverable historical rows) MUST NOT conflict — Postgres default
+        # NULL-distinct behaviour is load-bearing here, not incidental.
+        Index(
+            "uq_jobs_subject_in_flight",
+            "subject_type",
+            "subject_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('queued', 'active') AND deleted_at IS NULL"
+            ),
+        ),
         {"comment": "Background task queue entries (ingestion, generation)"},
     )
 
@@ -917,7 +956,25 @@ class Job(SoftDeleteMixin, Base):
         ForeignKey("course_nodes.id", ondelete="SET NULL"),
         index=True,
         comment="FK to target CourseNode (legacy table name course_nodes "
-        "until Phase 1.1 rename). NULL for orphaned jobs.",
+        "until Phase 1.1 rename). NULL for orphaned jobs. L1b: no longer the "
+        "cancellation target (that is subject_id) — context/attribution only; "
+        "physical fate deferred to L4.",
+    )
+    subject_type: Mapped[str | None] = mapped_column(
+        String(50),
+        comment="L1b typed job subject — the entity kind this job is about: "
+        "authored_document / homework_submission / course_node / project_base. "
+        "NULL for s3_cleanup (no natural subject, R2) and unrecoverable "
+        "historical rows. Source dictionary: jobs.job_type.JOB_SUBJECT_TYPE; "
+        "legal pairs enforced by ck_jobs_subject_type_legal.",
+    )
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        comment="L1b typed job subject id — polymorphic reference, NO FK "
+        "(orphans are legal by construction, KD12 Path 3). The cancellation "
+        "target (subject_id IN victim_ids) and the idempotency key "
+        "(uq_jobs_subject_in_flight). Paired with subject_type via "
+        "ck_jobs_subject_pair (both NULL or both set).",
     )
     job_type: Mapped[str] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="normal")

@@ -2,12 +2,28 @@
 
 Vision §3 KD13 + KD12. When a soft-delete cascade fires the
 ``on_cancel_jobs`` hook with the collected victim ids, this service
-finds active Jobs that reference any of those entities — by
-``tenant_id``, ``course_node_id``, or ``input_params`` JSONB
-containment — and flips them to ``status='cancelled'`` in the same
-DB transaction. Workers then observe the new status at their next
-``current_stage`` boundary via :class:`JobCancellationChecker`
-(commit (d)) and exit gracefully.
+finds in-flight Jobs whose **subject** is one of those victims and
+flips them to ``status='cancelled'`` in the same DB transaction (via
+the status owner, :meth:`JobRepository.update_status`). Workers then
+observe the new status at their next ``current_stage`` boundary via
+:class:`JobCancellationChecker` and exit gracefully.
+
+**L1b — one predicate arm.** The lookup is a single
+``Job.subject_id.in_(victim_ids)`` (plus the in-flight + not-soft-deleted
+filters). The cascade hands the FULL victim id set — every soft-deleted
+entity of every type, since the cascade engine does not filter by type —
+so a document-subject job is matched by its AuthoredDocument id and a
+node-subject job by its CourseNode id, both already present in the victim
+set (H-L1b-4 Case A). This replaced a three-arm OR
+(``tenant_id`` / ``course_node_id`` / ``input_params @> {course_node_id}``)
+that keyed on the node: it over-cancelled every sibling job of the node
+(F3) and could not see a document subject at all (F2) — the reason each
+document-rooted caller had to inject ``course_node_id`` (the "augmented"
+hack, now removed). The ``tenant_id`` arm was unreachable (no caller roots
+a cascade on a Tenant); the JSONB arm was dead against real data (no writer
+ever put ``course_node_id`` into ``input_params``) — so retiring it drops
+the deferred GIN-index debt (DD-L1a-D) as no-longer-applicable rather than
+implementing it.
 
 Phase 1+ entity tasks bind this as the :data:`OnCancelJobs`
 callable on their cascade declarations::
@@ -18,24 +34,6 @@ callable on their cascade declarations::
         cascade_map,
         on_cancel_jobs=jcs.cancel_jobs_for_entities,
     )
-
-0.3 ships the implementation only — no ``__cascades_soft_delete_to__``
-list is populated here, no entity-specific binding lands.
-
-**Performance note for POST-MR-NOTES.** The JSONB containment branch
-generates one ``Job.input_params @> '{"course_node_id": ...}'`` clause
-per victim id. PostgreSQL's ``@>`` operator does not natively check
-"any of these values for the same key", so OR-of-N is the correct
-shape. A GIN index on ``Job.input_params`` (``CREATE INDEX
-ix_jobs_input_params_gin ON jobs USING GIN (input_params jsonb_path_ops)``)
-would convert each ``@>`` from a sequential scan to an index-only
-lookup, but adding it now is premature: the migration is one round
-trip per cascade in dev/test, and real cascade widths are not yet
-known. Phase 2.x will add the GIN index once telemetry from
-production cascades shows the JSONB branch as a real bottleneck —
-ideally bundled with the call-site rewrite that drops the legacy
-``input_params["course_node_id"]`` indirection in favour of the
-direct FK.
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import Job
@@ -82,16 +80,15 @@ class JobCancellationService:
         *,
         now: datetime | None = None,
     ) -> None:
-        """Cancel all in-progress Jobs that reference any ``entity_id``.
+        """Cancel all in-flight Jobs whose subject is one of ``entity_ids``.
 
-        Lookup is OR-of-paths because Jobs reference entities through
-        three different columns depending on ``job_type``:
-
-        * ``Job.tenant_id`` — tenant-wide cascades.
-        * ``Job.course_node_id`` — node-scoped jobs (KD13 canonical FK).
-        * ``Job.input_params @> {"course_node_id": ...}`` — legacy /
-          edge cases where the FK is NULL but the JSONB carries the id
-          (some pre-rewrite orchestrators emit this shape).
+        ``entity_ids`` is the cascade's full victim id set (every
+        soft-deleted entity of every type). A Job is cancelled when its
+        typed ``subject_id`` (L1b) is in that set — precise per-subject
+        cancellation with no over-cancel: deleting one document no longer
+        touches its siblings' jobs. Node deletion still cancels the whole
+        subtree because the victim set already contains the subtree's
+        AuthoredDocument and CourseNode ids (H-L1b-4 Case A).
 
         ``now`` overrides the ``completed_at`` timestamp for
         deterministic tests; defaults to ``datetime.now(UTC)``.
@@ -114,32 +111,22 @@ class JobCancellationService:
 
         ts = now if now is not None else datetime.now(UTC)
 
-        jsonb_clauses = [
-            Job.input_params.op("@>")({"course_node_id": str(eid)})
-            for eid in entity_ids
-        ]
-
+        # L1b: one arm — match the typed subject against the victim id set.
+        # NULL subject_id (s3_cleanup / unrecoverable historical) matches
+        # nothing, which is correct: those jobs have no subject to cancel by.
         stmt = (
             select(Job)
             .where(Job.status.in_(IN_FLIGHT_STATUSES))
             .where(Job.deleted_at.is_(None))
-            .where(
-                or_(
-                    Job.tenant_id.in_(entity_ids),
-                    Job.course_node_id.in_(entity_ids),
-                    *jsonb_clauses,
-                )
-            )
+            .where(Job.subject_id.in_(entity_ids))
         )
         result = await self._session.execute(stmt)
         jobs = list(result.scalars().all())
 
         # Route every cancel through the status owner (contract §3
-        # "Ownership"): ``active -> cancelled`` is now a legal transition and
+        # "Ownership"): ``active -> cancelled`` is a legal transition and
         # ``update_status`` stamps ``completed_at`` as the termination time.
-        # N per-row calls replace the prior in-loop attr-assign + single
-        # flush; the width is node-subtree-bounded (the ``tenant_id`` OR-arm
-        # is unreachable — no caller roots the cascade on a Tenant).
+        # N per-row calls; the width is node-subtree-bounded.
         repo = JobRepository(self._session)
         for job in jobs:
             await repo.update_status(job.id, "cancelled", now=ts)

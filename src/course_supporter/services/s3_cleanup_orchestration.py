@@ -33,7 +33,7 @@ import uuid
 from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.jobs import JobType
+from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import Job
 
@@ -95,6 +95,12 @@ async def enqueue_s3_cleanup(
         course_node_id=course_node_id,
         job_type=JobType.S3_CLEANUP,
         input_params={"file_keys": file_keys},
+        # L1b: s3_cleanup has no natural single subject — it operates on a raw
+        # file-key list (R2). Both stay NULL (JOB_SUBJECT_TYPE[S3_CLEANUP] is
+        # None), so the idempotency index never applies: parallel cleanups do
+        # not conflict.
+        subject_type=JOB_SUBJECT_TYPE[JobType.S3_CLEANUP],
+        subject_id=None,
     )
     # QQ5 boundary: commit DB before issuing the ARQ side-effect so
     # observers never see an enqueued ARQ task pointing at a Job row

@@ -1079,17 +1079,15 @@ async def delete_document(
        (cancel → invalidate → scrub → write deleted_at → flush) plus
        per-victim scrub dispatch:
 
-       * ``on_cancel_jobs`` — closure-augmented binding to
+       * ``on_cancel_jobs`` — direct binding to
          :class:`JobCancellationService.cancel_jobs_for_entities`
-         per vision §KD13. Cascade engine passes the document id as
-         the victim list, but JCS lookup paths are course_node_id-
-         keyed (``Job.course_node_id`` IN, ``Job.input_params @>
-         {course_node_id}``, ``Job.tenant_id`` IN); a raw bind would
-         silent-no-op. Closure injects ``document.course_node_id``
-         so the Job.course_node_id path matches active node-scoped
-         ingestion jobs. KD13 cancel semantics:
+         (L1b). The cascade victim list carries the document's own id,
+         which IS the job subject, and JCS now keys on
+         ``Job.subject_id IN victim_ids`` — so the document's ingestion
+         job is cancelled precisely, with no over-cancel of sibling
+         jobs and no course_node_id augmentation. KD13 cancel semantics:
          ``status='cancelled'`` + ``completed_at = now()``;
-         ``deleted_at`` REMAINS NULL — Job is sibling-cancelled, not
+         ``deleted_at`` REMAINS NULL — Job is subject-cancelled, not
          cascade soft-deleted (per PHASE.md §1.2 audit: Job ∉ any
          ``__cascades_soft_delete_to__`` chain).
        * ``on_invalidate_hashes`` — Gap 3 hook bridging
@@ -1140,10 +1138,11 @@ async def delete_document(
     # map for AuthoredDocument resolves to [DocumentSummary,
     # DocumentSegment] — both empty in Phase 1 per Amendment 16.
     # Hook chain per cascade engine ordering invariant: cancel →
-    # invalidate → scrub → write deleted_at → flush. See route
-    # docstring step (3) for the closure-augmentation rationale on
-    # ``cancel_hook`` (cascade victim ids are document-keyed; JCS
-    # lookup paths are course_node_id-keyed).
+    # invalidate → scrub → write deleted_at → flush. L1b: cancel binds
+    # ``cancel_jobs_for_entities`` directly — the cascade victim set already
+    # carries the document's own id, which IS the job subject, so no
+    # course_node_id augmentation is needed (nor wanted: injecting it caused
+    # the F3 over-cancel that hit every sibling job of the node).
     cascade_service = CascadeDeleteService(session)
     cascade_map = build_cascade_map(AuthoredDocument)
     content_hash_service = ContentHashService(session)
@@ -1154,14 +1153,10 @@ async def delete_document(
     ) -> None:
         await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
 
-    async def cancel_hook(victim_ids: list[uuid.UUID]) -> None:
-        augmented = [*victim_ids, course_node_id]
-        await job_cancellation_service.cancel_jobs_for_entities(augmented)
-
     await cascade_service.soft_delete_with_cascade(
         document,
         cascade_map,
-        on_cancel_jobs=cancel_hook,
+        on_cancel_jobs=job_cancellation_service.cancel_jobs_for_entities,
         on_invalidate_hashes=invalidate_hook,
     )
 
@@ -1240,22 +1235,47 @@ async def retry_document(
     document.error_message = None
     await session.flush()
 
+    # L1b R1 ("do instead of what's there"): supersede any in-flight job of
+    # THIS subject (the document) before queuing the new one — otherwise the
+    # new Job collides on uq_jobs_subject_in_flight. Cancellation keys on
+    # subject_id, so only this document's live job is terminated, never a
+    # sibling's. A no-op on the common error-retry (the prior job already
+    # failed) and on ``force`` over a ``ready`` doc with no live job.
+    jcs = JobCancellationService(session)
+    await jcs.cancel_jobs_for_entities([document.id])
+
     # DD-3.3c-I-B: reuse the duration the original create/confirm probed,
     # rather than re-running the (network-heavy for URL) intake probe. None
     # for legacy documents with no prior probed job — a mild under-count.
     job_repo = JobRepository(session)
     duration_sec = await job_repo.get_latest_ingest_duration_for_material(document.id)
 
-    job = await enqueue_ingestion(
-        redis=arq,
-        session=session,
-        tenant_id=tenant.tenant_id,
-        node_id=document.course_node_id,
-        material_id=document.id,
-        source_type=document.source_type,
-        source_url=document.source_url,
-        duration_sec=duration_sec,
-    )
+    try:
+        job = await enqueue_ingestion(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            node_id=document.course_node_id,
+            material_id=document.id,
+            source_type=document.source_type,
+            source_url=document.source_url,
+            duration_sec=duration_sec,
+        )
+    except IntegrityError as exc:
+        # A concurrent retry won the subject slot between the cancel above and
+        # this insert — the index is the final judge (invariant 4). Surface a
+        # human 409, never a 500 from the index (invariant 5).
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    "a concurrent retry is already re-processing this "
+                    "document; try again shortly."
+                ),
+            },
+        ) from exc
     # enqueue_ingestion flipped the document to PENDING and owns the commit
     # (QQ5 helper-owns-commit) — the error_message reset + Job are already
     # durable before the ARQ dispatch.

@@ -291,15 +291,14 @@ class TestDeleteFile:
 
         mock_s3.delete_object.assert_not_awaited()
 
-    async def test_mode_a_passes_cancel_hook_with_course_node_augmentation(
+    async def test_mode_a_cancel_hook_direct_bind_no_augmentation(
         self, client: AsyncClient
     ) -> None:
-        """Hotfix-5 contract — Mode A handler wires ``on_cancel_jobs``
-        as a closure that augments the cascade-engine victim id list
-        with ``document.course_node_id`` before forwarding to JCS.
-        Mirrors the ``delete_document`` augmentation pattern; cascade
-        victim ids are document-keyed and JCS lookup paths are
-        course_node_id-keyed.
+        """L1b — Mode A wires ``on_cancel_jobs`` as the DIRECT-bound
+        :meth:`JobCancellationService.cancel_jobs_for_entities` (no closure,
+        no ``course_node_id`` augmentation). JCS keys on
+        ``Job.subject_id IN victim_ids`` and the document's own id is in the
+        cascade victim set, so its job cancels precisely.
         """
         key = f"tenants/{STUB_TENANT.tenant_id}/nodes/n/file.pdf"
         course_node_id = uuid.uuid4()
@@ -311,7 +310,6 @@ class TestDeleteFile:
         document.source_url = f"http://localhost:9000/course-materials/{key}"
 
         cascade_mock = AsyncMock()
-        jcs_method_mock = AsyncMock()
 
         with (
             patch(_ENTRY_REPO) as repo_cls,
@@ -324,11 +322,6 @@ class TestDeleteFile:
                 "course_supporter.api.routes.storage.enqueue_s3_cleanup",
                 AsyncMock(),
             ),
-            patch.object(
-                JobCancellationService,
-                "cancel_jobs_for_entities",
-                jcs_method_mock,
-            ),
         ):
             repo_cls.return_value.get_by_source_url = AsyncMock(return_value=document)
             resp = await client.delete(f"/api/v1/storage/files/{key}")
@@ -339,19 +332,14 @@ class TestDeleteFile:
             assert on_cancel_jobs is not None, (
                 "Mode A on_cancel_jobs missing — KD13 gap"
             )
-
-            # Invoke the closure with sample victim ids; verify
-            # augmentation injects course_node_id so JCS lookup path
-            # matches. MUST run inside the patch.object block so the
-            # JCS class patch is still active when the closure
-            # dispatches the call.
-            await on_cancel_jobs([document_id])
-            jcs_method_mock.assert_awaited_once()
-            passed_ids = jcs_method_mock.call_args.args[0]
-            assert document_id in passed_ids
-            assert course_node_id in passed_ids, (
-                "course_node_id missing from augmented ids — JCS lookup "
-                "would silent-no-op for document-rooted cascades"
+            # Direct bind — a bound method whose __func__ is the JCS method,
+            # NOT a wrapping augmentation closure.
+            assert (
+                getattr(on_cancel_jobs, "__func__", None)
+                is JobCancellationService.cancel_jobs_for_entities
+            ), (
+                "Mode A must direct-bind cancel_jobs_for_entities "
+                "(L1b — no augmentation)"
             )
 
     async def test_mode_b_does_not_invoke_job_cancellation(

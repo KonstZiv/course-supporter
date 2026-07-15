@@ -11,7 +11,7 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.jobs import JobType, validate_job_type
+from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType, validate_job_type
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.storage.orm import CourseNode, Job
 
@@ -90,6 +90,8 @@ class JobRepository:
         input_params: dict[str, object] | None = None,
         depends_on: list[str] | None = None,
         duration_sec: float | None = None,
+        subject_type: str | None = None,
+        subject_id: uuid.UUID | None = None,
     ) -> Job:
         """Create a new job record.
 
@@ -101,6 +103,15 @@ class JobRepository:
         ``duration_sec`` is the intake-probed source video duration
         (DD-3.3c-I-B); NULL for non-video ingests and non-ingest jobs.
         It feeds :meth:`sum_active_ingest_duration_sec`.
+
+        ``subject_type`` / ``subject_id`` (L1b) are the typed job subject —
+        the enqueue helpers derive ``subject_type`` from
+        :data:`~course_supporter.jobs.JOB_SUBJECT_TYPE` and pass the entity
+        id as ``subject_id``. Both NULL for ``s3_cleanup`` (no natural
+        subject). The DB enforces pair consistency (``ck_jobs_subject_pair``),
+        the legal pair set (``ck_jobs_subject_type_legal``) and one-in-flight
+        -per-subject (``uq_jobs_subject_in_flight``); a duplicate in-flight
+        subject surfaces as ``IntegrityError`` (routes map it to a human 409).
         """
         job = Job(
             tenant_id=tenant_id,
@@ -111,6 +122,8 @@ class JobRepository:
             input_params=input_params,
             depends_on=depends_on,
             duration_sec=duration_sec,
+            subject_type=subject_type,
+            subject_id=subject_id,
         )
         self._session.add(job)
         await self._session.flush()
@@ -119,6 +132,37 @@ class JobRepository:
     async def get_by_id(self, job_id: uuid.UUID) -> Job | None:
         """Get a job by primary key."""
         stmt = select(Job).where(Job.id == job_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_inflight_job_for_subject(
+        self, subject_type: str | None, subject_id: uuid.UUID | None
+    ) -> Job | None:
+        """Return an in-flight Job for the subject, or ``None`` (L1b).
+
+        The application-level mirror of ``uq_jobs_subject_in_flight``: same
+        predicate (``subject`` match + ``status IN IN_FLIGHT_STATUSES`` +
+        ``deleted_at IS NULL``). Routes call this to raise a human 409 before
+        an enqueue/reactivate would otherwise hit the DB index and surface a
+        500 (contract invariant 5). The index — not this check — is the final
+        judge under a concurrent race; this only buys a friendly message.
+
+        A NULL subject (``s3_cleanup`` or an unrecoverable historical row)
+        cannot conflict — NULLs are distinct in the partial-unique index — so
+        this returns ``None`` immediately without a query.
+        """
+        if subject_type is None or subject_id is None:
+            return None
+        stmt = (
+            select(Job)
+            .where(
+                Job.subject_type == subject_type,
+                Job.subject_id == subject_id,
+                Job.status.in_(IN_FLIGHT_STATUSES),
+                Job.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -474,16 +518,17 @@ class JobRepository:
 
         Retry creates a fresh Job; rather than re-running the (network-heavy
         for URL) intake probe, it reuses the duration already probed by the
-        original create/confirm. Matches on the ``material_id`` carried in
-        ``input_params`` via JSONB containment (``@>``; no dedicated column).
-        Returns ``None`` when no prior job carried a duration (legacy rows) —
+        original create/confirm. L1b: matches on the typed subject columns
+        (``subject_type = 'authored_document' AND subject_id = material_id``),
+        not JSONB containment. Returns ``None`` when no prior job carried a
+        duration (legacy rows with NULL subject, or a genuine first probe) —
         the caller accepts a mild under-count over a re-probe.
         """
         stmt = (
             select(Job.duration_sec)
             .where(
-                Job.job_type == JobType.DOCUMENT_PROCESSING,
-                Job.input_params.contains({"material_id": str(material_id)}),
+                Job.subject_type == JOB_SUBJECT_TYPE[JobType.DOCUMENT_PROCESSING],
+                Job.subject_id == material_id,
                 Job.duration_sec.is_not(None),
             )
             .order_by(Job.queued_at.desc())

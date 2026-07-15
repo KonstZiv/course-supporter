@@ -38,6 +38,7 @@ import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.agents.methodist_factory import (
@@ -55,8 +56,10 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.enqueue import enqueue_node_summary_regeneration
+from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
@@ -168,13 +171,50 @@ async def generate_node_summary(
             },
         )
 
-    job = await enqueue_node_summary_regeneration(
-        redis=arq,
-        session=session,
-        tenant_id=tenant.tenant_id,
-        vertex_node_id=node_id,
-        force=body.force,
+    # L1b: one in-flight regeneration per vertex. Application pre-check for a
+    # human 409 before the enqueue hits uq_jobs_subject_in_flight (invariant
+    # 5); the index remains the final judge under a race. ``body.force`` is a
+    # scope flag (regenerate despite freshness), NOT a supersede signal — a
+    # live regen for this vertex blocks regardless.
+    job_repo = JobRepository(session)
+    existing = await job_repo.get_inflight_job_for_subject(
+        JOB_SUBJECT_TYPE[JobType.NODE_SUMMARY_REGENERATION], node_id
     )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    f"node-summary regeneration is already in flight for this "
+                    f"node (job {existing.id}); wait for it to finish."
+                ),
+            },
+        )
+
+    try:
+        job = await enqueue_node_summary_regeneration(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            vertex_node_id=node_id,
+            force=body.force,
+        )
+    except IntegrityError as exc:
+        # A concurrent regenerate won the subject slot between the app-check
+        # and this insert — the index is the final judge (invariant 4). 409,
+        # never a 500 (invariant 5).
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    "a concurrent regeneration is already in flight for this "
+                    "node; retry once it finishes."
+                ),
+            },
+        ) from exc
     # enqueue_node_summary_regeneration owns the commit (QQ5 helper-owns-commit).
 
     logger.info(

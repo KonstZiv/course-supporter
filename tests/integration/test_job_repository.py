@@ -752,6 +752,8 @@ class TestAdmissionAggregate:
             job_type="document_processing",
             input_params=params,
             duration_sec=3300.0,
+            subject_type="authored_document",
+            subject_id=mid,
         )
 
         assert await repo.get_latest_ingest_duration_for_material(mid) == 3300.0
@@ -762,11 +764,14 @@ class TestAdmissionAggregate:
         """Lookup returns None when no prior job carried a duration (legacy)."""
         repo = JobRepository(db_session)
         mid = uuid.uuid4()
-        # A prior job for the material but with NULL duration — skipped.
+        # A prior job for the material (matched by subject) but with NULL
+        # duration — skipped by the ``duration_sec IS NOT NULL`` filter.
         await repo.create(
             tenant_id=seed_root_node.tenant_id,
             course_node_id=seed_root_node.id,
             job_type="document_processing",
             input_params={"material_id": str(mid), "source_type": "video"},
+            subject_type="authored_document",
+            subject_id=mid,
         )
         assert await repo.get_latest_ingest_duration_for_material(mid) is None

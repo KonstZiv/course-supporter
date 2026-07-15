@@ -47,6 +47,45 @@ class JobType(StrEnum):
 _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)
 
 
+# ── L1b: typed job subject ──────────────────────────────────────────────
+# The subject_type token per job_type — the ONE source for both the enqueue
+# write side (``enqueue.py`` / ``s3_cleanup_orchestration.py``) and the
+# ``ck_jobs_subject_type_legal`` DB CHECK whitelist. The migration freezes an
+# equivalent SQL literal and a test-lock asserts the two agree (contract R3/R4;
+# derive-or-verify, the №18 lesson). A ``None`` value means the type has no
+# natural single subject — ``s3_cleanup`` operates on a raw file-key list
+# (R2), so its ``subject_type``/``subject_id`` stay NULL and the idempotency
+# index (``uq_jobs_subject_in_flight``) does not apply to it.
+JOB_SUBJECT_TYPE: dict[JobType, str | None] = {
+    JobType.DOCUMENT_PROCESSING: "authored_document",
+    JobType.HOMEWORK_PROCESSING: "homework_submission",
+    JobType.NODE_SUMMARY_REGENERATION: "course_node",
+    JobType.BASE_NORMALIZE: "project_base",
+    JobType.S3_CLEANUP: None,
+}
+
+# Totality guard (mirror of ``_STATUS_CATEGORY`` in ``job_repository``): a new
+# JobType member added without an explicit subject_type — or an explicit
+# ``None`` decision — fails loudly at import, not silently at the enqueue site.
+# This is the L1b analogue of the L1a totality guard that a new terminal status
+# cannot be forgotten the way ``running`` was.
+_subjectless = set(JobType) - set(JOB_SUBJECT_TYPE)
+if _subjectless:  # pragma: no cover — guarded by test_l1b_invariants
+    msg = (
+        f"JobType members without a JOB_SUBJECT_TYPE entry: "
+        f"{sorted(jt.value for jt in _subjectless)}. Add each to "
+        f"JOB_SUBJECT_TYPE (a subject_type token, or an explicit None when the "
+        f"type has no natural single subject)."
+    )
+    raise RuntimeError(msg)
+
+# The legal ``(job_type, subject_type)`` pairs, excluding the NULL branch —
+# the source of the ``ck_jobs_subject_type_legal`` whitelist and its test-lock.
+JOB_SUBJECT_TYPE_PAIRS: frozenset[tuple[str, str]] = frozenset(
+    (jt.value, st) for jt, st in JOB_SUBJECT_TYPE.items() if st is not None
+)
+
+
 def validate_job_type(value: JobType | str) -> str:
     """Normalize a ``job_type`` argument to its canonical string.
 

@@ -7,6 +7,7 @@ from typing import Annotated, Any, NamedTuple
 
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
@@ -44,19 +45,41 @@ class _ReenqueueDispatch(NamedTuple):
 
 
 def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
-    """Map ``(job.job_type, job.input_params)`` → ARQ task call shape.
+    """Map ``(job.job_type, job.subject_id, job.input_params)`` → ARQ call.
 
     Dispatch over the canonical :class:`JobType` values (matched by
     enum member, not string literal — contract invariant #3).
 
+    L1b: the identity argument of each branch comes from the typed
+    ``job.subject_id`` column, not ``input_params``; the remaining
+    payload keys (``source_type`` / ``source_url`` / ``force`` /
+    ``file_keys``) stay in ``input_params`` — they are task parameters,
+    not identity.
+
     Raises :class:`HTTPException` (422) when:
 
     * ``job.job_type`` is not in the supported set.
-    * ``job.input_params`` is missing a required field for the
-      target ARQ task.
+    * an entity-typed job has a NULL ``subject_id`` (unrecoverable
+      historical row) — the same human 422 the missing input_params
+      key used to give.
+    * ``job.input_params`` is missing a required payload field.
     """
     p = job.input_params or {}
     jid = str(job.id)
+
+    def _subject() -> str:
+        # Identity now lives in the typed subject_id column (L1b). A NULL
+        # subject_id (historical row predating typed subjects) yields the same
+        # human 422 the missing input_params identity key used to give.
+        if job.subject_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Job {job.id} has no subject_id (legacy row predating the "
+                    f"typed subject); cannot re-enqueue."
+                ),
+            )
+        return str(job.subject_id)
 
     try:
         match job.job_type:
@@ -65,7 +88,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                     arq_function="arq_ingest_material",
                     args=[
                         jid,
-                        p["material_id"],
+                        _subject(),
                         p["source_type"],
                         p["source_url"],
                         job.priority,
@@ -74,12 +97,13 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
             case JobType.HOMEWORK_PROCESSING:
                 return _ReenqueueDispatch(
                     arq_function="arq_process_homework",
-                    args=[jid, p["submission_id"]],
+                    args=[jid, _subject()],
                     queue_name="homework",
                 )
             case JobType.S3_CLEANUP:
                 # KD13 s3_cleanup_task uses kw-only args; carried via
-                # task_kwargs rather than positional ``args``.
+                # task_kwargs rather than positional ``args``. No subject —
+                # ``file_keys`` is a payload list, not identity.
                 return _ReenqueueDispatch(
                     arq_function="s3_cleanup_task",
                     args=[],
@@ -90,9 +114,8 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                 )
             case JobType.NODE_SUMMARY_REGENERATION:
                 # Phase 3.2.4 — the methodist two-pass orchestrator
-                # job. ``vertex_node_id`` + ``force`` are recorded on
-                # original enqueue (``enqueue_node_summary_regeneration``)
-                # and replayed verbatim here so reactivate resumes the
+                # job. The vertex node id is the subject; ``force`` is a
+                # payload flag replayed verbatim so reactivate resumes the
                 # same scope; ``stage_progress`` is preserved by
                 # ``reactivate`` so the orchestrator picks up from
                 # KD4a checkpoint via memo-skip on already-fresh nodes.
@@ -100,7 +123,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                     arq_function="arq_regenerate_node_summary",
                     args=[
                         jid,
-                        p["vertex_node_id"],
+                        _subject(),
                         p.get("force", False),
                     ],
                 )
@@ -184,10 +207,41 @@ async def reactivate_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # L1b: reactivating failed→queued re-enters the in-flight set of
+    # uq_jobs_subject_in_flight. If a newer job already occupies that slot for
+    # the same subject, block with a human 409 instead of a 500 from the index
+    # (invariant 5). NULL-subject jobs cannot conflict — the check skips them.
+    existing = await repo.get_inflight_job_for_subject(job.subject_type, job.subject_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    f"another in-flight job {existing.id} already covers this "
+                    f"subject; wait for it to finish before reactivating."
+                ),
+            },
+        )
+
     try:
         await repo.reactivate(job.id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        # A concurrent reactivate/enqueue won the subject slot between the
+        # app-check above and this flush — the index is the final judge
+        # (invariant 4). Present it as a 409, never a 500 (invariant 5).
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    "a concurrent job won the subject slot; retry once it finishes."
+                ),
+            },
+        ) from exc
 
     dispatch = _resolve_reenqueue(job)
 

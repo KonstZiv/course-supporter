@@ -267,7 +267,6 @@ class IngestionCallback:
             )
             return
 
-        course_node_id = document.course_node_id
         cascade_service = CascadeDeleteService(session)
         cascade_map = build_cascade_map(AuthoredDocument)
         content_hash_service = ContentHashService(session)
@@ -278,14 +277,13 @@ class IngestionCallback:
         ) -> None:
             await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
 
-        async def cancel_hook(victim_ids: list[uuid.UUID]) -> None:
-            augmented = [*victim_ids, course_node_id]
-            await job_cancellation_service.cancel_jobs_for_entities(augmented)
-
+        # L1b: direct bind — the rejected document's own id is in the victim
+        # set and IS the job subject (JCS keys on subject_id); no
+        # course_node_id augmentation needed.
         await cascade_service.soft_delete_with_cascade(
             document,
             cascade_map,
-            on_cancel_jobs=cancel_hook,
+            on_cancel_jobs=job_cancellation_service.cancel_jobs_for_entities,
             on_invalidate_hashes=invalidate_hook,
         )
         log.info("stage2_reject_cascade_complete", material_id=str(material_id))

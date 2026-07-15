@@ -446,13 +446,16 @@ async def delete_node(
 
        * ``on_cancel_jobs`` — direct-bind to
          :class:`JobCancellationService.cancel_jobs_for_entities`
-         per vision §KD13. Subtree victim ids are course_node_id-keyed
-         (cascade traverses ``CourseNode → CourseNode → AuthoredDocument``
-         so the victim list includes the full subtree CourseNode set),
-         matching the JCS ``Job.course_node_id`` IN lookup path
-         directly — no closure augmentation needed (the augmentation
-         pattern in ``documents.py`` + ``storage.py`` is reserved for
-         delete sites where victim ids are document-keyed). KD13 cancel
+         per vision §KD13. The cascade traverses
+         ``CourseNode → CourseNode → AuthoredDocument``, so the victim
+         list is heterotypic — it contains every subtree CourseNode id
+         AND every subtree AuthoredDocument id. L1b keys cancellation on
+         ``Job.subject_id IN victim_ids``: node_summary jobs (subject =
+         the vertex CourseNode) and document_processing jobs (subject =
+         the AuthoredDocument) are BOTH matched because their subject ids
+         are in that list (H-L1b-4 Case A). No closure augmentation — the
+         former ``course_node_id``-injection hooks were removed in L1b now
+         that the subject id is a first-class column. KD13 cancel
          semantics: ``status='cancelled'`` + ``completed_at = now()``;
          ``deleted_at`` REMAINS NULL (Job ∉ any
          ``__cascades_soft_delete_to__`` chain per PHASE.md §1.2 audit).

@@ -35,6 +35,8 @@ def _make_job_mock(
     queued_at: datetime | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
+    subject_type: str | None = None,
+    subject_id: uuid.UUID | None = None,
 ) -> MagicMock:
     """Create a mock Job ORM object."""
     job = MagicMock()
@@ -54,6 +56,10 @@ def _make_job_mock(
     job.queued_at = queued_at or datetime.now(UTC)
     job.started_at = started_at
     job.completed_at = completed_at
+    # L1b typed subject — explicit (else MagicMock auto-creates a truthy attr
+    # that the reactivate 409-check / _resolve_reenqueue would misread).
+    job.subject_type = subject_type
+    job.subject_id = subject_id
     return job
 
 
@@ -203,15 +209,19 @@ def _make_failed_ingest_job(
     exercise the unsupported-type branch directly instead of patching the
     attribute on the returned mock.
     """
+    mid = uuid.uuid4()
     job = _make_job_mock(
         status="failed",
         job_type=job_type,
         node_id=node_id or uuid.uuid4(),
         error_message="boom",
         completed_at=datetime.now(UTC),
+        # L1b: identity is the typed subject, not input_params.
+        subject_type="authored_document",
+        subject_id=mid,
     )
     job.input_params = {
-        "material_id": str(uuid.uuid4()),
+        "material_id": str(mid),
         "source_type": "web",
         "source_url": "https://example.com",
     }
@@ -228,6 +238,9 @@ class TestReactivateJobHappyPath:
         job = _make_failed_ingest_job()
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
+            patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
             patch.object(JobRepository, "reactivate", return_value=job),
             patch.object(JobRepository, "set_arq_job_id", return_value=None),
         ):
@@ -244,6 +257,9 @@ class TestReactivateJobHappyPath:
         job = _make_failed_ingest_job()
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
+            patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
             patch.object(JobRepository, "reactivate", return_value=job),
             patch.object(JobRepository, "set_arq_job_id", return_value=None),
         ):
@@ -277,6 +293,9 @@ class TestReactivateJobNotFound:
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
             patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
+            patch.object(
                 JobRepository,
                 "reactivate",
                 side_effect=ValueError("Cannot reactivate Job ... in state 'queued'"),
@@ -287,29 +306,52 @@ class TestReactivateJobNotFound:
         assert "Cannot reactivate" in response.json()["detail"]
 
 
-class TestReactivateJobInputParamsMissing:
-    """Dispatcher 422 — Job exists and is failed but input_params incomplete."""
+class TestReactivateJobDispatch422:
+    """Dispatcher 422 — Job exists and is failed but cannot be re-enqueued."""
 
-    async def test_missing_required_input_param_returns_422(
-        self, client: AsyncClient
-    ) -> None:
-        """Stripped input_params → dispatcher KeyError → HTTPException(422)."""
+    async def test_missing_payload_key_returns_422(self, client: AsyncClient) -> None:
+        """Stripped payload key (source_type) → dispatcher KeyError → 422.
+
+        Identity (subject_id) is present; the missing key is task payload.
+        """
         job = _make_failed_ingest_job()
-        # Strip a key the ingest dispatcher requires
-        job.input_params = {"material_id": str(uuid.uuid4())}
+        job.input_params = {"material_id": str(job.subject_id)}
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
+            patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
             patch.object(JobRepository, "reactivate", return_value=job),
         ):
             response = await client.post(f"/api/v1/jobs/{job.id}/reactivate")
         assert response.status_code == 422
         assert "input_params missing" in response.json()["detail"]
 
+    async def test_null_subject_returns_422(self, client: AsyncClient) -> None:
+        """L1b — an entity-typed job with NULL subject_id (unrecoverable
+        historical row) → 422, the same human error the missing input_params
+        identity key used to give."""
+        job = _make_failed_ingest_job()
+        job.subject_id = None
+        with (
+            patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
+            patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
+            patch.object(JobRepository, "reactivate", return_value=job),
+        ):
+            response = await client.post(f"/api/v1/jobs/{job.id}/reactivate")
+        assert response.status_code == 422
+        assert "no subject_id" in response.json()["detail"]
+
     async def test_unsupported_job_type_returns_422(self, client: AsyncClient) -> None:
         """job_type outside the dispatcher's match set → 422 with supported list."""
         job = _make_failed_ingest_job(job_type="unknown_future_type")
         with (
             patch.object(JobRepository, "get_by_id_for_tenant", return_value=job),
+            patch.object(
+                JobRepository, "get_inflight_job_for_subject", return_value=None
+            ),
             patch.object(JobRepository, "reactivate", return_value=job),
         ):
             response = await client.post(f"/api/v1/jobs/{job.id}/reactivate")

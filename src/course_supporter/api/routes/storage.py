@@ -104,10 +104,11 @@ async def delete_file(
       ``AuthoredDocument``; cascade soft-delete dispatches the four-
       phase hook chain (cancel → invalidate → scrub → write deleted_at
       → flush per cascade engine invariant). ``on_cancel_jobs`` flips
-      active Jobs scoped to the document's parent CourseNode to
-      ``status='cancelled'`` per vision §KD13 (closure-augmented with
-      ``course_node_id`` since cascade victim ids are document-keyed —
-      mirrors ``delete_document``). ``on_invalidate_hashes`` cascade
+      the document's own in-flight ingestion Job to
+      ``status='cancelled'`` per vision §KD13 (L1b: JCS keys on
+      ``Job.subject_id IN victim_ids`` and the document id is in the
+      victim set — direct bind, no augmentation; mirrors
+      ``delete_document``). ``on_invalidate_hashes`` cascade
       hook bridges :class:`ContentHashService.invalidate_subtree` so
       parent-chain hash recompute treats victims as already gone
       (Gap 3 from commit (i)). Class-level ``__scrub_callable__``
@@ -154,22 +155,16 @@ async def delete_file(
         ) -> None:
             await content_hash_service.invalidate_subtree(ids, exclude_ids=exclude_ids)
 
-        async def cancel_hook(victim_ids: list[uuid.UUID]) -> None:
-            # KD13 closure-augmentation: cascade victim ids are
-            # ``[document_id]`` but JCS lookup paths are
-            # course_node_id-keyed; inject ``course_node_id`` so the
-            # Job.course_node_id path matches node-scoped ingestion
-            # jobs. Mirrors the delete_document handler at
-            # ``api/routes/documents.py``.
-            augmented = [*victim_ids, course_node_id]
-            await job_cancellation_service.cancel_jobs_for_entities(augmented)
-
+        # L1b: direct bind — the document's own id is in the cascade victim
+        # set and IS the job subject (JCS keys on subject_id); no
+        # course_node_id augmentation needed. Mirrors the delete_document
+        # handler at ``api/routes/documents.py``.
         cascade_service = CascadeDeleteService(session)
         cascade_map = build_cascade_map(AuthoredDocument)
         await cascade_service.soft_delete_with_cascade(
             document,
             cascade_map,
-            on_cancel_jobs=cancel_hook,
+            on_cancel_jobs=job_cancellation_service.cancel_jobs_for_entities,
             on_invalidate_hashes=invalidate_hook,
         )
 

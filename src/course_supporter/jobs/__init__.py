@@ -20,9 +20,16 @@ from course_supporter.jobs.cancellation import (
     JobCancelledError,
 )
 from course_supporter.jobs.cancellation_service import JobCancellationService
-from course_supporter.jobs.job_type import JobType, validate_job_type
+from course_supporter.jobs.job_type import (
+    JOB_SUBJECT_TYPE,
+    JOB_SUBJECT_TYPE_PAIRS,
+    JobType,
+    validate_job_type,
+)
 
 __all__ = [
+    "JOB_SUBJECT_TYPE",
+    "JOB_SUBJECT_TYPE_PAIRS",
     "JobCancellationChecker",
     "JobCancellationService",
     "JobCancelledError",

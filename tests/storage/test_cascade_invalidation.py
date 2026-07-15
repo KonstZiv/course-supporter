@@ -542,12 +542,13 @@ class TestKD13CancelHookIntegration:
         gap3_session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """Build CourseNode root → child + an in-progress
-        ``ingest`` Job referencing the child via ``course_node_id``.
+        ``node_summary_regeneration`` Job whose L1b subject IS the child node.
         Cascade soft-delete from root with
         ``on_cancel_jobs=JobCancellationService(...).cancel_jobs_for_entities``
-        bound directly (mirrors ``delete_node`` handler pattern).
-        Assert the Job flipped to cancelled but its row remains
-        soft-delete-NULL.
+        bound directly (mirrors ``delete_node`` handler pattern). The child is
+        a cascade victim, so its id enters ``entity_ids`` and the Job's
+        ``subject_id`` match flips it to cancelled — while its row remains
+        soft-delete-NULL (Job ∉ any cascade).
         """
         async with gap3_session_factory() as session:
             tenant = await _make_tenant(session, "kd13-cancel")
@@ -561,10 +562,12 @@ class TestKD13CancelHookIntegration:
                 id=uuid.uuid4(),
                 tenant_id=tenant.id,
                 course_node_id=child.id,
-                job_type="document_processing",
+                job_type="node_summary_regeneration",
                 priority="normal",
                 status="active",
-                input_params={"course_node_id": str(child.id)},
+                input_params={"vertex_node_id": str(child.id), "force": False},
+                subject_type="course_node",
+                subject_id=child.id,
             )
             session.add(job)
             await session.commit()

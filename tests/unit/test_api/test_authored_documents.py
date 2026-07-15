@@ -1158,19 +1158,17 @@ class TestDeleteDocument:
         cascade_mock.assert_awaited_once()
         enqueue_mock.assert_not_awaited()
 
-    async def test_passes_cancel_hook_with_course_node_augmentation(
+    async def test_passes_cancel_hook_direct_bind_no_augmentation(
         self,
         client: AsyncClient,
         node_id: uuid.UUID,
         mock_s3: AsyncMock,
     ) -> None:
-        """Hotfix-5 contract — handler wires ``on_cancel_jobs`` as a
-        closure that augments the cascade-engine victim id list with
-        ``document.course_node_id`` before forwarding to JCS. JCS lookup
-        paths are course_node_id-keyed; raw victim ids (just the
-        document id) would silent-no-op. Closure invocation invokes
-        :meth:`JobCancellationService.cancel_jobs_for_entities` with
-        ``[document_id, course_node_id]``.
+        """L1b — ``on_cancel_jobs`` is the DIRECT-bound
+        :meth:`JobCancellationService.cancel_jobs_for_entities`, not a closure.
+        JCS now keys on ``Job.subject_id IN victim_ids`` and the document's own
+        id is in the cascade victim set, so the document's job cancels precisely
+        — no ``course_node_id`` augmentation (which caused the F3 over-cancel).
         """
         entry = _mock_entry(
             node_id=node_id,
@@ -1178,7 +1176,6 @@ class TestDeleteDocument:
         )
         mock_s3.extract_key = MagicMock(return_value=None)
         cascade_mock = AsyncMock()
-        jcs_method_mock = AsyncMock()
         with (
             patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
             patch.object(
@@ -1191,40 +1188,20 @@ class TestDeleteDocument:
                 "soft_delete_with_cascade",
                 cascade_mock,
             ),
-            patch.object(
-                JobCancellationService,
-                "cancel_jobs_for_entities",
-                jcs_method_mock,
-            ),
         ):
             resp = await client.delete(f"/api/v1/documents/{entry.id}")
             assert resp.status_code == 204
             cascade_mock.assert_awaited_once()
-            # Closure passed (not the bound JCS method directly — that
-            # is the nodes.py pattern; documents.py uses closure
-            # augmentation).
             on_cancel_jobs = cascade_mock.call_args.kwargs.get("on_cancel_jobs")
             assert on_cancel_jobs is not None, "on_cancel_jobs missing — KD13 gap"
-            assert not hasattr(on_cancel_jobs, "__func__") or (
-                on_cancel_jobs.__func__
-                is not (JobCancellationService.cancel_jobs_for_entities)
+            # Direct bind (the nodes.py pattern) — a bound method whose __func__
+            # is the JCS method itself, NOT a wrapping closure.
+            assert (
+                getattr(on_cancel_jobs, "__func__", None)
+                is JobCancellationService.cancel_jobs_for_entities
             ), (
-                "delete_document must use closure augmentation, not "
-                "direct-bind — see KD13 closure-augmentation rationale "
-                "in route docstring"
-            )
-            # Invoke the closure with sample victim ids and assert the
-            # augmented call to JCS includes course_node_id. MUST run
-            # inside the patch.object block so the JCS class patch is
-            # still active when the closure dispatches the call.
-            sample_victims = [entry.id]
-            await on_cancel_jobs(sample_victims)
-            jcs_method_mock.assert_awaited_once()
-            passed_ids = jcs_method_mock.call_args.args[0]
-            assert entry.id in passed_ids, "victim id stripped by augmentation"
-            assert node_id in passed_ids, (
-                "course_node_id missing from augmented ids — "
-                "JCS lookup would silent-no-op"
+                "delete_document must direct-bind cancel_jobs_for_entities "
+                "(L1b — no course_node_id augmentation)"
             )
 
     async def test_passes_on_invalidate_hashes_hook(
@@ -1289,6 +1266,13 @@ class TestRetryDocument:
                 CourseNodeRepository,
                 "get_by_id",
                 return_value=_mock_node(node_id=node_id),
+            ),
+            # L1b: retry supersedes any in-flight job of the subject before
+            # enqueue — mocked here (the SQL path is exercised in the DB tier).
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                new_callable=AsyncMock,
             ),
             patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
         ):

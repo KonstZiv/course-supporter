@@ -34,6 +34,7 @@ from course_supporter.api.deps import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
+from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
@@ -248,6 +249,17 @@ class TestTenantGateGeneric404:
 
 
 class TestGenerateEnqueuesJob:
+    @pytest.fixture(autouse=True)
+    def _no_inflight_conflict(self) -> object:
+        """L1b: the generate route now pre-checks for an in-flight regen job
+        of this vertex (409 on conflict). These tests exercise the clean path,
+        so stub the check to "no conflict" — the 409/index behaviour is
+        covered in the DB tier (test_l1b_job_subject_db)."""
+        with patch.object(
+            JobRepository, "get_inflight_job_for_subject", return_value=None
+        ):
+            yield
+
     async def test_returns_202_with_job_response_when_scope_clean(
         self, client: AsyncClient, mock_session: AsyncMock
     ) -> None:

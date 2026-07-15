@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
 from course_supporter.job_priority import JobPriority
-from course_supporter.jobs import JobType
+from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -123,6 +123,12 @@ async def enqueue_ingestion(
             "source_url": source_url,
         },
         duration_sec=duration_sec,
+        # L1b typed subject — the AuthoredDocument. ``course_node_id`` above
+        # stays the owning node (context/attribution + node-deletion cascade
+        # reach); the cancellation TARGET is now subject_id (R7 — do NOT drop
+        # the course_node_id write).
+        subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PROCESSING],
+        subject_id=material_id,
     )
 
     # Stage the PENDING transition into the same transaction as the Job so
@@ -191,6 +197,9 @@ async def create_homework_job(
         input_params={
             "submission_id": str(submission_id),
         },
+        # L1b typed subject — the HomeworkSubmission.
+        subject_type=JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+        subject_id=submission_id,
     )
     # Stage the submission↔job link into the same transaction as the Job, so
     # the caller's single commit makes both durable before dispatch.
@@ -279,6 +288,10 @@ async def enqueue_node_summary_regeneration(
             "vertex_node_id": str(vertex_node_id),
             "force": force,
         },
+        # L1b typed subject — the vertex CourseNode (also the course_node_id
+        # column; the two agree for this type).
+        subject_type=JOB_SUBJECT_TYPE[JobType.NODE_SUMMARY_REGENERATION],
+        subject_id=vertex_node_id,
     )
 
     # QQ5 boundary (mirrors enqueue_s3_cleanup): durable-commit the Job
@@ -351,6 +364,11 @@ async def enqueue_base_normalize(
         tenant_id=tenant_id,
         job_type=JobType.BASE_NORMALIZE,
         input_params={"project_base_id": str(base.id)},
+        # L1b typed subject — the freshly-allocated ProjectBase version (a new
+        # id per re-upload, so this never collides on uq_jobs_subject_in_flight;
+        # re-upload arbitration is the separate UNIQUE(doc, version) above).
+        subject_type=JOB_SUBJECT_TYPE[JobType.BASE_NORMALIZE],
+        subject_id=base.id,
     )
     # (2) QQ5 boundary (mirrors enqueue_ingestion): durable-commit the pending
     # base + Job BEFORE the ARQ side-effect, so the worker never reads a Job

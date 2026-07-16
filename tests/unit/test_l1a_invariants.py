@@ -313,6 +313,14 @@ def test_no_running_status_literal() -> None:
 
 @pytest.mark.parametrize("status", sorted(JOB_TRANSITIONS))
 def test_machine_statuses_are_canonical(status: str) -> None:
-    """The machine's keys are exactly the five canonical statuses — no
-    ``running`` / ``completed`` leaked back into JOB_TRANSITIONS."""
-    assert status in {"queued", "active", "complete", "failed", "cancelled"}
+    """The machine's keys are exactly the six canonical statuses (L2 added
+    ``obsolete`` — the seam's "subject vanished" terminal) — no ``running`` /
+    ``completed`` leaked back into JOB_TRANSITIONS."""
+    assert status in {
+        "queued",
+        "active",
+        "complete",
+        "failed",
+        "cancelled",
+        "obsolete",
+    }

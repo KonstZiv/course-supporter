@@ -903,7 +903,8 @@ class Job(SoftDeleteMixin, Base):
             name="ck_jobs_job_type",
         ),
         CheckConstraint(
-            "status IN ('queued', 'active', 'complete', 'failed', 'cancelled')",
+            "status IN ('queued', 'active', 'complete', 'failed', "
+            "'cancelled', 'obsolete')",
             name="ck_jobs_status",
         ),
         # ── L1b: typed job subject (KD13 idempotency invariant) ──────────────

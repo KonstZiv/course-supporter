@@ -83,12 +83,22 @@ class TestJobTransitions:
     def test_failed_can_retry(self) -> None:
         assert "queued" in JOB_TRANSITIONS["failed"]
 
+    def test_queued_to_obsolete(self) -> None:
+        # L2 seam "subject vanished" reachable before the job ever goes active.
+        assert "obsolete" in JOB_TRANSITIONS["queued"]
+
+    def test_active_to_obsolete(self) -> None:
+        assert "obsolete" in JOB_TRANSITIONS["active"]
+
+    def test_obsolete_is_terminal(self) -> None:
+        assert JOB_TRANSITIONS["obsolete"] == set()
+
     def test_invalid_transition_not_allowed(self) -> None:
         assert "complete" not in JOB_TRANSITIONS["queued"]
         assert "queued" not in JOB_TRANSITIONS["active"]
 
     def test_all_statuses_covered(self) -> None:
-        expected = {"queued", "active", "complete", "failed", "cancelled"}
+        expected = {"queued", "active", "complete", "failed", "cancelled", "obsolete"}
         assert set(JOB_TRANSITIONS.keys()) == expected
 
 

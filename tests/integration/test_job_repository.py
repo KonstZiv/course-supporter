@@ -124,6 +124,39 @@ class TestJobLifecycleSuccess:
         delta = abs((datetime.now(UTC) - active_job.started_at).total_seconds())
         assert delta < 5
 
+    async def test_obsolete_sets_completed_at_without_error_fields(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """L2 ``obsolete`` terminal ("subject vanished"): stamps
+        ``completed_at`` (termination time) but writes NO error fields — it is
+        not a failure, the world changed (Рат.1). Reachable from both in-flight
+        states (queued directly, and via active)."""
+        repo = JobRepository(db_session)
+
+        # queued -> obsolete (subject gone before the worker ever picked it up)
+        job_q = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        obs_q = await repo.update_status(job_q.id, "obsolete")
+        assert obs_q.status == "obsolete"
+        assert obs_q.completed_at is not None
+        assert obs_q.error_message is None
+        assert obs_q.error_category is None
+
+        # active -> obsolete (subject died while the job was in flight)
+        job_a = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        await repo.update_status(job_a.id, "active")
+        obs_a = await repo.update_status(job_a.id, "obsolete")
+        assert obs_a.status == "obsolete"
+        assert obs_a.completed_at is not None
+        assert obs_a.error_message is None
+
 
 class TestJobLifecycleFailureRetry:
     """Failure + retry lifecycle."""

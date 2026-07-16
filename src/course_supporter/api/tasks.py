@@ -17,6 +17,7 @@ from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
 )
+from course_supporter.jobs.execution_seam import through_seam
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
     reset_progress_writer,
@@ -972,29 +973,27 @@ async def arq_process_homework(
             log.error("homework_processing_failed", error=str(exc))
 
 
+@through_seam()
 async def arq_regenerate_node_summary(
     ctx: dict[str, Any],
     job_id: str,
     vertex_node_id: str,
     force: bool = False,
 ) -> None:
-    """ARQ task: drive the two-pass methodist generation orchestrator.
+    """ARQ task body: drive the two-pass methodist generation orchestrator.
 
-    The single production-shaped entry point for ``orch.run()`` (Phase
-    3.2.4 invariant 4 — routes never invoke the orchestrator
-    synchronously). Mirrors ``arq_ingest_material`` plumbing shape:
+    Wrapped by the L2 execution seam (:func:`through_seam`), which owns the
+    ``Job.status`` lifecycle (active → complete on return / failed on raise) and
+    the vertex-node liveness check (a soft-deleted vertex → ``obsolete``, this
+    body skipped). The body is therefore pure domain: ContextVar plumbing so
+    every ESC row resolves the caller's tenant/job, then ``orch.run`` to
+    completion. Per-node errors are recorded into ``Job.stage_progress.errors[]``
+    by the orchestrator regardless; a raised exception becomes the seam's
+    ``failed`` terminal (the body's session rolls back on exit, the seam writes
+    the terminal in its own fresh session).
 
-    1. ContextVar plumbing (``set_tenant_from_job`` + ``set_job_from_arq``)
-       so every ESC row inside the run resolves the caller's tenant
-       and job ids.
-    2. ``Job.status = 'active'`` transition + commit.
-    3. Construct the orchestrator via
-       :func:`build_node_summary_orchestrator` (single DI shape per
-       Phase 3.2.3a).
-    4. Drive ``orch.run(job_id, vertex_node_id, force)`` to completion.
-    5. ``Job.status = 'complete'`` (success) or ``'failed'`` (exception);
-       per-node errors are already recorded into
-       ``Job.stage_progress.errors[]`` by the orchestrator regardless.
+    The single production-shaped entry point for ``orch.run()`` (Phase 3.2.4
+    invariant 4 — routes never invoke the orchestrator synchronously).
 
     Args:
         ctx: ARQ worker context (session_factory, stage_router).
@@ -1013,7 +1012,6 @@ async def arq_regenerate_node_summary(
         build_node_summary_orchestrator,
     )
     from course_supporter.llm.stage_router import StageRouter
-    from course_supporter.storage.job_repository import JobRepository
 
     jid = uuid.UUID(job_id)
     vid = uuid.UUID(vertex_node_id)
@@ -1028,29 +1026,7 @@ async def arq_regenerate_node_summary(
     log.info("node_summary_regeneration_started")
 
     async with session_factory() as session:
-        job_repo = JobRepository(session)
-        try:
-            await job_repo.update_status(jid, "active")
-            await session.commit()
-
-            orch = build_node_summary_orchestrator(session, stage_router)
-            await orch.run(job_id=jid, vertex_node_id=vid, force=force)
-
-            await job_repo.update_status(jid, "complete")
-            await session.commit()
-            log.info("node_summary_regeneration_done")
-        except Exception as exc:
-            await session.rollback()
-            async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
-                try:
-                    await err_job_repo.update_status(
-                        jid, "failed", error_message=str(exc)
-                    )
-                except ValueError as status_exc:
-                    log.warning(
-                        "node_summary_job_status_update_skipped",
-                        reason=str(status_exc),
-                    )
-                await err_session.commit()
-            log.error("node_summary_regeneration_failed", error=str(exc))
+        orch = build_node_summary_orchestrator(session, stage_router)
+        await orch.run(job_id=jid, vertex_node_id=vid, force=force)
+        await session.commit()
+    log.info("node_summary_regeneration_done")

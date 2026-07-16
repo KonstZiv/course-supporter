@@ -6,8 +6,12 @@ Covers the three-tier error policy from the worker module:
   counted as deleted (idempotent).
 * Other ``ClientError`` (e.g. ``AccessDenied``, throttling
   ``SlowDown``) → recorded per-key in ``errors[]``; task continues.
-* Non-``ClientError`` (e.g. ``EndpointConnectionError``) → propagates
-  so ARQ's existing retry policy fires.
+* Non-``ClientError`` (e.g. ``EndpointConnectionError``, a ``BotoCoreError``) →
+  ``arq.Retry`` so ARQ re-runs (a bare re-raise does NOT retry in ARQ).
+
+These exercise the pure S3 delete logic via the *body* (``__wrapped__``),
+bypassing the execution seam (the seam's active/complete/result_data wrapping is
+covered by ``test_execution_seam`` + the DB gesture in ``test_s3_cleanup_seam``).
 """
 
 from __future__ import annotations
@@ -17,9 +21,14 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from arq import Retry
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
+
+# The seam-free body: pure S3 logic, no Job / DB. ``functools.wraps`` (in
+# ``through_seam``) exposes the undecorated coroutine as ``__wrapped__``.
+_body = s3_cleanup_task.__wrapped__
 
 
 def _make_client_error(code: str) -> ClientError:
@@ -39,9 +48,7 @@ class TestEmpty:
         """Empty input short-circuits without calling S3 at all."""
         s3 = AsyncMock()
         s3.delete_object = AsyncMock()
-        result = await s3_cleanup_task(
-            _make_ctx(s3), file_keys=[], job_id=str(uuid.uuid4())
-        )
+        result = await _body(_make_ctx(s3), file_keys=[], job_id=str(uuid.uuid4()))
         assert result == {"deleted": [], "errors": []}
         s3.delete_object.assert_not_called()
 
@@ -51,9 +58,7 @@ class TestHappyPath:
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(return_value=None)
         keys = ["a", "b", "c"]
-        result = await s3_cleanup_task(
-            _make_ctx(s3), file_keys=keys, job_id=str(uuid.uuid4())
-        )
+        result = await _body(_make_ctx(s3), file_keys=keys, job_id=str(uuid.uuid4()))
         assert result["deleted"] == keys
         assert result["errors"] == []
         assert s3.delete_object.call_count == 3
@@ -65,7 +70,7 @@ class TestIdempotency:
     async def test_no_such_key_counted_as_deleted(self) -> None:
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(side_effect=_make_client_error("NoSuchKey"))
-        result = await s3_cleanup_task(
+        result = await _body(
             _make_ctx(s3), file_keys=["missing"], job_id=str(uuid.uuid4())
         )
         assert result["deleted"] == ["missing"]
@@ -75,18 +80,14 @@ class TestIdempotency:
         """B2 / S3-compatible providers may return code='404' instead."""
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(side_effect=_make_client_error("404"))
-        result = await s3_cleanup_task(
-            _make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4())
-        )
+        result = await _body(_make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4()))
         assert result["deleted"] == ["x"]
         assert result["errors"] == []
 
     async def test_not_found_code_counted_as_deleted(self) -> None:
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(side_effect=_make_client_error("NotFound"))
-        result = await s3_cleanup_task(
-            _make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4())
-        )
+        result = await _body(_make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4()))
         assert result["deleted"] == ["x"]
         assert result["errors"] == []
 
@@ -104,7 +105,7 @@ class TestPerKeyClientError:
 
         s3.delete_object = AsyncMock(side_effect=side_effect)
 
-        result = await s3_cleanup_task(
+        result = await _body(
             _make_ctx(s3),
             file_keys=["ok1", "denied", "ok2"],
             job_id=str(uuid.uuid4()),
@@ -120,23 +121,20 @@ class TestPerKeyClientError:
         becomes operator-visible via Job.result_data)."""
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(side_effect=_make_client_error("SlowDown"))
-        result = await s3_cleanup_task(
-            _make_ctx(s3), file_keys=["t"], job_id=str(uuid.uuid4())
-        )
+        result = await _body(_make_ctx(s3), file_keys=["t"], job_id=str(uuid.uuid4()))
         assert result["deleted"] == []
         assert len(result["errors"]) == 1
         assert "SlowDown" in result["errors"][0]["error"]
 
 
-class TestPropagation:
-    """Non-ClientError exceptions propagate so ARQ's retry policy fires."""
+class TestTransientRetry:
+    """A connection-level BotoCoreError → arq.Retry (the seam passes it through);
+    a bare re-raise would NOT retry in ARQ and would strand the work."""
 
-    async def test_endpoint_connection_error_propagates(self) -> None:
+    async def test_endpoint_connection_error_raises_retry(self) -> None:
         s3 = AsyncMock()
         s3.delete_object = AsyncMock(
             side_effect=EndpointConnectionError(endpoint_url="http://example.com")
         )
-        with pytest.raises(EndpointConnectionError):
-            await s3_cleanup_task(
-                _make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4())
-            )
+        with pytest.raises(Retry):
+            await _body(_make_ctx(s3), file_keys=["x"], job_id=str(uuid.uuid4()))

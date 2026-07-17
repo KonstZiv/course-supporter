@@ -54,7 +54,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.storage.homework_repository import HomeworkRepository
-    from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.orm import HomeworkSubmission, ProjectBase
     from course_supporter.storage.s3 import S3Client
 
@@ -97,7 +96,6 @@ async def process_project_submission(
     session: AsyncSession,
     s3: S3Client,
     hw_repo: HomeworkRepository,
-    job_repo: JobRepository,
     submission: HomeworkSubmission,
     sid: uuid.UUID,
     jid: uuid.UUID,
@@ -110,9 +108,8 @@ async def process_project_submission(
 
     Fail-closed on a content/structural rejection (a malformed / bomb archive):
     persist a ``{"source": "normalizer", "reason": ...}`` safety result, set the
-    submission ``rejected`` + the Job ``complete``, commit, and return ``None`` —
-    mirroring both the base worker's ``mark_failed`` and the single-file stage-1
-    rejection, so no ARQ retry and no crash.
+    submission ``rejected``, commit, and return ``None`` — the caller returns and
+    the L2 execution seam writes the Job ``complete`` (no ARQ retry, no crash).
     """
     log = logger.bind(submission_id=str(sid), job_id=str(jid))
 
@@ -121,7 +118,7 @@ async def process_project_submission(
         # The preflight guarantees an archive filename; treat an unresolvable
         # kind here as a clean rejection rather than a crash.
         reason = "unsupported_archive: cannot resolve archive kind"
-        await _persist_rejection(session, hw_repo, job_repo, sid, jid, reason)
+        await _persist_rejection(session, hw_repo, sid, reason)
         log.warning("project_submission.unsupported_kind")
         return None
 
@@ -131,7 +128,7 @@ async def process_project_submission(
         )
     except (NormalizerError, SecurityRejectedError) as exc:
         reason = _project_failure_reason(exc)
-        await _persist_rejection(session, hw_repo, job_repo, sid, jid, reason)
+        await _persist_rejection(session, hw_repo, sid, reason)
         log.warning("project_submission.rejected", reason=reason)
         return None
 
@@ -209,13 +206,14 @@ async def process_project_submission(
 async def _persist_rejection(
     session: AsyncSession,
     hw_repo: HomeworkRepository,
-    job_repo: JobRepository,
     sid: uuid.UUID,
-    jid: uuid.UUID,
     reason: str,
 ) -> None:
-    """Fail-closed persistence: safety result + rejected + Job complete + commit."""
+    """Fail-closed persistence: safety result + submission rejected + commit.
+
+    The Job → complete transition is the execution seam's: the caller returns
+    None, the homework body returns, and the seam terminalises the Job.
+    """
     await hw_repo.store_safety_result(sid, {"source": "normalizer", "reason": reason})
     await hw_repo.update_status(sid, "rejected", error_message=reason)
-    await job_repo.update_status(jid, "complete")
     await session.commit()

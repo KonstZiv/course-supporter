@@ -69,10 +69,6 @@ class _FakeHwRepo:
         self.stored.append((snapshot_key, snapshot_hash))
 
 
-class _FakeJobRepo:
-    async def update_status(self, jid: uuid.UUID, status: str) -> None: ...
-
-
 class _FakeSession:
     async def commit(self) -> None: ...
 
@@ -138,7 +134,6 @@ async def test_wiring_base_attached_passes_versions(
         session=_FakeSession(),  # type: ignore[arg-type]
         s3=s3,  # type: ignore[arg-type]
         hw_repo=_FakeHwRepo(),  # type: ignore[arg-type]
-        job_repo=_FakeJobRepo(),  # type: ignore[arg-type]
         submission=submission,  # type: ignore[arg-type]
         sid=uuid.uuid4(),
         jid=uuid.uuid4(),
@@ -179,7 +174,6 @@ async def test_wiring_no_base_versions_none(monkeypatch: pytest.MonkeyPatch) -> 
         session=_FakeSession(),  # type: ignore[arg-type]
         s3=s3,  # type: ignore[arg-type]
         hw_repo=_FakeHwRepo(),  # type: ignore[arg-type]
-        job_repo=_FakeJobRepo(),  # type: ignore[arg-type]
         submission=submission,  # type: ignore[arg-type]
         sid=uuid.uuid4(),
         jid=uuid.uuid4(),

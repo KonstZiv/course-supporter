@@ -47,7 +47,6 @@ from course_supporter.models.sanity import SanityClassification
 from course_supporter.normalizer import manifest_to_jsonb, normalize_archive
 from course_supporter.security.schemas import SafetyResult
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -241,7 +240,6 @@ class TestProcessProjectSubmissionDirect:
                     session=session,
                     s3=s3_client,
                     hw_repo=HomeworkRepository(session),
-                    job_repo=JobRepository(session),
                     submission=sub,
                     sid=ids["submission_id"],
                     jid=ids["job_id"],
@@ -286,7 +284,6 @@ class TestProcessProjectSubmissionDirect:
                     session=session,
                     s3=s3_client,
                     hw_repo=HomeworkRepository(session),
-                    job_repo=JobRepository(session),
                     submission=sub,
                     sid=ids["submission_id"],
                     jid=ids["job_id"],
@@ -300,9 +297,12 @@ class TestProcessProjectSubmissionDirect:
                 assert sub.status == "rejected"
                 assert sub.safety_result is not None
                 assert sub.safety_result["source"] == "normalizer"
+                # L2: _persist_rejection no longer writes the Job — that is the
+                # seam's. Called directly here, the Job stays as seeded (active);
+                # the seam would write `complete` on the body's return.
                 job = await session.get(Job, ids["job_id"])
                 assert job is not None
-                assert job.status == "complete"
+                assert job.status == "active"
         finally:
             await _cleanup(session_factory, ids)
 
@@ -339,7 +339,6 @@ class TestProcessProjectSubmissionDirect:
                         session=session,
                         s3=s3_client,
                         hw_repo=HomeworkRepository(session),
-                        job_repo=JobRepository(session),
                         submission=sub,
                         sid=ids["submission_id"],
                         jid=ids["job_id"],

@@ -26,11 +26,15 @@ logger = structlog.get_logger()
 # that through ``update_status`` requires the transition the machine
 # would otherwise reject.
 JOB_TRANSITIONS: dict[str, set[str]] = {
-    "queued": {"active", "cancelled", "failed"},
-    "active": {"complete", "failed", "cancelled"},
+    "queued": {"active", "cancelled", "failed", "obsolete"},
+    "active": {"complete", "failed", "cancelled", "obsolete"},
     "complete": set(),
     "failed": {"queued"},  # retry
     "cancelled": set(),
+    # L2 seam terminal "subject vanished": reachable from either in-flight
+    # state (the seam writes it on skip-if-dead, before or after `active`).
+    # Terminal — no outgoing edges.
+    "obsolete": set(),
 }
 
 # Category per status — the ONE source from which the in-flight / at-rest
@@ -49,6 +53,7 @@ _STATUS_CATEGORY: dict[str, str] = {
     "complete": "at_rest",
     "failed": "at_rest",
     "cancelled": "at_rest",
+    "obsolete": "at_rest",  # L2 terminal — no worker holds it
 }
 
 _uncategorised = set(JOB_TRANSITIONS) - set(_STATUS_CATEGORY)
@@ -232,6 +237,15 @@ class JobRepository:
             # not of work (contract §3 "Meaning"). Kept a separate branch
             # from the complete/failed set so the two axes never merge: a
             # future terminal must not inherit completed_at by composition.
+            values["completed_at"] = now
+        elif status == "obsolete":
+            # L2 seam terminal "subject vanished": the subject was soft-deleted
+            # before/while the worker reached the job (skip-if-dead). Like
+            # ``cancelled``, ``completed_at`` is the termination time, not work
+            # time; unlike ``failed``, NO error fields — this is not a failure,
+            # the world changed (Рат.1). A separate branch, not composed with
+            # ``cancelled``: the two causes ("human cancelled" vs "subject
+            # gone") stay distinguishable at the token.
             values["completed_at"] = now
 
         stmt = update(Job).where(Job.id == job_id).values(**values)
@@ -470,17 +484,18 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
-    async def get_active_jobs(self) -> list[Job]:
-        """Return all live Jobs currently in the ``active`` status.
+    async def get_in_flight_jobs(self) -> list[Job]:
+        """Return all live Jobs in flight (``queued`` OR ``active``).
 
-        Global (not tenant-scoped) and soft-delete-aware. Consumed by the
-        worker startup reconcile sweep (task 3.3c-B): on the single prod
-        worker a Job stranded in ``active`` by a previous instance that died
-        mid-task blocks the whole queue behind it, so startup must find and
-        terminalise such jobs.
+        Global (not tenant-scoped) and soft-delete-aware. Consumed by the worker
+        startup reconcile sweep (task 3.3c-B; L2 extends it to ``queued`` — F11):
+        a Job stranded in ``active`` (previous worker died mid-task) blocks the
+        single serial worker's queue, and a Job stranded in ``queued`` with no
+        live ARQ handle (e.g. a Redis flush) would otherwise sit invisible
+        forever. The status set is derived from :data:`IN_FLIGHT_STATUSES`.
         """
         stmt = select(Job).where(
-            Job.status == "active",
+            Job.status.in_(IN_FLIGHT_STATUSES),
             Job.deleted_at.is_(None),
         )
         result = await self._session.execute(stmt)

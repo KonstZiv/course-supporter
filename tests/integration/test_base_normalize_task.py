@@ -80,6 +80,8 @@ async def _seed_base(
             course_node_id=node_id,
             job_type=JobType.BASE_NORMALIZE,
             input_params={"project_base_id": str(base.id)},
+            subject_type="project_base",
+            subject_id=base.id,
         )
         await session.commit()
         return base.id, job.id
@@ -112,15 +114,14 @@ class TestBaseNormalizeTaskLive:
         )
 
         ctx = {"s3_client": s3_client, "session_factory": session_factory}
+        # L2: the seam owns the return — the wrapped task yields None; the body's
+        # result dict lands on Job.result_data (asserted below).
         result = await base_normalize_task(ctx, str(job_id), str(base_id))
+        assert result is None
 
         expected = normalize_archive(
             raw, archive_kind="zip", limits=_PROJECT_NORMALIZE_LIMITS
         )
-        assert result["state"] == "ready"
-        # Point A: the aggregate over NORMALIZED content, not the raw-zip hash.
-        assert result["snapshot_hash"] == expected.snapshot_hash
-        assert result["snapshot_hash"] != hashlib.sha256(raw).hexdigest()
 
         async with session_factory() as session:
             base = await ProjectBaseRepository(session).get_by_id(base_id)
@@ -137,6 +138,12 @@ class TestBaseNormalizeTaskLive:
             job = await JobRepository(session).get_by_id(job_id)
             assert job is not None
             assert job.status == "complete"
+            # Result dict persisted by the seam (store_result). Point A: the
+            # aggregate over NORMALIZED content, not the raw-zip hash.
+            assert job.result_data is not None
+            assert job.result_data["state"] == "ready"
+            assert job.result_data["snapshot_hash"] == expected.snapshot_hash
+            assert job.result_data["snapshot_hash"] != hashlib.sha256(raw).hexdigest()
 
         # The canonical snapshot actually landed in S3, byte-reproducible.
         body = await s3_client.get_object(snapshot_key)
@@ -163,9 +170,12 @@ class TestBaseNormalizeTaskLive:
         )
 
         ctx = {"s3_client": s3_client, "session_factory": session_factory}
+        # L2: the body marks the domain row failed then raises; the seam writes
+        # the Job `failed` and swallows (no ARQ retry), so the wrapped call
+        # returns None rather than re-raising.
         result = await base_normalize_task(ctx, str(job_id), str(base_id))
+        assert result is None
 
-        assert result["state"] == "failed"
         async with session_factory() as session:
             base = await ProjectBaseRepository(session).get_by_id(base_id)
             assert base is not None

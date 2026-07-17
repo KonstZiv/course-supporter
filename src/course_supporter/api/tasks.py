@@ -12,11 +12,11 @@ import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.ingestion.base import CategorisedProcessingError
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
 )
+from course_supporter.jobs.execution_seam import SeamTerminal, through_seam
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
     reset_progress_writer,
@@ -121,6 +121,37 @@ def _bound_safety_text(text: str, *, log: Any) -> str:
     return bounded
 
 
+async def _ingest_on_terminal(
+    ctx: dict[str, Any],
+    job_id: str,
+    material_id: str,
+    *_rest: Any,
+    outcome: SeamTerminal,
+) -> None:
+    """Ingest's opaque post-terminal domain reaction (L2, GO condition 3).
+
+    The seam has already written the terminal Job status (durably, terminal-
+    first) before this runs. Only the FAILURE path needs a reaction here:
+    material visibility + the dependent-job cascade + the Stage 2 reject
+    soft-delete, which MUST run after the failed-Job commit so a stranded
+    ``active`` never blocks the serial worker. On success ``complete_processing``
+    already ran in the body (before the seam's ``complete``); on ``obsolete`` the
+    subject is already gone — neither needs a reaction here.
+    """
+    if outcome.status != "failed":
+        return
+    from course_supporter.ingestion_callback import IngestionCallback
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    await IngestionCallback(session_factory).on_failure(
+        job_id=uuid.UUID(job_id),
+        material_id=uuid.UUID(material_id),
+        error_message=outcome.error_message or "",
+        error_category=outcome.error_category,
+    )
+
+
+@through_seam(on_terminal=_ingest_on_terminal)
 async def arq_ingest_material(
     ctx: dict[str, Any],
     job_id: str,  # UUID as string (ARQ JSON serialization)
@@ -129,11 +160,15 @@ async def arq_ingest_material(
     source_url: str,
     priority: str = "normal",
 ) -> None:
-    """ARQ task: process a AuthoredDocument with job tracking.
+    """ARQ task body: process an AuthoredDocument through the two-pass pipeline.
 
-    Thin orchestrator: validates priority, transitions to active,
-    runs the processor, then delegates completion handling to
-    :class:`~course_supporter.ingestion_callback.IngestionCallback`.
+    Wrapped by the L2 execution seam (:func:`through_seam`), which owns the
+    ``Job.status`` lifecycle (active → complete on return / failed on raise) +
+    the AuthoredDocument liveness check (soft-deleted material → ``obsolete``,
+    body skipped). The body runs the pipeline and, on success, the domain
+    ``complete_processing`` (before the seam's ``complete``); on failure it raises
+    and the seam's post-terminal callback (:func:`_ingest_on_terminal`) runs the
+    failure-domain cascade AFTER the durable ``failed`` write (terminal-first).
 
     Args:
         ctx: ARQ worker context (session_factory, model_router,
@@ -211,8 +246,13 @@ async def arq_ingest_material(
 
         entry = await entry_repo.get_by_id(mid)
         if entry is None:
+            # The seam's liveness check turns a soft-deleted subject into
+            # ``obsolete`` before this body runs; a None here is the extreme race
+            # of the row vanishing in between. Raise → the seam writes ``failed``
+            # (a normal return would wrongly land on ``complete``).
             log.error("material_entry_not_found", material_id=material_id)
-            return
+            msg = f"AuthoredDocument {material_id} vanished after liveness check"
+            raise ValueError(msg)
 
         # Resolve effective language: entry override → course default → None.
         # Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
@@ -230,7 +270,8 @@ async def arq_ingest_material(
                 )
 
         try:
-            await job_repo.update_status(jid, "active")
+            # Job → active is owned by the seam (already written on entry). The
+            # body only marks the material pending + links the job (domain).
             await entry_repo.set_pending(mid, jid)
             await session.commit()
 
@@ -452,49 +493,32 @@ async def arq_ingest_material(
             await session.commit()
             # ── /Pass 2b ──
 
-            content = doc.model_dump_json()
+            # ── /Pass 2b — the body's domain work is committed. ──
 
         except SecurityRejectedError as exc:
-            # Stage 2 reject branch (KD-2.1-P, Phase 2.1 C6). The
-            # ``safety_result`` row is already committed pre-raise so
-            # rollback is a no-op for that row; callback handles the
-            # cascade soft-delete in its fresh session via the
-            # ``error_category`` discriminator.
-            await session.rollback()
-            await callback.on_failure(
-                job_id=jid,
-                material_id=mid,
-                error_message=str(exc),
-                error_category=exc.category,
-            )
+            # Stage 2 reject (KD-2.1-P): the ``safety_result`` row is already
+            # committed (pre-raise), so the body-session rollback on exit is a
+            # no-op for it. The seam writes Job ``failed`` with ``exc.category``
+            # (STAGE2_REJECTED); its post-terminal callback runs the cascade
+            # soft-delete AFTER that durable write (terminal-first).
             log.warning(
                 "ingestion_security_rejected",
                 category=exc.category.value,
                 detail=exc.detail,
             )
-            return
+            raise
         except Exception as exc:
-            await session.rollback()
-            # F4: a categorised processing failure (empty document, empty
-            # presentation segment, ...) carries its structural code into
-            # the persisted error_category; everything else stays NULL.
-            category = (
-                exc.category if isinstance(exc, CategorisedProcessingError) else None
-            )
-            await callback.on_failure(
-                job_id=jid,
-                material_id=mid,
-                error_message=str(exc),
-                error_category=category,
-            )
+            # The seam writes Job ``failed``; a CategorisedProcessingError carries
+            # its structural code (``exc.category``), which the seam persists as
+            # ``error_category`` (F4). The post-terminal callback marks the
+            # material failed + runs the best-effort cascade.
             log.error("ingestion_failed", error=str(exc))
-            return
+            raise
 
-    await callback.on_success(
-        job_id=jid,
-        material_id=mid,
-        content_json=content,
-    )
+    # Domain success: mark the material complete BEFORE the seam writes Job
+    # ``complete`` (material durably completed first — no stuck-``pending``
+    # window). Job ``complete`` is the seam's, on this body's normal return.
+    await callback.on_success(job_id=jid, material_id=mid)
     log.info("ingestion_done")
 
 
@@ -532,12 +556,24 @@ async def _notify_homework_failed(
     await session.commit()
 
 
+@through_seam()
 async def arq_process_homework(
     ctx: dict[str, Any],
     job_id: str,
     submission_id: str,
 ) -> None:
-    """ARQ task: process a homework submission.
+    """ARQ task body: process a homework submission through the pipeline.
+
+    Wrapped by the L2 execution seam (:func:`through_seam`): the seam owns the
+    ``Job.status`` lifecycle (active → complete on normal return / failed on
+    raise) + the HomeworkSubmission liveness check (a soft-deleted submission →
+    ``obsolete``, body skipped). The body owns ALL domain — the
+    ``HomeworkSubmission`` status machine, webhooks, and the fresh error-session
+    reaction (Рат.2 strict boundary). On a processing failure the body performs
+    its domain reaction (submission → rejected/failed + failed webhook) and then
+    RE-RAISES so the seam writes ``failed``. The webhook therefore fires just
+    before the seam's terminal write (a conscious, accepted "webhook-before-
+    terminal" inversion — see the module tests).
 
     Orchestrates the full homework pipeline (KD13 / KD15):
     safety → sanity → review → delivery. Safety and the sanity gate both
@@ -580,7 +616,6 @@ async def arq_process_homework(
         CourseNodeRepository,
     )
     from course_supporter.storage.homework_repository import HomeworkRepository
-    from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.student_repository import StudentRepository
 
     jid = uuid.UUID(job_id)
@@ -601,11 +636,12 @@ async def arq_process_homework(
     log.info("homework_processing_started")
 
     async with session_factory() as session:
-        job_repo = JobRepository(session)
         hw_repo = HomeworkRepository(session)
         node_repo = CourseNodeRepository(session)
         try:
-            # Load submission
+            # Load submission. The seam already turned a soft-deleted submission
+            # into `obsolete` (skip); a None here is the extreme race of the row
+            # vanishing after the liveness check → raise → the seam writes failed.
             submission = await hw_repo.get_by_id(sid)
             if submission is None:
                 msg = f"HomeworkSubmission {sid} not found"
@@ -631,9 +667,7 @@ async def arq_process_homework(
                 file_url=submission.file_url,
             )
 
-            await job_repo.update_status(jid, "active")
-            await session.commit()
-
+            # Job → active is the seam's (already written on entry).
             # --- HW-004: Safety check (runs while status is still 'received';
             # sets the 'safety_ok' milestone only on pass, KD15 §1298) ---
             s3_key = s3.extract_key(submission.file_url)
@@ -690,7 +724,6 @@ async def arq_process_homework(
                         session=session,
                         s3=s3,
                         hw_repo=hw_repo,
-                        job_repo=job_repo,
                         submission=submission,
                         sid=sid,
                         jid=jid,
@@ -749,7 +782,6 @@ async def arq_process_homework(
                         await hw_repo.update_status(
                             sid, "rejected", error_message=stage1_exc.detail
                         )
-                        await job_repo.update_status(jid, "complete")
                         await session.commit()
                         log.warning(
                             "homework_rejected_stage1",
@@ -798,7 +830,6 @@ async def arq_process_homework(
                         "rejected",
                         error_message=safety_result.reasoning,
                     )
-                    await job_repo.update_status(jid, "complete")
                     await session.commit()
                     log.warning(
                         "homework_rejected_safety",
@@ -850,8 +881,6 @@ async def arq_process_homework(
                             session=session,
                         )
                         await session.commit()
-                    await job_repo.update_status(jid, "complete")
-                    await session.commit()
                     return
 
                 # Sanity gate passed.
@@ -910,7 +939,8 @@ async def arq_process_homework(
                     if delivered:
                         await hw_repo.update_status(sid, "delivered")
 
-                await job_repo.update_status(jid, "complete")
+                # Commit the 'delivered' status write (if any); Job → complete is
+                # the seam's, on this body's normal return.
                 await session.commit()
                 log.info("homework_processing_done")
             finally:
@@ -921,10 +951,13 @@ async def arq_process_homework(
         except SecurityRejectedError as exc:
             exc.enrich(sec_ctx)
             await session.rollback()
+            # Domain reaction in a fresh session (the main one rolled back): mark
+            # the submission rejected. Job → failed is the seam's, on the re-raise
+            # below — for homework this inverts terminal-first (the submission
+            # write lands just before the Job terminal), a conscious accepted
+            # degradation (Рат.2).
             async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
-                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
                 try:
                     await err_hw_repo.update_status(
                         sid,
@@ -941,13 +974,15 @@ async def arq_process_homework(
                 "security_violation",
                 **exc.as_log_dict(),
             )
+            raise
 
         except Exception as exc:
             await session.rollback()
+            # Domain reaction in a fresh session: mark the submission failed +
+            # best-effort failed webhook. Job → failed is the seam's, on the
+            # re-raise below (webhook-before-terminal inversion, Рат.2).
             async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
-                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
                 failed_set = False
                 try:
                     await err_hw_repo.update_status(
@@ -970,31 +1005,30 @@ async def arq_process_homework(
                     except Exception:
                         log.warning("homework_failed_webhook_skipped", exc_info=True)
             log.error("homework_processing_failed", error=str(exc))
+            raise
 
 
+@through_seam()
 async def arq_regenerate_node_summary(
     ctx: dict[str, Any],
     job_id: str,
     vertex_node_id: str,
     force: bool = False,
 ) -> None:
-    """ARQ task: drive the two-pass methodist generation orchestrator.
+    """ARQ task body: drive the two-pass methodist generation orchestrator.
 
-    The single production-shaped entry point for ``orch.run()`` (Phase
-    3.2.4 invariant 4 — routes never invoke the orchestrator
-    synchronously). Mirrors ``arq_ingest_material`` plumbing shape:
+    Wrapped by the L2 execution seam (:func:`through_seam`), which owns the
+    ``Job.status`` lifecycle (active → complete on return / failed on raise) and
+    the vertex-node liveness check (a soft-deleted vertex → ``obsolete``, this
+    body skipped). The body is therefore pure domain: ContextVar plumbing so
+    every ESC row resolves the caller's tenant/job, then ``orch.run`` to
+    completion. Per-node errors are recorded into ``Job.stage_progress.errors[]``
+    by the orchestrator regardless; a raised exception becomes the seam's
+    ``failed`` terminal (the body's session rolls back on exit, the seam writes
+    the terminal in its own fresh session).
 
-    1. ContextVar plumbing (``set_tenant_from_job`` + ``set_job_from_arq``)
-       so every ESC row inside the run resolves the caller's tenant
-       and job ids.
-    2. ``Job.status = 'active'`` transition + commit.
-    3. Construct the orchestrator via
-       :func:`build_node_summary_orchestrator` (single DI shape per
-       Phase 3.2.3a).
-    4. Drive ``orch.run(job_id, vertex_node_id, force)`` to completion.
-    5. ``Job.status = 'complete'`` (success) or ``'failed'`` (exception);
-       per-node errors are already recorded into
-       ``Job.stage_progress.errors[]`` by the orchestrator regardless.
+    The single production-shaped entry point for ``orch.run()`` (Phase 3.2.4
+    invariant 4 — routes never invoke the orchestrator synchronously).
 
     Args:
         ctx: ARQ worker context (session_factory, stage_router).
@@ -1013,7 +1047,6 @@ async def arq_regenerate_node_summary(
         build_node_summary_orchestrator,
     )
     from course_supporter.llm.stage_router import StageRouter
-    from course_supporter.storage.job_repository import JobRepository
 
     jid = uuid.UUID(job_id)
     vid = uuid.UUID(vertex_node_id)
@@ -1028,29 +1061,7 @@ async def arq_regenerate_node_summary(
     log.info("node_summary_regeneration_started")
 
     async with session_factory() as session:
-        job_repo = JobRepository(session)
-        try:
-            await job_repo.update_status(jid, "active")
-            await session.commit()
-
-            orch = build_node_summary_orchestrator(session, stage_router)
-            await orch.run(job_id=jid, vertex_node_id=vid, force=force)
-
-            await job_repo.update_status(jid, "complete")
-            await session.commit()
-            log.info("node_summary_regeneration_done")
-        except Exception as exc:
-            await session.rollback()
-            async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
-                try:
-                    await err_job_repo.update_status(
-                        jid, "failed", error_message=str(exc)
-                    )
-                except ValueError as status_exc:
-                    log.warning(
-                        "node_summary_job_status_update_skipped",
-                        reason=str(status_exc),
-                    )
-                await err_session.commit()
-            log.error("node_summary_regeneration_failed", error=str(exc))
+        orch = build_node_summary_orchestrator(session, stage_router)
+        await orch.run(job_id=jid, vertex_node_id=vid, force=force)
+        await session.commit()
+    log.info("node_summary_regeneration_done")

@@ -124,6 +124,39 @@ class TestJobLifecycleSuccess:
         delta = abs((datetime.now(UTC) - active_job.started_at).total_seconds())
         assert delta < 5
 
+    async def test_obsolete_sets_completed_at_without_error_fields(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """L2 ``obsolete`` terminal ("subject vanished"): stamps
+        ``completed_at`` (termination time) but writes NO error fields — it is
+        not a failure, the world changed (Рат.1). Reachable from both in-flight
+        states (queued directly, and via active)."""
+        repo = JobRepository(db_session)
+
+        # queued -> obsolete (subject gone before the worker ever picked it up)
+        job_q = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        obs_q = await repo.update_status(job_q.id, "obsolete")
+        assert obs_q.status == "obsolete"
+        assert obs_q.completed_at is not None
+        assert obs_q.error_message is None
+        assert obs_q.error_category is None
+
+        # active -> obsolete (subject died while the job was in flight)
+        job_a = await repo.create(
+            tenant_id=seed_root_node.tenant_id,
+            course_node_id=seed_root_node.id,
+            job_type="document_processing",
+        )
+        await repo.update_status(job_a.id, "active")
+        obs_a = await repo.update_status(job_a.id, "obsolete")
+        assert obs_a.status == "obsolete"
+        assert obs_a.completed_at is not None
+        assert obs_a.error_message is None
+
 
 class TestJobLifecycleFailureRetry:
     """Failure + retry lifecycle."""
@@ -550,13 +583,14 @@ class TestUpdateStage:
         assert fetched.current_stage == "checking_safety"
 
 
-class TestGetActiveJobs:
-    """get_active_jobs — global live-active sweep (task 3.3c-B, Vector 3)."""
+class TestGetInFlightJobs:
+    """get_in_flight_jobs — global sweep of queued OR active (task 3.3c-B; L2 F11
+    extends the reconcile from active-only to in-flight)."""
 
-    async def test_returns_only_live_active_jobs(
+    async def test_returns_queued_and_active_excludes_soft_deleted(
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
-        """Returns active, non-deleted jobs; excludes queued and soft-deleted."""
+        """Returns queued + active (non-deleted); excludes soft-deleted."""
         repo = JobRepository(db_session)
         tid = seed_root_node.tenant_id
         nid = seed_root_node.id
@@ -570,7 +604,7 @@ class TestGetActiveJobs:
         )
         await repo.update_status(active_two.id, "active")
 
-        # Stays queued — must be excluded.
+        # Stays queued — now INCLUDED (L2 F11: queued orphans are reconcilable).
         queued = await repo.create(
             tenant_id=tid, course_node_id=nid, job_type="document_processing"
         )
@@ -585,12 +619,12 @@ class TestGetActiveJobs:
         deleted_row.deleted_at = datetime.now(UTC)
         await db_session.flush()
 
-        result = await repo.get_active_jobs()
+        result = await repo.get_in_flight_jobs()
         ids = {job.id for job in result}
 
         assert active_one.id in ids
         assert active_two.id in ids
-        assert queued.id not in ids
+        assert queued.id in ids
         assert deleted.id not in ids
 
 

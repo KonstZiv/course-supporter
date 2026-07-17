@@ -57,69 +57,39 @@ def _setup_job_mock(job_cls: MagicMock) -> MagicMock:
 
 
 class TestOnSuccess:
-    """IngestionCallback.on_success — happy path."""
+    """IngestionCallback.on_success — domain-only (complete_processing); the
+    seam owns the Job.status → complete transition."""
 
     async def test_material_processing_completed(self) -> None:
         """AuthoredDocument complete_processing called with the entry id only."""
         callback, _ = _make_callback()
         jid = uuid.uuid4()
         mid = uuid.uuid4()
-        content = '{"key": "value"}'
 
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
+        with patch(_ENTRY_REPO) as entry_cls:
             entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
 
-            await callback.on_success(job_id=jid, material_id=mid, content_json=content)
+            await callback.on_success(job_id=jid, material_id=mid)
 
         entry_cls.return_value.complete_processing.assert_awaited_once()
         call_args = entry_cls.return_value.complete_processing.call_args
         assert call_args.args[0] == mid
         assert call_args.kwargs == {}
 
-    async def test_job_updated_to_complete(self) -> None:
-        """Job status transitions to 'complete'."""
-        callback, _ = _make_callback()
-        jid = uuid.uuid4()
-        mid = uuid.uuid4()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_repo = job_cls.return_value
-            job_repo.update_status = AsyncMock()
-
-            await callback.on_success(job_id=jid, material_id=mid, content_json="{}")
-
-        job_repo.update_status.assert_awaited_once_with(jid, "complete")
-
     async def test_session_committed(self) -> None:
-        """Session is committed after all updates."""
+        """Session is committed after complete_processing."""
         callback, factory = _make_callback()
         session = factory._mock_session
 
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
+        with patch(_ENTRY_REPO) as entry_cls:
             entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                content_json="{}",
-            )
+            await callback.on_success(job_id=uuid.uuid4(), material_id=uuid.uuid4())
 
         session.commit.assert_awaited_once()
 
-    async def test_repos_receive_same_session(self) -> None:
-        """Both repositories are instantiated with the same session."""
+    async def test_does_not_write_job_status(self) -> None:
+        """L2 invariant: on_success carries only the domain half — it never
+        instantiates JobRepository nor writes the Job (the seam does)."""
         callback, factory = _make_callback()
         session = factory._mock_session
 
@@ -128,27 +98,19 @@ class TestOnSuccess:
             patch(_JOB_REPO) as job_cls,
         ):
             entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock()
-
-            await callback.on_success(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                content_json="{}",
-            )
+            await callback.on_success(job_id=uuid.uuid4(), material_id=uuid.uuid4())
 
         entry_cls.assert_called_once_with(session)
-        job_cls.assert_called_once_with(session)
+        job_cls.assert_not_called()
 
 
 class TestOnFailure:
     """IngestionCallback.on_failure — error path."""
 
-    async def test_job_updated_to_failed(self) -> None:
-        """Job status transitions to 'failed' with error message."""
+    async def test_does_not_write_job_status(self) -> None:
+        """L2 invariant: on_failure carries only the domain half — it never
+        writes the Job (the seam wrote `failed` durably before this runs)."""
         callback, _ = _make_callback()
-        jid = uuid.uuid4()
-        mid = uuid.uuid4()
-        error = "PDF parsing failed"
 
         with (
             patch(_ENTRY_REPO) as entry_cls,
@@ -157,11 +119,11 @@ class TestOnFailure:
             entry_cls.return_value.fail_processing = AsyncMock()
             job_repo = _setup_job_mock(job_cls)
 
-            await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
+            await callback.on_failure(
+                job_id=uuid.uuid4(), material_id=uuid.uuid4(), error_message="e"
+            )
 
-        job_repo.update_status.assert_awaited_once_with(
-            jid, "failed", error_message=error, error_category=None
-        )
+        job_repo.update_status.assert_not_awaited()
 
     async def test_material_updated_to_error(self) -> None:
         """AuthoredDocument fail_processing called with error message."""
@@ -183,13 +145,13 @@ class TestOnFailure:
             mid, error_message=error, error_category=None
         )
 
-    async def test_commits_in_three_durable_tiers(self) -> None:
-        """Happy path commits three times: terminal, visibility, cleanup.
+    async def test_commits_in_two_durable_tiers(self) -> None:
+        """Happy path commits twice: material visibility, then cleanup.
 
-        Task 3.3c-B (Vector 2) splits the single commit into a terminal-first
-        commit (Job → failed), an independent material-visibility commit
-        (fail_processing), and a best-effort cleanup commit (cascade / orphan
-        / soft-delete).
+        L2: the Job → failed terminal moved to the seam (a third commit is no
+        longer here). What remains is the independent material-visibility commit
+        (fail_processing) + the best-effort cleanup commit (cascade / orphan /
+        soft-delete).
         """
         callback, factory = _make_callback()
         session = factory._mock_session
@@ -207,7 +169,7 @@ class TestOnFailure:
                 error_message="some error",
             )
 
-        assert session.commit.await_count == 3
+        assert session.commit.await_count == 2
 
     async def test_repos_receive_same_session(self) -> None:
         """Both repositories are instantiated with the same session."""
@@ -397,91 +359,34 @@ class TestOnSuccessErrors:
         """ValueError from entry repo propagates to caller."""
         callback, _ = _make_callback()
 
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
+        with patch(_ENTRY_REPO) as entry_cls:
             entry_cls.return_value.complete_processing = AsyncMock(
                 side_effect=ValueError("AuthoredDocument not found: xxx")
             )
-            job_cls.return_value.update_status = AsyncMock()
 
             with pytest.raises(ValueError, match="AuthoredDocument not found"):
                 await callback.on_success(
                     job_id=uuid.uuid4(),
                     material_id=uuid.uuid4(),
-                    content_json="{}",
-                )
-
-    async def test_job_not_found_propagates(self) -> None:
-        """ValueError from job repo propagates to caller."""
-        callback, _ = _make_callback()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-        ):
-            entry_cls.return_value.complete_processing = AsyncMock()
-            job_cls.return_value.update_status = AsyncMock(
-                side_effect=ValueError("Job xxx not found")
-            )
-
-            with pytest.raises(ValueError, match="Job xxx not found"):
-                await callback.on_success(
-                    job_id=uuid.uuid4(),
-                    material_id=uuid.uuid4(),
-                    content_json="{}",
                 )
 
 
 class TestOnFailureResilience:
-    """on_failure tiered-durability guard (task 3.3c-B, Vector 2).
+    """on_failure tiered-durability guard (task 3.3c-B, Vector 2; L2-updated).
 
-    A failure callback must never strand the Job in ``active`` (queue block)
-    nor leave the material in an invisible ``pending`` state. Two halves of
-    "do not lose it" are durable independently — Job → failed (Tier 1) and
-    material visibility / fail_processing (Tier 2) each commit on their own,
-    before the best-effort dependent-job cascade (Tier 3). No tier's failure
-    propagates out of the callback.
+    The Job → failed terminal is the seam's (durable, terminal-first). What
+    remains here are two guarded domain tiers: material visibility
+    (``fail_processing``, its own commit) BEFORE the best-effort dependent-job
+    cascade. Neither tier's failure propagates out of the callback, and a
+    material-visibility commit is never undone by a cascade blow-up.
     """
 
-    async def test_terminal_transition_error_is_swallowed(self) -> None:
-        """A ValueError on the terminal write is logged, not raised.
-
-        Previously this propagated (→ ARQ retry). A missing Job (or one
-        already terminal via a race) cannot be stranded in ``active``, so
-        the callback logs and continues to best-effort secondaries.
-        """
-        callback, _ = _make_callback()
-
-        with (
-            patch(_ENTRY_REPO) as entry_cls,
-            patch(_JOB_REPO) as job_cls,
-            capture_logs() as logs,
-        ):
-            entry_cls.return_value.fail_processing = AsyncMock()
-            repo = _setup_job_mock(job_cls)
-            repo.update_status = AsyncMock(side_effect=ValueError("Job not found"))
-
-            # Must NOT raise.
-            await callback.on_failure(
-                job_id=uuid.uuid4(),
-                material_id=uuid.uuid4(),
-                error_message="error",
-            )
-
-        assert [e for e in logs if e["event"] == "ingestion_failure_status_skipped"]
-
-    async def test_material_visibility_failure_keeps_terminal_durable(self) -> None:
-        """A fail_processing blow-up does not undo the committed Job → failed.
-
-        Tier 2 (material visibility) is guarded with its own commit; if it
-        raises, the Tier 1 terminal write is already durable, so the Job is
-        terminal and the queue is unblocked.
-        """
+    async def test_material_visibility_failure_is_swallowed(self) -> None:
+        """A fail_processing blow-up is logged, not raised — the Job terminal is
+        already the seam's (durable), so nothing is stranded; the cleanup tier
+        still commits."""
         callback, factory = _make_callback()
         session = factory._mock_session
-        jid = uuid.uuid4()
         error = "fail_processing db hiccup"
 
         with (
@@ -492,18 +397,15 @@ class TestOnFailureResilience:
             entry_cls.return_value.fail_processing = AsyncMock(
                 side_effect=RuntimeError("db hiccup")
             )
-            repo = _setup_job_mock(job_cls)
+            _setup_job_mock(job_cls)
 
-            # Must NOT raise despite the Tier 2 RuntimeError.
+            # Must NOT raise despite the material-visibility RuntimeError.
             await callback.on_failure(
-                job_id=jid, material_id=uuid.uuid4(), error_message=error
+                job_id=uuid.uuid4(), material_id=uuid.uuid4(), error_message=error
             )
 
-        # Terminal write committed (Tier 1); the cleanup tier still commits.
-        repo.update_status.assert_awaited_once_with(
-            jid, "failed", error_message=error, error_category=None
-        )
-        assert session.commit.await_count == 2
+        # Visibility tier rolled back; the best-effort cleanup tier still commits.
+        assert session.commit.await_count == 1
         session.rollback.assert_awaited()
         # log.exception keeps the traceback for the unexpected failure (💡-A).
         events = [
@@ -518,10 +420,9 @@ class TestOnFailureResilience:
     async def test_cascade_failure_keeps_material_visible(self) -> None:
         """A propagate_failure blow-up does not hide the material.
 
-        Core Vector-2 invariant: material visibility (fail_processing, Tier 2)
-        commits BEFORE the best-effort dependent-job cascade (Tier 3), so a
-        cascade exception cannot leave the AuthoredDocument in an invisible
-        ``pending`` state.
+        Core invariant: material visibility (fail_processing) commits BEFORE the
+        best-effort dependent-job cascade, so a cascade exception cannot leave
+        the AuthoredDocument in an invisible ``pending`` state.
         """
         callback, factory = _make_callback()
         session = factory._mock_session
@@ -538,18 +439,14 @@ class TestOnFailureResilience:
             repo = _setup_job_mock(job_cls)
             repo.propagate_failure = AsyncMock(side_effect=RuntimeError("cascade boom"))
 
-            # Must NOT raise despite the Tier 3 cascade RuntimeError.
+            # Must NOT raise despite the cascade RuntimeError.
             await callback.on_failure(job_id=jid, material_id=mid, error_message=error)
 
-        # Material visibility persisted before the cascade blew up.
+        # Material visibility persisted (its own commit) before the cascade blew up.
         entry_cls.return_value.fail_processing.assert_awaited_once_with(
             mid, error_message=error, error_category=None
         )
-        repo.update_status.assert_awaited_once_with(
-            jid, "failed", error_message=error, error_category=None
-        )
-        # Tier 1 (terminal) + Tier 2 (visibility) both committed; Tier 3 failed.
-        assert session.commit.await_count == 2
+        assert session.commit.await_count == 1
         # log.exception keeps the traceback for the unexpected failure (💡-A).
         events = [
             e for e in logs if e["event"] == "ingestion_failure_secondary_skipped"
@@ -675,7 +572,9 @@ class TestCallbackIntegrationWithArqTask:
             cb_cls.return_value.on_success = AsyncMock()
             cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
+            # Body via __wrapped__ (bypass the DB-backed seam); on success it
+            # delegates the domain completion to callback.on_success.
+            await arq_ingest_material.__wrapped__(
                 ctx, str(jid), str(mid), "web", "https://example.com"
             )
 
@@ -683,71 +582,3 @@ class TestCallbackIntegrationWithArqTask:
         call_kwargs = cb_cls.return_value.on_success.call_args.kwargs
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
-        assert call_kwargs["content_json"] == '{"content": "ok"}'
-
-    async def test_failure_delegates_to_callback(self) -> None:
-        """On processing error, callback.on_failure is called."""
-        from course_supporter.api.tasks import arq_ingest_material
-
-        jid = uuid.uuid4()
-        mid = uuid.uuid4()
-
-        session = AsyncMock()
-        session.commit = AsyncMock()
-        session.rollback = AsyncMock()
-
-        ctx_manager = AsyncMock()
-        ctx_manager.__aenter__ = AsyncMock(return_value=session)
-        ctx_manager.__aexit__ = AsyncMock(return_value=False)
-
-        factory = MagicMock(return_value=ctx_manager)
-        router = MagicMock()
-
-        ctx = {
-            "session_factory": factory,
-            "model_router": router,
-            "stage_router": MagicMock(),
-            "redis": MagicMock(),
-        }
-
-        _arq_job_repo = "course_supporter.storage.job_repository.JobRepository"
-        _arq_entry_repo = (
-            "course_supporter.storage.authored_document_repository"
-            ".AuthoredDocumentRepository"
-        )
-        _heavy = "course_supporter.api.tasks.create_heavy_steps"
-        _factory_fn = "course_supporter.api.tasks.create_processors"
-
-        mock_processor = MagicMock()
-        mock_processor.process_raw = AsyncMock(side_effect=RuntimeError("boom"))
-
-        mock_entry = MagicMock()
-        mock_entry.source_url = "https://example.com"
-
-        with (
-            patch("course_supporter.ingestion_callback.IngestionCallback") as cb_cls,
-            patch("course_supporter.job_priority.check_work_window"),
-            patch(_arq_job_repo) as job_cls,
-            patch(_arq_entry_repo) as entry_cls,
-            patch(_heavy),
-            patch(_factory_fn, return_value={"web": mock_processor}),
-            patch(
-                "course_supporter.api.tasks.set_tenant_from_job",
-                new=AsyncMock(),
-            ),
-        ):
-            job_cls.return_value.update_status = AsyncMock()
-            entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
-            entry_cls.return_value.set_pending = AsyncMock()
-            cb_cls.return_value.on_success = AsyncMock()
-            cb_cls.return_value.on_failure = AsyncMock()
-
-            await arq_ingest_material(
-                ctx, str(jid), str(mid), "web", "https://example.com"
-            )
-
-        cb_cls.return_value.on_failure.assert_awaited_once()
-        call_kwargs = cb_cls.return_value.on_failure.call_args.kwargs
-        assert call_kwargs["job_id"] == jid
-        assert call_kwargs["material_id"] == mid
-        assert "boom" in call_kwargs["error_message"]

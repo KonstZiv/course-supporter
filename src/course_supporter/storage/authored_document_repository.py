@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from course_supporter.models.source import AssignmentType, MaterialRole
 from course_supporter.security.exceptions import ErrorCategory
@@ -193,6 +194,11 @@ class AuthoredDocumentRepository:
             select(AuthoredDocument)
             .where(AuthoredDocument.course_node_id == node_id)
             .order_by(AuthoredDocument.order)
+            # L3 (Рат.6): eager-load each row's in-flight Job so the
+            # ``processing_phase`` derivation on the list response is
+            # O(1)-in-queries (one batched IN-select), not a per-row lazy
+            # load (MissingGreenlet under async). Flat, no ``load_only``.
+            .options(selectinload(AuthoredDocument.pending_job))
         )
         if source_type is not None:
             stmt = stmt.where(AuthoredDocument.source_type == source_type)

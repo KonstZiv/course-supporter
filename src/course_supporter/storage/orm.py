@@ -32,6 +32,7 @@ from course_supporter.storage.cascade import (
     scrub_node_summary_final_previous_snapshot,
     scrub_node_summary_raw,
 )
+from course_supporter.storage.processing_phase import derive_processing_phase
 
 
 def _uuid7() -> uuid.UUID:
@@ -506,6 +507,26 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         if self.job_id is not None:
             return MaterialState.PENDING
         return MaterialState.READY
+
+    @property
+    def processing_phase(self) -> str:
+        """L3 external phase — the queued/processing split ``state`` collapses.
+
+        A NEW sibling of :attr:`state` (Рат.3), never a mutation of it: the
+        terminal values (``ready`` / ``error``) mirror ``state`` verbatim while
+        the in-flight ``pending`` case splits into ``queued`` (worker has not
+        taken the job) vs ``processing`` (worker took it), read from the
+        in-flight ``Job.status`` via :attr:`pending_job`.
+
+        ``pending_job`` MUST be eager-loaded on every path that serialises this
+        object (Рат.6) — this property never triggers a lazy load, which under
+        the async session would be a ``MissingGreenlet``. A ``None`` ``job_id``
+        short-circuits without touching the relationship at all.
+        """
+        job = self.pending_job if self.job_id is not None else None
+        return derive_processing_phase(
+            self.error_message, job.status if job is not None else None
+        )
 
     # ── Timestamps ──
     created_at: Mapped[datetime] = mapped_column(

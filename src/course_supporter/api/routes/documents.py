@@ -30,6 +30,7 @@ from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
@@ -601,6 +602,10 @@ async def create_document(
         job_id=str(job.id),
         task_type=task_type,
     )
+    # L3: the freshly-enqueued Job is 'queued'; bind it as the committed
+    # ``pending_job`` value so ``processing_phase`` derives 'queued' at once
+    # with no lazy load (Рат.3 / Рат.6).
+    set_committed_value(document, "pending_job", job)
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
     response.processing_estimate = _processing_estimate()
@@ -800,6 +805,9 @@ async def confirm_upload(
         key=body.key,
         job_id=str(job.id),
     )
+    # L3: bind the freshly-enqueued 'queued' Job so ``processing_phase``
+    # derives 'queued' with no lazy load (Рат.3 / Рат.6).
+    set_committed_value(document, "pending_job", job)
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
     response.processing_estimate = _processing_estimate()
@@ -1003,6 +1011,9 @@ async def get_document(
     document = await _require_document_for_tenant(
         document_repo, node_repo, document_id, tenant.tenant_id
     )
+    # L3: load the in-flight Job so ``processing_phase`` derives without a
+    # lazy load (Рат.6). Single-doc read path → one extra select, not N+1.
+    await session.refresh(document, ["pending_job"])
     return AuthoredDocumentResponse.model_validate(document)
 
 
@@ -1051,6 +1062,9 @@ async def update_document(
         task_type=body.task_type,
         fields=list(fields_set),
     )
+    # L3: load the in-flight Job so ``processing_phase`` derives without a
+    # lazy load (Рат.6). Single-doc read path → one extra select, not N+1.
+    await session.refresh(document, ["pending_job"])
     return AuthoredDocumentResponse.model_validate(document)
 
 
@@ -1285,6 +1299,9 @@ async def retry_document(
         document_id=str(document_id),
         job_id=str(job.id),
     )
+    # L3: bind the freshly-enqueued 'queued' Job so ``processing_phase``
+    # derives 'queued' with no lazy load (Рат.3 / Рат.6).
+    set_committed_value(document, "pending_job", job)
     response = AuthoredDocumentCreateResponse.model_validate(document)
     response.job_id = job.id
     response.processing_estimate = _processing_estimate()

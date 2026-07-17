@@ -556,12 +556,24 @@ async def _notify_homework_failed(
     await session.commit()
 
 
+@through_seam()
 async def arq_process_homework(
     ctx: dict[str, Any],
     job_id: str,
     submission_id: str,
 ) -> None:
-    """ARQ task: process a homework submission.
+    """ARQ task body: process a homework submission through the pipeline.
+
+    Wrapped by the L2 execution seam (:func:`through_seam`): the seam owns the
+    ``Job.status`` lifecycle (active → complete on normal return / failed on
+    raise) + the HomeworkSubmission liveness check (a soft-deleted submission →
+    ``obsolete``, body skipped). The body owns ALL domain — the
+    ``HomeworkSubmission`` status machine, webhooks, and the fresh error-session
+    reaction (Рат.2 strict boundary). On a processing failure the body performs
+    its domain reaction (submission → rejected/failed + failed webhook) and then
+    RE-RAISES so the seam writes ``failed``. The webhook therefore fires just
+    before the seam's terminal write (a conscious, accepted "webhook-before-
+    terminal" inversion — see the module tests).
 
     Orchestrates the full homework pipeline (KD13 / KD15):
     safety → sanity → review → delivery. Safety and the sanity gate both
@@ -604,7 +616,6 @@ async def arq_process_homework(
         CourseNodeRepository,
     )
     from course_supporter.storage.homework_repository import HomeworkRepository
-    from course_supporter.storage.job_repository import JobRepository
     from course_supporter.storage.student_repository import StudentRepository
 
     jid = uuid.UUID(job_id)
@@ -625,11 +636,12 @@ async def arq_process_homework(
     log.info("homework_processing_started")
 
     async with session_factory() as session:
-        job_repo = JobRepository(session)
         hw_repo = HomeworkRepository(session)
         node_repo = CourseNodeRepository(session)
         try:
-            # Load submission
+            # Load submission. The seam already turned a soft-deleted submission
+            # into `obsolete` (skip); a None here is the extreme race of the row
+            # vanishing after the liveness check → raise → the seam writes failed.
             submission = await hw_repo.get_by_id(sid)
             if submission is None:
                 msg = f"HomeworkSubmission {sid} not found"
@@ -655,9 +667,7 @@ async def arq_process_homework(
                 file_url=submission.file_url,
             )
 
-            await job_repo.update_status(jid, "active")
-            await session.commit()
-
+            # Job → active is the seam's (already written on entry).
             # --- HW-004: Safety check (runs while status is still 'received';
             # sets the 'safety_ok' milestone only on pass, KD15 §1298) ---
             s3_key = s3.extract_key(submission.file_url)
@@ -714,7 +724,6 @@ async def arq_process_homework(
                         session=session,
                         s3=s3,
                         hw_repo=hw_repo,
-                        job_repo=job_repo,
                         submission=submission,
                         sid=sid,
                         jid=jid,
@@ -773,7 +782,6 @@ async def arq_process_homework(
                         await hw_repo.update_status(
                             sid, "rejected", error_message=stage1_exc.detail
                         )
-                        await job_repo.update_status(jid, "complete")
                         await session.commit()
                         log.warning(
                             "homework_rejected_stage1",
@@ -822,7 +830,6 @@ async def arq_process_homework(
                         "rejected",
                         error_message=safety_result.reasoning,
                     )
-                    await job_repo.update_status(jid, "complete")
                     await session.commit()
                     log.warning(
                         "homework_rejected_safety",
@@ -874,8 +881,6 @@ async def arq_process_homework(
                             session=session,
                         )
                         await session.commit()
-                    await job_repo.update_status(jid, "complete")
-                    await session.commit()
                     return
 
                 # Sanity gate passed.
@@ -934,7 +939,8 @@ async def arq_process_homework(
                     if delivered:
                         await hw_repo.update_status(sid, "delivered")
 
-                await job_repo.update_status(jid, "complete")
+                # Commit the 'delivered' status write (if any); Job → complete is
+                # the seam's, on this body's normal return.
                 await session.commit()
                 log.info("homework_processing_done")
             finally:
@@ -945,10 +951,13 @@ async def arq_process_homework(
         except SecurityRejectedError as exc:
             exc.enrich(sec_ctx)
             await session.rollback()
+            # Domain reaction in a fresh session (the main one rolled back): mark
+            # the submission rejected. Job → failed is the seam's, on the re-raise
+            # below — for homework this inverts terminal-first (the submission
+            # write lands just before the Job terminal), a conscious accepted
+            # degradation (Рат.2).
             async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
-                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
                 try:
                     await err_hw_repo.update_status(
                         sid,
@@ -965,13 +974,15 @@ async def arq_process_homework(
                 "security_violation",
                 **exc.as_log_dict(),
             )
+            raise
 
         except Exception as exc:
             await session.rollback()
+            # Domain reaction in a fresh session: mark the submission failed +
+            # best-effort failed webhook. Job → failed is the seam's, on the
+            # re-raise below (webhook-before-terminal inversion, Рат.2).
             async with session_factory() as err_session:
-                err_job_repo = JobRepository(err_session)
                 err_hw_repo = HomeworkRepository(err_session)
-                await err_job_repo.update_status(jid, "failed", error_message=str(exc))
                 failed_set = False
                 try:
                     await err_hw_repo.update_status(
@@ -994,6 +1005,7 @@ async def arq_process_homework(
                     except Exception:
                         log.warning("homework_failed_webhook_skipped", exc_info=True)
             log.error("homework_processing_failed", error=str(exc))
+            raise
 
 
 @through_seam()

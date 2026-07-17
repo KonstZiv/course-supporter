@@ -216,6 +216,15 @@ class _FakeReviewService:
         return self._output
 
 
+class _RaisingReviewService:
+    """A review service that blows up mid-graph (drives the failure path)."""
+
+    async def review(self, *, submission: Any, submission_text: str) -> Any:
+        del submission, submission_text
+        msg = "mentor review graph exploded"
+        raise RuntimeError(msg)
+
+
 def _patch_pipeline(
     stack: ExitStack,
     *,
@@ -398,6 +407,70 @@ class TestSafetyReject:
         assert sub.review_result is None
         # No webhook on a safety rejection (not in the T7 event set).
         assert deliver.await_count == 0
+
+
+class TestProcessingFailure:
+    """Рат.2 regress: a mid-pipeline exception drives the body's domain reaction
+    (submission → failed + best-effort failed webhook) in a FRESH err-session,
+    then the seam writes Job ``failed``. The task does not re-raise out of the
+    seam (the seam swallows a terminal failure — no ARQ retry of the body)."""
+
+    async def test_review_failure_marks_failed_and_delivers_webhook(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        homework_seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        tmp_file = tmp_path / "sub.py"
+        tmp_file.write_text("def f(): return 1", encoding="utf-8")
+        ctx = _build_ctx(session_factory, tmp_file)
+        deliver = AsyncMock(return_value=True)
+        match = SanityGateOutcome(
+            classification=SanityClassification(
+                verdict="match", confidence=0.9, reason="on task"
+            ),
+            gated=False,
+        )
+
+        with ExitStack() as stack:
+            # Safe + sanity-match so the pipeline reaches the review graph…
+            _patch_pipeline(
+                stack,
+                is_safe=True,
+                sanity=match,
+                review_output=_review_output(),
+                deliver=deliver,
+            )
+            # …but the review graph blows up mid-run (last patch wins).
+            stack.enter_context(
+                patch(
+                    "course_supporter.homework.review_graph"
+                    ".build_mentor_review_service",
+                    new=MagicMock(return_value=_RaisingReviewService()),
+                )
+            )
+            # The seam swallows the re-raised exception after writing Job failed.
+            await arq_process_homework(
+                ctx,
+                str(homework_seed["job_id"]),
+                str(homework_seed["submission_id"]),
+            )
+
+        # Domain reaction (fresh err-session): submission → failed.
+        sub = await _status(session_factory, homework_seed["submission_id"])
+        assert sub.status == "failed"
+
+        # The seam's terminal: Job → failed.
+        async with session_factory() as session:
+            job = await session.get(Job, homework_seed["job_id"])
+            assert job is not None
+            assert job.status == "failed"
+
+        # Best-effort failed webhook delivered exactly once (T7).
+        failed_events = [
+            c for c in deliver.await_args_list if c.kwargs["payload"].event == "failed"
+        ]
+        assert len(failed_events) == 1
 
 
 class TestCancelRaceGuard:

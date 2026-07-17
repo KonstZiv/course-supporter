@@ -259,12 +259,16 @@ async def _run_seam(
             and sid is not None
             and not await _subject_is_alive(session, st, sid)
         ):
-            await repo.update_status(jid, "obsolete")
-            await session.commit()
+            # Route the obsolete write through _write_terminal (own session,
+            # tolerant): a race that cancelled the job between the read above and
+            # here makes cancelled→obsolete illegal — skip, don't crash. "No
+            # terminal — no post-terminal" applies as on every terminal path.
             logger.info("seam_obsolete_dead_subject", subject_type=st)
-            await _invoke_on_terminal(
-                on_terminal, ctx, job_id, args, kwargs, SeamTerminal(status="obsolete")
-            )
+            terminal = SeamTerminal(status="obsolete")
+            if await _write_terminal(session_factory, jid, terminal, logger):
+                await _invoke_on_terminal(
+                    on_terminal, ctx, job_id, args, kwargs, terminal
+                )
             return
         await repo.update_status(jid, "active")  # no-op on replay (active→active)
         await session.commit()
@@ -272,9 +276,29 @@ async def _run_seam(
     # ── Body ──
     try:
         result = await body(ctx, job_id, *args, **kwargs)
-    except Retry:
-        # Control flow, NOT a failure (GO condition 1): let ARQ (or the
-        # missing-job policy / a domain retry) handle it. Do not terminalize.
+    except Retry as retry_exc:
+        # Control flow, NOT a failure (GO condition 1): ARQ (or the missing-job
+        # policy / a domain retry) handles the re-run. On NON-final attempts the
+        # seam stays a clean pass-through.
+        #
+        # Ruling 3: on the FINAL attempt (job_try >= max_tries — both derived,
+        # like the missing-job policy), a re-raised Retry makes ARQ finish the
+        # job at its OWN level (JobExecutionFailed) WITHOUT re-entering the task,
+        # which would strand the Job in flight until the next reconcile sweep.
+        # Write a durable `failed` here FIRST (an honest status now, not after a
+        # restart), then re-raise so ARQ still records the retry-exhaustion.
+        # "No terminal — no post-terminal" holds: the callback fires only if the
+        # failed write actually landed.
+        if int(ctx.get("job_try", 1)) >= get_settings().worker_max_tries:
+            cause = retry_exc.__cause__
+            terminal = SeamTerminal(
+                status="failed",
+                error_message=str(cause) if cause else "retry budget exhausted",
+            )
+            if await _write_terminal(session_factory, jid, terminal, logger):
+                await _invoke_on_terminal(
+                    on_terminal, ctx, job_id, args, kwargs, terminal
+                )
         raise
     except Exception as exc:
         category = getattr(exc, "category", None)

@@ -216,6 +216,38 @@ async def test_dead_subject_writes_obsolete_and_skips_body(
     assert store[jid].error_message is None
 
 
+async def test_obsolete_write_skipped_on_race_no_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entry-obsolete polish: a race that cancels the job between the liveness
+    check and the obsolete write makes cancelled→obsolete illegal — the write is
+    skipped (no crash) and no post-terminal callback fires."""
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "authored_document", uuid.uuid4())}
+    calls: list[Any] = []
+    invoked = False
+
+    async def _dead_and_concurrent_cancel(*_a: Any, **_k: Any) -> bool:
+        store[jid].status = "cancelled"  # a cancel lands before the obsolete write
+        return False  # …and the subject is dead
+
+    monkeypatch.setattr(seam, "_subject_is_alive", _dead_and_concurrent_cancel)
+
+    async def on_terminal(
+        ctx: dict, job_id: str, *args: Any, outcome: SeamTerminal, **kw: Any
+    ) -> None:
+        nonlocal invoked
+        invoked = True  # pragma: no cover
+
+    @through_seam(on_terminal=on_terminal)
+    async def task(ctx: dict, job_id: str) -> None:
+        raise AssertionError("body must not run on a dead subject")
+
+    await task(_ctx(store, calls), str(jid))  # must NOT raise
+    assert store[jid].status == "cancelled"  # obsolete write skipped
+    assert invoked is False  # no post-terminal
+
+
 async def test_null_subject_skips_liveness_and_runs_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -316,6 +348,52 @@ async def test_arq_retry_passes_through_without_failed(
     # The job stays `active` — the seam did NOT terminalize it as failed.
     assert store[jid].status == "active"
     assert not any(c[0] == "update_status" and c[1] == "failed" for c in calls)
+
+
+# ── Ruling 3: Retry on the final attempt terminalises before re-raising ──
+
+
+async def test_retry_on_non_final_attempt_stays_pass_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 3 (b): a Retry below max_tries is a clean pass-through — no
+    terminal, Retry propagated (behaviour unchanged)."""
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "authored_document", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise Retry(defer=1)
+
+    # job_try = 1 < worker_max_tries (3) → non-final.
+    with pytest.raises(Retry):
+        await task(_ctx(store, calls, job_try=1), str(jid))
+    assert store[jid].status == "active"  # no terminal written
+    assert not any(c[0] == "update_status" and c[1] == "failed" for c in calls)
+
+
+async def test_retry_on_final_attempt_writes_failed_then_reraises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 3 (a): a Retry on the final attempt (job_try >= max_tries) →
+    the seam writes a durable `failed` (error_message from the Retry's __cause__)
+    THEN re-raises so ARQ still records the retry-exhaustion."""
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "authored_document", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise Retry(defer=1) from RuntimeError("connection kept flapping")
+
+    # job_try = 3 == default worker_max_tries → final attempt.
+    with pytest.raises(Retry):
+        await task(_ctx(store, calls, job_try=3), str(jid))
+    assert store[jid].status == "failed"  # honest terminal now, not after restart
+    assert store[jid].error_message == "connection kept flapping"
 
 
 # ── replay: active on entry → body re-runs, active write no-op ───────────

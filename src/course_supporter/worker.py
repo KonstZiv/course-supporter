@@ -11,6 +11,7 @@ Or in Docker::
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
@@ -33,28 +34,48 @@ if TYPE_CHECKING:
 WorkerCtx = dict[str, Any]
 
 
-async def _reconcile_orphaned_active_jobs(
+# Startup-race grace: a Job is enqueued in two steps — INSERT + commit (durable
+# Job first, KD13/QQ5), then `redis.enqueue_job`, then set arq_job_id + commit.
+# Between the two commits a queued Job carries a NULL arq_job_id transiently. If
+# the reconcile sweep runs in that window it must NOT mistake it for an orphan,
+# so rows younger than this window are skipped. 60s comfortably covers the two
+# commits + the enqueue round-trip while staying far below any real orphan age.
+_RECONCILE_GRACE_S = 60
+
+
+async def _reconcile_orphaned_in_flight_jobs(
     session_factory: async_sessionmaker[AsyncSession],
     redis: ArqRedis,
 ) -> None:
-    """Fail Jobs stranded in ``active`` by a dead previous worker (task 3.3c-B).
+    """Fail Jobs stranded in flight with no live ARQ handle (task 3.3c-B; L2).
 
-    Runs once at worker startup, before this worker polls any job — so every
-    ``active`` Job belongs to a *previous* instance. For each, consult ARQ for
+    Runs once at worker startup, before this worker polls any job. Sweeps BOTH
+    in-flight statuses (``active`` — a previous worker died mid-task — and
+    ``queued`` — enqueued but its ARQ task was lost, e.g. a Redis flush; L2 F11:
+    queued orphans were previously invisible forever). For each, consult ARQ for
     the liveness of its ``arq_job_id``:
 
-    * ``not_found`` / ``complete`` (or no ``arq_job_id``) → ARQ has no live
-      handle that will (re)run it → transition the Job to ``failed`` so the
-      single-worker queue is unblocked and the failure becomes visible
-      (covers a hard-kill mid-task with ``max_tries`` exhausted).
-    * ``in_progress`` / ``queued`` / ``deferred`` → ARQ will (re)run it →
-      leave it; the rerun terminates it normally (race-safe).
+    * live (``in_progress`` / ``queued`` / ``deferred`` on ANY worker queue) →
+      ARQ will (re)run it → leave it. R7: a freshly-enqueued ``queued`` Job has a
+      live ARQ key, so it is never reconciled — the same liveness rule that
+      protects a running ``active`` job.
+    * ``not_found`` / ``complete`` on every queue (or no ``arq_job_id``) → ARQ has
+      no live handle → transition the Job to ``failed`` so the single-worker queue
+      is unblocked and the stranded job becomes visible instead of a spinner.
 
-    ``arq.jobs.Job`` is queried on the default queue. An ``active`` Job maps to
-    ARQ ``in_progress`` — a global key, queue-agnostic — so the default-queue
-    assumption only affects the ``queued`` branch, which never applies to an
-    already-running job.
+    **Per-queue liveness (arq/jobs.py::Job.status):** ``complete`` /
+    ``in_progress`` are global keys, but ``queued`` / ``deferred`` come from a
+    ``zscore`` on the *queue-specific* sorted set (``self._queue_name``). So a
+    homework-queue Job is only visible when queried with the homework queue name.
+    We therefore check BOTH worker queues (default + ``HomeworkWorkerSettings``'s)
+    and treat a Job as orphaned only when it is not-live on ALL of them — no
+    job_type→queue mapping, just the two known worker queues.
+
+    **Startup-race grace:** rows younger than :data:`_RECONCILE_GRACE_S` are
+    skipped — their NULL ``arq_job_id`` may be the transient mid-enqueue state,
+    not an orphan.
     """
+    from arq.constants import default_queue_name
     from arq.jobs import Job as ArqJob
     from arq.jobs import JobStatus
 
@@ -62,29 +83,45 @@ async def _reconcile_orphaned_active_jobs(
 
     log = structlog.get_logger()
     arq_live = {JobStatus.in_progress, JobStatus.queued, JobStatus.deferred}
+    queues = (default_queue_name, HomeworkWorkerSettings.queue_name)
+
+    async def _arq_is_live(arq_job_id: str) -> bool:
+        """True if ARQ reports a live handle on ANY worker queue (see docstring —
+        queued/deferred are per-queue, so both queues must be consulted)."""
+        for queue in queues:
+            if await ArqJob(arq_job_id, redis, _queue_name=queue).status() in arq_live:
+                return True
+        return False
+
+    now = datetime.now(UTC)
+    grace = timedelta(seconds=_RECONCILE_GRACE_S)
 
     async with session_factory() as session:
         job_repo = JobRepository(session)
-        active = await job_repo.get_active_jobs()
-        if not active:
+        in_flight = await job_repo.get_in_flight_jobs()
+        if not in_flight:
             return
 
         reconciled = 0
-        for job in active:
-            if job.arq_job_id is not None:
-                arq_status = await ArqJob(job.arq_job_id, redis).status()
-                if arq_status in arq_live:
-                    continue
-            # No arq_job_id, or ARQ reports not_found / complete → orphaned.
-            try:
-                await job_repo.update_status(
-                    job.id,
-                    "failed",
-                    error_message=(
-                        "Reconciled at worker startup: stranded in 'active' "
-                        "with no live ARQ job (previous worker died mid-task)."
-                    ),
+        for job in in_flight:
+            if job.queued_at is not None and now - job.queued_at < grace:
+                continue  # mid-enqueue window — NULL arq_job_id is transient
+            if job.arq_job_id is not None and await _arq_is_live(job.arq_job_id):
+                continue
+            # No arq_job_id, or ARQ reports not_found / complete on every queue →
+            # orphaned. The message names the prior status so an operator can tell
+            # a died-mid-task (`active`) apart from a never-picked-up (`queued`).
+            reason = (
+                f"Reconciled at worker startup: stranded in {job.status!r} with "
+                "no live ARQ job "
+                + (
+                    "(previous worker died mid-task)."
+                    if job.status == "active"
+                    else "(enqueued task lost — never picked up)."
                 )
+            )
+            try:
+                await job_repo.update_status(job.id, "failed", error_message=reason)
                 reconciled += 1
             except ValueError as exc:
                 log.warning(
@@ -93,7 +130,7 @@ async def _reconcile_orphaned_active_jobs(
 
         if reconciled:
             await session.commit()
-            log.info("orphaned_active_jobs_reconciled", count=reconciled)
+            log.info("orphaned_in_flight_jobs_reconciled", count=reconciled)
 
 
 async def startup(ctx: WorkerCtx) -> None:
@@ -174,17 +211,18 @@ async def startup(ctx: WorkerCtx) -> None:
 
     log = structlog.get_logger()
 
-    # Reconcile Jobs stranded in `active` by a previously-killed worker
-    # (task 3.3c-B, Vector 3). Best-effort and guarded: a reconcile failure
-    # must not stop the worker from starting to process new jobs. ARQ sets
-    # ctx['redis'] before invoking on_startup; ``.get`` keeps direct-call
-    # tests (which pass a bare ctx) from tripping over a missing pool.
+    # Reconcile Jobs stranded in flight (active OR queued) with no live ARQ
+    # handle (task 3.3c-B, Vector 3; L2 extends to queued — F11). Best-effort and
+    # guarded: a reconcile failure must not stop the worker from starting to
+    # process new jobs. ARQ sets ctx['redis'] before invoking on_startup; ``.get``
+    # keeps direct-call tests (which pass a bare ctx) from tripping over a
+    # missing pool.
     redis = ctx.get("redis")
     if isinstance(redis, ArqRedis):
         try:
-            await _reconcile_orphaned_active_jobs(session_factory, redis)
+            await _reconcile_orphaned_in_flight_jobs(session_factory, redis)
         except Exception:
-            log.exception("orphaned_active_jobs_reconcile_failed")
+            log.exception("orphaned_in_flight_jobs_reconcile_failed")
 
     log.info("worker_started", redis_url=s.redis_url, max_jobs=s.worker_max_jobs)
 

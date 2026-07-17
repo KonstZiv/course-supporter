@@ -484,17 +484,18 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
-    async def get_active_jobs(self) -> list[Job]:
-        """Return all live Jobs currently in the ``active`` status.
+    async def get_in_flight_jobs(self) -> list[Job]:
+        """Return all live Jobs in flight (``queued`` OR ``active``).
 
-        Global (not tenant-scoped) and soft-delete-aware. Consumed by the
-        worker startup reconcile sweep (task 3.3c-B): on the single prod
-        worker a Job stranded in ``active`` by a previous instance that died
-        mid-task blocks the whole queue behind it, so startup must find and
-        terminalise such jobs.
+        Global (not tenant-scoped) and soft-delete-aware. Consumed by the worker
+        startup reconcile sweep (task 3.3c-B; L2 extends it to ``queued`` — F11):
+        a Job stranded in ``active`` (previous worker died mid-task) blocks the
+        single serial worker's queue, and a Job stranded in ``queued`` with no
+        live ARQ handle (e.g. a Redis flush) would otherwise sit invisible
+        forever. The status set is derived from :data:`IN_FLIGHT_STATUSES`.
         """
         stmt = select(Job).where(
-            Job.status == "active",
+            Job.status.in_(IN_FLIGHT_STATUSES),
             Job.deleted_at.is_(None),
         )
         result = await self._session.execute(stmt)

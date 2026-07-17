@@ -240,6 +240,15 @@ async def _run_seam(
         if job.status in AT_REST_STATUSES:
             # complete / failed / cancelled / obsolete — replay or externally
             # terminated. Body must not run (this is the F1 crash-class fix).
+            #
+            # Рат.5: the cooperative-cancel checker (JobCancellationChecker /
+            # raise_if_cancelled, jobs.cancellation) is deliberately NOT wired
+            # into the seam. This entry-check subsumes the common case (a job
+            # cancelled before pickup never runs its body); a mid-body cancel is
+            # already handled by the tolerant terminal write (a cancelled → *
+            # transition is illegal and skipped, "no terminal — no post-terminal")
+            # rather than by cooperative polling between stages. Wiring it is out
+            # of L2 scope.
             logger.info("seam_skip_terminal", status=job.status)
             return
         # NULL subject (s3_cleanup, or a legacy NULL-subject row — A3) skips

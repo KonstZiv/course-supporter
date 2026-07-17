@@ -1,10 +1,12 @@
 """Tests for ARQ worker configuration."""
 
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from arq.connections import RedisSettings
+from arq.jobs import JobStatus
 from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_ingest_material
@@ -38,7 +40,10 @@ def _fake_active_job(
 
 def _reconcile_harness(
     jobs: list[MagicMock],
-    status_by_arq_id: dict[str, object],
+    # Mapping (not dict) — covariant in the value type, so a call site can pass
+    # a homogeneous ``{id: JobStatus}`` (same status on every queue) OR a
+    # ``{id: {queue: JobStatus}}`` (per-queue) literal without an invariance clash.
+    status_by_arq_id: Mapping[str, JobStatus | dict[str, JobStatus]],
 ) -> tuple[AsyncMock, MagicMock, MagicMock, object]:
     """Wire a mock session_factory + JobRepository + ArqJob.status factory.
 
@@ -242,7 +247,6 @@ class TestReconcileOrphanedActiveJobs:
 
     async def test_orphaned_failed_and_live_left(self) -> None:
         """not_found/complete → failed; in_progress/queued/deferred → left."""
-        from arq.jobs import JobStatus
 
         not_found = _fake_active_job("a")
         complete = _fake_active_job("b")
@@ -298,7 +302,6 @@ class TestReconcileOrphanedActiveJobs:
 
     async def test_all_live_does_not_commit(self) -> None:
         """When every active job is still live in ARQ, nothing is written."""
-        from arq.jobs import JobStatus
 
         job = _fake_active_job("x")
         session, factory, repo, arq_job = _reconcile_harness(
@@ -316,7 +319,6 @@ class TestReconcileOrphanedActiveJobs:
 
     async def test_transition_error_is_swallowed_and_others_continue(self) -> None:
         """A ValueError on one transition is logged; the sweep continues."""
-        from arq.jobs import JobStatus
 
         bad = _fake_active_job("a")
         good = _fake_active_job("b")
@@ -338,7 +340,6 @@ class TestReconcileOrphanedActiveJobs:
     async def test_queued_orphan_reconciled_live_queued_untouched(self) -> None:
         """L2 F11 / R7: a `queued` Job with a lost ARQ key → failed; a freshly-
         enqueued `queued` Job (ARQ status queued/deferred) is left untouched."""
-        from arq.jobs import JobStatus
 
         orphan = _fake_active_job("lost", status="queued")
         fresh = _fake_active_job("fresh", status="queued")
@@ -362,7 +363,6 @@ class TestReconcileOrphanedActiveJobs:
         queue (``not_found`` on the default queue) must NOT be reconciled —
         queued/deferred is per-queue (arq zscore), so both worker queues are
         consulted; an orphan is not-live on BOTH."""
-        from arq.jobs import JobStatus
 
         hw_queue = HomeworkWorkerSettings.queue_name
         live_hw = _fake_active_job("hw", status="queued")

@@ -12,12 +12,11 @@ import anyio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.ingestion.base import CategorisedProcessingError
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
     create_processors,
 )
-from course_supporter.jobs.execution_seam import through_seam
+from course_supporter.jobs.execution_seam import SeamTerminal, through_seam
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import (
     reset_progress_writer,
@@ -122,6 +121,37 @@ def _bound_safety_text(text: str, *, log: Any) -> str:
     return bounded
 
 
+async def _ingest_on_terminal(
+    ctx: dict[str, Any],
+    job_id: str,
+    material_id: str,
+    *_rest: Any,
+    outcome: SeamTerminal,
+) -> None:
+    """Ingest's opaque post-terminal domain reaction (L2, GO condition 3).
+
+    The seam has already written the terminal Job status (durably, terminal-
+    first) before this runs. Only the FAILURE path needs a reaction here:
+    material visibility + the dependent-job cascade + the Stage 2 reject
+    soft-delete, which MUST run after the failed-Job commit so a stranded
+    ``active`` never blocks the serial worker. On success ``complete_processing``
+    already ran in the body (before the seam's ``complete``); on ``obsolete`` the
+    subject is already gone — neither needs a reaction here.
+    """
+    if outcome.status != "failed":
+        return
+    from course_supporter.ingestion_callback import IngestionCallback
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    await IngestionCallback(session_factory).on_failure(
+        job_id=uuid.UUID(job_id),
+        material_id=uuid.UUID(material_id),
+        error_message=outcome.error_message or "",
+        error_category=outcome.error_category,
+    )
+
+
+@through_seam(on_terminal=_ingest_on_terminal)
 async def arq_ingest_material(
     ctx: dict[str, Any],
     job_id: str,  # UUID as string (ARQ JSON serialization)
@@ -130,11 +160,15 @@ async def arq_ingest_material(
     source_url: str,
     priority: str = "normal",
 ) -> None:
-    """ARQ task: process a AuthoredDocument with job tracking.
+    """ARQ task body: process an AuthoredDocument through the two-pass pipeline.
 
-    Thin orchestrator: validates priority, transitions to active,
-    runs the processor, then delegates completion handling to
-    :class:`~course_supporter.ingestion_callback.IngestionCallback`.
+    Wrapped by the L2 execution seam (:func:`through_seam`), which owns the
+    ``Job.status`` lifecycle (active → complete on return / failed on raise) +
+    the AuthoredDocument liveness check (soft-deleted material → ``obsolete``,
+    body skipped). The body runs the pipeline and, on success, the domain
+    ``complete_processing`` (before the seam's ``complete``); on failure it raises
+    and the seam's post-terminal callback (:func:`_ingest_on_terminal`) runs the
+    failure-domain cascade AFTER the durable ``failed`` write (terminal-first).
 
     Args:
         ctx: ARQ worker context (session_factory, model_router,
@@ -212,8 +246,13 @@ async def arq_ingest_material(
 
         entry = await entry_repo.get_by_id(mid)
         if entry is None:
+            # The seam's liveness check turns a soft-deleted subject into
+            # ``obsolete`` before this body runs; a None here is the extreme race
+            # of the row vanishing in between. Raise → the seam writes ``failed``
+            # (a normal return would wrongly land on ``complete``).
             log.error("material_entry_not_found", material_id=material_id)
-            return
+            msg = f"AuthoredDocument {material_id} vanished after liveness check"
+            raise ValueError(msg)
 
         # Resolve effective language: entry override → course default → None.
         # Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
@@ -231,7 +270,8 @@ async def arq_ingest_material(
                 )
 
         try:
-            await job_repo.update_status(jid, "active")
+            # Job → active is owned by the seam (already written on entry). The
+            # body only marks the material pending + links the job (domain).
             await entry_repo.set_pending(mid, jid)
             await session.commit()
 
@@ -453,49 +493,32 @@ async def arq_ingest_material(
             await session.commit()
             # ── /Pass 2b ──
 
-            content = doc.model_dump_json()
+            # ── /Pass 2b — the body's domain work is committed. ──
 
         except SecurityRejectedError as exc:
-            # Stage 2 reject branch (KD-2.1-P, Phase 2.1 C6). The
-            # ``safety_result`` row is already committed pre-raise so
-            # rollback is a no-op for that row; callback handles the
-            # cascade soft-delete in its fresh session via the
-            # ``error_category`` discriminator.
-            await session.rollback()
-            await callback.on_failure(
-                job_id=jid,
-                material_id=mid,
-                error_message=str(exc),
-                error_category=exc.category,
-            )
+            # Stage 2 reject (KD-2.1-P): the ``safety_result`` row is already
+            # committed (pre-raise), so the body-session rollback on exit is a
+            # no-op for it. The seam writes Job ``failed`` with ``exc.category``
+            # (STAGE2_REJECTED); its post-terminal callback runs the cascade
+            # soft-delete AFTER that durable write (terminal-first).
             log.warning(
                 "ingestion_security_rejected",
                 category=exc.category.value,
                 detail=exc.detail,
             )
-            return
+            raise
         except Exception as exc:
-            await session.rollback()
-            # F4: a categorised processing failure (empty document, empty
-            # presentation segment, ...) carries its structural code into
-            # the persisted error_category; everything else stays NULL.
-            category = (
-                exc.category if isinstance(exc, CategorisedProcessingError) else None
-            )
-            await callback.on_failure(
-                job_id=jid,
-                material_id=mid,
-                error_message=str(exc),
-                error_category=category,
-            )
+            # The seam writes Job ``failed``; a CategorisedProcessingError carries
+            # its structural code (``exc.category``), which the seam persists as
+            # ``error_category`` (F4). The post-terminal callback marks the
+            # material failed + runs the best-effort cascade.
             log.error("ingestion_failed", error=str(exc))
-            return
+            raise
 
-    await callback.on_success(
-        job_id=jid,
-        material_id=mid,
-        content_json=content,
-    )
+    # Domain success: mark the material complete BEFORE the seam writes Job
+    # ``complete`` (material durably completed first — no stuck-``pending``
+    # window). Job ``complete`` is the seam's, on this body's normal return.
+    await callback.on_success(job_id=jid, material_id=mid)
     log.info("ingestion_done")
 
 

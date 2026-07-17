@@ -151,7 +151,9 @@ async def test_stage2_pass_continues_to_pass_2a() -> None:
         cb_cls.return_value.on_success = AsyncMock()
         cb_cls.return_value.on_failure = AsyncMock()
 
-        await arq_ingest_material(ctx, str(jid), str(mid), "web", "https://example.com")
+        await arq_ingest_material.__wrapped__(
+            ctx, str(jid), str(mid), "web", "https://example.com"
+        )
 
     mock_stage2.assert_awaited_once()
     entry_cls.return_value.store_safety_result.assert_awaited_once()
@@ -217,19 +219,22 @@ async def test_stage2_reject_skips_pass_2a() -> None:
         cb_cls.return_value.on_success = AsyncMock()
         cb_cls.return_value.on_failure = AsyncMock()
 
-        await arq_ingest_material(ctx, str(jid), str(mid), "web", "https://example.com")
+        from course_supporter.security.exceptions import SecurityRejectedError
+
+        # The body now RAISES on reject; the seam writes Job `failed`
+        # (STAGE2_REJECTED) and runs on_failure from its post-terminal callback.
+        with pytest.raises(SecurityRejectedError):
+            await arq_ingest_material.__wrapped__(
+                ctx, str(jid), str(mid), "web", "https://example.com"
+            )
 
     entry_cls.return_value.store_safety_result.assert_awaited_once()
     sr_kwargs = entry_cls.return_value.store_safety_result.call_args.kwargs
     assert sr_kwargs["safety_result"]["is_safe"] is False
     processor.process_macro.assert_not_awaited()
     summary_cls.return_value.create.assert_not_awaited()
-    cb_cls.return_value.on_failure.assert_awaited_once()
-
-    from course_supporter.security.exceptions import ErrorCategory
-
-    failure_kwargs = cb_cls.return_value.on_failure.call_args.kwargs
-    assert failure_kwargs["error_category"] is ErrorCategory.STAGE2_REJECTED
+    # on_failure is the seam's post-terminal callback, not the body's.
+    cb_cls.return_value.on_failure.assert_not_awaited()
     cb_cls.return_value.on_success.assert_not_awaited()
 
 
@@ -295,7 +300,9 @@ async def test_stage2_pass_order_is_checking_safety_then_extracting() -> None:
         cb_cls.return_value.on_success = AsyncMock()
         cb_cls.return_value.on_failure = AsyncMock()
 
-        await arq_ingest_material(ctx, str(jid), str(mid), "web", "https://example.com")
+        await arq_ingest_material.__wrapped__(
+            ctx, str(jid), str(mid), "web", "https://example.com"
+        )
 
     stage_calls = [
         call.args[1] for call in job_cls.return_value.update_stage.await_args_list

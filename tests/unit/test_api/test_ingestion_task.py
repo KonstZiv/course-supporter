@@ -9,6 +9,14 @@ from course_supporter.api.tasks import arq_ingest_material
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceDocument, SourceType
 
+# These exercise the ingest BODY (pipeline / s3 / slides / callback delegation)
+# via ``__wrapped__``, bypassing the L2 execution seam. The seam's Job.status
+# lifecycle (active / complete / failed / obsolete) is DB-backed and covered by
+# ``test_execution_seam`` + a DB gesture; here the body no longer writes Job
+# status (the seam does), so a failure now RAISES out of the body rather than
+# being swallowed into ``on_failure``.
+_body = arq_ingest_material.__wrapped__
+
 _FACTORY = "course_supporter.api.tasks.create_processors"
 _HEAVY = "course_supporter.api.tasks.create_heavy_steps"
 _ENTRY_REPO = (
@@ -213,7 +221,7 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
+            await _body(
                 ctx,
                 job_id,
                 material_id,
@@ -262,23 +270,23 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com"
-            )
+            await _body(ctx, job_id, material_id, "web", "https://example.com")
 
-        mock_job.update_status.assert_awaited_once_with(jid, "active")
+        # Job → active is the seam's, not the body's; the body links the
+        # material (set_pending) and, on success, delegates the domain
+        # completion to the callback.
         mock_entry_cls.return_value.set_pending.assert_awaited_once_with(mid, jid)
         mock_cb_cls.return_value.on_success.assert_awaited_once()
         call_kwargs = mock_cb_cls.return_value.on_success.call_args.kwargs
         assert call_kwargs["job_id"] == jid
         assert call_kwargs["material_id"] == mid
 
-    async def test_error_delegates_to_callback(self) -> None:
-        """On error: session rolled back, callback.on_failure called."""
+    async def test_error_raises_out_of_body(self) -> None:
+        """On error the body RAISES (the seam writes Job `failed` + runs the
+        failure-domain cascade via its post-terminal callback). The body itself
+        does NOT call on_failure — that moved to the seam's on_terminal."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
-        jid = uuid.UUID(job_id)
-        mid = uuid.UUID(material_id)
 
         session = AsyncMock()
         session.add = MagicMock()
@@ -309,19 +317,16 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com"
-            )
+            with pytest.raises(RuntimeError, match="boom"):
+                await _body(ctx, job_id, material_id, "web", "https://example.com")
 
-        session.rollback.assert_awaited_once()
-        mock_cb_cls.return_value.on_failure.assert_awaited_once()
-        call_kwargs = mock_cb_cls.return_value.on_failure.call_args.kwargs
-        assert call_kwargs["job_id"] == jid
-        assert call_kwargs["material_id"] == mid
-        assert "boom" in call_kwargs["error_message"]
+        mock_cb_cls.return_value.on_failure.assert_not_awaited()
+        mock_cb_cls.return_value.on_success.assert_not_awaited()
 
-    async def test_entry_not_found_returns_early(self) -> None:
-        """When AuthoredDocument not found, returns early without processing."""
+    async def test_entry_not_found_raises(self) -> None:
+        """A missing AuthoredDocument raises (a normal return would wrongly land
+        the seam on `complete`); the seam terminalises it `failed`. No domain
+        callback runs from the body."""
         job_id = str(uuid.uuid4())
         material_id = str(uuid.uuid4())
         factory = _make_session_factory()
@@ -345,9 +350,8 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com"
-            )
+            with pytest.raises(ValueError, match="vanished"):
+                await _body(ctx, job_id, material_id, "web", "https://example.com")
 
         mock_cb_cls.return_value.on_success.assert_not_awaited()
         mock_cb_cls.return_value.on_failure.assert_not_awaited()
@@ -367,7 +371,7 @@ class TestArqIngestMaterial:
             ),
             pytest.raises(Retry),
         ):
-            await arq_ingest_material(
+            await _body(
                 ctx,
                 job_id,
                 material_id,
@@ -411,6 +415,9 @@ class TestArqIngestMaterial:
         mock_proc = MagicMock()
         mock_proc.process_raw = capture_process
         mock_proc.process_macro = AsyncMock(return_value=_default_summary_draft())
+        # process_detail must be awaitable now that the body no longer swallows
+        # a mid-pipeline error (the seam raises it) — this is a success-path test.
+        mock_proc.process_detail = AsyncMock(return_value=[])
         procs = {SourceType.TEXT: mock_proc}
 
         with (
@@ -436,7 +443,7 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
+            await _body(
                 ctx,
                 job_id,
                 material_id,
@@ -502,13 +509,16 @@ class TestArqIngestMaterial:
             mock_entry_cls.return_value.set_pending = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
-                ctx,
-                job_id,
-                material_id,
-                "text",
-                "http://localhost:9000/course-materials/courses/f.md",
-            )
+            # Failing processor → the body raises; the temp-file cleanup lives in
+            # the ``_resolve_s3_url`` finally, so it still runs before the raise.
+            with pytest.raises(RuntimeError):
+                await _body(
+                    ctx,
+                    job_id,
+                    material_id,
+                    "text",
+                    "http://localhost:9000/course-materials/courses/f.md",
+                )
 
         mock_unlink.assert_awaited_once_with(missing_ok=True)
 
@@ -569,7 +579,7 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
+            await _body(
                 ctx,
                 job_id,
                 material_id,
@@ -622,9 +632,7 @@ class TestArqIngestMaterial:
             mock_cb_cls.return_value.on_success = AsyncMock()
             mock_cb_cls.return_value.on_failure = AsyncMock()
 
-            await arq_ingest_material(
-                ctx, job_id, material_id, "web", "https://example.com"
-            )
+            await _body(ctx, job_id, material_id, "web", "https://example.com")
 
         mock_persist.assert_not_awaited()
         mock_entry_cls.return_value.set_slide_keys.assert_not_awaited()

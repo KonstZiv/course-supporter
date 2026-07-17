@@ -350,6 +350,16 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     state: str = Field(
         description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
+    processing_phase: str = Field(
+        description=(
+            "External processing phase (L3, root cause #2): ``queued`` "
+            "(standing in the queue, no worker has taken it), ``processing`` "
+            "(a worker is processing it), ``ready``, or ``error``. Splits the "
+            "in-flight ``pending`` state into ``queued`` vs ``processing``; the "
+            "terminal values (``ready`` / ``error``) mirror ``state`` verbatim. "
+            "Never null/empty."
+        ),
+    )
     error_message: str | None = Field(
         description="Error from the last failed processing attempt, if any."
     )
@@ -474,6 +484,16 @@ class AuthoredDocumentResponse(BaseModel):
     state: str = Field(
         description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),
     )
+    processing_phase: str = Field(
+        description=(
+            "External processing phase (L3, root cause #2): ``queued`` "
+            "(standing in the queue, no worker has taken it), ``processing`` "
+            "(a worker is processing it), ``ready``, or ``error``. Splits the "
+            "in-flight ``pending`` state into ``queued`` vs ``processing``; the "
+            "terminal values (``ready`` / ``error``) mirror ``state`` verbatim. "
+            "Never null/empty."
+        ),
+    )
     error_message: str | None = Field(
         description="Error message from the last failed processing attempt, if any."
     )
@@ -541,6 +561,15 @@ class AuthoredDocumentCreateResponse(BaseModel):
     )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(description="Derived lifecycle state (will be ``pending``).")
+    processing_phase: str = Field(
+        default="queued",
+        description=(
+            "External processing phase (L3, root cause #2): on create/confirm/"
+            "retry this is ``queued`` (the ingestion job was just enqueued and "
+            "no worker has taken it). Full vocabulary elsewhere: ``queued`` | "
+            "``processing`` | ``ready`` | ``error``. Never null/empty."
+        ),
+    )
     job_id: uuid.UUID | None = Field(
         default=None,
         description="ID of the auto-enqueued ingestion job for progress tracking.",

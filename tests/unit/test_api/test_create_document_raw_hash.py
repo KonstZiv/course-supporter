@@ -143,6 +143,9 @@ def app_with_overrides(
         doc.language = kwargs.get("language")
         doc.raw_hash = kwargs.get("raw_hash")
         doc.state = "raw"
+        # L3: response carries a sibling ``processing_phase``; not asserted here
+        # — a fresh create mock is honestly ``queued``.
+        doc.processing_phase = "queued"
         doc.created_at = fixed_now
         doc.updated_at = fixed_now
         doc.job_id = None

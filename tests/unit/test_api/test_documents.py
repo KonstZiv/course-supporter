@@ -75,6 +75,10 @@ def _mock_entry(
     entry.language = None
     entry.order = 0
     entry.state = state
+    # L3: the response now carries a sibling ``processing_phase``. These tests
+    # do not assert it — mirror the terminal state, default in-flight to
+    # ``queued`` (the honest value for a freshly-enqueued create/confirm mock).
+    entry.processing_phase = {"ready": "ready", "error": "error"}.get(state, "queued")
     entry.error_message = None
     entry.job_id = None
     entry.processing_estimate = None

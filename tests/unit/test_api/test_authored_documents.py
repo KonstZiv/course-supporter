@@ -115,6 +115,12 @@ def _mock_entry(
     entry.language = None
     entry.order = order
     entry.state = state
+    # L3: the response now carries a sibling ``processing_phase``. These tests
+    # do not assert it — mirror the real derivation (error dominates; a
+    # non-terminal mock defaults to the honest ``queued``).
+    entry.processing_phase = (
+        "error" if error_message else "ready" if state == "ready" else "queued"
+    )
     entry.error_message = error_message
     entry.error_category = None
     entry.job_id = job_id

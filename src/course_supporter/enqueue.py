@@ -7,6 +7,8 @@ The email helper (``enqueue_email``) is the fire-and-forget exception — no
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from typing import TypedDict
 
 import structlog
 from arq.connections import ArqRedis
@@ -14,7 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
-from course_supporter.job_priority import JobPriority
+from course_supporter.job_priority import JobPriority, get_work_window
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -23,6 +25,18 @@ from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import Job, ProjectBase
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
+
+
+class _DeferKwargs(TypedDict, total=False):
+    """The one optional ARQ keyword the L3 defer path may add.
+
+    Kept a ``total=False`` TypedDict (not ``dict[str, ...]``) so the
+    ``**defer_kwargs`` splat is type-checked against ``enqueue_job``'s
+    ``_defer_until`` parameter AND stays genuinely absent when empty — an
+    IMMEDIATE / disabled-window dispatch is byte-identical to before.
+    """
+
+    _defer_until: datetime
 
 
 async def enqueue_ingestion(
@@ -141,6 +155,26 @@ async def enqueue_ingestion(
     # "Job not found" race). The helper takes ownership of the commit.
     await session.commit()
 
+    # L3 (d1) enqueue-time work-window defer (Рат.1). A NORMAL ingest raised
+    # outside an ENABLED heavy-work window is handed ``_defer_until`` so ARQ
+    # holds it in the queue (future zset score) and never dequeues it — the
+    # seam therefore never flips it to ``active``. The Job stays honestly
+    # ``queued`` for the whole wait, restoring the §3 «Значення» axis at the
+    # DB (active == a worker actually took it) without touching the seam, the
+    # status machine, or a new status token. IMMEDIATE priority and a disabled
+    # window add NO kwarg, so the call stays byte-identical to before.
+    #
+    # Body-level ``check_work_window`` (api/tasks.py) stays as a belt-and-
+    # suspenders guard. Accepted residual (Рат.1): if the operator toggles the
+    # window ON mid-queue, an already-dispatched task is not re-scheduled; a
+    # late pickup can still hit the body check and Retry into a rare, brief
+    # ``active``-hang until the window opens. Known and accepted.
+    defer_kwargs: _DeferKwargs = {}
+    if priority == JobPriority.NORMAL:
+        window = get_work_window()
+        if window.enabled and not window.is_active_now():
+            defer_kwargs["_defer_until"] = window.next_start()
+
     arq_job = await redis.enqueue_job(
         "arq_ingest_material",
         str(job.id),
@@ -148,6 +182,7 @@ async def enqueue_ingestion(
         source_type,
         source_url,
         priority.value,
+        **defer_kwargs,
     )
 
     if arq_job is not None:

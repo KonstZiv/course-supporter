@@ -271,34 +271,6 @@ class TestJobQueries:
         found = await repo.get_by_id_for_tenant(job.id, wrong_tenant_id)
         assert found is None
 
-    async def test_count_pending(
-        self, db_session: AsyncSession, seed_root_node: CourseNode
-    ) -> None:
-        """count_pending returns accurate count with mixed statuses."""
-        repo = JobRepository(db_session)
-
-        # Count before
-        initial_count = await repo.count_pending()
-
-        # Add 3 queued
-        for _ in range(3):
-            await repo.create(
-                tenant_id=seed_root_node.tenant_id,
-                course_node_id=seed_root_node.id,
-                job_type="document_processing",
-            )
-
-        # Add 1 active (not counted)
-        job_active = await repo.create(
-            tenant_id=seed_root_node.tenant_id,
-            course_node_id=seed_root_node.id,
-            job_type="document_processing",
-        )
-        await repo.update_status(job_active.id, "active")
-
-        count = await repo.count_pending()
-        assert count == initial_count + 3
-
     async def test_set_arq_job_id_persists(
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:

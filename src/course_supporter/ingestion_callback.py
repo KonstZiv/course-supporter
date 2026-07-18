@@ -5,9 +5,9 @@ The ``Job.status`` lifecycle is owned by the execution seam
 longer writes it. It carries only the domain half around an ingestion outcome:
 
 1. AuthoredDocument processing state (``complete_processing`` / ``fail_processing``).
-2. The best-effort failure cascade — dependent-job ``propagate_failure``, the
-   orphan-Summary observer, and the Stage 2 reject soft-delete.
-3. Merkle-fingerprint invalidation (inside the cascade).
+2. Best-effort failure cleanup — the orphan-Summary observer and the Stage 2
+   reject soft-delete.
+3. Merkle-fingerprint invalidation (inside the soft-delete cascade).
 
 ``on_success`` runs in the task body before the seam's ``complete`` write;
 ``on_failure`` runs from the seam's opaque post-terminal callback AFTER the
@@ -21,8 +21,6 @@ import uuid
 from typing import TYPE_CHECKING
 
 import structlog
-
-from course_supporter.storage.job_repository import JobRepository
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -95,15 +93,15 @@ class IngestionCallback:
         reaction (terminal-first — a stranded ``active`` would block the single
         serial worker's queue). This method carries only the domain half:
         material visibility (``fail_processing``, its own guarded commit) plus the
-        best-effort dependent-job cascade / orphan observer / Stage 2 reject
-        soft-delete. When ``error_category == ErrorCategory.STAGE2_REJECTED``
+        best-effort orphan observer / Stage 2 reject soft-delete. When
+        ``error_category == ErrorCategory.STAGE2_REJECTED``
         (Phase 2.1 C6 per KD-2.1-P) the failed AuthoredDocument is additionally
         soft-deleted so the operator-facing tree never displays a rejected
         document; infrastructure failures and Stage 1 rejections fall through the
         default branch (``fail_processing`` only, row intact).
 
         Args:
-            job_id: The Job tracking this ingestion (dependent-job cascade key).
+            job_id: The Job tracking this ingestion (log context only).
             material_id: The material that failed.
             error_message: Human-readable error description.
             error_category: Optional :class:`ErrorCategory`. Only
@@ -116,14 +114,12 @@ class IngestionCallback:
         )
 
         async with self._session_factory() as session:
-            job_repo = JobRepository(session)
-
             # Material visibility (task 3.3c-B, Vector 2): mark the
             # AuthoredDocument ERROR + persist its error_message in its OWN
-            # guarded sub-step with its OWN commit, BEFORE the dependent-job
-            # cascade. The Job terminal is the seam's (written durably before
+            # guarded sub-step with its OWN commit, BEFORE the best-effort
+            # cleanup. The Job terminal is the seam's (written durably before
             # this reaction — terminal-first); this is the material-visibility
-            # half of "do not lose it" — a failure in the best-effort cascade
+            # half of "do not lose it" — a failure in the best-effort cleanup
             # below must not leave the material in an invisible `pending` state
             # (the UI would still show it processing).
             from course_supporter.storage.authored_document_repository import (
@@ -147,16 +143,12 @@ class IngestionCallback:
                     "ingestion_failure_material_visibility_skipped", error=str(exc)
                 )
 
-            # Best-effort cleanup (dependent-job cascade, orphan observer,
-            # Stage 2 reject soft-delete). Guarded so a failure here can
-            # neither re-raise into the already-returning ARQ task nor undo
-            # the durable terminal + visibility writes above (task 3.3c-B,
-            # Vector 2). Only genuinely-secondary bookkeeping lives here.
+            # Best-effort cleanup (orphan observer, Stage 2 reject
+            # soft-delete). Guarded so a failure here can neither re-raise into
+            # the already-returning ARQ task nor undo the durable terminal +
+            # visibility writes above (task 3.3c-B, Vector 2). Only
+            # genuinely-secondary bookkeeping lives here.
             try:
-                cascaded = await job_repo.propagate_failure(job_id)
-                if cascaded:
-                    log.info("cascading_failure_propagated", failed_count=len(cascaded))
-
                 # Orphan-Summary observer (task 2.4.6, Q4 / DD-2.4-G). Pass 2a
                 # commits the DocumentSummary before process_detail runs
                 # (api/tasks.py), so a later Pass 2b/2c failure leaves that

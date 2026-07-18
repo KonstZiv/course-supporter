@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -33,6 +34,19 @@ from course_supporter.storage.cascade import (
     scrub_node_summary_raw,
 )
 from course_supporter.storage.processing_phase import derive_processing_phase
+
+
+class PendingJobNotLoadedError(RuntimeError):
+    """Raised when ``AuthoredDocument.processing_phase`` is read without
+    ``pending_job`` eager-loaded (Рат.6, L3).
+
+    The property must never lazy-load ``pending_job``: under the async session
+    that surfaces as a cryptic ``MissingGreenlet`` deep in the greenlet trace.
+    This guard fails fast with the actual contract instead — every serialisation
+    path MUST eager-load ``pending_job`` (selectinload / refresh /
+    set_committed_value). The positive-control test proves all three mark the
+    relationship loaded, so the guard cannot false-positive on a correct path.
+    """
 
 
 def _uuid7() -> uuid.UUID:
@@ -520,9 +534,16 @@ class AuthoredDocument(SoftDeleteMixin, Base):
 
         ``pending_job`` MUST be eager-loaded on every path that serialises this
         object (Рат.6) — this property never triggers a lazy load, which under
-        the async session would be a ``MissingGreenlet``. A ``None`` ``job_id``
-        short-circuits without touching the relationship at all.
+        the async session would be a ``MissingGreenlet``. A forgotten eager-load
+        instead raises :exc:`PendingJobNotLoadedError` (a fail-fast guard that
+        names the actual contract). A ``None`` ``job_id`` short-circuits without
+        touching the relationship at all.
         """
+        if self.job_id is not None and "pending_job" in inspect(self).unloaded:
+            raise PendingJobNotLoadedError(
+                "Рат.6 (L3): eager-load of pending_job required before reading "
+                "processing_phase (selectinload / refresh / set_committed_value)."
+            )
         job = self.pending_job if self.job_id is not None else None
         return derive_processing_phase(
             self.error_message, job.status if job is not None else None
@@ -979,8 +1000,8 @@ class Job(SoftDeleteMixin, Base):
         index=True,
         comment="FK to target CourseNode (legacy table name course_nodes "
         "until Phase 1.1 rename). NULL for orphaned jobs. L1b: no longer the "
-        "cancellation target (that is subject_id) — context/attribution only; "
-        "physical fate deferred to L4.",
+        "cancellation target (that is subject_id) — context/attribution only. "
+        "Live readers: cost attribution (cost summary). No planned drop.",
     )
     subject_type: Mapped[str | None] = mapped_column(
         String(50),
@@ -1045,17 +1066,12 @@ class Job(SoftDeleteMixin, Base):
         "(KD4a in-flight resume + KD13 reactivate). Schema is "
         "per-pipeline and intentionally not enforced at the DB level.",
     )
-    depends_on: Mapped[list[str] | None] = mapped_column(
-        JSONB,
-        comment="JSONB array of jobs.id UUIDs (as strings) "
-        "that must complete before this job runs. "
-        "DEPRECATED in v0.20 vision (KD13 — one Job = one logical "
-        "action, internal stages via current_stage). To be dropped "
-        "when remaining multi-job orchestration is rewritten to the "
-        "single-Job-with-stages pattern in Phase 2.x.",
-    )
     result_data: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"
+        JSONB,
+        comment="JSONB result payload — the task body's return dict, "
+        "persisted by the execution seam via store_result. Concretely: "
+        "s3_cleanup → {deleted: [key…], errors: [{key, error}…]}. "
+        "NULL when the body returns nothing.",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     error_category: Mapped[str | None] = mapped_column(

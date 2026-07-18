@@ -13,15 +13,23 @@ import uuid
 from collections.abc import AsyncGenerator, Iterable
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, inspect, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    Job,
+    PendingJobNotLoadedError,
+    Tenant,
+)
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = [pytest.mark.requires_db]
@@ -252,7 +260,14 @@ class TestProcessingPhaseNoNPlusOne:
     ) -> int:
         count = 0
 
-        def _on_exec(conn, cursor, statement, params, context, executemany):  # type: ignore[no-untyped-def]
+        def _on_exec(
+            conn: object,
+            cursor: object,
+            statement: str,
+            params: object,
+            context: object,
+            executemany: bool,
+        ) -> None:
             nonlocal count
             count += 1
 
@@ -293,3 +308,144 @@ class TestProcessingPhaseNoNPlusOne:
         finally:
             await self._cleanup(session_factory, one)
             await self._cleanup(session_factory, many)
+
+
+class TestPendingJobLoadedMarker:
+    """DD-L3-A positive-control (Рат.2 gate).
+
+    Every eager-load mechanism the repositories use for ``pending_job`` must
+    mark it LOADED on the instance — drop it from ``inspect(obj).unloaded``.
+    This is the precondition for a property-level ``inspect().unloaded`` guard in
+    ``AuthoredDocument.processing_phase`` (turn a forgotten eager-load into a
+    named error instead of a raw ``MissingGreenlet``). The load-bearing case is
+    ``set_committed_value`` on the create / confirm / retry response paths
+    (``api/routes/documents.py``): it binds the freshly-enqueued Job with NO
+    SELECT, so if it did not mark the relationship loaded the guard would
+    false-positive on those paths and the guard cannot ship.
+    """
+
+    async def test_all_load_mechanisms_mark_pending_job_loaded(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with session_factory() as session:
+            tenant = Tenant(name=f"l4-guard-{uuid.uuid4().hex[:8]}")
+            session.add(tenant)
+            await session.flush()
+            node = make_root_course_node(tenant_id=tenant.id, title="L4G", order=0)
+            session.add(node)
+            await session.flush()
+            doc = await _new_document(session, node_id=node.id, url="w://guard")
+            job_id = await _attach_job(
+                session,
+                tenant_id=tenant.id,
+                node_id=node.id,
+                doc_id=doc.id,
+                status="active",
+            )
+            await session.commit()
+            node_id, doc_id, tenant_id = node.id, doc.id, tenant.id
+
+        try:
+            # (1) selectinload — the tree / list read paths.
+            async with session_factory() as session:
+                doc = (
+                    await session.execute(
+                        select(AuthoredDocument)
+                        .where(AuthoredDocument.id == doc_id)
+                        .options(selectinload(AuthoredDocument.pending_job))
+                    )
+                ).scalar_one()
+                assert "pending_job" not in inspect(doc).unloaded
+
+            # (2) session.refresh([...]) — the get / update read paths.
+            async with session_factory() as session:
+                doc = (
+                    await session.execute(
+                        select(AuthoredDocument).where(AuthoredDocument.id == doc_id)
+                    )
+                ).scalar_one()
+                assert "pending_job" in inspect(doc).unloaded  # precondition
+                await session.refresh(doc, ["pending_job"])
+                assert "pending_job" not in inspect(doc).unloaded
+
+            # (3) set_committed_value — create / confirm / retry paths (no SELECT).
+            async with session_factory() as session:
+                doc = (
+                    await session.execute(
+                        select(AuthoredDocument).where(AuthoredDocument.id == doc_id)
+                    )
+                ).scalar_one()
+                job = await JobRepository(session).get_by_id(job_id)
+                assert "pending_job" in inspect(doc).unloaded  # precondition
+                set_committed_value(doc, "pending_job", job)
+                assert "pending_job" not in inspect(doc).unloaded
+        finally:
+            async with session_factory() as session:
+                await session.execute(
+                    Job.__table__.delete().where(Job.course_node_id == node_id)
+                )
+                await session.execute(
+                    AuthoredDocument.__table__.delete().where(
+                        AuthoredDocument.course_node_id == node_id
+                    )
+                )
+                await session.execute(
+                    CourseNode.__table__.delete().where(CourseNode.id == node_id)
+                )
+                await session.execute(
+                    Tenant.__table__.delete().where(Tenant.id == tenant_id)
+                )
+                await session.commit()
+
+    async def test_guard_raises_named_error_when_not_eager_loaded(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A doc with a live ``job_id`` but ``pending_job`` NOT eager-loaded
+        raises :exc:`PendingJobNotLoadedError` — the named contract — instead of
+        the raw ``MissingGreenlet`` a lazy load would trigger under async."""
+        async with session_factory() as session:
+            tenant = Tenant(name=f"l4-guardneg-{uuid.uuid4().hex[:8]}")
+            session.add(tenant)
+            await session.flush()
+            node = make_root_course_node(tenant_id=tenant.id, title="L4GN", order=0)
+            session.add(node)
+            await session.flush()
+            doc = await _new_document(session, node_id=node.id, url="w://guardneg")
+            await _attach_job(
+                session,
+                tenant_id=tenant.id,
+                node_id=node.id,
+                doc_id=doc.id,
+                status="active",
+            )
+            await session.commit()
+            node_id, doc_id, tenant_id = node.id, doc.id, tenant.id
+
+        try:
+            async with session_factory() as session:
+                # Plain select — pending_job is NOT eager-loaded, job_id is set.
+                doc = (
+                    await session.execute(
+                        select(AuthoredDocument).where(AuthoredDocument.id == doc_id)
+                    )
+                ).scalar_one()
+                assert "pending_job" in inspect(doc).unloaded
+                with pytest.raises(PendingJobNotLoadedError):
+                    _ = doc.processing_phase
+        finally:
+            async with session_factory() as session:
+                await session.execute(
+                    Job.__table__.delete().where(Job.course_node_id == node_id)
+                )
+                await session.execute(
+                    AuthoredDocument.__table__.delete().where(
+                        AuthoredDocument.course_node_id == node_id
+                    )
+                )
+                await session.execute(
+                    CourseNode.__table__.delete().where(CourseNode.id == node_id)
+                )
+                await session.execute(
+                    Tenant.__table__.delete().where(Tenant.id == tenant_id)
+                )
+                await session.commit()

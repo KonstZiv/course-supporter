@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
@@ -93,7 +92,6 @@ class JobRepository:
         priority: str = "normal",
         arq_job_id: str | None = None,
         input_params: dict[str, object] | None = None,
-        depends_on: list[str] | None = None,
         duration_sec: float | None = None,
         subject_type: str | None = None,
         subject_id: uuid.UUID | None = None,
@@ -125,7 +123,6 @@ class JobRepository:
             priority=priority,
             arq_job_id=arq_job_id,
             input_params=input_params,
-            depends_on=depends_on,
             duration_sec=duration_sec,
             subject_type=subject_type,
             subject_id=subject_id,
@@ -418,71 +415,6 @@ class JobRepository:
         stmt = select(Job).where(Job.id == job_id, Job.tenant_id == tenant_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
-
-    async def get_active_for_node(self, node_id: uuid.UUID) -> list[Job]:
-        """Get all active (queued or running) jobs for a node."""
-        stmt = (
-            select(Job)
-            .where(
-                Job.course_node_id == node_id,
-                Job.status.in_(["queued", "active"]),
-            )
-            .order_by(Job.queued_at)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def propagate_failure(
-        self, failed_job_id: uuid.UUID, *, error_message: str | None = None
-    ) -> list[uuid.UUID]:
-        """Propagate failure to all dependent jobs recursively.
-
-        Finds jobs whose ``depends_on`` JSONB array contains the given
-        job ID, marks them as failed, and recurses into their dependents.
-
-        Args:
-            failed_job_id: UUID of the job that failed.
-            error_message: Override message. Defaults to
-                ``"Dependency <uuid> failed"``.
-
-        Returns:
-            List of newly failed job IDs (may be empty).
-        """
-        msg = error_message or f"Dependency {failed_job_id} failed"
-
-        queue: deque[uuid.UUID] = deque([failed_job_id])
-        seen: set[uuid.UUID] = set()
-        failed_ids: list[uuid.UUID] = []
-
-        while queue:
-            current_id = queue.popleft()
-            dependents = await self._find_dependents(current_id)
-            for job in dependents:
-                if job.id in seen:
-                    continue
-                seen.add(job.id)
-                if job.status in IN_FLIGHT_STATUSES:
-                    # Route through the status owner: it stamps completed_at +
-                    # error_message on ``failed`` and validates the transition
-                    # (queued/active → failed are both legal). Per-row call =
-                    # per-row completed_at, matching the prior behaviour.
-                    await self.update_status(job.id, "failed", error_message=msg)
-                    failed_ids.append(job.id)
-                    queue.append(job.id)
-
-        return failed_ids
-
-    async def _find_dependents(self, job_id: uuid.UUID) -> list[Job]:
-        """Find all jobs whose depends_on contains the given job_id."""
-        stmt = select(Job).where(Job.depends_on.contains([str(job_id)]))
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def count_pending(self) -> int:
-        """Count all queued jobs (for queue estimates)."""
-        stmt = select(func.count()).select_from(Job).where(Job.status == "queued")
-        result = await self._session.execute(stmt)
-        return result.scalar_one()
 
     async def get_in_flight_jobs(self) -> list[Job]:
         """Return all live Jobs in flight (``queued`` OR ``active``).

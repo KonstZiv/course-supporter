@@ -1,6 +1,7 @@
 """Tests for enqueue_ingestion (post-C9.3; other enqueue helpers removed)."""
 
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -496,3 +497,94 @@ class TestEnqueueIngestionAdmissionGate:
             self._patch_repo(repo_cls, pending_sec=0.0)
             await self._enqueue(redis, session)
         repo_cls.return_value.sum_active_ingest_duration_sec.assert_awaited_once()
+
+
+_DEFER_NEXT_START = datetime(2026, 7, 18, 2, 0, tzinfo=UTC)
+
+
+def _mock_window(*, enabled: bool, active_now: bool) -> MagicMock:
+    """A stand-in WorkWindow with configurable gate state."""
+    window = MagicMock()
+    window.enabled = enabled
+    window.is_active_now.return_value = active_now
+    window.next_start.return_value = _DEFER_NEXT_START
+    return window
+
+
+async def _enqueue_capture_call(
+    *, priority: JobPriority, window: MagicMock
+) -> tuple[tuple, dict]:
+    """Run enqueue_ingestion with a stubbed window; return the enqueue_job call."""
+    session = _mock_session()
+    redis = _mock_redis()
+    mock_job = _mock_job()
+    with (
+        patch("course_supporter.enqueue.JobRepository") as repo_cls,
+        patch("course_supporter.enqueue.get_work_window", return_value=window),
+    ):
+        repo_cls.return_value.create = AsyncMock(return_value=mock_job)
+        repo_cls.return_value.set_arq_job_id = AsyncMock()
+        repo_cls.return_value.sum_active_ingest_duration_sec = AsyncMock(
+            return_value=0.0
+        )
+        await enqueue_ingestion(
+            redis=redis,
+            session=session,
+            tenant_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
+            material_id=uuid.uuid4(),
+            source_type="web",
+            source_url="https://example.com",
+            priority=priority,
+        )
+    call = redis.enqueue_job.call_args
+    return call.args, call.kwargs
+
+
+class TestEnqueueIngestionWorkWindowDefer:
+    """L3 (d1) enqueue-time work-window defer (Рат.1).
+
+    A NORMAL ingest raised outside an ENABLED window is dispatched with
+    ``_defer_until`` (== ``window.next_start()``) so the Job stays honestly
+    ``queued`` and the seam never flips it to ``active``. Every other cell of
+    the (enabled x active_now x priority) matrix adds NO kwarg — the call is
+    byte-identical to the pre-L3 dispatch.
+    """
+
+    async def test_normal_enabled_outside_window_defers(self) -> None:
+        """The one deferring cell: kwarg present and == next_start."""
+        _args, kwargs = await _enqueue_capture_call(
+            priority=JobPriority.NORMAL,
+            window=_mock_window(enabled=True, active_now=False),
+        )
+        assert kwargs == {"_defer_until": _DEFER_NEXT_START}
+
+    async def test_normal_enabled_inside_window_no_defer(self) -> None:
+        """Inside an enabled window → run now, no defer kwarg."""
+        _args, kwargs = await _enqueue_capture_call(
+            priority=JobPriority.NORMAL,
+            window=_mock_window(enabled=True, active_now=True),
+        )
+        assert "_defer_until" not in kwargs
+
+    async def test_normal_window_disabled_no_defer(self) -> None:
+        """Window disabled (the prod default) → byte-identical, no kwarg."""
+        _args, kwargs = await _enqueue_capture_call(
+            priority=JobPriority.NORMAL,
+            window=_mock_window(enabled=False, active_now=True),
+        )
+        assert "_defer_until" not in kwargs
+
+    async def test_immediate_never_defers_even_outside_window(self) -> None:
+        """IMMEDIATE bypasses the window entirely — never deferred."""
+        _args, kwargs = await _enqueue_capture_call(
+            priority=JobPriority.IMMEDIATE,
+            window=_mock_window(enabled=True, active_now=False),
+        )
+        assert "_defer_until" not in kwargs
+
+    async def test_immediate_does_not_consult_window(self) -> None:
+        """IMMEDIATE short-circuits before building the window (no gate call)."""
+        window = _mock_window(enabled=True, active_now=False)
+        await _enqueue_capture_call(priority=JobPriority.IMMEDIATE, window=window)
+        window.is_active_now.assert_not_called()

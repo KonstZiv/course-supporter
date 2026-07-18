@@ -381,7 +381,14 @@ class CourseNodeRepository:
         )
         if include_documents:
             stmt = stmt.options(
-                selectinload(CourseNode.documents),
+                # L3 (Рат.6): eager-load each document's in-flight Job so the
+                # ``processing_phase`` derivation stays O(1)-in-queries — a
+                # per-row lazy load would be a MissingGreenlet under async.
+                # Flat ``selectinload`` (no ``load_only``): a partial column
+                # fetch is a fresh instance of exactly that MissingGreenlet.
+                selectinload(CourseNode.documents).selectinload(
+                    AuthoredDocument.pending_job
+                ),
             )
         result = await self._session.execute(stmt)
         all_nodes = list(result.scalars().all())
@@ -484,9 +491,13 @@ class CourseNodeRepository:
                 CourseNode.created_at.asc(),
             )
             .options(
+                # L3 (Рат.6): chain the in-flight Job eager-load onto the
+                # active-documents loader so ``processing_phase`` needs no
+                # per-row lazy load (MissingGreenlet under async). Flat
+                # ``selectinload`` — no ``load_only`` (Рат.6).
                 selectinload(
                     CourseNode.documents.and_(AuthoredDocument.deleted_at.is_(None))
-                ),
+                ).selectinload(AuthoredDocument.pending_job),
             )
         )
         result = await self._session.execute(stmt)

@@ -3,10 +3,12 @@
 Vision §3 KD13 + KD12. When a soft-delete cascade fires the
 ``on_cancel_jobs`` hook with the collected victim ids, this service
 finds in-flight Jobs whose **subject** is one of those victims and
-flips them to ``status='cancelled'`` in the same DB transaction (via
-the status owner, :meth:`JobRepository.update_status`). Workers then
-observe the new status at their next ``current_stage`` boundary via
-:class:`JobCancellationChecker` and exit gracefully.
+flips them to ``status='cancelled'`` via the status owner. The execution
+seam then enforces this passively: its entry-check skips the body of any
+job already at rest (a job cancelled before pickup never runs), and a
+mid-body cancel surfaces as an illegal ``cancelled → *`` terminal
+transition that the seam tolerantly skips. There is no cooperative
+per-stage polling.
 
 **L1b — one predicate arm.** The lookup is a single
 ``Job.subject_id.in_(victim_ids)`` (plus the in-flight + not-soft-deleted

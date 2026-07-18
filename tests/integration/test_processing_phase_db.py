@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Iterable
-from typing import Any
 
 import pytest
 from sqlalchemy import event, inspect, select
@@ -262,11 +261,11 @@ class TestProcessingPhaseNoNPlusOne:
         count = 0
 
         def _on_exec(
-            conn: Any,
-            cursor: Any,
+            conn: object,
+            cursor: object,
             statement: str,
-            params: Any,
-            context: Any,
+            params: object,
+            context: object,
             executemany: bool,
         ) -> None:
             nonlocal count

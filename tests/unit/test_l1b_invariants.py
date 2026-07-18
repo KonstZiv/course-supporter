@@ -198,9 +198,9 @@ def test_no_jsonb_identity_addressing_in_src() -> None:
     """No runtime JSONB addressing of Job.input_params remains in queries.
 
     L1b moved identity to the typed subject columns; the ``@>`` / ``.contains``
-    / column-subscript addressing is gone. ``Job.depends_on.contains`` is a
-    DIFFERENT column (``_find_dependents``) and is legal — the regex targets
-    ``input_params`` only; instance-side dict access stays legal.
+    / column-subscript addressing is gone. Class-form ``.contains`` on a
+    DIFFERENT JSONB column (e.g. ``Job.stage_progress``) is legal — the regex
+    targets ``input_params`` only; instance-side dict access stays legal.
     """
     offenders: list[str] = []
     for py in _SRC.rglob("*.py"):
@@ -224,8 +224,8 @@ def test_jsonb_addressing_detector_positive_control() -> None:
     assert _JSONB_CONTAINMENT.search('Job.input_params["material_id"].astext == x')
     # Instance-side payload read — legal, must NOT match.
     assert not _JSONB_CONTAINMENT.search("p = job.input_params or {}")
-    # depends_on is a different column — must NOT match.
-    assert not _JSONB_CONTAINMENT.search("Job.depends_on.contains([str(job_id)])")
+    # A different JSONB column — must NOT match.
+    assert not _JSONB_CONTAINMENT.search("Job.stage_progress.contains([str(x)])")
 
 
 # ── no augmentation in the former hooks (acceptance 10) ──────────────────

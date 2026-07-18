@@ -979,8 +979,8 @@ class Job(SoftDeleteMixin, Base):
         index=True,
         comment="FK to target CourseNode (legacy table name course_nodes "
         "until Phase 1.1 rename). NULL for orphaned jobs. L1b: no longer the "
-        "cancellation target (that is subject_id) — context/attribution only; "
-        "physical fate deferred to L4.",
+        "cancellation target (that is subject_id) — context/attribution only. "
+        "Live readers: cost attribution (cost summary). No planned drop.",
     )
     subject_type: Mapped[str | None] = mapped_column(
         String(50),
@@ -1045,17 +1045,12 @@ class Job(SoftDeleteMixin, Base):
         "(KD4a in-flight resume + KD13 reactivate). Schema is "
         "per-pipeline and intentionally not enforced at the DB level.",
     )
-    depends_on: Mapped[list[str] | None] = mapped_column(
-        JSONB,
-        comment="JSONB array of jobs.id UUIDs (as strings) "
-        "that must complete before this job runs. "
-        "DEPRECATED in v0.20 vision (KD13 — one Job = one logical "
-        "action, internal stages via current_stage). To be dropped "
-        "when remaining multi-job orchestration is rewritten to the "
-        "single-Job-with-stages pattern in Phase 2.x.",
-    )
     result_data: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, comment="JSONB result payload (e.g. reconciliation preview issues)"
+        JSONB,
+        comment="JSONB result payload — the task body's return dict, "
+        "persisted by the execution seam via store_result. Concretely: "
+        "s3_cleanup → {deleted: [key…], errors: [{key, error}…]}. "
+        "NULL when the body returns nothing.",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     error_category: Mapped[str | None] = mapped_column(

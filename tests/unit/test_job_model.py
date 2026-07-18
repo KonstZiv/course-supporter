@@ -23,7 +23,6 @@ class TestJobModel:
             "input_params",
             "current_stage",
             "stage_progress",
-            "depends_on",
             "error_message",
             "queued_at",
             "started_at",

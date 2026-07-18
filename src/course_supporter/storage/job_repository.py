@@ -416,25 +416,6 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_active_for_node(self, node_id: uuid.UUID) -> list[Job]:
-        """Get all active (queued or running) jobs for a node."""
-        stmt = (
-            select(Job)
-            .where(
-                Job.course_node_id == node_id,
-                Job.status.in_(["queued", "active"]),
-            )
-            .order_by(Job.queued_at)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def count_pending(self) -> int:
-        """Count all queued jobs (for queue estimates)."""
-        stmt = select(func.count()).select_from(Job).where(Job.status == "queued")
-        result = await self._session.execute(stmt)
-        return result.scalar_one()
-
     async def get_in_flight_jobs(self) -> list[Job]:
         """Return all live Jobs in flight (``queued`` OR ``active``).
 

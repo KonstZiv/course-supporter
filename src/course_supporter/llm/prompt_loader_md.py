@@ -37,8 +37,8 @@ Parsing and rendering are split deliberately:
   strings stay empty.
 
 Coexists with the legacy :mod:`course_supporter.agents.prompt_loader`
-(YAML-based, different package). Both will live side-by-side until
-Phase 5 cleanup.
+(YAML-based, different package); that loader is retired together with the
+legacy router — undated, tracked as DD-3.2.3-pre-A.
 """
 
 from __future__ import annotations

@@ -7,9 +7,9 @@ requires a deterministic estimate of input tokens before the LLM
 call so the router can skip rungs whose context window will not
 fit. The estimate is computed in code; the LLM is never asked.
 
-Phase 5 cleanup will remove the legacy router; this module survives
-that deletion intact — StageRouter's import path stays correct
-without dragging legacy-router source as a dependency.
+The legacy router's removal (undated; scope tracked as DD-20-A) will not
+touch this module — StageRouter's import path stays correct without
+dragging legacy-router source as a dependency.
 """
 
 from __future__ import annotations

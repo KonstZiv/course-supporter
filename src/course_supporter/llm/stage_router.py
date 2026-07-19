@@ -1,8 +1,9 @@
 """Stage-keyed LLM router (KD16).
 
 Coexistent with the legacy :class:`course_supporter.llm.router.ModelRouter`,
-not integrated. Phase 1+ tasks adopt :class:`StageRouter` as they
-rewrite each agent; the legacy router stays in place until Phase 5.
+not integrated: the agents route through :class:`StageRouter`. The legacy
+router is still present but called from no production path as of 2026-07-19;
+its removal date is undetermined, scope tracked as DD-20-A.
 
 Per-attempt fallback policy (vision §3 KD16):
 

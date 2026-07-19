@@ -176,17 +176,25 @@ providers:
         cost_per_1k_in: 0.000435
         cost_per_1k_out: 0.00087
       - id: deepseek-chat
-        # DEPRECATED by DeepSeek (maps to deepseek-v4-flash non-thinking).
-        # Retained for legacy ModelRouter action references.
+        # DeepSeek shuts this model off 2026-07-24 15:59 UTC
+        # (api-docs.deepseek.com, verified 2026-07-19); it maps to
+        # deepseek-v4-flash non-thinking. This record stays only because the
+        # dead `actions` chains below reference it and the startup validator
+        # (registry.py, validate_and_flatten) resolves those chains against our
+        # own registry, not the provider — so after the shutdown date startup
+        # still passes and no live stage changes behaviour (the live surface is
+        # ladders_*.yaml / StageRouter, which never names deepseek-chat).
+        # Removal tracked as DD-20-A.
         capabilities: [structured_output]
         max_context: 131072
-        # DeepSeek-chat hard-caps max_tokens at 8192 (HTTP 400 otherwise —
-        # verified empirically on 2026-04-13 after an incorrect bump to
-        # 16384 caused every material_outline call to return
-        # 'Invalid max_tokens value, the valid range of max_tokens is
-        # [1, 8192]'). For long transcripts that exceed 8k output we rely
-        # on the fallback chain (Claude Sonnet) — the proper fix is the
-        # long-video chunking project.
+        # On 2026-04-13 deepseek-chat rejected max_tokens=16384 with HTTP 400
+        # ('Invalid max_tokens value, the valid range of max_tokens is
+        # [1, 8192]') — an incorrect bump that failed every material_outline
+        # call; the 8192 below is recorded from that observation. Since
+        # deepseek-chat now maps to v4-flash non-thinking (which accepts up to
+        # 384000 on input), its current ceiling has not been re-measured. For
+        # output beyond 8k the legacy chain fell back to Claude Sonnet — the
+        # proper fix is the long-video chunking project.
         max_output_tokens: 8192
         unit_type: tokens
         cost_per_1k_in: 0.00014
@@ -326,6 +334,16 @@ strategies:
     providers: [deepgram, openai_stt]
     fallback: true
 
+# ── Legacy ModelRouter surface ────────────────────────────────────────────
+# The `actions` chains below are served by ModelRouter (llm/router.py). Zero
+# complete / complete_structured calls from any production path as of
+# 2026-07-19 — the live LLM routing surface is the `stages` section of
+# ladders_*.yaml, served by StageRouter. These chains are kept only so the
+# startup validator (registry.py, validate_and_flatten) still resolves them
+# against the registry. Removal date undetermined; the full removal scope (the
+# router, this section, and the unused `router` param on
+# SourceProcessor.process_raw) is tracked as DD-20-A in
+# refactoring-vision/sprint/active-debt.md.
 actions:
   video_analysis:
     strategy: default

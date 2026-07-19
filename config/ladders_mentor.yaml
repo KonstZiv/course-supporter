@@ -35,8 +35,17 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
+      # These three classifier stages (safety_check, safety_check_authored,
+      # sanity_check) pin the v4-flash rung output at 8192. Their output is a
+      # short structured verdict — a SafetyResult (security/schemas.py) for the
+      # two safety stages, a SanityClassification {verdict, confidence, reason}
+      # (models/sanity.py) for sanity_check — so 8192 is generous headroom
+      # while still bounding degenerate output. The pin wins over the registry
+      # max_output_tokens (stage_router._build_request), so v4-flash's 384K
+      # provider ceiling does not flow into these wire calls. N20, 2026-07-19.
       - provider: deepseek
         model: deepseek-v4-flash
+        max_output_tokens: 8192
       - provider: gemini
         model: gemini-2.5-flash
 
@@ -59,8 +68,11 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
+      # v4-flash output here is a short SafetyResult verdict, so 8192 is ample
+      # headroom; full rationale over the safety_check rung.
       - provider: deepseek
         model: deepseek-v4-flash
+        max_output_tokens: 8192
       - provider: gemini
         model: gemini-2.5-flash
 
@@ -81,8 +93,11 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
+      # v4-flash output here is a short sanity verdict {verdict, confidence,
+      # reason}, so 8192 is ample headroom; full rationale over safety_check.
       - provider: deepseek
         model: deepseek-v4-flash
+        max_output_tokens: 8192
       - provider: gemini
         model: gemini-2.5-flash
 

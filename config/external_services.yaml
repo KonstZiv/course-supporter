@@ -139,10 +139,16 @@ providers:
         # Current flash tier (replaces deepseek-chat). Referenced by the
         # safety_check / safety_check_authored / pass_2a_mapping ladders —
         # registered 2026-05-23 to close their cost-tracking gap. $0.14/$0.28
-        # per 1M. Same 8192 output hard-cap as deepseek-chat (see below).
-        capabilities: [structured_output]
-        max_context: 131072
-        max_output_tokens: 8192
+        # per 1M. Context 1M / max output 384K per api-docs.deepseek.com
+        # ("MAX OUTPUT | MAXIMUM: 384K"), verified 2026-07-19 with live
+        # api.deepseek.com calls (max_tokens 16384/65536/384000 all HTTP 200;
+        # the V3-era [1, 8192] wall does not apply here). 384000 is the
+        # provider's published output maximum; stages needing a tighter cap
+        # pin it on the rung — the three classifier rungs in
+        # ladders_mentor.yaml pin 8192.
+        capabilities: [structured_output, long_context]
+        max_context: 1048576
+        max_output_tokens: 384000
         unit_type: tokens
         cost_per_1k_in: 0.00014
         cost_per_1k_out: 0.00028

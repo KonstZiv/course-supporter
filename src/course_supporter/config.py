@@ -378,7 +378,7 @@ class Settings(BaseSettings):
     gemini_default_model: str = "gemini-2.5-flash"
     anthropic_default_model: str = "claude-sonnet-4-20250514"
     openai_default_model: str = "gpt-4o-mini"
-    deepseek_default_model: str = "deepseek-chat"
+    deepseek_default_model: str = "deepseek-v4-flash"
     # Thinking-on sibling defaults to V4 Pro (reasoning-tier flagship; the only
     # current consumer is video Pass 2a rung 1 per KD-2.4-T).
     deepseek_thinking_default_model: str = "deepseek-v4-pro"

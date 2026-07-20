@@ -78,7 +78,7 @@ stages:
   # which any rung's max_context comfortably fits. ``long_context`` is the
   # bottom-up requirement (it integrates every child's compressed_summary up
   # to the root, which DOES grow); applying it here would falsely exclude
-  # legitimate rungs like deepseek-v4-flash (128k context) without changing
+  # legitimate rungs like deepseek-v4-flash (1M context) without changing
   # what the stage actually needs.
   methodist_topdown:
     prompt_ref: "prompts/methodist_topdown/v1.md"

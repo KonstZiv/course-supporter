@@ -7,7 +7,8 @@ uniqueness is enforced.
 
 Sister module to :mod:`course_supporter.llm.registry`; this is the
 KD16 replacement for the legacy ``actions`` / ``strategies`` model.
-The legacy module remains untouched until Phase 5 cleanup.
+That legacy model remains in place but unused on any production path as of
+2026-07-19; its removal is undated, scope tracked as DD-20-A.
 """
 
 from __future__ import annotations

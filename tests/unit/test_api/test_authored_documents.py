@@ -124,6 +124,9 @@ def _mock_entry(
     entry.error_message = error_message
     entry.error_category = None
     entry.job_id = job_id
+    # №21: explicit so MagicMock auto-attr does not feed
+    # AuthoredDocumentResponse a MagicMock where a dict|None is expected.
+    entry.file_roles = None
     entry.processing_estimate = None
     entry.deleted_at = None
     # Phase 6 T3: explicit so MagicMock auto-attr does not make the

@@ -33,7 +33,10 @@ from course_supporter.storage.cascade import (
     scrub_node_summary_final_previous_snapshot,
     scrub_node_summary_raw,
 )
-from course_supporter.storage.processing_phase import derive_processing_phase
+from course_supporter.storage.processing_phase import (
+    derive_processing_phase,
+    is_awaiting_author,
+)
 
 
 class PendingJobNotLoadedError(RuntimeError):
@@ -546,7 +549,10 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         terminal values (``ready`` / ``error``) mirror ``state`` verbatim while
         the in-flight ``pending`` case splits into ``queued`` (worker has not
         taken the job) vs ``processing`` (worker took it), read from the
-        in-flight ``Job.status`` via :attr:`pending_job`.
+        in-flight ``Job.status`` via :attr:`pending_job`. №21 adds
+        ``awaiting_author`` (derived from :attr:`file_roles` via
+        ``is_awaiting_author``) between the in-flight split and ``ready`` — an
+        uncovered prep proposal outranks a stale ``ready``.
 
         ``pending_job`` MUST be eager-loaded on every path that serialises this
         object (Рат.6) — this property never triggers a lazy load, which under
@@ -562,7 +568,9 @@ class AuthoredDocument(SoftDeleteMixin, Base):
             )
         job = self.pending_job if self.job_id is not None else None
         return derive_processing_phase(
-            self.error_message, job.status if job is not None else None
+            self.error_message,
+            job.status if job is not None else None,
+            awaiting_author=is_awaiting_author(self.file_roles),
         )
 
     # ── Timestamps ──

@@ -12,7 +12,10 @@ from course_supporter.storage.job_repository import (
     IN_FLIGHT_STATUSES,
     JOB_TRANSITIONS,
 )
-from course_supporter.storage.processing_phase import derive_processing_phase
+from course_supporter.storage.processing_phase import (
+    derive_processing_phase,
+    is_awaiting_author,
+)
 
 _EXPECTED_STATUSES = {
     "queued",
@@ -81,3 +84,78 @@ class TestPhaseMatrixTotality:
         for status in [*list(JOB_TRANSITIONS), None]:
             for err in (None, "", "boom"):
                 assert derive_processing_phase(err, status)
+
+
+class TestDeriveWithAwaitingAuthor:
+    """№21: awaiting_author sits between the in-flight split and ready."""
+
+    def test_awaiting_no_job_is_awaiting_author(self) -> None:
+        assert (
+            derive_processing_phase(None, None, awaiting_author=True)
+            == "awaiting_author"
+        )
+
+    def test_awaiting_outranks_ready(self) -> None:
+        # No job + awaiting signal → awaiting_author, NOT ready — the
+        # retry-with-live-old-summary case must show the confirm screen.
+        assert derive_processing_phase(None, None, awaiting_author=True) != "ready"
+
+    @pytest.mark.parametrize("terminal", sorted(AT_REST_STATUSES))
+    def test_awaiting_outranks_stale_terminal(self, terminal: str) -> None:
+        # A stale terminal job_id is "no job"; the awaiting signal still wins.
+        assert (
+            derive_processing_phase(None, terminal, awaiting_author=True)
+            == "awaiting_author"
+        )
+
+    @pytest.mark.parametrize("status", sorted(IN_FLIGHT_STATUSES))
+    def test_in_flight_job_outranks_awaiting(self, status: str) -> None:
+        # A running prep/processing shows queued/processing, not awaiting_author.
+        assert derive_processing_phase(None, status, awaiting_author=True) in {
+            "queued",
+            "processing",
+        }
+
+    def test_error_outranks_awaiting(self) -> None:
+        assert derive_processing_phase("boom", None, awaiting_author=True) == "error"
+
+    def test_not_awaiting_no_job_is_ready(self) -> None:
+        # D2-rollback shape: a covered proposal yields awaiting=False → ready
+        # (recovery via re-retry, ratified 2026-07-22).
+        assert derive_processing_phase(None, None, awaiting_author=False) == "ready"
+
+
+_PROPOSAL = {"tree_digest": "d1", "files": {}}
+
+
+class TestIsAwaitingAuthor:
+    """№21: the file_roles signal — a proposal is present AND not covered."""
+
+    def test_none_file_roles(self) -> None:
+        assert is_awaiting_author(None) is False
+
+    def test_empty_file_roles(self) -> None:
+        assert is_awaiting_author({}) is False
+
+    def test_proposal_absent(self) -> None:
+        assert is_awaiting_author({"decision": {"tree_digest": "d1"}}) is False
+
+    def test_proposal_without_decision_awaits(self) -> None:
+        assert is_awaiting_author({"proposal": _PROPOSAL}) is True
+
+    def test_decision_covers_proposal_does_not_await(self) -> None:
+        assert (
+            is_awaiting_author(
+                {"proposal": _PROPOSAL, "decision": {"tree_digest": "d1"}}
+            )
+            is False
+        )
+
+    def test_stale_decision_awaits(self) -> None:
+        # Tree changed under a saved decision → digest mismatch → awaits again.
+        assert (
+            is_awaiting_author(
+                {"proposal": _PROPOSAL, "decision": {"tree_digest": "OLD"}}
+            )
+            is True
+        )

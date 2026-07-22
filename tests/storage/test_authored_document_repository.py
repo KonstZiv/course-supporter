@@ -614,3 +614,94 @@ class TestCreateRawHash:
             assert doc.raw_hash is None
 
         await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+
+@pytest.mark.requires_db
+class TestStoreFileRolesProposal:
+    """№21: ``store_file_roles_proposal`` writes ONLY the ``proposal`` key.
+
+    The invariant-I1 mirror on the writer side (criterion 4 / decision 19): a
+    re-run of prep refreshes the proposal but never clobbers an existing author
+    ``decision`` — the author's markup survives a re-run.
+    """
+
+    async def test_reprep_updates_proposal_and_preserves_decision(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A second prep run refreshes ``proposal`` and leaves ``decision`` intact."""
+        decision = {
+            "files": {"a.ts": "full"},
+            "tree_digest": "d1",
+            "decided_at": "t0",
+        }
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "file-roles")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root.id,
+                source_type="code",
+                source_url="s3://bucket/archive.zip",
+            )
+            doc.file_roles = {
+                "decision": decision,
+                "proposal": {
+                    "files": {"a.ts": {"role": "full", "reason": "custom_source"}},
+                    "tree_digest": "d1",
+                    "computed_at": "t0",
+                },
+            }
+            await session.commit()
+            tenant_id = tenant.id
+            doc_id = doc.id
+
+        new_proposal = {
+            "files": {
+                "a.ts": {"role": "full", "reason": "custom_source"},
+                "b.ts": {"role": "full", "reason": "custom_source"},
+            },
+            "tree_digest": "d2",
+            "computed_at": "t1",
+        }
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            updated = await repo.store_file_roles_proposal(
+                doc_id, proposal=new_proposal
+            )
+            await session.commit()
+            assert updated.file_roles is not None
+            assert updated.file_roles["proposal"] == new_proposal
+            assert updated.file_roles["decision"] == decision  # I1: untouched
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_first_prep_writes_proposal_without_decision(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """First prep run (file_roles was NULL): proposal set, no decision key."""
+        proposal = {"files": {}, "tree_digest": "d0", "computed_at": "t0"}
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "file-roles-first")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root.id,
+                source_type="code",
+                source_url="s3://bucket/a.zip",
+            )
+            await session.commit()
+            assert doc.file_roles is None
+
+            updated = await repo.store_file_roles_proposal(doc.id, proposal=proposal)
+            await session.commit()
+            assert updated.file_roles == {"proposal": proposal}
+            assert "decision" not in updated.file_roles
+            tenant_id = tenant.id
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])

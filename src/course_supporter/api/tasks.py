@@ -522,6 +522,146 @@ async def arq_ingest_material(
     log.info("ingestion_done")
 
 
+async def _prepare_on_terminal(
+    ctx: dict[str, Any],
+    job_id: str,
+    material_id: str,
+    *_rest: Any,
+    outcome: SeamTerminal,
+) -> None:
+    """Prep's post-terminal rule of three (№21, decision 19), terminal-first.
+
+    Runs AFTER the seam's durable terminal write, so the prep Job is at-rest (not
+    in-flight): the follow-on DOCUMENT_PROCESSING enqueue cannot collide with it
+    on ``uq_jobs_subject_in_flight``. Only ``complete`` chains — a ``failed`` /
+    ``obsolete`` prep leaves the document idle for a retry.
+
+    Chains ONLY when the author's saved ``decision`` covers the current tree
+    (``decision.tree_digest == proposal.tree_digest``) → silently enqueue
+    processing (criterion 4, the silent second retry). No decision, or a stale one
+    → the document sits in ``awaiting_author`` (BE4 derives that phase); the
+    author confirms via the confirm endpoint (BE5).
+    """
+    if outcome.status != "complete":
+        return
+
+    from fastapi import HTTPException
+
+    from course_supporter.enqueue import enqueue_ingestion
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
+    from course_supporter.storage.job_repository import JobRepository
+
+    jid = uuid.UUID(job_id)
+    mid = uuid.UUID(material_id)
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    redis: ArqRedis = ctx["redis"]
+    log = structlog.get_logger().bind(job_id=job_id, material_id=material_id)
+
+    async with session_factory() as session:
+        job = await JobRepository(session).get_by_id(jid)
+        entry = await AuthoredDocumentRepository(session).get_by_id(mid)
+        if job is None or job.tenant_id is None or entry is None:
+            return
+        roles = entry.file_roles or {}
+        proposal = roles.get("proposal") or {}
+        decision = roles.get("decision")
+        if not decision or decision.get("tree_digest") != proposal.get("tree_digest"):
+            log.info("document_preparation_awaiting_author")
+            return
+        try:
+            await enqueue_ingestion(
+                redis=redis,
+                session=session,
+                tenant_id=job.tenant_id,
+                node_id=entry.course_node_id,
+                material_id=entry.id,
+                source_type=entry.source_type,
+                source_url=entry.source_url,
+            )
+        except HTTPException as exc:
+            # enqueue_ingestion's video admission gate is API-shaped; in a worker
+            # chain a 503 is not actionable — leave the document idle
+            # (awaiting_author) for a manual retry rather than crash the callback.
+            log.warning("document_preparation_chain_deferred", status=exc.status_code)
+            return
+        log.info("document_preparation_chained_processing")
+
+
+@through_seam(on_terminal=_prepare_on_terminal)
+async def arq_prepare_document(
+    ctx: dict[str, Any],
+    job_id: str,  # UUID as string (ARQ JSON serialization)
+    material_id: str,  # UUID as string (ARQ JSON serialization)
+) -> dict[str, Any]:
+    """Deterministic CODE-archive preparation (№21): extract + typicality + tree
+    → file-role proposal. Zero LLM (I3).
+
+    Wrapped by the L2 seam (owns Job.status; a soft-deleted document →
+    ``obsolete``, body skipped). The body writes ONLY the ``file_roles``
+    proposal — an existing author ``decision`` is preserved (invariant I1
+    mirror). The rule of three (decision 19) lives in the post-terminal callback
+    (:func:`_prepare_on_terminal`), not here: enqueuing DOCUMENT_PROCESSING while
+    this prep Job is still in-flight would collide on
+    ``uq_jobs_subject_in_flight``.
+
+    Reuses ``CodeProcessor.process_raw`` (deterministic, ignores its optional
+    router) so prep and the expensive processing see the IDENTICAL extraction —
+    the invariant the shared ``tree_digest`` (I2) rests on.
+    """
+    from datetime import UTC, datetime
+
+    from course_supporter.ingestion.code import CodeProcessor
+    from course_supporter.ingestion.file_roles import build_role_proposal
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
+
+    jid = uuid.UUID(job_id)
+    mid = uuid.UUID(material_id)
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    s3: S3Client | None = ctx.get("s3_client")
+    log = structlog.get_logger().bind(job_id=job_id, material_id=material_id)
+
+    await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
+    log.info("document_preparation_started")
+
+    async with session_factory() as session:
+        entry_repo = AuthoredDocumentRepository(session)
+        entry = await entry_repo.get_by_id(mid)
+        if entry is None:
+            # The seam's liveness check turns a soft-deleted subject into
+            # ``obsolete`` before this body runs; a None here is the extreme race
+            # of the row vanishing in between. Raise → the seam writes ``failed``.
+            msg = f"AuthoredDocument {material_id} vanished after liveness check"
+            raise ValueError(msg)
+
+        # CodeProcessor.process_raw needs a local path; _resolve_s3_url downloads
+        # the archive to a temp file and yields a proxy over the entry. The
+        # security-structural sandbox runs INSIDE process_raw's extraction; the
+        # LLM safety check stays in the expensive processing phase (not here).
+        async with _resolve_s3_url(entry, s3) as resolved:
+            doc = await CodeProcessor().process_raw(resolved)
+
+        proposal = build_role_proposal(doc, computed_at=datetime.now(UTC))
+        await entry_repo.store_file_roles_proposal(mid, proposal=proposal)
+        await session.commit()
+
+    files = proposal["files"]
+    log.info(
+        "document_preparation_ready",
+        files=len(files),
+        tree_digest=proposal["tree_digest"],
+    )
+    return {
+        "state": "ready",
+        "files": len(files),
+        "tree_digest": proposal["tree_digest"],
+    }
+
+
 async def _notify_homework_failed(
     session: AsyncSession,
     submission_id: uuid.UUID,

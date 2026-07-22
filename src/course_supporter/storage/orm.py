@@ -957,7 +957,8 @@ class Job(SoftDeleteMixin, Base):
         # ``storage.job_repository`` (JobType / JOB_TRANSITIONS).
         CheckConstraint(
             "job_type IN ('document_processing', 'node_summary_regeneration', "
-            "'homework_processing', 's3_cleanup', 'base_normalize')",
+            "'homework_processing', 's3_cleanup', 'base_normalize', "
+            "'document_preparation')",
             name="ck_jobs_job_type",
         ),
         CheckConstraint(
@@ -976,6 +977,8 @@ class Job(SoftDeleteMixin, Base):
         ),
         CheckConstraint(
             "(job_type = 'document_processing' "
+            "AND subject_type = 'authored_document') "
+            "OR (job_type = 'document_preparation' "
             "AND subject_type = 'authored_document') "
             "OR (job_type = 'homework_processing' "
             "AND subject_type = 'homework_submission') "

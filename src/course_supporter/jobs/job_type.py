@@ -1,6 +1,6 @@
 """Canonical Job type enum + application-level validation.
 
-Vision §3 KD13 fixes the universe of ``Job.job_type`` values to five:
+Vision §3 KD13 fixes the universe of ``Job.job_type`` values to six:
 
 * ``document_processing`` — pipeline of one ``AuthoredDocument``
   (stages: pass_1 → pass_2a → pass_2b → pass_2c).
@@ -11,9 +11,14 @@ Vision §3 KD13 fixes the universe of ``Job.job_type`` values to five:
 * ``s3_cleanup`` — async hard-delete of S3 files after soft-delete.
 * ``base_normalize`` — deterministic project-base archive
   normalization (KD18 P2; zero LLM, no ESC).
+* ``document_preparation`` — deterministic pre-processing of a CODE
+  ``AuthoredDocument`` (№21: extract + typicality + tree → file-role
+  proposal; zero LLM). Same subject as ``document_processing``; the
+  author's role decision gates the expensive processing job.
 
-The DB-level CHECK constraint ``ck_jobs_job_type`` (L1a migration)
-enforces exactly this set at the storage layer. :func:`validate_job_type`
+The DB-level CHECK constraint ``ck_jobs_job_type`` (L1a, widened by
+n21_prep_jobtype for ``document_preparation``) enforces exactly this set
+at the storage layer. :func:`validate_job_type`
 is the application-level mirror: it gives a clean ``ValueError`` at the
 call site before the INSERT rather than an opaque ``IntegrityError`` from
 the CHECK. The transitional ``DeprecationWarning`` arm that accepted
@@ -39,9 +44,12 @@ class JobType(StrEnum):
     HOMEWORK_PROCESSING = "homework_processing"
     S3_CLEANUP = "s3_cleanup"
     # KD18 P2: deterministic base-archive normalization (zero LLM, no ESC).
-    # A String(50) job_type value — no migration (the DB CHECK is still
-    # deferred, see module docstring). The one Job type added by KD18.
     BASE_NORMALIZE = "base_normalize"
+    # №21: deterministic prep of a CODE authored_document (extract + typicality
+    # + tree → file-role proposal; zero LLM). Same subject as
+    # document_processing (authored_document) — the author's role decision gates
+    # the expensive processing job. Added to both DB CHECKs by n21_prep_jobtype.
+    DOCUMENT_PREPARATION = "document_preparation"
 
 
 _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)
@@ -58,6 +66,7 @@ _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)
 # index (``uq_jobs_subject_in_flight``) does not apply to it.
 JOB_SUBJECT_TYPE: dict[JobType, str | None] = {
     JobType.DOCUMENT_PROCESSING: "authored_document",
+    JobType.DOCUMENT_PREPARATION: "authored_document",
     JobType.HOMEWORK_PROCESSING: "homework_submission",
     JobType.NODE_SUMMARY_REGENERATION: "course_node",
     JobType.BASE_NORMALIZE: "project_base",

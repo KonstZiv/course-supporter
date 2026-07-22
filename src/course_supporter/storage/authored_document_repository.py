@@ -359,6 +359,38 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
+    async def store_file_roles_proposal(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        proposal: dict[str, object],
+    ) -> AuthoredDocument:
+        """Persist the DOCUMENT_PREPARATION file-role proposal (№21).
+
+        Writes ONLY the ``proposal`` key of ``file_roles``. Any existing
+        ``decision`` (the author's confirmation) is preserved untouched — a
+        re-run of prep refreshes the proposal but never clobbers the decision
+        (invariant I1 mirror; supports criterion 4 / decision 19: the author's
+        markup survives a re-run). The whole dict is reassigned (not mutated in
+        place)
+        so SQLAlchemy detects the JSONB change.
+
+        Args:
+            entry_id: AuthoredDocument id to update.
+            proposal: The proposal block ``{files, tree_digest, computed_at}``
+                from :func:`course_supporter.ingestion.file_roles.build_role_proposal`.
+
+        Returns:
+            The updated AuthoredDocument.
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.file_roles = {**(entry.file_roles or {}), "proposal": proposal}
+        await self._session.flush()
+        return entry
+
     async def set_slide_keys(
         self,
         entry_id: uuid.UUID,

@@ -435,15 +435,29 @@ class CodeProcessor(MaterialProcessor):
 
         offsets = self._chunk_offsets(chunks, reference)
 
+        # №21: the file-role map process_raw threaded in; only full / auxiliary
+        # roles reached the chunk stage (structure_only did not).
+        role_map: dict[str, str] = doc.metadata.get("file_roles", {})
+
+        def _role_of(chunk: ContentChunk) -> str:
+            return role_map.get(str(chunk.metadata["file_path"]), ROLE_FULL)
+
         # Step 1 — per-file skeleton + describe (bounded concurrency,
-        # presentation Pass 1 precedent: fail-fast on first failure).
+        # presentation Pass 1 precedent: fail-fast on first failure). Decision 7:
+        # the per-file prompt gets the role so an auxiliary file is described
+        # CONCISELY (not less thoroughly — the Mentor reads the description).
         sem = asyncio.Semaphore(_PER_FILE_CONCURRENCY)
 
         async def _describe(chunk: ContentChunk) -> CodeSegmentDescription:
             async with sem:
                 skeleton, core = await self._skeleton_for(chunk, router)
                 return await self._describe_file(
-                    chunk, skeleton, core, router, language
+                    chunk,
+                    skeleton,
+                    core,
+                    router,
+                    language,
+                    is_auxiliary=_role_of(chunk) == ROLE_AUXILIARY,
                 )
 
         results = await asyncio.gather(
@@ -466,13 +480,6 @@ class CodeProcessor(MaterialProcessor):
         # ready per-file descriptions, never skeletons — ratified).
         structure = self._build_structure(doc, chunks)
         summary = await self._summarise(doc, chunks, descriptions, structure, router)
-
-        # №21: the file-role map (raw path → role) process_raw threaded in; only
-        # full / auxiliary roles reached the chunk stage (structure_only did not).
-        role_map: dict[str, str] = doc.metadata.get("file_roles", {})
-
-        def _role_of(chunk: ContentChunk) -> str:
-            return role_map.get(str(chunk.metadata["file_path"]), ROLE_FULL)
 
         # Deterministic segment drafts; content filled in Pass 2b. Decision 5:
         # the is_auxiliary flag is written from the SAME role as the tree entry.
@@ -641,8 +648,16 @@ class CodeProcessor(MaterialProcessor):
         core: list[str],
         router: StageRouter,
         language: str | None,
+        *,
+        is_auxiliary: bool = False,
     ) -> CodeSegmentDescription:
-        """One cheap ``code_segment_description`` call per included file."""
+        """One cheap ``code_segment_description`` call per included file.
+
+        Decision 7 (careful form): an auxiliary file is described CONCISELY, not
+        less thoroughly — ``is_auxiliary`` conditions the prompt so the
+        description focuses on the file's purpose. An empty auxiliary description
+        would be worse than a verbose one (the Mentor reads it).
+        """
         parsed: dict[str, CodeSegmentDescription] = {}
 
         def _validator(content: str) -> None:
@@ -666,6 +681,7 @@ class CodeProcessor(MaterialProcessor):
             skeleton=skeleton,
             namespace_core=", ".join(core),
             language=language,
+            is_auxiliary=is_auxiliary,
         )
         return parsed["result"]
 

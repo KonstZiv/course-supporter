@@ -205,3 +205,40 @@ class TestRenderStructureBlock:
         ]
         with pytest.raises(ValueError, match="non-excluded reasons"):
             render_structure_block(rogue)
+
+    def test_role_tag_per_file(self) -> None:
+        """№21 (decision 7): each per-file line carries its role label."""
+        entries = [
+            {
+                "path": "src/app.ts",
+                "size": 100,
+                "cls": "included",
+                "reason": None,
+                "role": "full",
+            },
+            {
+                "path": "src/util.ts",
+                "size": 50,
+                "cls": "included",
+                "reason": None,
+                "role": "auxiliary",
+            },
+            {
+                "path": "package.json",
+                "size": 40,
+                "cls": "description_only",
+                "reason": "build_config: package.json",
+                "role": "structure_only",
+            },
+        ]
+        block = render_structure_block(entries)
+        assert "src/app.ts (100 B) [основний]" in block
+        assert "src/util.ts (50 B) [допоміжний]" in block
+        assert "[лише структура]" in block  # on the package.json line
+
+    def test_roleless_entry_renders_without_tag(self) -> None:
+        # I8: a legacy entry with no ``role`` renders exactly as before — the
+        # augmentation is additive, never a change to existing output.
+        legacy = [{"path": "x.ts", "size": 1, "cls": "included", "reason": None}]
+        block = render_structure_block(legacy)
+        assert block == "x.ts (1 B)"

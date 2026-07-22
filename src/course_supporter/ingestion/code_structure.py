@@ -221,6 +221,25 @@ def _distinct_basenames(
     return head + ", …" if len(names) > limit else head
 
 
+# №21 (decision 2): role token → human label for the structure block the
+# summary model reads (author-facing prose, not the machine token).
+_ROLE_LABEL: Final[dict[str, str]] = {
+    "full": "основний",
+    "auxiliary": "допоміжний",
+    "structure_only": "лише структура",
+}
+
+
+def _role_suffix(entry: Mapping[str, Any]) -> str:
+    """A compact role tag appended to a structure file line (decision 7).
+
+    The summary model reads the role alongside each file. Empty for entries
+    without a role (excluded rows) so the aggregation stays untouched (I8).
+    """
+    label = _ROLE_LABEL.get(str(entry.get("role")))
+    return f" [{label}]" if label else ""
+
+
 def render_structure_block(entries: Sequence[Mapping[str, Any]]) -> str:
     """Render the ``structure_block`` the ``code_summary`` LLM call sees.
 
@@ -229,7 +248,10 @@ def render_structure_block(entries: Sequence[Mapping[str, Any]]) -> str:
     is a project dependency), while ``excluded`` junk is AGGREGATED to one
     line per kind with counts. The persisted DB tree stays full; this
     collapse lives only in the prompt so the model gets the fact, not
-    hundreds of AppleDouble paths.
+    hundreds of AppleDouble paths. №21 (decision 7): each per-file line also
+    carries a role tag (``[основний]`` / ``[допоміжний]`` / ``[лише
+    структура]``) — an AUGMENTATION only, the aggregation semantics are
+    unchanged (I8).
     """
     included: list[str] = []
     description: list[str] = []
@@ -240,10 +262,10 @@ def render_structure_block(entries: Sequence[Mapping[str, Any]]) -> str:
         path = str(entry["path"])
         size = int(entry["size"])
         if cls == "included":
-            included.append(f"{path} ({size} B)")
+            included.append(f"{path} ({size} B){_role_suffix(entry)}")
         elif cls == "description_only":
             clause = describe_for_llm(_reason_token(str(entry["reason"])))
-            description.append(f"{path} ({size} B) — {clause}")
+            description.append(f"{path} ({size} B) — {clause}{_role_suffix(entry)}")
         elif cls == "excluded":
             excluded[_reason_token(str(entry["reason"]))].append(entry)
 

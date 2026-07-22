@@ -705,3 +705,44 @@ class TestStoreFileRolesProposal:
             tenant_id = tenant.id
 
         await _cleanup_tenant(kd_delta_session_factory, [tenant_id])
+
+    async def test_store_decision_preserves_proposal_byte_identical(
+        self,
+        kd_delta_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """I1 (moved from BE2 to BE5): writing the decision leaves the proposal
+        byte-untouched — the confirm write-path exists only now."""
+        proposal = {
+            "files": {"a.ts": {"role": "full", "reason": "custom_source"}},
+            "tree_digest": "d1",
+            "computed_at": "t0",
+        }
+        async with kd_delta_session_factory() as session:
+            tenant = await _make_tenant(session, "decision-i1")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            repo = AuthoredDocumentRepository(session)
+            doc = await repo.create(
+                node_id=root.id, source_type="code", source_url="s3://bucket/a.zip"
+            )
+            doc.file_roles = {"proposal": proposal}
+            await session.commit()
+            tenant_id = tenant.id
+            doc_id = doc.id
+
+        decision = {
+            "files": {"a.ts": "auxiliary"},
+            "tree_digest": "d1",
+            "decided_at": "t1",
+        }
+        async with kd_delta_session_factory() as session:
+            repo = AuthoredDocumentRepository(session)
+            updated = await repo.store_file_roles_decision(doc_id, decision=decision)
+            await session.commit()
+            assert updated.file_roles is not None
+            assert updated.file_roles["decision"] == decision
+            # I1: the proposal is byte-identical to what prep wrote.
+            assert updated.file_roles["proposal"] == proposal
+
+        await _cleanup_tenant(kd_delta_session_factory, [tenant_id])

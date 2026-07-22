@@ -391,6 +391,36 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
+    async def store_file_roles_decision(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        decision: dict[str, object],
+    ) -> AuthoredDocument:
+        """Persist the author's file-role decision (№21), preserving the proposal.
+
+        Writes ONLY the ``decision`` key of ``file_roles``; the ``proposal`` key
+        stays byte-untouched (invariant I1 — the proposal↔decision delta is
+        kept as labelled data, KD20). Mirror of :meth:`store_file_roles_proposal`
+        on the write side. The whole dict is reassigned (not mutated in place) so
+        SQLAlchemy detects the JSONB change.
+
+        Args:
+            entry_id: AuthoredDocument id to update.
+            decision: The decision block ``{files: {<path>: <role>}, tree_digest,
+                decided_at}`` from the confirm endpoint.
+
+        Returns:
+            The updated AuthoredDocument.
+
+        Raises:
+            ValueError: If entry not found.
+        """
+        entry = await self._require(entry_id)
+        entry.file_roles = {**(entry.file_roles or {}), "decision": decision}
+        await self._session.flush()
+        return entry
+
     async def set_slide_keys(
         self,
         entry_id: uuid.UUID,

@@ -451,6 +451,33 @@ class AuthoredDocumentUpdateRequest(BaseModel):
     )
 
 
+FileRoleToken = Literal["full", "auxiliary", "structure_only"]
+
+
+class FileRolesDecisionRequest(BaseModel):
+    """№21 confirm-screen payload — the author's per-file role decision.
+
+    ``files`` must assign a role to EVERY proposal file and no others (the UI
+    expands folder gestures to per-file states; decision 3 / decision 4). Role
+    tokens are the three of decision 2 — ``auxiliary`` is legal (author-chosen).
+    """
+
+    files: dict[str, FileRoleToken] = Field(
+        description=(
+            "Per-file role decision. Keys MUST exactly cover the current "
+            "``proposal.files`` — a missing or extra path is a 422. Values: "
+            "``full`` | ``auxiliary`` | ``structure_only``."
+        ),
+    )
+    tree_digest: str = Field(
+        description=(
+            "The ``proposal.tree_digest`` being confirmed against. Must equal "
+            "the current proposal's digest, else the file tree changed and the "
+            "confirmation is stale (409 ``file_roles_stale``)."
+        ),
+    )
+
+
 class AuthoredDocumentResponse(BaseModel):
     """Response schema for a single authored document."""
 

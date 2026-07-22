@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from course_supporter.ingestion.file_roles import (
+    ROLE_AUXILIARY,
     ROLE_FULL,
     ROLE_STRUCTURE_ONLY,
     build_role_proposal,
@@ -111,3 +112,20 @@ def test_proposal_digest_equals_standalone_digest() -> None:
     )
     proposal = build_role_proposal(doc, computed_at=_FIXED)
     assert proposal["tree_digest"] == compute_tree_digest(doc)
+
+
+def test_schema_role_tokens_match_file_role_constants() -> None:
+    """The confirm request's role Literal == the file_roles role tokens.
+
+    Derive-or-verify: ``schemas.FileRoleToken`` and the ``ROLE_*`` constants are
+    two representations of the decision-2 role vocabulary; a drift fails here.
+    """
+    from typing import get_args
+
+    from course_supporter.api.schemas import FileRoleToken
+
+    assert set(get_args(FileRoleToken)) == {
+        ROLE_FULL,
+        ROLE_AUXILIARY,
+        ROLE_STRUCTURE_ONLY,
+    }

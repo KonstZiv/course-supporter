@@ -8,6 +8,8 @@ KD18 blast-radius guarantee visible.
 
 from __future__ import annotations
 
+import pytest
+
 from course_supporter.ingestion.code_typicality import (
     KEPT_SINGLE_MAX_BYTES,
     TypicalityVerdict,
@@ -82,3 +84,38 @@ class TestClassifyCouplingLock:
         from course_supporter.normalizer.classify import denylist_prefix
 
         assert code_typicality.denylist_prefix is denylist_prefix
+
+
+class TestBuildConfig:
+    """№21 (decision 8): build-config files → description-only (BUILD_CONFIG)."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "angular.json",
+            "package.json",
+            "tsconfig.json",
+            "tsconfig.app.json",
+            "tsconfig.spec.json",
+            "webpack.config.js",
+            "vite.config.ts",
+            "rollup.config.mjs",
+            ".babelrc",
+            "babel.config.js",
+            "jest.config.ts",
+            "postcss.config.cjs",
+            "tailwind.config.js",
+        ],
+    )
+    def test_build_config_is_description_only(self, name: str) -> None:
+        verdict = assess(f"project/{name}", 500)
+        assert verdict.disposition == "typical"
+        assert not verdict.is_custom
+        assert verdict.reason is not None
+        assert verdict.reason.startswith("build_config")
+
+    def test_ordinary_code_stays_custom(self) -> None:
+        # A user file whose name merely CONTAINS "config" is not a build config;
+        # only the exact names / ``<stem>.config.<ext>`` shapes match.
+        assert assess("src/config.ts", 500).is_custom
+        assert assess("src/app.component.ts", 500).is_custom

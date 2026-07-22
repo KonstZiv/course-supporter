@@ -11,6 +11,7 @@ function, used by prep here and by the processing precondition guard (BE8).
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -24,10 +25,39 @@ ROLE_STRUCTURE_ONLY = "structure_only"
 
 # Reason for a full-role file: it passed typicality as segment-worthy custom
 # source (no exclusion signal). structure_only files carry their typicality
-# reason verbatim; the config→structure_only refinement (and its own reason
-# token) is a later commit (BE6, decisions 8/9). ``auxiliary`` is never
-# auto-proposed — the author assigns it by hand (decision 8).
+# reason verbatim (build-config files → the BUILD_CONFIG token, BE6/decision 9).
+# ``auxiliary`` is never auto-proposed — the author assigns it by hand
+# (decision 8).
 _REASON_CUSTOM_SOURCE = "custom_source"
+
+
+def default_role(*, is_custom: bool) -> str:
+    """The role the deterministic default assigns absent an author decision.
+
+    Segment-worthy custom code → ``full``; everything else (typical / oversize /
+    build-config) → ``structure_only``. ``auxiliary`` is NEVER a default — the
+    author assigns it by hand (decision 8). This is the single source both the
+    prep proposal and the expensive processor's fallback branch use, so "no
+    decision" behaves identically on both sides (point 6). ``build_role_proposal``
+    is consistent by construction: its chunks are custom → full, its
+    description-only files are non-custom → structure_only.
+    """
+    return ROLE_FULL if is_custom else ROLE_STRUCTURE_ONLY
+
+
+def decision_roles(file_roles: Mapping[str, Any] | None) -> dict[str, str]:
+    """The author's per-file role decision (``{path: role}``), or ``{}``.
+
+    Empty when there is no ``file_roles``, no ``decision`` yet, or the decision
+    carries no files — the caller then falls back to :func:`default_role`.
+    """
+    if not file_roles:
+        return {}
+    decision = file_roles.get("decision")
+    if not decision:
+        return {}
+    files = decision.get("files")
+    return dict(files) if files else {}
 
 
 def _included_paths(doc: SourceDocument) -> list[str]:
@@ -60,9 +90,11 @@ def build_role_proposal(
 ) -> dict[str, Any]:
     """Derive the ``proposal`` block from a CODE SourceDocument's partition.
 
-    Default role map (decision 8, the "as today" part; the config→structure_only
-    refinement is BE6): custom source → ``full``; typical / oversize
-    (description-only) → ``structure_only`` with its typicality reason.
+    Default role map (decision 8): custom source → ``full``; every
+    description-only file (typical / oversize / build-config) → ``structure_only``
+    with its typicality reason. Build-config now reaches the description-only side
+    via the ``assess`` BUILD_CONFIG detector, so it is proposed structure_only
+    like any other non-custom file.
 
     ``computed_at`` is injected (not read from a clock here) so the proposal is a
     pure function of its inputs — the digest is deterministic and the timestamp

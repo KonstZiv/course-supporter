@@ -77,6 +77,37 @@ _GENERATED_SUFFIXES: Final[tuple[str, ...]] = (
     ".bundle.js",
 )
 
+# №21 (decision 8): project build-config files — description-only, so their keys
+# (compilerOptions, devDependencies, outDir, …) stop reaching the concept lists.
+# A first-approximation dictionary (decision 1: the author corrects a false hit
+# on the confirm screen); core from the defect slice is angular/tsconfig/package.
+_BUILD_CONFIG_NAMES: Final[frozenset[str]] = frozenset(
+    {"angular.json", "package.json", ".babelrc"}
+)
+# Config files matched by their ``<stem>.config.<ext>`` shape
+# (webpack.config.js, vite.config.ts, rollup.config.mjs, …).
+_BUILD_CONFIG_STEMS: Final[frozenset[str]] = frozenset(
+    {
+        "webpack.config",
+        "vite.config",
+        "rollup.config",
+        "babel.config",
+        "jest.config",
+        "postcss.config",
+        "tailwind.config",
+    }
+)
+
+
+def _is_build_config(basename: str) -> bool:
+    """Whether ``basename`` is a project build-config file (decision 8)."""
+    if basename in _BUILD_CONFIG_NAMES:
+        return True
+    if basename.startswith("tsconfig") and basename.endswith(".json"):
+        return True
+    return basename.rsplit(".", 1)[0] in _BUILD_CONFIG_STEMS
+
+
 Disposition = Literal["custom", "typical", "oversize"]
 
 
@@ -132,6 +163,14 @@ def assess(path: str, size_bytes: int) -> TypicalityVerdict:
                 "typical",
                 structure_reason(CodeStructureReason.GENERATED_ARTIFACT, f"*{suffix}"),
             )
+
+    # №21 (decision 8): build-config → description-only (a new BUILD_CONFIG
+    # reason). Before the size cap: a config file is config regardless of size.
+    if _is_build_config(basename):
+        return TypicalityVerdict(
+            "typical",
+            structure_reason(CodeStructureReason.BUILD_CONFIG, basename),
+        )
 
     if size_bytes > KEPT_SINGLE_MAX_BYTES:
         return TypicalityVerdict(

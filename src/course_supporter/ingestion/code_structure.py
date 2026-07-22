@@ -68,6 +68,13 @@ class CodeStructureReason(StrEnum):
     LOCKFILE = "lockfile"
     GENERATED_ARTIFACT = "generated_artifact"
     OVERSIZE = "oversize"
+    # №21 (decision 9): project build-config files (angular.json, tsconfig*,
+    # bundler configs) — description-only, so their keys stop leaking into the
+    # lesson's concept lists.
+    BUILD_CONFIG = "build_config"
+    # №21: a segment-worthy custom file the AUTHOR demoted to structure_only via
+    # a file-role decision (no typicality reason of its own).
+    AUTHOR_STRUCTURE_ONLY = "author_structure_only"
 
 
 # The ONLY bridge from the security layer's EntryVerdict into the code
@@ -149,6 +156,12 @@ _LLM_PHRASE: Final[dict[CodeStructureReason, str]] = {
         "згенерований артефакт — подано лише описом"
     ),
     CodeStructureReason.OVERSIZE: "завеликий файл — подано лише описом",
+    CodeStructureReason.BUILD_CONFIG: (
+        "конфігурація складання проєкту — подано лише структурою"
+    ),
+    CodeStructureReason.AUTHOR_STRUCTURE_ONLY: (
+        "рішення автора — подано лише структурою"
+    ),
 }
 
 # Tokens that can appear on an ``excluded`` structure row. The remaining

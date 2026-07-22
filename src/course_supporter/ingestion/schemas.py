@@ -136,6 +136,15 @@ class DocumentSegmentDraft(BaseModel):
         default_factory=list,
         description="Concept strings mentioned but not taught in this segment.",
     )
+    is_auxiliary: bool = Field(
+        default=False,
+        description=(
+            "№21 (decision 5): True when the author marked this file auxiliary "
+            "(its concepts merge into the material's secondary only); False for "
+            "the central/main role. Written from the same file-role decision as "
+            "the structure-tree role."
+        ),
+    )
     content: str | None = Field(
         default=None,
         description=(

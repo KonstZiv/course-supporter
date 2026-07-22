@@ -30,11 +30,19 @@ _PY_BODY = 'print("hello")\n'
 _RB_BODY = "# service\nclass PostService\nend\n"
 
 
-def _mock_source(source_url: str, *, filename: str | None = None) -> MagicMock:
+def _mock_source(
+    source_url: str,
+    *,
+    filename: str | None = None,
+    file_roles: dict[str, Any] | None = None,
+) -> MagicMock:
     source = MagicMock()
     source.source_type = SourceType.CODE
     source.source_url = source_url
     source.filename = filename
+    # №21: process_raw reads source.file_roles; explicit None keeps a bare
+    # MagicMock auto-attr out of decision_roles (default roles, no decision).
+    source.file_roles = file_roles
     return source
 
 
@@ -418,6 +426,7 @@ class TestTwoStepGeneration:
         assert seg.title == "script.py"
         assert seg.start_pos == 0
         assert seg.end_pos == len(doc.assemble_text())
+        assert seg.is_auxiliary is False  # №21: a custom file defaults to full
         assert draft.structure == {
             "entries": [
                 {
@@ -425,6 +434,7 @@ class TestTwoStepGeneration:
                     "size": len(_PY_BODY.encode()),
                     "cls": "included",
                     "reason": None,
+                    "role": "full",
                 }
             ]
         }
@@ -616,3 +626,126 @@ class TestProcessDetail:
         # FULL-COVER reproduced on the filled drafts.
         assert filled[0].start_pos == 0
         assert filled[-1].end_pos == len(reference)
+
+
+class TestFileRoles:
+    """№21 role-routing: decision-driven roles → concept merge + segment flag."""
+
+    @staticmethod
+    def _router() -> AsyncMock:
+        return _stage_router(
+            {
+                "code_segment_description": _DESCRIBE_PAYLOAD,
+                "code_summary": _SUMMARY_PAYLOAD,
+            }
+        )
+
+    async def test_auxiliary_routes_all_concepts_to_secondary(
+        self, tmp_path: Path
+    ) -> None:
+        # decision 6: an auxiliary file sends even its central concepts to
+        # secondary only — a solo full file would put "service object" in main;
+        # marked auxiliary it lands in secondary and main is empty.
+        f = tmp_path / "svc.py"
+        f.write_text('class Svc:\n    """service"""\n')
+        processor = CodeProcessor()
+        doc = await processor.process_raw(
+            _mock_source(
+                str(f),
+                filename="svc.py",
+                file_roles={"decision": {"files": {"svc.py": "auxiliary"}}},
+            )
+        )
+        draft = await processor.process_macro(doc, self._router())
+        assert "service object" not in draft.main_concepts
+        assert "service object" in draft.secondary_concepts
+        assert len(draft.segments) == 1
+        assert draft.segments[0].is_auxiliary is True
+
+    async def test_full_default_keeps_main_and_is_not_auxiliary(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "svc.py"
+        f.write_text('class Svc:\n    """service"""\n')
+        processor = CodeProcessor()
+        doc = await processor.process_raw(_mock_source(str(f), filename="svc.py"))
+        draft = await processor.process_macro(doc, self._router())
+        assert "service object" in draft.main_concepts
+        assert draft.segments[0].is_auxiliary is False
+
+    async def test_structure_only_decision_demotes_out_of_segments(
+        self, tmp_path: Path
+    ) -> None:
+        archive = tmp_path / "p.zip"
+        _write_zip(
+            archive,
+            {
+                "keep.py": b'class A:\n    """a"""\n',
+                "drop.py": b'class B:\n    """b"""\n',
+            },
+        )
+        doc = await CodeProcessor().process_raw(
+            _mock_source(
+                str(archive),
+                file_roles={
+                    "decision": {
+                        "files": {"keep.py": "full", "drop.py": "structure_only"}
+                    }
+                },
+            )
+        )
+        assert {c.metadata["file_path"] for c in doc.chunks} == {"keep.py"}
+        desc_only = {e["path"] for e in doc.metadata["description_only_entries"]}
+        assert "drop.py" in desc_only
+
+    async def test_build_config_stays_out_of_segments_k3(self, tmp_path: Path) -> None:
+        # K3 mechanism: package.json is description-only (decision 8), so its
+        # keys never reach the describe stage or the material's concept lists.
+        archive = tmp_path / "p.zip"
+        _write_zip(
+            archive,
+            {
+                "src/app.py": b'class App:\n    """app"""\n',
+                "package.json": b'{"compilerOptions": {}, "devDependencies": {}}\n',
+            },
+        )
+        doc = await CodeProcessor().process_raw(_mock_source(str(archive)))
+        segmented = {c.metadata["file_path"] for c in doc.chunks}
+        assert "package.json" not in segmented
+        assert "src/app.py" in segmented
+        cfg = next(
+            e
+            for e in doc.metadata["description_only_entries"]
+            if e["path"] == "package.json"
+        )
+        assert cfg["reason"].startswith("build_config")
+
+    async def test_role_invariant_tree_matches_segment_flag(
+        self, tmp_path: Path
+    ) -> None:
+        # decision-5 invariant: for every included file the structure-tree role
+        # and the segment is_auxiliary flag agree (written from ONE decision).
+        archive = tmp_path / "p.zip"
+        _write_zip(
+            archive,
+            {
+                "a.py": b'class A:\n    """a"""\n',
+                "b.py": b'class B:\n    """b"""\n',
+            },
+        )
+        processor = CodeProcessor()
+        doc = await processor.process_raw(
+            _mock_source(
+                str(archive),
+                file_roles={
+                    "decision": {"files": {"a.py": "full", "b.py": "auxiliary"}}
+                },
+            )
+        )
+        draft = await processor.process_macro(doc, self._router())
+        by_basename = {seg.title: seg for seg in draft.segments}
+        included = [e for e in draft.structure["entries"] if e["cls"] == "included"]
+        assert included  # positive control — there ARE included entries to check
+        for entry in included:
+            seg = by_basename[entry["path"].rsplit("/", 1)[-1]]
+            assert seg.is_auxiliary == (entry["role"] == "auxiliary")

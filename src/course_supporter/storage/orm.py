@@ -853,6 +853,17 @@ class DocumentSegment(SoftDeleteMixin, Base):
         server_default=text("'[]'::jsonb"),
         comment="List of concept strings mentioned but not taught (KD-gamma).",
     )
+    is_auxiliary: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        comment="№21 (decision 5): the file-role role of this code segment — "
+        "True = auxiliary (its concepts merge into the material's secondary "
+        "only), False = the central/main role (concepts routed as-is). "
+        "server_default false so legacy segments read honestly as main. Written "
+        "from the SAME author decision as the structure-tree role in one moment "
+        "(invariant, test-locked).",
+    )
     visual_content: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=False,

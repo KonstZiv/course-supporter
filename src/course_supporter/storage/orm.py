@@ -507,6 +507,22 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         "NULL when Stage 2 hasn't run yet (legacy rows pre-Phase-2.1 C6).",
     )
 
+    # ── Author file-role markup (№21, KD20) ──
+    file_roles: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="№21 author file-role markup (KD20 proposal/decision "
+        "separation). Two independent top-level keys: 'proposal' (system "
+        "suggestion — {files: {<path>: {role, reason}}, tree_digest, "
+        "computed_at}, written ONLY by the DOCUMENT_PREPARATION job) and "
+        "'decision' (author's confirmation — {files: {<path>: <role>}, "
+        "tree_digest, decided_at}, written ONLY by the confirm endpoint) or "
+        "absent. Roles: 'full' | 'auxiliary' | 'structure_only'. Writing "
+        "'decision' NEVER mutates 'proposal' (invariant I1 / KD20): separate "
+        "keys, so the proposal-vs-decision delta survives as labelled data. "
+        "NULL until the prep job has run.",
+    )
+
     # ── Derived state ──
 
     @property

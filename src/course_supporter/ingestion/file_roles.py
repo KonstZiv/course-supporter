@@ -99,6 +99,11 @@ def build_role_proposal(
     ``computed_at`` is injected (not read from a clock here) so the proposal is a
     pure function of its inputs — the digest is deterministic and the timestamp
     is the caller's to own.
+
+    The proposal also carries ``removed: {count: N}`` (decision 4 / decision 16,
+    a KD20 field-extension) — how many files sanitization removed (safety +
+    service-dir denylist). Count only: the author cannot restore them, and the
+    confirm screen shows an explanatory line when it is > 0.
     """
     files: dict[str, dict[str, str]] = {}
     for chunk in doc.chunks:
@@ -110,8 +115,14 @@ def build_role_proposal(
             "role": ROLE_STRUCTURE_ONLY,
             "reason": str(entry.get("reason") or entry.get("disposition") or "typical"),
         }
+    # Excluded rows are collapsed (a denylist dir is one row standing for its
+    # file count), so the true removed-file count sums each row's ``entries``.
+    removed_count = sum(
+        int(e.get("entries", 1)) for e in doc.metadata.get("excluded_entries", [])
+    )
     return {
         "files": files,
         "tree_digest": compute_tree_digest(doc),
         "computed_at": computed_at.isoformat(),
+        "removed": {"count": removed_count},
     }

@@ -129,3 +129,28 @@ def test_schema_role_tokens_match_file_role_constants() -> None:
         ROLE_AUXILIARY,
         ROLE_STRUCTURE_ONLY,
     }
+
+
+def test_removed_count_sums_excluded_file_count() -> None:
+    """decision 4 / decision 16: proposal.removed.count is the true removed-file
+    count (collapsed denylist dirs expand via their ``entries`` count)."""
+    doc = _doc(
+        chunks=[("src/app.ts", 100)],
+        excluded=[
+            {
+                "path": "node_modules/",
+                "size": 0,
+                "reason": "denylist_dir",
+                "entries": 42,
+            },
+            {"path": ".env", "size": 10, "reason": "forbidden_type", "entries": 1},
+        ],
+    )
+    proposal = build_role_proposal(doc, computed_at=_FIXED)
+    assert proposal["removed"] == {"count": 43}
+
+
+def test_removed_count_zero_when_nothing_excluded() -> None:
+    doc = _doc(chunks=[("src/app.ts", 100)])
+    proposal = build_role_proposal(doc, computed_at=_FIXED)
+    assert proposal["removed"] == {"count": 0}

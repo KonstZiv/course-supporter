@@ -6,8 +6,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from course_supporter.api.tasks import arq_ingest_material
+from course_supporter.ingestion.file_roles import (
+    FileRolesStaleError,
+    compute_tree_digest,
+)
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
-from course_supporter.models.source import SourceDocument, SourceType
+from course_supporter.models.source import (
+    ChunkType,
+    ContentChunk,
+    SourceDocument,
+    SourceType,
+)
 
 # These exercise the ingest BODY (pipeline / s3 / slides / callback delegation)
 # via ``__wrapped__``, bypassing the L2 execution seam. The seam's Job.status
@@ -114,6 +123,41 @@ def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
     """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.source_url = source_url
+    return entry
+
+
+def _code_doc() -> SourceDocument:
+    """A CODE SourceDocument shaped like CodeProcessor.process_raw's output, so
+    ``compute_tree_digest`` is well-defined (the BE8 precondition guard)."""
+    return SourceDocument(
+        source_type=SourceType.CODE,
+        source_url="archive.zip",
+        chunks=[
+            ContentChunk(
+                chunk_type=ChunkType.CODE_FILE,
+                text="print('x')",
+                index=0,
+                metadata={"file_path": "src/app.py", "size_bytes": 20},
+            )
+        ],
+        metadata={
+            "description_only_entries": [
+                {"path": "package.json", "size": 40, "reason": "build_config"}
+            ],
+            "excluded_entries": [],
+        },
+    )
+
+
+def _code_entry(*, decision_digest: str | None) -> MagicMock:
+    """A code AuthoredDocument mock carrying a proposal and, when
+    ``decision_digest`` is given, an author decision at that tree_digest."""
+    entry = _mock_entry(source_url="archive.zip")
+    entry.language = "ukr"
+    file_roles: dict[str, object] = {"proposal": {"files": {}, "tree_digest": "p"}}
+    if decision_digest is not None:
+        file_roles["decision"] = {"files": {}, "tree_digest": decision_digest}
+    entry.file_roles = file_roles
     return entry
 
 
@@ -233,6 +277,79 @@ class TestArqIngestMaterial:
         from course_supporter.job_priority import JobPriority
 
         mock_check.assert_called_once_with(JobPriority.IMMEDIATE)
+
+    async def test_code_matching_decision_proceeds(self) -> None:
+        """BE8 guard: a code doc whose decision covers the current tree passes the
+        precondition guard and runs the expensive pipeline (process_macro reached).
+        """
+        doc = _code_doc()
+        proc = _mock_processors(doc, source_type=SourceType.CODE)
+        ctx = _make_arq_ctx()
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch("course_supporter.storage.job_repository.JobRepository") as mjob,
+            patch(_ENTRY_REPO) as mentry,
+            patch("course_supporter.ingestion_callback.IngestionCallback") as mcb,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=proc),
+        ):
+            mjob.return_value.update_status = AsyncMock()
+            mjob.return_value.update_stage = AsyncMock()
+            mentry.return_value.get_by_id = AsyncMock(
+                return_value=_code_entry(decision_digest=compute_tree_digest(doc)),
+            )
+            mentry.return_value.set_pending = AsyncMock()
+            mentry.return_value.store_safety_result = AsyncMock()
+            mcb.return_value.on_success = AsyncMock()
+            mcb.return_value.on_failure = AsyncMock()
+
+            await _body(
+                ctx, str(uuid.uuid4()), str(uuid.uuid4()), "code", "archive.zip"
+            )
+
+        proc[SourceType.CODE].process_macro.assert_awaited_once()
+
+    async def test_code_no_decision_fails_fast(self) -> None:
+        """BE8 guard: no author decision → FileRolesStaleError before Stage 2 /
+        process_macro (zero LLM)."""
+        await self._assert_guard_fires(decision_digest=None)
+
+    async def test_code_stale_decision_fails_fast(self) -> None:
+        """BE8 guard: a decision whose tree_digest != the current extraction →
+        FileRolesStaleError before Stage 2 / process_macro (zero LLM)."""
+        await self._assert_guard_fires(decision_digest="stale-digest")
+
+    async def _assert_guard_fires(self, *, decision_digest: str | None) -> None:
+        """The guard raises ``file_roles_stale`` and spends zero LLM (Stage 2 +
+        process_macro both unreached)."""
+        doc = _code_doc()
+        proc = _mock_processors(doc, source_type=SourceType.CODE)
+        ctx = _make_arq_ctx()
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch("course_supporter.storage.job_repository.JobRepository") as mjob,
+            patch(_ENTRY_REPO) as mentry,
+            patch("course_supporter.ingestion_callback.IngestionCallback"),
+            patch(_HEAVY),
+            patch(_FACTORY, return_value=proc),
+            patch(
+                "course_supporter.security.stage2.run_stage2_safety_check",
+                new=AsyncMock(),
+            ) as msafety,
+        ):
+            mjob.return_value.update_stage = AsyncMock()
+            mentry.return_value.get_by_id = AsyncMock(
+                return_value=_code_entry(decision_digest=decision_digest),
+            )
+            mentry.return_value.set_pending = AsyncMock()
+            with pytest.raises(FileRolesStaleError):
+                await _body(
+                    ctx, str(uuid.uuid4()), str(uuid.uuid4()), "code", "archive.zip"
+                )
+
+        # Zero LLM: the guard fires before Stage 2 (safety) and Pass 2a (macro).
+        msafety.assert_not_called()
+        proc[SourceType.CODE].process_macro.assert_not_called()
 
     async def test_success_delegates_to_callback(self) -> None:
         """On success: job activated, set_pending called, callback.on_success called."""

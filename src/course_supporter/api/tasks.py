@@ -182,6 +182,10 @@ async def arq_ingest_material(
     """
     # PresentationProcessor + persist_slide_webps drive the Phase 6 T3 (KD17)
     # slide-WebP persistence on the seam (presentation source_type only).
+    from course_supporter.ingestion.file_roles import (
+        FileRolesStaleError,
+        compute_tree_digest,
+    )
     from course_supporter.ingestion.presentation import PresentationProcessor
     from course_supporter.ingestion.slide_persist import persist_slide_webps
     from course_supporter.ingestion_callback import IngestionCallback
@@ -324,6 +328,23 @@ async def arq_ingest_material(
                     doc.language = entry.language
             finally:
                 reset_progress_writer(progress_token)
+
+            # ── №21 BE8 — file-role precondition guard (code docs only) ──
+            # The expensive pipeline must never run without the author's decision
+            # matching THIS extraction: ``compute_tree_digest`` over the
+            # re-extracted set is the SAME hash prep wrote into the proposal the
+            # author confirmed (I2). A missing or stale decision fails fast HERE —
+            # before Stage 2, the first StageRouter/network call — with the
+            # ``file_roles_stale`` token the confirm endpoint's 409 also uses.
+            # Reached only defensively: prep's rule of three (decision 19) and the
+            # confirm endpoint both guarantee a covering decision before they
+            # enqueue processing.
+            if st == SourceType.CODE:
+                decision = (entry.file_roles or {}).get("decision")
+                if not decision or decision.get("tree_digest") != compute_tree_digest(
+                    doc
+                ):
+                    raise FileRolesStaleError
 
             # ── Stage 2 — LLM safety check (Phase 2.1 C6, KD-2.1-P) ──
             # Defense-in-depth: authored raw text may carry prompt
@@ -533,17 +554,40 @@ async def _prepare_on_terminal(
 
     Runs AFTER the seam's durable terminal write, so the prep Job is at-rest (not
     in-flight): the follow-on DOCUMENT_PROCESSING enqueue cannot collide with it
-    on ``uq_jobs_subject_in_flight``. Only ``complete`` chains — a ``failed`` /
-    ``obsolete`` prep leaves the document idle for a retry.
+    on ``uq_jobs_subject_in_flight``. A ``failed`` prep surfaces as a document
+    ERROR (decision 11 — a visible signal, not a silent forever-``ready``, now
+    that ``enqueue_document_preparation`` binds the pending receipt); an
+    ``obsolete`` prep (subject soft-deleted) needs no reaction; only ``complete``
+    runs the rule of three below.
 
     Chains ONLY when the author's saved ``decision`` covers the current tree
     (``decision.tree_digest == proposal.tree_digest``) → silently enqueue
     processing (criterion 4, the silent second retry). No decision, or a stale one
-    → the document sits in ``awaiting_author`` (BE4 derives that phase); the
-    author confirms via the confirm endpoint (BE5).
+    → the document sits in ``awaiting_author`` (BE4 derives that phase via the
+    at-rest prep receipt) and the author confirms via the confirm endpoint (BE5).
     """
-    if outcome.status != "complete":
+    jid = uuid.UUID(job_id)
+    mid = uuid.UUID(material_id)
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    log = structlog.get_logger().bind(job_id=job_id, material_id=material_id)
+
+    if outcome.status == "failed":
+        # A failed prep must be a VISIBLE error on the document, not a silent
+        # forever-``ready`` (decision 11 — the UI polls prep state). Mirror
+        # ``_ingest_on_terminal``: the domain failure reaction (``fail_processing``
+        # → ERROR + clear the pending receipt ``enqueue_document_preparation``
+        # set). No STAGE2 category → no soft-delete; the row stays for a retry.
+        from course_supporter.ingestion_callback import IngestionCallback
+
+        await IngestionCallback(session_factory).on_failure(
+            job_id=jid,
+            material_id=mid,
+            error_message=outcome.error_message or "",
+            error_category=outcome.error_category,
+        )
         return
+    if outcome.status != "complete":
+        return  # obsolete — the subject is soft-deleted; no document reaction
 
     from fastapi import HTTPException
 
@@ -553,21 +597,25 @@ async def _prepare_on_terminal(
     )
     from course_supporter.storage.job_repository import JobRepository
 
-    jid = uuid.UUID(job_id)
-    mid = uuid.UUID(material_id)
-    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     redis: ArqRedis = ctx["redis"]
-    log = structlog.get_logger().bind(job_id=job_id, material_id=material_id)
 
     async with session_factory() as session:
+        entry_repo = AuthoredDocumentRepository(session)
         job = await JobRepository(session).get_by_id(jid)
-        entry = await AuthoredDocumentRepository(session).get_by_id(mid)
+        entry = await entry_repo.get_by_id(mid)
         if job is None or job.tenant_id is None or entry is None:
             return
         roles = entry.file_roles or {}
         proposal = roles.get("proposal") or {}
         decision = roles.get("decision")
         if not decision or decision.get("tree_digest") != proposal.get("tree_digest"):
+            # Release the prep receipt → the document rests at the designed
+            # awaiting_author pair (job_id=None → state=ready, phase=awaiting_author
+            # via the file_roles proposal; decision 10 — no content-processing job
+            # is enqueued). Compare-and-clear on THIS prep job so a racing
+            # confirm/retry receipt is never clobbered.
+            if await entry_repo.release_pending(mid, expected_job_id=jid) is not None:
+                await session.commit()
             log.info("document_preparation_awaiting_author")
             return
         try:

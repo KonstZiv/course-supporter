@@ -452,11 +452,20 @@ async def enqueue_document_preparation(
     ``arq_job_id``. Payload = ``(job_id, authored_document_id)`` on the default
     queue — the worker re-reads the document by id.
 
+    Like :func:`enqueue_ingestion`, this binds the fresh Job to the document
+    (``set_pending``): a live prep is then visible as ``queued``/``processing`` on
+    the real document (BE4 precedence, decision 11 — the UI polls prep state), and
+    a *failed* prep surfaces as ``error`` rather than a silent, forever-``ready``
+    document. A prep Job left at rest (terminal) is treated as "no job" by
+    ``derive_processing_phase``, so once prep completes the phase falls through to
+    ``awaiting_author`` via the ``file_roles`` proposal.
+
     Returns:
         The created DOCUMENT_PREPARATION :class:`Job` (``arq_job_id`` set).
     """
     log = structlog.get_logger().bind(authored_document_id=str(authored_document_id))
     job_repo = JobRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
 
     job = await job_repo.create(
         tenant_id=tenant_id,
@@ -465,6 +474,10 @@ async def enqueue_document_preparation(
         subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PREPARATION],
         subject_id=authored_document_id,
     )
+    # Bind the prep Job to the document in the SAME commit as the Job row, so the
+    # in-flight phase is visible from the create/retry response onward (mirror of
+    # enqueue_ingestion; decision 11 / BE4 precedence).
+    await entry_repo.set_pending(authored_document_id, job.id)
     await session.commit()
 
     arq_job = await redis.enqueue_job(

@@ -85,6 +85,24 @@ def compute_tree_digest(doc: SourceDocument) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+class FileRolesStaleError(Exception):
+    """Expensive code processing reached without a decision covering THIS tree.
+
+    The BE8 precondition guard raises this (code docs only) before any
+    StageRouter/network call, when the author has no ``decision`` or it covers a
+    different tree than :func:`compute_tree_digest` of the current extraction
+    (I2). Its ``str`` is the ``file_roles_stale`` token — the SAME code the
+    confirm endpoint returns as its 409; the L2 seam maps ``str(exc)`` to the
+    document's ``error_message`` verbatim. It deliberately carries NO ``category``
+    attribute, so the seam leaves ``error_category`` ``None`` and the failure
+    lands the document in ERROR (re-confirmable) — never the ``STAGE2_REJECTED``
+    soft-delete cascade.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("file_roles_stale")
+
+
 def build_role_proposal(
     doc: SourceDocument, *, computed_at: datetime
 ) -> dict[str, Any]:

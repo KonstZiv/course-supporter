@@ -39,6 +39,7 @@ STUB_TENANT = TenantContext(
 )
 
 ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
+PREP_ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_document_preparation"
 RUN_STAGE1 = "course_supporter.api.routes.documents.run_stage1"
 GET_MAX_SIZE = "course_supporter.api.routes.documents.get_max_size_for_extension"
 PROBE_URL_FUNC = (
@@ -516,7 +517,10 @@ class TestCodeUploadRouting:
                 return_value=_mock_node(node_id=node_id),
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
             patch(RUN_STAGE1) as stage1_mock,
         ):
             resp = await client.post(
@@ -532,6 +536,10 @@ class TestCodeUploadRouting:
             )
         assert resp.status_code == 201
         stage1_mock.assert_not_called()
+        # BE8: a code upload routes to DOCUMENT_PREPARATION, never straight to
+        # ingestion (the author confirms file roles before the expensive pass).
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
         mock_s3.upload_smart.assert_awaited_once()
 
     async def test_code_zip_archive_201_skips_stage1(
@@ -554,7 +562,10 @@ class TestCodeUploadRouting:
                 return_value=_mock_node(node_id=node_id),
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
             patch(RUN_STAGE1) as stage1_mock,
         ):
             resp = await client.post(
@@ -570,6 +581,9 @@ class TestCodeUploadRouting:
             )
         assert resp.status_code == 201
         stage1_mock.assert_not_called()
+        # BE8: a code (zip) upload also routes to DOCUMENT_PREPARATION.
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
 
     async def test_code_non_code_extension_400_forbidden(
         self, client: AsyncClient, node_id: uuid.UUID
@@ -1303,6 +1317,40 @@ class TestRetryDocument:
         assert resp.status_code == 200
         data = resp.json()
         assert data["job_id"] == str(job.id)
+
+    async def test_code_retry_routes_to_preparation(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """BE8: retry of a code doc re-runs DOCUMENT_PREPARATION (decision 19),
+        never straight-to-processing; non-code retries stay on ingestion (I6)."""
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="code",
+            state="error",
+            error_message="Processing failed",
+        )
+        job = _mock_job()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
+        ):
+            resp = await client.post(f"/api/v1/documents/{entry.id}/retry")
+        assert resp.status_code == 200
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
 
     async def test_non_error_state_returns_409(
         self, client: AsyncClient, node_id: uuid.UUID

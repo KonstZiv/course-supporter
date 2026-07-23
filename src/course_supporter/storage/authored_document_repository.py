@@ -328,6 +328,42 @@ class AuthoredDocumentRepository:
         await self._session.flush()
         return entry
 
+    async def release_pending(
+        self,
+        entry_id: uuid.UUID,
+        *,
+        expected_job_id: uuid.UUID,
+    ) -> AuthoredDocument | None:
+        """Release the pending receipt IFF it still points to ``expected_job_id``.
+
+        A compare-and-clear sibling of :meth:`complete_processing` /
+        :meth:`fail_processing` for the DOCUMENT_PREPARATION terminal that leaves
+        the document AT REST: it clears ``job_id`` + ``pending_since`` but stamps
+        NO ``processed_at`` (prep is done, yet the document is NOT processed — it
+        rests at ``awaiting_author``) and sets NO error. The comparison guards a
+        race: a concurrent confirm/retry may already have written a NEWER receipt
+        (its own processing Job), which must never be clobbered.
+
+        Args:
+            entry_id: AuthoredDocument whose prep receipt to release.
+            expected_job_id: The prep Job the caller expects to still own the
+                receipt; the clear is a no-op when it has moved on.
+
+        Returns:
+            The updated entry when the receipt was released, or ``None`` when it
+            had already moved to another Job (no write).
+
+        Raises:
+            ValueError: If the entry is not found.
+        """
+        entry = await self._require(entry_id)
+        if entry.job_id != expected_job_id:
+            return None
+        entry.job_id = None
+        entry.pending_since = None
+        await self._session.flush()
+        return entry
+
     async def store_safety_result(
         self,
         entry_id: uuid.UUID,

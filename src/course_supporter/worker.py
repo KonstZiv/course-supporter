@@ -19,6 +19,7 @@ from arq.connections import ArqRedis, RedisSettings
 
 from course_supporter.api.tasks import (
     arq_ingest_material,
+    arq_prepare_document,
     arq_process_homework,
     arq_regenerate_node_summary,
 )
@@ -252,6 +253,7 @@ class WorkerSettings:
     )
     functions: ClassVar[list[Any]] = [
         arq_ingest_material,
+        arq_prepare_document,
         arq_regenerate_node_summary,
         s3_cleanup_task,
         arq_send_email,

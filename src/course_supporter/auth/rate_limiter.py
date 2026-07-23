@@ -66,3 +66,13 @@ class InMemoryRateLimiter:
                 cleaned += 1
 
         return cleaned
+
+    def reset(self) -> None:
+        """Drop ALL recorded requests — a full state reset (test isolation).
+
+        Distinct from :meth:`cleanup`, which evicts only EXPIRED entries; within
+        a fast test run nothing has expired yet, so per-test isolation of the
+        process-global limiter needs a hard reset, not an expiry sweep.
+        """
+        with self._lock:
+            self._requests.clear()

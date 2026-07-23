@@ -29,8 +29,14 @@ Inclusion = ``extract_archive_safely(classify=True)`` INCLUDED
 verdicts (extension whitelist + magic) refined by the typicality
 filter (:mod:`course_supporter.ingestion.code_typicality`, F3): the
 KD18 dir-denylist layer + the file layer (lockfiles / minified /
-vendored) + the 4 MiB ``kept_single`` sanitary cap (F7). Non-custom
-files go description-only — never rejected (R5).
+vendored / build-config) + the 4 MiB ``kept_single`` sanitary cap (F7).
+Non-custom files default to description-only — never rejected (R5).
+
+№21: the author's file-role DECISION (or, absent one, the deterministic
+default) — not raw typicality — makes the final segment / description-only
+call. A full/auxiliary role is a segment; structure_only is description-only.
+Role also routes concepts (auxiliary → secondary only, decision 6) and rides
+each structure entry + each segment (decision 2 / decision 5).
 """
 
 from __future__ import annotations
@@ -65,6 +71,13 @@ from course_supporter.ingestion.code_structure import (
     structure_reason,
 )
 from course_supporter.ingestion.code_typicality import assess
+from course_supporter.ingestion.file_roles import (
+    ROLE_AUXILIARY,
+    ROLE_FULL,
+    ROLE_STRUCTURE_ONLY,
+    decision_roles,
+    default_role,
+)
 from course_supporter.ingestion.schemas import (
     CodeSegmentDescription,
     CodeSkeletonResult,
@@ -87,6 +100,7 @@ from course_supporter.normalizer.classify import (
     collapse_denylist,
     denylist_prefix,
 )
+from course_supporter.normalizer.hashing import canonicalize_path
 from course_supporter.security.archive import EntryVerdict, extract_archive_safely
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.file_type import (
@@ -196,16 +210,35 @@ class CodeProcessor(MaterialProcessor):
         # logged loudly per file (the material is never rejected, R5).
         # One policy for a single file and a project alike (a single file
         # is the degenerate one-member project).
+        # №21 (point 6): the ROLE — not raw typicality — decides segment-
+        # worthiness. The author's decision (keyed on canonical paths) wins;
+        # absent a decision the default is identical to ``build_role_proposal``
+        # (custom → full, else structure_only). ``auxiliary`` arrives ONLY from a
+        # decision. A promoted config becomes a segment; a demoted custom file
+        # goes description-only. ``role_map`` (raw path → role) is threaded to
+        # ``process_macro`` via the SourceDocument metadata.
+        roles = decision_roles(source.file_roles)
+        role_map: dict[str, str] = {}
         description_only: list[dict[str, Any]] = []
         chunks: list[ContentChunk] = []
         for member_path, body in members:
             verdict = assess(member_path, len(body))
-            if not verdict.is_custom:
+            role = roles.get(canonicalize_path(member_path)) or default_role(
+                is_custom=verdict.is_custom
+            )
+            role_map[member_path] = role
+            if role == ROLE_STRUCTURE_ONLY:
+                # An intrinsically non-custom file carries its OWN typicality
+                # reason; a custom file the author demoted has none, so it takes
+                # the AUTHOR_STRUCTURE_ONLY token instead.
+                reason = verdict.reason or structure_reason(
+                    CodeStructureReason.AUTHOR_STRUCTURE_ONLY
+                )
                 description_only.append(
                     {
                         "path": member_path,
                         "size": len(body),
-                        "reason": verdict.reason,
+                        "reason": reason,
                         "disposition": verdict.disposition,
                     }
                 )
@@ -214,7 +247,8 @@ class CodeProcessor(MaterialProcessor):
                     file_path=member_path,
                     size_bytes=len(body),
                     disposition=verdict.disposition,
-                    reason=verdict.reason,
+                    reason=reason,
+                    role=role,
                 )
                 continue
             text = body.decode("utf-8", errors="replace")
@@ -250,6 +284,10 @@ class CodeProcessor(MaterialProcessor):
             metadata={
                 "excluded_entries": self._excluded,
                 "description_only_entries": description_only,
+                # №21: raw path → role, consumed by process_macro (decision 6
+                # concept routing + decision 5 segment flag) and _build_structure
+                # (decision 2 tree role).
+                "file_roles": role_map,
             },
         )
 
@@ -397,15 +435,29 @@ class CodeProcessor(MaterialProcessor):
 
         offsets = self._chunk_offsets(chunks, reference)
 
+        # №21: the file-role map process_raw threaded in; only full / auxiliary
+        # roles reached the chunk stage (structure_only did not).
+        role_map: dict[str, str] = doc.metadata.get("file_roles", {})
+
+        def _role_of(chunk: ContentChunk) -> str:
+            return role_map.get(str(chunk.metadata["file_path"]), ROLE_FULL)
+
         # Step 1 — per-file skeleton + describe (bounded concurrency,
-        # presentation Pass 1 precedent: fail-fast on first failure).
+        # presentation Pass 1 precedent: fail-fast on first failure). Decision 7:
+        # the per-file prompt gets the role so an auxiliary file is described
+        # CONCISELY (not less thoroughly — the Mentor reads the description).
         sem = asyncio.Semaphore(_PER_FILE_CONCURRENCY)
 
         async def _describe(chunk: ContentChunk) -> CodeSegmentDescription:
             async with sem:
                 skeleton, core = await self._skeleton_for(chunk, router)
                 return await self._describe_file(
-                    chunk, skeleton, core, router, language
+                    chunk,
+                    skeleton,
+                    core,
+                    router,
+                    language,
+                    is_auxiliary=_role_of(chunk) == ROLE_AUXILIARY,
                 )
 
         results = await asyncio.gather(
@@ -429,7 +481,8 @@ class CodeProcessor(MaterialProcessor):
         structure = self._build_structure(doc, chunks)
         summary = await self._summarise(doc, chunks, descriptions, structure, router)
 
-        # Deterministic segment drafts; content filled in Pass 2b.
+        # Deterministic segment drafts; content filled in Pass 2b. Decision 5:
+        # the is_auxiliary flag is written from the SAME role as the tree entry.
         segments = [
             DocumentSegmentDraft(
                 order=i,
@@ -439,18 +492,27 @@ class CodeProcessor(MaterialProcessor):
                 description=desc.description,
                 main_concepts=desc.main_concepts,
                 secondary_concepts=desc.secondary_concepts,
+                is_auxiliary=_role_of(chunk) == ROLE_AUXILIARY,
             )
             for i, (chunk, (start, end), desc) in enumerate(
                 zip(chunks, offsets, descriptions, strict=True)
             )
         ]
 
-        # Doc-level concepts: KD-2.1-O union + dedup + conflict rule.
+        # Doc-level concepts: KD-2.1-O union + dedup + conflict rule, now
+        # role-aware (decision 6). A full file contributes main→main /
+        # secondary→secondary as before; an auxiliary file sends ALL its concepts
+        # (even the ones central WITHIN the file) to secondary only. The conflict
+        # rule (a concept primary anywhere is not also secondary) is verbatim.
         all_main: set[str] = set()
         all_secondary: set[str] = set()
-        for desc in descriptions:
-            all_main.update(desc.main_concepts)
-            all_secondary.update(desc.secondary_concepts)
+        for chunk, desc in zip(chunks, descriptions, strict=True):
+            if _role_of(chunk) == ROLE_AUXILIARY:
+                all_secondary.update(desc.main_concepts)
+                all_secondary.update(desc.secondary_concepts)
+            else:  # full (structure_only never reaches a chunk)
+                all_main.update(desc.main_concepts)
+                all_secondary.update(desc.secondary_concepts)
         all_secondary -= all_main
 
         draft = DocumentSummaryDraft.model_validate(
@@ -586,8 +648,16 @@ class CodeProcessor(MaterialProcessor):
         core: list[str],
         router: StageRouter,
         language: str | None,
+        *,
+        is_auxiliary: bool = False,
     ) -> CodeSegmentDescription:
-        """One cheap ``code_segment_description`` call per included file."""
+        """One cheap ``code_segment_description`` call per included file.
+
+        Decision 7 (careful form): an auxiliary file is described CONCISELY, not
+        less thoroughly — ``is_auxiliary`` conditions the prompt so the
+        description focuses on the file's purpose. An empty auxiliary description
+        would be worse than a verbose one (the Mentor reads it).
+        """
         parsed: dict[str, CodeSegmentDescription] = {}
 
         def _validator(content: str) -> None:
@@ -611,6 +681,7 @@ class CodeProcessor(MaterialProcessor):
             skeleton=skeleton,
             namespace_core=", ".join(core),
             language=language,
+            is_auxiliary=is_auxiliary,
         )
         return parsed["result"]
 
@@ -622,14 +693,21 @@ class CodeProcessor(MaterialProcessor):
         Source → representation: built from the extraction results the
         processor already holds; the KD18 manifest artifact remains
         canonical in its own contour. Included entries carry
-        ``cls='included'``; excluded carry the verdict reason.
+        ``cls='included'``; excluded carry the verdict reason. №21 (decision 2)
+        adds a ``role`` per entry (full / auxiliary / structure_only), a
+        SEPARATE axis from ``cls`` — excluded rows have ``role=None`` (the author
+        cannot restore what sanitization removed, decision 4). The role is
+        written from the same decision as the segment ``is_auxiliary`` flag
+        (invariant).
         """
+        role_map: dict[str, str] = doc.metadata.get("file_roles", {})
         entries: list[dict[str, Any]] = [
             {
                 "path": str(c.metadata["file_path"]),
                 "size": int(c.metadata["size_bytes"]),
                 "cls": "included",
                 "reason": None,
+                "role": role_map.get(str(c.metadata["file_path"]), ROLE_FULL),
             }
             for c in chunks
         ]
@@ -640,6 +718,7 @@ class CodeProcessor(MaterialProcessor):
                     "size": do_entry["size"],
                     "cls": "description_only",
                     "reason": do_entry["reason"],
+                    "role": role_map.get(str(do_entry["path"]), ROLE_STRUCTURE_ONLY),
                 }
             )
         for exc_entry in doc.metadata.get("excluded_entries", []):
@@ -651,6 +730,7 @@ class CodeProcessor(MaterialProcessor):
                     "size": exc_entry["size"],
                     "cls": "excluded",
                     "reason": exc_entry["reason"],
+                    "role": None,
                     "entries": exc_entry.get("entries", 1),
                 }
             )

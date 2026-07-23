@@ -30,21 +30,32 @@ from course_supporter.storage.job_repository import IN_FLIGHT_STATUSES
 from course_supporter.storage.orm import Job
 
 _SRC = Path(course_supporter.__file__).parent
-_MIGRATION = (
-    Path(course_supporter.__file__).parents[2]
-    / "migrations"
-    / "versions"
-    / "l1b_job_subject.py"
-)
+_VERSIONS = Path(course_supporter.__file__).parents[2] / "migrations" / "versions"
+_MIGRATION = _VERSIONS / "l1b_job_subject.py"
+# №21 BE1+BE3 widened ck_jobs_subject_type_legal (drop + re-add with the
+# document_preparation pair), so the prep migration — not l1b — is now the
+# authority for the legal-pair set. l1b stays the authority for the
+# uq_jobs_subject_in_flight index it also froze (untouched by №21).
+_PREP_MIGRATION = _VERSIONS / "n21_prep_jobtype.py"
 
 
-def _load_migration() -> ModuleType:
-    """Load the l1b migration module by path (it is not an importable package)."""
-    spec = importlib.util.spec_from_file_location("_l1b_migration", _MIGRATION)
+def _load_module(path: Path, name: str) -> ModuleType:
+    """Load a migration module by path (migrations are not an importable package)."""
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _load_migration() -> ModuleType:
+    """Load the l1b migration (authority for the in-flight index)."""
+    return _load_module(_MIGRATION, "_l1b_migration")
+
+
+def _load_prep_migration() -> ModuleType:
+    """Load the №21 prep migration (current authority for the legal-pair CHECK)."""
+    return _load_module(_PREP_MIGRATION, "_n21_prep_migration")
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -166,22 +177,31 @@ def test_migration_index_where_matches_in_flight() -> None:
 
 
 def test_migration_pairs_match_code() -> None:
-    """The migration's frozen legal-pair CHECK == JOB_SUBJECT_TYPE_PAIRS."""
-    mig = _load_migration()
-    assert _legal_pairs_from_check(mig._TYPE_CONDITION) == set(JOB_SUBJECT_TYPE_PAIRS)
+    """The prep migration's frozen legal-pair CHECK == JOB_SUBJECT_TYPE_PAIRS.
+
+    №21 widened ck_jobs_subject_type_legal, so the authority is now the prep
+    migration's ``_SUBJECT_TYPE_CONDITION_NEW`` (the SQL it re-adds), not l1b's
+    superseded ``_TYPE_CONDITION``.
+    """
+    mig = _load_prep_migration()
+    assert _legal_pairs_from_check(mig._SUBJECT_TYPE_CONDITION_NEW) == set(
+        JOB_SUBJECT_TYPE_PAIRS
+    )
 
 
 def test_migration_and_orm_predicates_agree() -> None:
     """Migration frozen SQL and ORM declaration agree on the index WHERE and
     the legal-pair CHECK — keep the two representations identical or model↔DB
-    drifts (GIN 3.3b)."""
-    mig = _load_migration()
-    assert _statuses_from_where(mig._INFLIGHT_WHERE) == _statuses_from_where(
+    drifts (GIN 3.3b). Each leg reads its current authority: l1b for the
+    in-flight index, the №21 prep migration for the widened legal-pair CHECK."""
+    l1b_mig = _load_migration()
+    prep_mig = _load_prep_migration()
+    assert _statuses_from_where(l1b_mig._INFLIGHT_WHERE) == _statuses_from_where(
         _index_where("uq_jobs_subject_in_flight")
     )
-    assert _legal_pairs_from_check(mig._TYPE_CONDITION) == _legal_pairs_from_check(
-        _check_sqltext("ck_jobs_subject_type_legal")
-    )
+    assert _legal_pairs_from_check(
+        prep_mig._SUBJECT_TYPE_CONDITION_NEW
+    ) == _legal_pairs_from_check(_check_sqltext("ck_jobs_subject_type_legal"))
 
 
 # ── no JSONB identity addressing (acceptance 9) ──────────────────────────

@@ -17,6 +17,7 @@ Routes
 - ``PATCH  /documents/{did}``                      — Update document
 - ``DELETE /documents/{did}``                      — Delete document (KD3 cascade)
 - ``POST   /documents/{did}/retry``                — Retry failed ingestion
+- ``POST   /documents/{did}/file-roles``           — Confirm file-role decision (№21)
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from course_supporter.api.schemas import (
     AuthoredDocumentResponse,
     AuthoredDocumentUpdateRequest,
     ConfirmUploadRequest,
+    FileRolesDecisionRequest,
     PresignedUrlRequest,
     PresignedUrlResponse,
     ProcessingEstimate,
@@ -50,7 +52,11 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.config import get_settings
-from course_supporter.enqueue import enqueue_base_normalize, enqueue_ingestion
+from course_supporter.enqueue import (
+    enqueue_base_normalize,
+    enqueue_document_preparation,
+    enqueue_ingestion,
+)
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.video_pipeline import media
 from course_supporter.jobs.cancellation_service import JobCancellationService
@@ -80,7 +86,7 @@ from course_supporter.storage.cascade import CascadeDeleteService, build_cascade
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.storage.orm import AuthoredDocument, Job
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_chunks
 
@@ -369,6 +375,43 @@ async def _require_document_for_tenant(
     return document
 
 
+async def _enqueue_document_flow(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    document: AuthoredDocument,
+    duration_sec: float | None = None,
+) -> Job:
+    """№21 BE8 flow-switch: route a document to the right ingestion entry point.
+
+    A ``code`` document enters DOCUMENT_PREPARATION first — the author confirms
+    file roles (full source vs auxiliary vs structure-only) before the expensive
+    two-pass pipeline runs; the prep job's rule of three (decision 19) or the
+    confirm endpoint then enqueues DOCUMENT_PROCESSING. Every other source_type
+    enqueues ingestion directly, unchanged (I6). Both helpers bind the fresh job
+    to the document, so the create/retry response and later polls show the
+    in-flight phase uniformly (queued/processing).
+    """
+    if document.source_type == SourceType.CODE:
+        return await enqueue_document_preparation(
+            redis=redis,
+            session=session,
+            tenant_id=tenant_id,
+            authored_document_id=document.id,
+        )
+    return await enqueue_ingestion(
+        redis=redis,
+        session=session,
+        tenant_id=tenant_id,
+        node_id=document.course_node_id,
+        material_id=document.id,
+        source_type=document.source_type,
+        source_url=document.source_url,
+        duration_sec=duration_sec,
+    )
+
+
 @router.post("/nodes/{node_id}/documents", status_code=201)
 async def create_document(
     node_id: uuid.UUID,
@@ -582,18 +625,16 @@ async def create_document(
         raw_size_bytes=raw_size_bytes,
     )
 
-    job = await enqueue_ingestion(
+    job = await _enqueue_document_flow(
         redis=arq,
         session=session,
         tenant_id=tenant.tenant_id,
-        node_id=node_id,
-        material_id=document.id,
-        source_type=source_type,
-        source_url=actual_url,
+        document=document,
         duration_sec=duration_sec,
     )
-    # enqueue_ingestion owns the commit (QQ5 helper-owns-commit) — it has
-    # already durably committed the document INSERT + Job before dispatch.
+    # The flow helper owns the commit (QQ5 helper-owns-commit) — it has already
+    # durably committed the document INSERT + Job before dispatch. A code doc
+    # enters DOCUMENT_PREPARATION here (BE8); every other type is unchanged (I6).
 
     logger.info(
         "document_created",
@@ -786,17 +827,15 @@ async def confirm_upload(
         raw_size_bytes=len(body_bytes),
     )
 
-    job = await enqueue_ingestion(
+    job = await _enqueue_document_flow(
         redis=arq,
         session=session,
         tenant_id=tenant.tenant_id,
-        node_id=node_id,
-        material_id=document.id,
-        source_type=body.source_type,
-        source_url=s3_url,
+        document=document,
         duration_sec=duration_sec,
     )
-    # enqueue_ingestion owns the commit (QQ5 helper-owns-commit).
+    # The flow helper owns the commit (QQ5 helper-owns-commit); a code doc enters
+    # DOCUMENT_PREPARATION here (BE8), every other type is unchanged (I6).
 
     logger.info(
         "presigned_upload_confirmed",
@@ -1265,14 +1304,11 @@ async def retry_document(
     duration_sec = await job_repo.get_latest_ingest_duration_for_material(document.id)
 
     try:
-        job = await enqueue_ingestion(
+        job = await _enqueue_document_flow(
             redis=arq,
             session=session,
             tenant_id=tenant.tenant_id,
-            node_id=document.course_node_id,
-            material_id=document.id,
-            source_type=document.source_type,
-            source_url=document.source_url,
+            document=document,
             duration_sec=duration_sec,
         )
     except IntegrityError as exc:
@@ -1296,6 +1332,129 @@ async def retry_document(
 
     logger.info(
         "document_retry",
+        document_id=str(document_id),
+        job_id=str(job.id),
+    )
+    # L3: bind the freshly-enqueued 'queued' Job so ``processing_phase``
+    # derives 'queued' with no lazy load (Рат.3 / Рат.6).
+    set_committed_value(document, "pending_job", job)
+    response = AuthoredDocumentCreateResponse.model_validate(document)
+    response.job_id = job.id
+    response.processing_estimate = _processing_estimate()
+    return response
+
+
+@router.post("/documents/{document_id}/file-roles")
+async def confirm_file_roles(
+    document_id: uuid.UUID,
+    body: FileRolesDecisionRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+    arq: ArqDep,
+) -> AuthoredDocumentCreateResponse:
+    """Confirm the author's file-role decision, then enqueue processing (№21).
+
+    Flow point 4: validate against the current proposal → persist the decision
+    (proposal byte-untouched, invariant I1) → enqueue DOCUMENT_PROCESSING. The
+    enqueue mirrors :func:`retry_document` — supersede any in-flight job of this
+    subject (a no-op in the normal ``awaiting_author`` state), then enqueue; a
+    concurrent collision surfaces as 409, never a 500 from the idempotency index.
+
+    Validation:
+
+    * ``tree_digest`` must equal the current ``proposal.tree_digest`` — else 409
+      ``file_roles_stale`` (the tree changed, or there is no proposal; the client
+      re-reads the document and re-renders the screen).
+    * ``files`` keys must EXACTLY cover ``proposal.files`` — a missing or extra
+      path is a 422 (the UI expands folder gestures to per-file states, so a full
+      cover is expected; decision 3 / decision 4).
+    * role tokens are validated by the request schema (``Literal`` — a 422 on an
+      unknown token; ``auxiliary`` is legal, decision 2).
+    """
+    from datetime import UTC, datetime
+
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    if document.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Document has been deleted; confirmation is no longer available.",
+        )
+
+    proposal = (document.file_roles or {}).get("proposal") or {}
+    # (1) digest gate — an absent proposal has a null digest, so a stale or
+    # missing proposal both land here (stable token the client keys on).
+    if body.tree_digest != proposal.get("tree_digest"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "file_roles_stale",
+                "details": (
+                    "the file-role proposal changed or is absent; re-read the "
+                    "document and confirm against the current proposal."
+                ),
+            },
+        )
+    # (2) full-cover gate — the decision must role EVERY proposal file and no
+    # others (decision 3 / decision 4).
+    if set(body.files) != set(proposal.get("files", {})):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "file_roles_incomplete",
+                "details": (
+                    "the decision must assign a role to every proposal file and "
+                    "no others (missing or extra paths are not allowed)."
+                ),
+            },
+        )
+
+    # Persist the decision — proposal byte-untouched (invariant I1). decided_at
+    # is injected here (mirror of the prep job's computed_at).
+    decision: dict[str, object] = {
+        "files": dict(body.files),
+        "tree_digest": body.tree_digest,
+        "decided_at": datetime.now(UTC).isoformat(),
+    }
+    await document_repo.store_file_roles_decision(document_id, decision=decision)
+
+    # Enqueue processing — mirror retry_document: supersede any in-flight job of
+    # this subject, then enqueue; a collision on the index → 409, not a 500.
+    jcs = JobCancellationService(session)
+    await jcs.cancel_jobs_for_entities([document.id])
+    job_repo = JobRepository(session)
+    duration_sec = await job_repo.get_latest_ingest_duration_for_material(document.id)
+    try:
+        job = await enqueue_ingestion(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            node_id=document.course_node_id,
+            material_id=document.id,
+            source_type=document.source_type,
+            source_url=document.source_url,
+            duration_sec=duration_sec,
+        )
+    except IntegrityError as exc:
+        # A concurrent job won the subject slot between the cancel above and
+        # this insert — surface a human 409, never a 500 from the index.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUBJECT_ALREADY_PROCESSING",
+                "details": (
+                    "a concurrent job is already processing this document; "
+                    "try again shortly."
+                ),
+            },
+        ) from exc
+
+    logger.info(
+        "document_file_roles_confirmed",
         document_id=str(document_id),
         job_id=str(job.id),
     )

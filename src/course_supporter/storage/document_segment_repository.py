@@ -224,6 +224,7 @@ class DocumentSegmentRepository:
                     content_char_count=len(content),
                     main_concepts=list(draft.main_concepts),
                     secondary_concepts=list(draft.secondary_concepts),
+                    is_auxiliary=draft.is_auxiliary,
                     # Video visual stream (task 2.4.6); [] for every other
                     # source type (draft.visual_content is None) -- coerced so
                     # the not-null JSONB column always receives a real array.

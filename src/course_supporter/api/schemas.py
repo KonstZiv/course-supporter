@@ -354,10 +354,11 @@ class AuthoredDocumentSummaryResponse(BaseModel):
         description=(
             "External processing phase (L3, root cause #2): ``queued`` "
             "(standing in the queue, no worker has taken it), ``processing`` "
-            "(a worker is processing it), ``ready``, or ``error``. Splits the "
-            "in-flight ``pending`` state into ``queued`` vs ``processing``; the "
-            "terminal values (``ready`` / ``error``) mirror ``state`` verbatim. "
-            "Never null/empty."
+            "(a worker is processing it), ``awaiting_author`` (№21: prep "
+            "produced a file-role proposal the author has not yet confirmed), "
+            "``ready``, or ``error``. Splits the in-flight ``pending`` state "
+            "into ``queued`` vs ``processing``; the terminal values "
+            "(``ready`` / ``error``) mirror ``state`` verbatim. Never null/empty."
         ),
     )
     error_message: str | None = Field(
@@ -450,6 +451,33 @@ class AuthoredDocumentUpdateRequest(BaseModel):
     )
 
 
+FileRoleToken = Literal["full", "auxiliary", "structure_only"]
+
+
+class FileRolesDecisionRequest(BaseModel):
+    """№21 confirm-screen payload — the author's per-file role decision.
+
+    ``files`` must assign a role to EVERY proposal file and no others (the UI
+    expands folder gestures to per-file states; decision 3 / decision 4). Role
+    tokens are the three of decision 2 — ``auxiliary`` is legal (author-chosen).
+    """
+
+    files: dict[str, FileRoleToken] = Field(
+        description=(
+            "Per-file role decision. Keys MUST exactly cover the current "
+            "``proposal.files`` — a missing or extra path is a 422. Values: "
+            "``full`` | ``auxiliary`` | ``structure_only``."
+        ),
+    )
+    tree_digest: str = Field(
+        description=(
+            "The ``proposal.tree_digest`` being confirmed against. Must equal "
+            "the current proposal's digest, else the file tree changed and the "
+            "confirmation is stale (409 ``file_roles_stale``)."
+        ),
+    )
+
+
 class AuthoredDocumentResponse(BaseModel):
     """Response schema for a single authored document."""
 
@@ -488,10 +516,11 @@ class AuthoredDocumentResponse(BaseModel):
         description=(
             "External processing phase (L3, root cause #2): ``queued`` "
             "(standing in the queue, no worker has taken it), ``processing`` "
-            "(a worker is processing it), ``ready``, or ``error``. Splits the "
-            "in-flight ``pending`` state into ``queued`` vs ``processing``; the "
-            "terminal values (``ready`` / ``error``) mirror ``state`` verbatim. "
-            "Never null/empty."
+            "(a worker is processing it), ``awaiting_author`` (№21: prep "
+            "produced a file-role proposal the author has not yet confirmed), "
+            "``ready``, or ``error``. Splits the in-flight ``pending`` state "
+            "into ``queued`` vs ``processing``; the terminal values "
+            "(``ready`` / ``error``) mirror ``state`` verbatim. Never null/empty."
         ),
     )
     error_message: str | None = Field(
@@ -503,6 +532,15 @@ class AuthoredDocumentResponse(BaseModel):
     )
     job_id: uuid.UUID | None = Field(
         description="Job ID currently processing this material, or ``null``."
+    )
+    file_roles: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "№21 author file-role markup — the full ``{proposal, decision}`` "
+            "JSONB (proposal written by the DOCUMENT_PREPARATION job; decision "
+            "by the confirm endpoint). ``null`` until prep has run. The confirm "
+            "screen reads this whole object."
+        ),
     )
     created_at: datetime = Field(description="When this entry was created.")
     updated_at: datetime = Field(description="When this entry was last modified.")
@@ -567,7 +605,8 @@ class AuthoredDocumentCreateResponse(BaseModel):
             "External processing phase (L3, root cause #2): on create/confirm/"
             "retry this is ``queued`` (the ingestion job was just enqueued and "
             "no worker has taken it). Full vocabulary elsewhere: ``queued`` | "
-            "``processing`` | ``ready`` | ``error``. Never null/empty."
+            "``processing`` | ``awaiting_author`` | ``ready`` | ``error``. "
+            "Never null/empty."
         ),
     )
     job_id: uuid.UUID | None = Field(

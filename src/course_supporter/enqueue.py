@@ -430,6 +430,74 @@ async def enqueue_base_normalize(
     return base
 
 
+async def enqueue_document_preparation(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+) -> Job:
+    """Create a DOCUMENT_PREPARATION Job + enqueue the deterministic prep task.
+
+    №21. Helper-owns-commit (QQ5, mirrors :func:`enqueue_base_normalize` /
+    :func:`enqueue_ingestion`): a Job-row-backed job with zero ``ExternalService
+    Call`` (prep is deterministic, no LLM). The subject is the AuthoredDocument
+    itself — the SAME subject as ``document_processing`` — so
+    ``uq_jobs_subject_in_flight`` serialises prep and processing on one document
+    (decision 18); a stale prep must be cancelled before processing starts, and
+    the existing cancel-before-retry machinery already does that.
+
+    QQ5 ordering: durable-commit the Job BEFORE the ARQ side-effect (a hot worker
+    never reads a Job the DB has not committed); a second commit records
+    ``arq_job_id``. Payload = ``(job_id, authored_document_id)`` on the default
+    queue — the worker re-reads the document by id.
+
+    Like :func:`enqueue_ingestion`, this binds the fresh Job to the document
+    (``set_pending``): a live prep is then visible as ``queued``/``processing`` on
+    the real document (BE4 precedence, decision 11 — the UI polls prep state), and
+    a *failed* prep surfaces as ``error`` rather than a silent, forever-``ready``
+    document. A prep Job left at rest (terminal) is treated as "no job" by
+    ``derive_processing_phase``, so once prep completes the phase falls through to
+    ``awaiting_author`` via the ``file_roles`` proposal.
+
+    Returns:
+        The created DOCUMENT_PREPARATION :class:`Job` (``arq_job_id`` set).
+    """
+    log = structlog.get_logger().bind(authored_document_id=str(authored_document_id))
+    job_repo = JobRepository(session)
+    entry_repo = AuthoredDocumentRepository(session)
+
+    job = await job_repo.create(
+        tenant_id=tenant_id,
+        job_type=JobType.DOCUMENT_PREPARATION,
+        input_params={"material_id": str(authored_document_id)},
+        subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PREPARATION],
+        subject_id=authored_document_id,
+    )
+    # Bind the prep Job to the document in the SAME commit as the Job row, so the
+    # in-flight phase is visible from the create/retry response onward (mirror of
+    # enqueue_ingestion; decision 11 / BE4 precedence).
+    await entry_repo.set_pending(authored_document_id, job.id)
+    await session.commit()
+
+    arq_job = await redis.enqueue_job(
+        "arq_prepare_document",
+        str(job.id),
+        str(authored_document_id),
+    )
+    if arq_job is not None:
+        await job_repo.set_arq_job_id(job.id, arq_job.job_id)
+        await session.commit()
+
+    log.info(
+        "document_preparation_enqueued",
+        authored_document_id=str(authored_document_id),
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
 async def enqueue_email(
     *,
     arq: ArqRedis,

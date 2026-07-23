@@ -33,7 +33,10 @@ from course_supporter.storage.cascade import (
     scrub_node_summary_final_previous_snapshot,
     scrub_node_summary_raw,
 )
-from course_supporter.storage.processing_phase import derive_processing_phase
+from course_supporter.storage.processing_phase import (
+    derive_processing_phase,
+    is_awaiting_author,
+)
 
 
 class PendingJobNotLoadedError(RuntimeError):
@@ -507,6 +510,23 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         "NULL when Stage 2 hasn't run yet (legacy rows pre-Phase-2.1 C6).",
     )
 
+    # ── Author file-role markup (№21, KD20) ──
+    file_roles: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="№21 author file-role markup (KD20 proposal/decision "
+        "separation). Two independent top-level keys: 'proposal' (system "
+        "suggestion — {files: {<path>: {role, reason}}, tree_digest, "
+        "computed_at, removed: {count}}, written ONLY by the "
+        "DOCUMENT_PREPARATION job) and "
+        "'decision' (author's confirmation — {files: {<path>: <role>}, "
+        "tree_digest, decided_at}, written ONLY by the confirm endpoint) or "
+        "absent. Roles: 'full' | 'auxiliary' | 'structure_only'. Writing "
+        "'decision' NEVER mutates 'proposal' (invariant I1 / KD20): separate "
+        "keys, so the proposal-vs-decision delta survives as labelled data. "
+        "NULL until the prep job has run.",
+    )
+
     # ── Derived state ──
 
     @property
@@ -530,7 +550,10 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         terminal values (``ready`` / ``error``) mirror ``state`` verbatim while
         the in-flight ``pending`` case splits into ``queued`` (worker has not
         taken the job) vs ``processing`` (worker took it), read from the
-        in-flight ``Job.status`` via :attr:`pending_job`.
+        in-flight ``Job.status`` via :attr:`pending_job`. №21 adds
+        ``awaiting_author`` (derived from :attr:`file_roles` via
+        ``is_awaiting_author``) between the in-flight split and ``ready`` — an
+        uncovered prep proposal outranks a stale ``ready``.
 
         ``pending_job`` MUST be eager-loaded on every path that serialises this
         object (Рат.6) — this property never triggers a lazy load, which under
@@ -546,7 +569,9 @@ class AuthoredDocument(SoftDeleteMixin, Base):
             )
         job = self.pending_job if self.job_id is not None else None
         return derive_processing_phase(
-            self.error_message, job.status if job is not None else None
+            self.error_message,
+            job.status if job is not None else None,
+            awaiting_author=is_awaiting_author(self.file_roles),
         )
 
     # ── Timestamps ──
@@ -829,6 +854,17 @@ class DocumentSegment(SoftDeleteMixin, Base):
         server_default=text("'[]'::jsonb"),
         comment="List of concept strings mentioned but not taught (KD-gamma).",
     )
+    is_auxiliary: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        comment="№21 (decision 5): the file-role role of this code segment — "
+        "True = auxiliary (its concepts merge into the material's secondary "
+        "only), False = the central/main role (concepts routed as-is). "
+        "server_default false so legacy segments read honestly as main. Written "
+        "from the SAME author decision as the structure-tree role in one moment "
+        "(invariant, test-locked).",
+    )
     visual_content: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=False,
@@ -941,7 +977,8 @@ class Job(SoftDeleteMixin, Base):
         # ``storage.job_repository`` (JobType / JOB_TRANSITIONS).
         CheckConstraint(
             "job_type IN ('document_processing', 'node_summary_regeneration', "
-            "'homework_processing', 's3_cleanup', 'base_normalize')",
+            "'homework_processing', 's3_cleanup', 'base_normalize', "
+            "'document_preparation')",
             name="ck_jobs_job_type",
         ),
         CheckConstraint(
@@ -960,6 +997,8 @@ class Job(SoftDeleteMixin, Base):
         ),
         CheckConstraint(
             "(job_type = 'document_processing' "
+            "AND subject_type = 'authored_document') "
+            "OR (job_type = 'document_preparation' "
             "AND subject_type = 'authored_document') "
             "OR (job_type = 'homework_processing' "
             "AND subject_type = 'homework_submission') "

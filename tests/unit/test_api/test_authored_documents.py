@@ -39,6 +39,7 @@ STUB_TENANT = TenantContext(
 )
 
 ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_ingestion"
+PREP_ENQUEUE_FUNC = "course_supporter.api.routes.documents.enqueue_document_preparation"
 RUN_STAGE1 = "course_supporter.api.routes.documents.run_stage1"
 GET_MAX_SIZE = "course_supporter.api.routes.documents.get_max_size_for_extension"
 PROBE_URL_FUNC = (
@@ -124,6 +125,9 @@ def _mock_entry(
     entry.error_message = error_message
     entry.error_category = None
     entry.job_id = job_id
+    # №21: explicit so MagicMock auto-attr does not feed
+    # AuthoredDocumentResponse a MagicMock where a dict|None is expected.
+    entry.file_roles = None
     entry.processing_estimate = None
     entry.deleted_at = None
     # Phase 6 T3: explicit so MagicMock auto-attr does not make the
@@ -183,6 +187,20 @@ async def client(
     ) as ac:
         yield ac  # type: ignore[misc]
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> None:
+    """Isolate the process-global rate limiter across tests.
+
+    Every api test authenticates as the same stub tenant → one rate-limit
+    bucket; without a per-test reset a long test file eventually trips its own
+    429 (the sliding window is 60s, far longer than the whole run). Not a
+    behaviour under test here — rate limiting has its own suite.
+    """
+    from course_supporter.auth.scopes import rate_limiter
+
+    rate_limiter.reset()
 
 
 class TestCreateDocument:
@@ -499,7 +517,10 @@ class TestCodeUploadRouting:
                 return_value=_mock_node(node_id=node_id),
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
             patch(RUN_STAGE1) as stage1_mock,
         ):
             resp = await client.post(
@@ -515,6 +536,10 @@ class TestCodeUploadRouting:
             )
         assert resp.status_code == 201
         stage1_mock.assert_not_called()
+        # BE8: a code upload routes to DOCUMENT_PREPARATION, never straight to
+        # ingestion (the author confirms file roles before the expensive pass).
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
         mock_s3.upload_smart.assert_awaited_once()
 
     async def test_code_zip_archive_201_skips_stage1(
@@ -537,7 +562,10 @@ class TestCodeUploadRouting:
                 return_value=_mock_node(node_id=node_id),
             ),
             patch.object(AuthoredDocumentRepository, "create", return_value=entry),
-            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
             patch(RUN_STAGE1) as stage1_mock,
         ):
             resp = await client.post(
@@ -553,6 +581,9 @@ class TestCodeUploadRouting:
             )
         assert resp.status_code == 201
         stage1_mock.assert_not_called()
+        # BE8: a code (zip) upload also routes to DOCUMENT_PREPARATION.
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
 
     async def test_code_non_code_extension_400_forbidden(
         self, client: AsyncClient, node_id: uuid.UUID
@@ -1287,6 +1318,40 @@ class TestRetryDocument:
         data = resp.json()
         assert data["job_id"] == str(job.id)
 
+    async def test_code_retry_routes_to_preparation(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """BE8: retry of a code doc re-runs DOCUMENT_PREPARATION (decision 19),
+        never straight-to-processing; non-code retries stay on ingestion (I6)."""
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="code",
+            state="error",
+            error_message="Processing failed",
+        )
+        job = _mock_job()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                PREP_ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job
+            ) as prep_mock,
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock) as ingest_mock,
+        ):
+            resp = await client.post(f"/api/v1/documents/{entry.id}/retry")
+        assert resp.status_code == 200
+        prep_mock.assert_awaited_once()
+        ingest_mock.assert_not_awaited()
+
     async def test_non_error_state_returns_409(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:
@@ -1721,3 +1786,187 @@ class TestIntakeVideoDurationErrorMapping:
             )
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail["code"] == "INTAKE_DURATION_UNAVAILABLE"
+
+
+_CONFIRM_PROPOSAL = {
+    "files": {
+        "src/app.ts": {"role": "full", "reason": "custom_source"},
+        "package-lock.json": {"role": "structure_only", "reason": "lockfile"},
+    },
+    "tree_digest": "digest-1",
+    "computed_at": "t0",
+}
+_CONFIRM_BODY = {
+    "files": {"src/app.ts": "full", "package-lock.json": "structure_only"},
+    "tree_digest": "digest-1",
+}
+
+
+class TestConfirmFileRoles:
+    """POST /api/v1/documents/{did}/file-roles (№21 confirm-api)."""
+
+    def _entry(self, node_id: uuid.UUID) -> MagicMock:
+        entry = _mock_entry(node_id=node_id, source_type="code", state="ready")
+        entry.file_roles = {"proposal": _CONFIRM_PROPOSAL}
+        return entry
+
+    async def test_happy_path_writes_decision_and_enqueues(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        job = _mock_job()
+        store = AsyncMock(return_value=entry)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                AuthoredDocumentRepository, "store_file_roles_decision", store
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                new_callable=AsyncMock,
+            ),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=job),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles", json=_CONFIRM_BODY
+            )
+        assert resp.status_code == 200
+        assert resp.json()["job_id"] == str(job.id)
+        # Decision written with the full file set + confirmed digest + a stamp.
+        decision = store.call_args.kwargs["decision"]
+        assert set(decision["files"]) == {"src/app.ts", "package-lock.json"}
+        assert decision["tree_digest"] == "digest-1"
+        assert "decided_at" in decision
+
+    async def test_auxiliary_role_is_legal(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                AuthoredDocumentRepository,
+                "store_file_roles_decision",
+                new_callable=AsyncMock,
+                return_value=entry,
+            ),
+            patch.object(
+                JobCancellationService,
+                "cancel_jobs_for_entities",
+                new_callable=AsyncMock,
+            ),
+            patch(ENQUEUE_FUNC, new_callable=AsyncMock, return_value=_mock_job()),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles",
+                json={
+                    "files": {
+                        "src/app.ts": "auxiliary",
+                        "package-lock.json": "structure_only",
+                    },
+                    "tree_digest": "digest-1",
+                },
+            )
+        assert resp.status_code == 200
+
+    async def test_digest_mismatch_returns_409_stale(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles",
+                json={**_CONFIRM_BODY, "tree_digest": "STALE"},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "file_roles_stale"
+
+    async def test_extra_path_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles",
+                json={
+                    "files": {**_CONFIRM_BODY["files"], "extra.ts": "full"},
+                    "tree_digest": "digest-1",
+                },
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "file_roles_incomplete"
+
+    async def test_partial_coverage_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles",
+                json={"files": {"src/app.ts": "full"}, "tree_digest": "digest-1"},
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "file_roles_incomplete"
+
+    async def test_invalid_role_token_returns_422(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        entry = self._entry(node_id)
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/documents/{entry.id}/file-roles",
+                json={
+                    "files": {
+                        "src/app.ts": "bogus",
+                        "package-lock.json": "structure_only",
+                    },
+                    "tree_digest": "digest-1",
+                },
+            )
+        assert resp.status_code == 422  # Pydantic Literal rejection
+
+    async def test_not_found_returns_404(self, client: AsyncClient) -> None:
+        with patch.object(AuthoredDocumentRepository, "get_by_id", return_value=None):
+            resp = await client.post(
+                f"/api/v1/documents/{uuid.uuid4()}/file-roles", json=_CONFIRM_BODY
+            )
+        assert resp.status_code == 404

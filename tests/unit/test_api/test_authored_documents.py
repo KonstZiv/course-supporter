@@ -93,6 +93,7 @@ def _mock_entry(
     *,
     entry_id: uuid.UUID | None = None,
     node_id: uuid.UUID | None = None,
+    course_root_id: uuid.UUID | None = None,
     source_type: str = "text",
     material_role: str = "educational",
     task_type: str | None = None,
@@ -108,6 +109,9 @@ def _mock_entry(
     entry = MagicMock()
     entry.id = entry_id or uuid.uuid4()
     entry.course_node_id = node_id or uuid.uuid4()
+    # A-BE-2 (№21): explicit so MagicMock auto-attr does not feed the response a
+    # MagicMock where a uuid|None is expected (same hazard as file_roles below).
+    entry.course_root_id = course_root_id
     entry.source_type = source_type
     entry.material_role = material_role
     entry.task_type = task_type
@@ -966,6 +970,24 @@ class TestGetDocument:
         data = resp.json()
         assert data["id"] == str(entry.id)
         assert data["state"] == "ready"
+
+    async def test_returns_course_root_id(
+        self, client: AsyncClient, node_id: uuid.UUID
+    ) -> None:
+        """A-BE-2 (№21): the response projects the stored course_root_id."""
+        root_id = uuid.uuid4()
+        entry = _mock_entry(node_id=node_id, course_root_id=root_id, state="ready")
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+        ):
+            resp = await client.get(f"/api/v1/documents/{entry.id}")
+        assert resp.status_code == 200
+        assert resp.json()["course_root_id"] == str(root_id)
 
     async def test_not_found_returns_404(self, client: AsyncClient) -> None:
         """Non-existent document returns 404."""

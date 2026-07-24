@@ -26,6 +26,7 @@ def _orm_like() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
         course_node_id=uuid.uuid4(),
+        course_root_id=uuid.uuid4(),
         source_type="web",
         material_role="educational",
         task_type=None,

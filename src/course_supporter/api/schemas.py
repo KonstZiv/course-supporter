@@ -487,6 +487,16 @@ class AuthoredDocumentResponse(BaseModel):
     course_node_id: uuid.UUID = Field(
         description="Parent node this material belongs to."
     )
+    course_root_id: uuid.UUID = Field(
+        description=(
+            "Root CourseNode of the course this document's node belongs to "
+            "(KD-delta denormalised root). Projection of the already-stored "
+            "``AuthoredDocument.course_root_id`` — a NOT NULL column resolved by "
+            "a parent walk at creation, so this is always present (never null); "
+            "no migration, no read-time resolution. Equals ``course_node_id`` "
+            "when the document sits on a root node."
+        ),
+    )
     source_type: str = Field(
         description="Material type: ``video``, ``presentation``, ``text``, or ``web``."
     )

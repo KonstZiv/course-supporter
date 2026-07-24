@@ -1053,6 +1053,10 @@ async def get_document(
     # L3: load the in-flight Job so ``processing_phase`` derives without a
     # lazy load (Рат.6). Single-doc read path → one extra select, not N+1.
     await session.refresh(document, ["pending_job"])
+    # A-BE-2 (№21): ``course_root_id`` projects from the stored, already-loaded
+    # AuthoredDocument column (denormalised at creation by
+    # ``_resolve_course_root_id``) via ``from_attributes`` — no read-time
+    # resolution, no migration. Root-level docs read it == course_node_id.
     return AuthoredDocumentResponse.model_validate(document)
 
 

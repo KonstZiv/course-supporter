@@ -24,7 +24,6 @@ from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import Job
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
@@ -87,12 +86,16 @@ class TestPreparationVisibility:
         arq_redis: ArqRedis,
     ) -> None:
         """After enqueue_document_preparation the document carries the prep job as
-        its pending receipt — a live prep reads as ``queued`` (not ``ready``)."""
+        its pending receipt — a live prep reads as ``queued`` (not ``ready``) — and
+        the prep Job is stamped with its document's owning ``course_node_id`` so the
+        node-deletion cascade and the standard committed_seeds teardown both reach
+        it (no hand cleanup)."""
         async with session_factory() as session:
             job = await enqueue_document_preparation(
                 redis=arq_redis,
                 session=session,
                 tenant_id=committed_seeds["tenant_id"],
+                node_id=committed_seeds["course_node_id"],
                 authored_document_id=committed_seeds["material_id"],
             )
             prep_job_id = job.id
@@ -103,6 +106,13 @@ class TestPreparationVisibility:
             )
             assert doc is not None
             assert doc.job_id == prep_job_id
+            # The prep Job carries its document's owning node. Without it the
+            # committed_seeds teardown (DELETE jobs WHERE course_node_id=…) would
+            # miss the row — the exact flaw this test used to compensate for by
+            # hand-reaping the Job.
+            prep_job = await JobRepository(session).get_by_id(prep_job_id)
+            assert prep_job is not None
+            assert prep_job.course_node_id == committed_seeds["course_node_id"]
 
         phase = await _phase_of(
             session_factory,
@@ -110,13 +120,6 @@ class TestPreparationVisibility:
             material_id=committed_seeds["material_id"],
         )
         assert phase == "queued"
-
-        # enqueue_document_preparation does not stamp course_node_id on the Job
-        # (orthogonal to this task), so committed_seeds' teardown misses it —
-        # reap it here to keep the tenant delete FK-clean.
-        async with session_factory() as session:
-            await session.execute(Job.__table__.delete().where(Job.id == prep_job_id))
-            await session.commit()
 
     async def test_failed_prep_surfaces_error(
         self,

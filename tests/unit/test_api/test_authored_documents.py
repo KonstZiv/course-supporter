@@ -109,9 +109,10 @@ def _mock_entry(
     entry = MagicMock()
     entry.id = entry_id or uuid.uuid4()
     entry.course_node_id = node_id or uuid.uuid4()
-    # A-BE-2 (№21): explicit so MagicMock auto-attr does not feed the response a
-    # MagicMock where a uuid|None is expected (same hazard as file_roles below).
-    entry.course_root_id = course_root_id
+    # A-BE-2 (№21): explicit real UUID so MagicMock auto-attr does not feed the
+    # response a MagicMock — the field is a required uuid.UUID (the ORM column is
+    # NOT NULL), so a mock must always carry a concrete value.
+    entry.course_root_id = course_root_id or uuid.uuid4()
     entry.source_type = source_type
     entry.material_role = material_role
     entry.task_type = task_type

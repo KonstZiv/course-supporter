@@ -398,6 +398,7 @@ async def _enqueue_document_flow(
             redis=redis,
             session=session,
             tenant_id=tenant_id,
+            node_id=document.course_node_id,
             authored_document_id=document.id,
         )
     return await enqueue_ingestion(

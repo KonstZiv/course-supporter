@@ -435,6 +435,7 @@ async def enqueue_document_preparation(
     redis: ArqRedis,
     session: AsyncSession,
     tenant_id: uuid.UUID,
+    node_id: uuid.UUID,
     authored_document_id: uuid.UUID,
 ) -> Job:
     """Create a DOCUMENT_PREPARATION Job + enqueue the deterministic prep task.
@@ -446,6 +447,11 @@ async def enqueue_document_preparation(
     ``uq_jobs_subject_in_flight`` serialises prep and processing on one document
     (decision 18); a stale prep must be cancelled before processing starts, and
     the existing cancel-before-retry machinery already does that.
+
+    The prep Job is stamped with its owning ``node_id`` (mirror of
+    :func:`enqueue_ingestion`): ``course_node_id`` powers context/attribution and
+    gives the node-deletion cascade its reach over the prep Job — without it a
+    live prep would be orphaned from the node it belongs to.
 
     QQ5 ordering: durable-commit the Job BEFORE the ARQ side-effect (a hot worker
     never reads a Job the DB has not committed); a second commit records
@@ -469,8 +475,13 @@ async def enqueue_document_preparation(
 
     job = await job_repo.create(
         tenant_id=tenant_id,
+        course_node_id=node_id,
         job_type=JobType.DOCUMENT_PREPARATION,
         input_params={"material_id": str(authored_document_id)},
+        # ``course_node_id`` is the owning node — context/attribution + node-
+        # deletion cascade reach (mirror of enqueue_ingestion); the cancellation
+        # TARGET stays subject_id (the AuthoredDocument), which
+        # ``uq_jobs_subject_in_flight`` serialises against document_processing.
         subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PREPARATION],
         subject_id=authored_document_id,
     )

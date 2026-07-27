@@ -587,11 +587,10 @@ class TestCompleteAsyncText:
     """``complete`` end-to-end via mocked ``AioGeneration.call`` (DD-2.4-O).
 
     Covers the text-generation branch — the SDK endpoint Qwen text
-    reasoning flagships (``qwen3.7-max-2026-05-20``,
-    ``qwen3-max-2026-01-23``) belong to. Image bytes intentionally
-    absent on every test in this class so the detector picks this
-    branch; the asymmetric routing proof (each branch picks its own
-    SDK class) lives in ``TestCompleteRouting``.
+    reasoning flagships (``qwen3.7-max-2026-05-20``) belong to. Image
+    bytes intentionally absent on every test in this class so the
+    detector picks this branch; the asymmetric routing proof (each
+    branch picks its own SDK class) lives in ``TestCompleteRouting``.
     """
 
     @pytest.mark.asyncio

@@ -39,10 +39,9 @@
 #      shipped in sub-area #0 (``f89ce84``).
 #   2. gemini/gemini-3-flash-preview — fallback 1.
 #      Spike v2: $0.00161/slide, 4.02s avg latency (FASTEST), structured
-#      output + thinking levels capable. Pricing in
-#      ``external_services.yaml`` is currently PROVISIONAL (copied from
-#      gemini-2.5-flash); update once Google publishes official rates
-#      for the preview tier. Preview-tier stability acknowledged in
+#      output + thinking levels capable. Pricing lives in
+#      external_services.yaml (single source of truth). Preview-tier
+#      stability acknowledged in
 #      SPIKE-RESULTS §4 deferred concern #6.
 #   3. gemini/gemini-2.5-flash — fallback 2 / deep tier.
 #      Spike v2: $0.00164/slide, 5.25s latency. Cross-source-type

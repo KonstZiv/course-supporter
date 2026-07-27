@@ -33,7 +33,7 @@
 #      Registry ceiling is 65536, but the per-rung ``max_output_tokens: 8192``
 #      pins the budget contract rung-uniform so truncation surfaces as the
 #      same chunk-parse mismatch regardless of which rung answered (it never
-#      hides behind a silent fallback). Preview-tier pricing is PROVISIONAL.
+#      hides behind a silent fallback).
 #   3. gemini/gemini-2.5-flash — fallback 2 / stable deep tier. Same 8192 pin.
 #
 # Anthropic (Claude) vision R3 rung **deferred** per DD-2.3-AD: no Claude
@@ -110,14 +110,14 @@ stages:
   #
   # Rungs (post-task-2.4.17 — cost-first within reasoning-tier; flash-tier
   # is excluded as proven-collapsing on this workload):
-  #   1. deepseek_thinking/deepseek-v4-pro — cheapest reasoning-tier
-  #      ($1.74/$3.48 per 1M durable, 28% cheaper than qwen3.7-max). Highest
+  #   1. deepseek_thinking/deepseek-v4-pro — cheapest reasoning-tier.
+  #      Highest
   #      latency (~7 min) is acceptable for background ingestion; tradeoff
   #      ratified per Q3 ratify 2026-06-05.
   #   2. dashscope/qwen3.7-max — diverse-provider rescue (different vendor /
   #      data-centre / billing surface from DeepSeek). Reasoning-tier
   #      flagship with 1M context and 65k output; ~4× faster than Pro.
-  #   3. gemini/gemini-2.5-pro — last-resort escalation ($1.25/$10 per 1M);
+  #   3. gemini/gemini-2.5-pro — last-resort escalation;
   #      reasoning-tier baseline at Google; survives outages where both
   #      DeepSeek and DashScope MaaS surfaces would be down.
   #
@@ -138,9 +138,8 @@ stages:
   # Output-pin policy (DD-2.4-H). Per-rung ``max_output_tokens: 65536`` is
   # the sprint-wide video Pass 2a value lifted from the 8192 baseline (the
   # 8K pin truncated 23-min transcripts in RUN_SMOKE #1). All three rungs'
-  # underlying models support 65k+ output (DeepSeek V4 Pro 384k per the
-  # official docs verified 2026-06-05; Qwen 3.7-Max 65k from OpenRouter;
-  # Gemini 2.5 Pro 65k registered). Other Pass 2a stages (audio /
+  # underlying models support 65k+ output (ceilings per
+  # external_services.yaml). Other Pass 2a stages (audio /
   # presentation / text) keep the 8192 pin — DD-2.4-H stays live sprint-
   # wide; video Pass 2a is lifted "as a class" per the optional clause
   # ratified in task-2.4.12 and preserved here.

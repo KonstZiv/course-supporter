@@ -231,3 +231,8 @@ current-doc/vd-spike/example-video/
 # Temp test artifacts (CP tests, spike results, media)
 tmp/
 current-doc/stt-spike/sample.mp3
+
+# Video calibration material (vision-model spike) — binaries never committed;
+# only the tracked manifest.md is kept.
+data/calibration/video/*
+!data/calibration/video/manifest.md

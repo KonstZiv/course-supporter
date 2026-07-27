@@ -467,7 +467,6 @@ class TestCallbackIntegrationWithArqTask:
         ctx_manager.__aexit__ = AsyncMock(return_value=False)
 
         factory = MagicMock(return_value=ctx_manager)
-        router = MagicMock()
 
         mock_entry = MagicMock()
         mock_entry.source_url = "https://example.com"
@@ -475,7 +474,6 @@ class TestCallbackIntegrationWithArqTask:
 
         ctx = {
             "session_factory": factory,
-            "model_router": router,
             "stage_router": MagicMock(),
             "redis": MagicMock(),
         }

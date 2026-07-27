@@ -53,8 +53,8 @@ class TestStageRouterFoundation:
     def test_stage_router_instantiates_with_loaded_config(self) -> None:
         """``StageRouter`` constructor accepts ``ladder_config`` + ``providers``.
 
-        Option-a two-build wiring per §6.2 ratify: providers built once
-        for StageRouter independently of ModelRouter's internal providers.
+        Option-a two-build wiring per §6.2 ratify: providers are built
+        once for StageRouter's own use.
         """
         ladder_config = load_ladder_config(settings.ladders_dir)
         providers = create_providers(settings)
@@ -68,9 +68,9 @@ class TestStageRouterFoundation:
     async def test_get_stage_router_dependency_returns_app_state_router(self) -> None:
         """``get_stage_router`` reads ``request.app.state.stage_router``.
 
-        Mirrors the existing ``get_model_router`` resolution pattern
-        (api/deps.py:90). The dependency is the integration point for
-        future StageRouter consumers (homework migration in Phase 1.2.2).
+        Uses the same app-state resolution pattern as the other request
+        dependencies (api/deps.py). The dependency is the integration point
+        for future StageRouter consumers (homework migration in Phase 1.2.2).
         """
         ladder_config = load_ladder_config(settings.ladders_dir)
         providers = create_providers(settings)

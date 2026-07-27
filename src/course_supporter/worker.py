@@ -137,7 +137,7 @@ async def _reconcile_orphaned_in_flight_jobs(
 async def startup(ctx: WorkerCtx) -> None:
     """Initialize worker resources on startup.
 
-    Creates an async engine, session factory, and model router,
+    Creates an async engine, session factory, and StageRouter,
     storing them in the worker context for use by task functions.
     """
     from sqlalchemy.ext.asyncio import (
@@ -146,7 +146,6 @@ async def startup(ctx: WorkerCtx) -> None:
         create_async_engine,
     )
 
-    from course_supporter.llm import create_model_router
     from course_supporter.llm.factory import create_providers
     from course_supporter.llm.ladder_config import (
         load_ladder_config,
@@ -172,12 +171,9 @@ async def startup(ctx: WorkerCtx) -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    # Load the model registry once and share it across both routers
-    # (TASK-2.4.22): ModelRouter consumes it for action-chain routing and
-    # cost; StageRouter consumes it for ESC cost_usd + max_tokens fallback
-    # on unpinned ladder rungs.
+    # Load the model registry once for the StageRouter: it consumes it for
+    # ESC cost_usd + max_tokens fallback on unpinned ladder rungs.
     registry = load_registry(s.external_services_path)
-    model_router = create_model_router(s, session_factory, registry=registry)
 
     # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
     # (option a, two-build); mirrors the FastAPI lifespan wiring in
@@ -206,7 +202,6 @@ async def startup(ctx: WorkerCtx) -> None:
 
     ctx["engine"] = engine
     ctx["session_factory"] = session_factory
-    ctx["model_router"] = model_router
     ctx["stage_router"] = stage_router
     ctx["s3_client"] = s3
 

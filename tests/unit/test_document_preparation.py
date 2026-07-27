@@ -12,10 +12,10 @@ import inspect
 
 from course_supporter.api.tasks import arq_ingest_material, arq_prepare_document
 
-# The LLM-router surface a deterministic body must never touch. StageRouter /
-# ModelRouter are the ladder entry points; the ``ctx[...]`` keys are how a body
-# pulls them out of the ARQ context.
-_LLM_ROUTER_TOKENS = ("stage_router", "model_router", "StageRouter", "ModelRouter")
+# The LLM-router surface a deterministic body must never touch. StageRouter is
+# the ladder entry point; the ``ctx[...]`` key is how a body pulls it out of the
+# ARQ context.
+_LLM_ROUTER_TOKENS = ("stage_router", "StageRouter")
 
 
 def _body_source(fn: object) -> str:

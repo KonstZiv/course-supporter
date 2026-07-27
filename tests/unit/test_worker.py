@@ -136,7 +136,6 @@ class TestWorkerLifecycle:
                 return_value=MagicMock(),
             ),
             patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
-            patch("course_supporter.llm.create_model_router"),
         ):
             await startup(ctx)
             mock_logging.assert_called_once()
@@ -151,7 +150,6 @@ class TestWorkerLifecycle:
                 return_value=mock_engine,
             ),
             patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
-            patch("course_supporter.llm.create_model_router"),
         ):
             await startup(ctx)
         assert ctx["engine"] is mock_engine
@@ -166,25 +164,9 @@ class TestWorkerLifecycle:
                 "sqlalchemy.ext.asyncio.async_sessionmaker",
                 return_value=mock_factory,
             ),
-            patch("course_supporter.llm.create_model_router"),
         ):
             await startup(ctx)
         assert ctx["session_factory"] is mock_factory
-
-    async def test_startup_stores_model_router_in_ctx(self) -> None:
-        ctx: dict[str, object] = {}
-        mock_router = MagicMock()
-        with (
-            patch("course_supporter.worker.configure_logging"),
-            patch("sqlalchemy.ext.asyncio.create_async_engine"),
-            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
-            patch(
-                "course_supporter.llm.create_model_router",
-                return_value=mock_router,
-            ),
-        ):
-            await startup(ctx)
-        assert ctx["model_router"] is mock_router
 
     async def test_shutdown_disposes_engine(self) -> None:
         mock_engine = MagicMock()
@@ -219,7 +201,6 @@ class TestWorkerLifecycle:
             patch("course_supporter.worker.configure_logging"),
             patch("sqlalchemy.ext.asyncio.create_async_engine"),
             patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
-            patch("course_supporter.llm.create_model_router"),
             patch(
                 "course_supporter.storage.s3.S3Client",
                 return_value=mock_s3,

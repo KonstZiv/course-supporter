@@ -1,9 +1,8 @@
 """Stage-keyed LLM router (KD16).
 
-Coexistent with the legacy :class:`course_supporter.llm.router.ModelRouter`,
-not integrated: the agents route through :class:`StageRouter`. The legacy
-router is still present but called from no production path as of 2026-07-19;
-its removal date is undetermined, scope tracked as DD-20-A.
+The single LLM routing surface: agents and ingestion route every call
+through :class:`StageRouter` over the ladder configs in
+``config/ladders_*.yaml``.
 
 Per-attempt fallback policy (vision §3 KD16):
 
@@ -126,7 +125,7 @@ class StageRouter:
         # invariant "StageRouter knows pricing + per-model token caps" is
         # structural — a forgotten registry would silently revert
         # cost_usd / max_tokens fallback to NULL / None (the bug TASK-2.4.22
-        # closes). Mirrors the legacy ModelRouter's required registry slot.
+        # closes).
         self._registry = registry
         self._session_factory = session_factory
         self._prompt_base_path = prompt_base_path
@@ -474,7 +473,7 @@ class StageRouter:
                 # None) and zero-token success (NULL is semantically right
                 # for "nothing billable"). Model not in registry → NULL
                 # (graceful — caller's responsibility to keep registry in
-                # sync). Mirrors legacy ``ModelRouter`` cost computation.
+                # sync).
                 computed_cost: float | None = None
                 if response is not None and (response.tokens_in or response.tokens_out):
                     cost_model = self._registry.models.get(entry.model)

@@ -376,7 +376,7 @@ class Settings(BaseSettings):
     # Configurable per environment via env vars.
     # Defaults can be overridden via external_services.yaml registry.
     gemini_default_model: str = "gemini-2.5-flash"
-    anthropic_default_model: str = "claude-sonnet-4-20250514"
+    anthropic_default_model: str = "claude-sonnet-4-5-20250929"
     openai_default_model: str = "gpt-4o-mini"
     deepseek_default_model: str = "deepseek-v4-flash"
     # Thinking-on sibling defaults to V4 Pro (reasoning-tier flagship; the only

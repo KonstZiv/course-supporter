@@ -77,7 +77,6 @@ from course_supporter.models.source import (
 from course_supporter.security.exceptions import ErrorCategory
 
 if TYPE_CHECKING:
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
 
@@ -200,13 +199,8 @@ class PresentationProcessor(MaterialProcessor):
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         """Stage 1 — extract per-slide text + render images → SourceDocument.
-
-        The ``router`` parameter is accepted for ABC symmetry but not
-        used (presentation extraction is LibreOffice + PyMuPDF, no LLM).
 
         Flow:
         1. Validate ``source_type`` + extension.

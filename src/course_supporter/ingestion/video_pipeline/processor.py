@@ -69,7 +69,6 @@ if TYPE_CHECKING:
         FrameDescription,
         SttResult,
     )
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.stt.router import STTRouter
@@ -101,17 +100,13 @@ class VideoProcessor(MaterialProcessor):
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         """Krok 1-4 → ``SourceDocument``.
 
         Reads ``job_id`` from the ContextVar (set at ARQ task entry) for
         the Redis carrier key. All transient files (yt-dlp download,
         extracted audio, sampled frame JPEGs) live in a processor-owned
-        tempdir cleaned on exit. The ``router`` (``ModelRouter``) parameter
-        is accepted for ABC symmetry but unused; Pass 1 (Krok 4) uses the
-        injected ``self._stage_router`` (the vision ladder), not this arg.
+        tempdir cleaned on exit.
         """
         job_id = get_current_job_id()
         if job_id is None:

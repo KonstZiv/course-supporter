@@ -80,7 +80,7 @@ async def test_openai_compat_honors_expects_json() -> None:
 
     with patch("course_supporter.llm.providers.openai_compat.openai.AsyncOpenAI"):
         prov = OpenAICompatProvider(
-            api_keys=("k",), default_model="deepseek-chat", provider_name="deepseek"
+            api_keys=("k",), default_model="deepseek-v4-flash", provider_name="deepseek"
         )
 
     resp = MagicMock()

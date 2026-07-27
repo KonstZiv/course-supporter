@@ -67,7 +67,7 @@ class TestIngestSeamSkipIfDead:
         )
 
         # Only session_factory is needed: the seam skips the body on a dead
-        # subject, so model_router / stage_router / redis are never touched.
+        # subject, so stage_router / redis are never touched.
         ctx = {"session_factory": session_factory}
         result = await arq_ingest_material(
             ctx, str(job_id), str(mid), "web", "https://example.com/e2e"

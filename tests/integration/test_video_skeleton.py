@@ -177,7 +177,6 @@ def _build_ctx(
     """Minimal ARQ worker context for the ingestion task."""
     return {
         "session_factory": session_factory,
-        "model_router": MagicMock(),
         "stage_router": MagicMock(),
         "redis": AsyncMock(),
         "s3_client": None,

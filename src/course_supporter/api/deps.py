@@ -18,7 +18,6 @@ from course_supporter.auth.student_session import (
     SessionTokenError,
     decode_session_token,
 )
-from course_supporter.llm.router import ModelRouter
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Student, StudentCredential, Tenant
@@ -31,7 +30,6 @@ __all__ = [
     "get_arq_redis",
     "get_current_student",
     "get_current_tenant",
-    "get_model_router",
     "get_s3_client",
     "get_session",
     "get_stage_router",
@@ -150,14 +148,6 @@ async def get_arq_redis(request: Request) -> ArqRedis:
     Initialized during lifespan startup.
     """
     return cast("ArqRedis", request.app.state.arq_redis)
-
-
-async def get_model_router(request: Request) -> ModelRouter:
-    """Retrieve ModelRouter from app state.
-
-    Initialized during lifespan startup.
-    """
-    return cast(ModelRouter, request.app.state.model_router)
 
 
 async def get_stage_router(request: Request) -> StageRouter:

@@ -75,13 +75,11 @@ def _make_session_factory(session: AsyncMock | None = None) -> MagicMock:
 
 def _make_arq_ctx(
     factory: MagicMock | None = None,
-    router: MagicMock | None = None,
     stage_router: MagicMock | None = None,
 ) -> dict[str, object]:
     """Build an ARQ worker context dict for testing."""
     return {
         "session_factory": factory or _make_session_factory(),
-        "model_router": router,
         "stage_router": stage_router or MagicMock(),
         "redis": MagicMock(),
     }

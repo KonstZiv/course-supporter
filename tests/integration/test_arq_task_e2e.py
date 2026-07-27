@@ -44,7 +44,6 @@ def _build_ctx(
     """
     return {
         "session_factory": session_factory,
-        "model_router": MagicMock(),
         "stage_router": MagicMock(),
         "redis": MagicMock(),
     }

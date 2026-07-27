@@ -41,7 +41,6 @@ def _build_ctx(
 ) -> dict[str, Any]:
     return {
         "session_factory": session_factory,
-        "model_router": MagicMock(),
         "stage_router": MagicMock(),
         # ArqRedis pool injected into every job ctx; the shared task unpacks
         # it for the audio/video processor factory (task 2.4.2). Mocked here

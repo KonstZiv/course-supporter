@@ -30,7 +30,6 @@ from course_supporter.models.source import (
 from course_supporter.security.exceptions import ErrorCategory
 
 if TYPE_CHECKING:
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
 
@@ -47,14 +46,11 @@ class TextProcessor(MaterialProcessor):
     """Process text documents (MD, DOCX, HTML, TXT).
 
     Extracts headings and paragraphs without LLM.
-    The router parameter is accepted but not used.
     """
 
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         if source.source_type != SourceType.TEXT:
             raise UnsupportedFormatError(

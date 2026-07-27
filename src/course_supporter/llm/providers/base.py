@@ -59,7 +59,7 @@ class LLMProvider(abc.ABC):
     provider_name: str = ""
 
     # Override in subclasses where the API requires max_tokens
-    # (e.g. Anthropic). Used by ModelRouter token guard when neither
+    # (e.g. Anthropic). Used by the StageRouter token guard when neither
     # request nor model config specifies a value.
     default_max_output_tokens: int | None = None
 
@@ -121,7 +121,7 @@ class LLMProvider(abc.ABC):
         Raises:
             StructuredOutputError: If the response is not valid JSON
                 or doesn't match the schema. Retry logic is handled
-                by ModelRouter (S1-009), not individual providers.
+                by StageRouter (S1-009), not individual providers.
         """
         try:
             return response_schema.model_validate_json(raw_json)

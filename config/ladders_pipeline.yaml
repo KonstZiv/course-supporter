@@ -3,18 +3,7 @@
 # Phase 1+ tasks add real stages here as they rewrite each pass:
 #   pass_1_video_vision, pass_2a_mapping, pass_2b_safety,
 #   pass_2c_denoise, etc.
-#
-# The single example stage below proves the loader works and
-# documents the expected shape.
 stages:
-  example_stage:
-    prompt_ref: "prompts/example/v1.md"
-    ladder:
-      - provider: anthropic
-        model: claude-sonnet-4-20250514
-      - provider: gemini
-        model: gemini-2.5-flash
-
   # Pass 2a -- cost-first semantic mapping for text/web ingestion
   # (KD-2.1-A, KD-2.1-O). Produces DocumentSummary fields (title /
   # description / content_char_count) and segment boundaries used by
@@ -37,10 +26,10 @@ stages:
   #      structured-output workload.
   #
   # Snapshot convention: anthropic models pinned (date-stamped
-  # snapshot for deterministic reproducibility per
-  # ladders_methodist.yaml + ladders_pipeline.yaml example_stage
-  # precedent); gemini / deepseek models use aliases (latest stable;
-  # provider-side stability guarantee per existing repo convention).
+  # snapshot for deterministic reproducibility per the
+  # ladders_methodist.yaml precedent); gemini / deepseek models use
+  # aliases (latest stable; provider-side stability guarantee per
+  # existing repo convention).
   pass_2a_mapping:
     prompt_ref: "prompts/pass_2a_mapping/v1.md"
     requires: [structured_output]

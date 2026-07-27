@@ -31,7 +31,7 @@ def mock_session() -> AsyncMock:
 
 @pytest.fixture()
 async def client(mock_session: AsyncMock) -> AsyncGenerator[AsyncClient]:
-    """AsyncClient that skips real DB and ModelRouter."""
+    """AsyncClient that skips real DB."""
     app.dependency_overrides[get_session] = lambda: mock_session
     app.dependency_overrides[get_current_tenant] = lambda: STUB_TENANT
     async with AsyncClient(

@@ -31,11 +31,11 @@ def _write(path: Path, body: str) -> Path:
 
 _PIPELINE_YAML = """\
 stages:
-  example_stage:
+  pipeline_demo:
     prompt_ref: "prompts/example/v1.md"
     ladder:
       - provider: anthropic
-        model: claude-sonnet-4-20250514
+        model: claude-sonnet-4-5-20250929
       - provider: gemini
         model: gemini-2.5-flash
 """
@@ -46,7 +46,7 @@ stages:
     prompt_ref: "prompts/methodist_demo/v1.md"
     ladder:
       - provider: anthropic
-        model: claude-sonnet-4-20250514
+        model: claude-sonnet-4-5-20250929
 """
 
 _MENTOR_YAML = """\
@@ -55,7 +55,7 @@ stages:
     prompt_ref: "prompts/mentor_demo/v1.md"
     ladder:
       - provider: deepseek
-        model: deepseek-chat
+        model: deepseek-v4-flash
 """
 
 
@@ -75,7 +75,7 @@ class TestLoadLadderConfig:
 
         assert isinstance(config, LadderConfig)
         assert set(config.stages) == {
-            "example_stage",
+            "pipeline_demo",
             "methodist_demo",
             "mentor_demo",
         }
@@ -83,11 +83,11 @@ class TestLoadLadderConfig:
     def test_get_stage_returns_validated_config(self, tmp_path: Path) -> None:
         config = load_ladder_config(_three_file_directory(tmp_path))
 
-        stage = config.get_stage("example_stage")
+        stage = config.get_stage("pipeline_demo")
         assert stage.prompt_ref == "prompts/example/v1.md"
         assert len(stage.ladder) == 2
         assert stage.ladder[0] == LadderEntry(
-            provider="anthropic", model="claude-sonnet-4-20250514"
+            provider="anthropic", model="claude-sonnet-4-5-20250929"
         )
 
     def test_get_stage_unknown_raises_keyerror(self, tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ class TestLoadLadderConfig:
         _write(tmp_path / "external_services.yaml", "ignored: true")
 
         config = load_ladder_config(tmp_path)
-        assert set(config.stages) == {"example_stage"}
+        assert set(config.stages) == {"pipeline_demo"}
 
     def test_missing_directory_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
@@ -120,7 +120,7 @@ class TestLoadLadderConfig:
         _write(tmp_path / "ladders_pipeline.yaml", _PIPELINE_YAML)
 
         config = load_ladder_config(tmp_path)
-        assert set(config.stages) == {"example_stage"}
+        assert set(config.stages) == {"pipeline_demo"}
 
 
 # ── Cross-file uniqueness ──────────────────────────────────────────
@@ -139,7 +139,7 @@ class TestUniqueness:
             load_ladder_config(tmp_path)
 
         msg = str(exc_info.value)
-        assert "example_stage" in msg
+        assert "pipeline_demo" in msg
         assert "ladders_a.yaml" in msg
         assert "ladders_b.yaml" in msg
 
@@ -152,7 +152,7 @@ class TestExtraForbid:
         # "stagez" instead of "stages"
         _write(
             tmp_path / "ladders_typo.yaml",
-            "stagez:\n  example_stage:\n    prompt_ref: x\n    ladder:\n"
+            "stagez:\n  pipeline_demo:\n    prompt_ref: x\n    ladder:\n"
             "      - provider: a\n        model: b\n",
         )
 
@@ -163,7 +163,7 @@ class TestExtraForbid:
         # "leader" instead of "ladder"
         _write(
             tmp_path / "ladders_typo.yaml",
-            "stages:\n  example_stage:\n    prompt_ref: x\n    leader:\n"
+            "stages:\n  pipeline_demo:\n    prompt_ref: x\n    leader:\n"
             "      - provider: a\n        model: b\n",
         )
 
@@ -174,7 +174,7 @@ class TestExtraForbid:
         # "providr" instead of "provider"
         _write(
             tmp_path / "ladders_typo.yaml",
-            "stages:\n  example_stage:\n    prompt_ref: x\n    ladder:\n"
+            "stages:\n  pipeline_demo:\n    prompt_ref: x\n    ladder:\n"
             "      - providr: a\n        model: b\n",
         )
 
@@ -189,7 +189,7 @@ class TestSchemaValidation:
     def test_empty_ladder_rejected(self, tmp_path: Path) -> None:
         _write(
             tmp_path / "ladders_empty_chain.yaml",
-            "stages:\n  example_stage:\n    prompt_ref: x\n    ladder: []\n",
+            "stages:\n  pipeline_demo:\n    prompt_ref: x\n    ladder: []\n",
         )
 
         with pytest.raises(ValueError, match="Invalid ladder config"):
@@ -198,7 +198,7 @@ class TestSchemaValidation:
     def test_missing_prompt_ref_rejected(self, tmp_path: Path) -> None:
         _write(
             tmp_path / "ladders_missing.yaml",
-            "stages:\n  example_stage:\n    ladder:\n"
+            "stages:\n  pipeline_demo:\n    ladder:\n"
             "      - provider: a\n        model: b\n",
         )
 
@@ -285,10 +285,9 @@ class TestRealConfigs:
         # Resolve relative to backend repo root; tests run from there.
         config = load_ladder_config(Path("config"))
 
-        # All three checked-in files are picked up; all stage names
-        # are unique across them (covers the canonical "example_stage"
-        # asked for by the acceptance criteria).
-        assert "example_stage" in config.stages
+        # All checked-in files are picked up; all stage names are unique
+        # across them (covers the pipeline pass_2a_mapping stage).
+        assert "pass_2a_mapping" in config.stages
         # Methodist stages: methodist_bottomup (Phase 3.2.3a Pass 1) and
         # methodist_topdown (Phase 3.2.3b Pass 2).
         assert "methodist_bottomup" in config.stages
@@ -573,10 +572,9 @@ class TestProductionLaddersValidate:
         assert config.get_stage("safety_check").requires == [
             Capability.STRUCTURED_OUTPUT
         ]
-        # Pass 2c / example stages stay unconstrained.
+        # Pass 2c stages stay unconstrained.
         assert config.get_stage("video_pass_2c_denoise").requires == []
         assert config.get_stage("audio_pass_2c_denoise").requires == []
-        assert config.get_stage("example_stage").requires == []
 
 
 # ── Phase 3.2.3-pre: input_budget_ratio field + config-time validator ──

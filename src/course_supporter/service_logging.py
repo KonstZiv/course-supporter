@@ -12,7 +12,7 @@ Usage in task functions::
         ...  # all LLM/STT/VD calls get tenant_id from contextvar
 
 Factory functions create typed callbacks compatible with
-ModelRouter, STTRouter, and VD pipeline components.
+StageRouter, STTRouter, and VD pipeline components.
 """
 
 from __future__ import annotations

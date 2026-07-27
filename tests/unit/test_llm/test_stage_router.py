@@ -1099,8 +1099,8 @@ class TestRegistryAwareCost:
     ) -> None:
         """Model in registry with 0.0 pricing → cost_usd=0.0 (not NULL).
 
-        Mirrors legacy ModelRouter behaviour; semantically the model is
-        either free or pricing is unset in YAML — caller's responsibility
+        Mirrors the prior cost-computation behaviour; semantically the model
+        is either free or pricing is unset in YAML — caller's responsibility
         to keep registry accurate (DD-2.4-F audit script territory).
         """
         _mock_load_prompt(monkeypatch)

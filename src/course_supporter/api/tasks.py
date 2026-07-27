@@ -28,7 +28,6 @@ from course_supporter.service_logging import (
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.storage.s3 import S3Client
 
 
@@ -171,9 +170,9 @@ async def arq_ingest_material(
     failure-domain cascade AFTER the durable ``failed`` write (terminal-first).
 
     Args:
-        ctx: ARQ worker context (session_factory, model_router,
-            stage_router, s3_client, engine, plus framework-injected
-            ``redis`` ArqRedis pool used by AudioProcessor word-cache).
+        ctx: ARQ worker context (session_factory, stage_router,
+            s3_client, engine, plus framework-injected ``redis`` ArqRedis
+            pool used by AudioProcessor word-cache).
         job_id: Job UUID as string (ARQ serializes via JSON).
         material_id: AuthoredDocument UUID as string.
         source_type: One of 'video', 'presentation', 'text', 'web', 'audio'.
@@ -216,7 +215,6 @@ async def arq_ingest_material(
     jid = uuid.UUID(job_id)
     mid = uuid.UUID(material_id)
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
-    router: ModelRouter = ctx["model_router"]
     stage_router: StageRouter = ctx["stage_router"]
     redis: ArqRedis = ctx["redis"]
     callback = IngestionCallback(session_factory)
@@ -317,7 +315,7 @@ async def arq_ingest_material(
             progress_token = set_progress_writer(_detection_progress)
             try:
                 async with _resolve_s3_url(entry, s3) as resolved:
-                    doc = await processor.process_raw(resolved, router=router)
+                    doc = await processor.process_raw(resolved)
                     # Task 2.4.14 — propagate the resolved course language into
                     # the SourceDocument so Pass 2a can pin its output language
                     # to the course (NOT to the input). ``entry.language`` is

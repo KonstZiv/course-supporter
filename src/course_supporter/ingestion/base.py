@@ -36,7 +36,6 @@ from course_supporter.ingestion.schemas import (
 from course_supporter.models.source import SourceDocument
 
 if TYPE_CHECKING:
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.security.exceptions import ErrorCategory
     from course_supporter.storage.orm import AuthoredDocument
@@ -89,15 +88,11 @@ class MaterialProcessor(abc.ABC):
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         """Parse raw source material into a structured ``SourceDocument``.
 
         Args:
             source: The source material to process.
-            router: Optional ModelRouter for LLM-powered processing
-                    (vision analysis, transcription via Gemini, etc.).
 
         Returns:
             SourceDocument with extracted content chunks.

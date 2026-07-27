@@ -112,7 +112,6 @@ from course_supporter.stt.router import STTRouter
 from course_supporter.stt.schemas import STTWord
 
 if TYPE_CHECKING:
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
 
@@ -237,14 +236,8 @@ class AudioProcessor(MaterialProcessor):
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         """Stage 1 — STT transcription → SourceDocument з chunks.
-
-        The ``router`` parameter is accepted for ABC symmetry but
-        not used (audio routes STT calls through ``self._stt_router``,
-        not the LLM ``ModelRouter``).
 
         Flow:
         1. Read ``job_id`` from ContextVar (set at arq task entry).

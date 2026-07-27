@@ -44,7 +44,6 @@ from course_supporter.api.routes.students import router as students_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.config import settings
-from course_supporter.llm import create_model_router
 from course_supporter.llm.factory import create_providers
 from course_supporter.llm.ladder_config import (
     load_ladder_config,
@@ -78,7 +77,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Manage application startup and shutdown.
 
     Startup:
-        - Create ModelRouter with DB logging enabled.
         - Create StageRouter (KD16) with ladder config + providers.
         - Start rate limiter cleanup task.
     Shutdown:
@@ -89,14 +87,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         environment=str(settings.environment),
         log_level=settings.log_level,
     )
-    # Load the model registry once and share it across both routers
-    # (TASK-2.4.22): ModelRouter consumes it for action-chain routing and
-    # cost; StageRouter consumes it for ESC cost_usd + max_tokens fallback
-    # on unpinned ladder rungs.
+    # Load the model registry once for the StageRouter: it consumes it for
+    # ESC cost_usd + max_tokens fallback on unpinned ladder rungs.
     registry = load_registry(settings.external_services_path)
-    app.state.model_router = create_model_router(
-        settings, async_session, registry=registry
-    )
 
     # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
     # (option a, two-build); providers are stateless HTTP wrappers and a

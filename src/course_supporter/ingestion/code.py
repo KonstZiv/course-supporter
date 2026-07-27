@@ -110,7 +110,6 @@ from course_supporter.security.file_type import (
 from course_supporter.security.policies import AUTHORED_POLICY
 
 if TYPE_CHECKING:
-    from course_supporter.llm.router import ModelRouter
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import AuthoredDocument
 
@@ -184,8 +183,6 @@ class CodeProcessor(MaterialProcessor):
     async def process_raw(
         self,
         source: AuthoredDocument,
-        *,
-        router: ModelRouter | None = None,
     ) -> SourceDocument:
         if source.source_type != SourceType.CODE:
             raise UnsupportedFormatError(

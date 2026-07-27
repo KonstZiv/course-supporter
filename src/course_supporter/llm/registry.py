@@ -3,8 +3,9 @@
 Loaded from config/external_services.yaml at startup, validated by Pydantic.
 Extensible: new action/model/strategy = YAML edit, no code changes.
 
-ModelRouter uses get_chain() to obtain ordered list of
-ModelConfig objects with .provider, .model_id, .estimate_cost().
+STTRouter uses get_chain() to obtain an ordered list of ModelConfig
+objects with .provider, .model_id, .estimate_cost(); StageRouter reads the
+flattened ``models`` map for per-rung cost + max_tokens.
 """
 
 from enum import StrEnum
@@ -58,7 +59,7 @@ class ActionConfig(BaseModel):
     chain: dict[str, list[str]] = {}
 
 
-# ── Flattened model config for ModelRouter compatibility ──
+# ── Flattened model config (per-model cost + limits lookup) ──
 
 
 class CostPer1K(BaseModel):
@@ -69,10 +70,11 @@ class CostPer1K(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    """Flattened model configuration used by ModelRouter.
+    """Flattened per-model configuration.
 
     Built from provider + model data during registry validation.
-    Provides .model_id, .provider, .unit_type, and .estimate_cost().
+    Provides .model_id, .provider, .unit_type, and .estimate_cost();
+    consumed by StageRouter (cost + limits) and STTRouter (chain).
     """
 
     model_id: str = ""
@@ -101,7 +103,7 @@ class ModelRegistryConfig(BaseModel):
 
     Parses the providers/strategies/actions YAML structure and
     flattens provider models into a dict[model_id, ModelConfig]
-    for backward compatibility with ModelRouter.
+    for per-model cost + limit lookup.
 
     Validates that:
     - All models referenced in action chains exist

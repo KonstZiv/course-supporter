@@ -2,7 +2,8 @@
 # Unified external service registry
 # ============================================================
 # Covers LLM providers, transcription, and future integrations.
-# ModelRouter uses strategies + actions to build fallback chains.
+# StageRouter (config/ladders_*.yaml) is the live LLM routing surface; this
+# registry supplies the model catalog and the STT ``transcribe`` action chain.
 
 providers:
   gemini:
@@ -79,12 +80,11 @@ providers:
     type: llm
     # Date-pinned snapshot IDs (reproducibility). Live pricing (Sonnet 4.5,
     # Haiku 4.5) verified 2026-07-26 against
-    # platform.claude.com/docs/en/about-claude/pricing; the two deprecated
-    # snapshots below keep their own 2026-05-23 note.
+    # platform.claude.com/docs/en/about-claude/pricing.
     models:
       - id: claude-sonnet-4-5-20250929
         # Sonnet 4.5 — current Sonnet snapshot (registered 2026-05-23;
-        # replaces deprecated claude-sonnet-4-20250514). $3 / $15 per 1M.
+        # replaces the retired 2025-05-14 Sonnet snapshot). $3 / $15 per 1M.
         # (claude-sonnet-4-6 is newer + same price but ships only as a
         # non-date-pinned alias, against the snapshot convention.)
         capabilities: [structured_output, long_context]
@@ -103,26 +103,6 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.001
         cost_per_1k_out: 0.005
-      - id: claude-opus-4-20250514
-        # DEPRECATED (Anthropic pricing page 2026-05-23). Retained only for
-        # legacy ModelRouter action references; migrate to a current Opus
-        # (e.g. claude-opus-4-5) when next touched. $15 / $75 per 1M.
-        capabilities: [structured_output, long_context]
-        max_context: 200000
-        max_output_tokens: 32768
-        unit_type: tokens
-        cost_per_1k_in: 0.015
-        cost_per_1k_out: 0.075
-      - id: claude-sonnet-4-20250514
-        # DEPRECATED (Anthropic pricing page 2026-05-23). Superseded by
-        # claude-sonnet-4-5-20250929 above; retained only for legacy
-        # ModelRouter action references. $3 / $15 per 1M.
-        capabilities: [structured_output, long_context]
-        max_context: 200000
-        max_output_tokens: 16384
-        unit_type: tokens
-        cost_per_1k_in: 0.003
-        cost_per_1k_out: 0.015
 
   openai:
     type: llm
@@ -160,12 +140,12 @@ providers:
   deepseek:
     type: llm
     # Live IDs verified 2026-05-23 (api.deepseek.com/models): the lineup is now
-    # deepseek-v4-flash + deepseek-v4-pro. deepseek-chat / deepseek-reasoner are
-    # being deprecated by DeepSeek (they map to the non-thinking / thinking
-    # modes of deepseek-v4-flash). Pricing per api-docs.deepseek.com/pricing.
+    # deepseek-v4-flash + deepseek-v4-pro. The legacy chat / reasoner aliases
+    # were retired by DeepSeek 2026-07-24 (they mapped to the non-thinking /
+    # thinking modes of deepseek-v4-flash). Pricing per api-docs.deepseek.com/pricing.
     models:
       - id: deepseek-v4-flash
-        # Current flash tier (replaces deepseek-chat). Referenced by the
+        # Current flash tier (replaces the retired chat alias). Referenced by the
         # safety_check / safety_check_authored / pass_2a_mapping ladders —
         # registered 2026-05-23 to close their cost-tracking gap. $0.14/$0.28
         # per 1M (rates re-verified 2026-07-26 against api-docs.deepseek.com,
@@ -206,30 +186,6 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.000435
         cost_per_1k_out: 0.00087
-      - id: deepseek-chat
-        # DeepSeek shuts this model off 2026-07-24 15:59 UTC
-        # (api-docs.deepseek.com, verified 2026-07-19); it maps to
-        # deepseek-v4-flash non-thinking. This record stays only because the
-        # dead `actions` chains below reference it and the startup validator
-        # (registry.py, validate_and_flatten) resolves those chains against our
-        # own registry, not the provider — so after the shutdown date startup
-        # still passes and no live stage changes behaviour (the live surface is
-        # ladders_*.yaml / StageRouter, which never names deepseek-chat).
-        # Removal tracked as DD-20-A.
-        capabilities: [structured_output]
-        max_context: 131072
-        # On 2026-04-13 deepseek-chat rejected max_tokens=16384 with HTTP 400
-        # ('Invalid max_tokens value, the valid range of max_tokens is
-        # [1, 8192]') — an incorrect bump that failed every material_outline
-        # call; the 8192 below is recorded from that observation. Since
-        # deepseek-chat now maps to v4-flash non-thinking (which accepts up to
-        # 384000 on input), its current ceiling has not been re-measured. For
-        # output beyond 8k the legacy chain fell back to Claude Sonnet — the
-        # proper fix is the long-video chunking project.
-        max_output_tokens: 8192
-        unit_type: tokens
-        cost_per_1k_in: 0.00014
-        cost_per_1k_out: 0.00028
 
   mistral:
     type: llm
@@ -248,8 +204,9 @@ providers:
         cost_per_1k_out: 0.0015
       - id: mistral-small-latest
         # Alias now resolves to Mistral Small 4; rates per mistral.ai/pricing/api,
-        # verified 2026-07-26. Context/output not re-verified: referenced only by
-        # dead ModelRouter chains, fate decided by the DD-20-A dismantle task.
+        # verified 2026-07-26. Context/output not re-verified: no live routing
+        # references this record (the legacy action chains that used it were
+        # removed by the DD-20-A dismantle). Kept pending a removal decision.
         capabilities: [vision, structured_output]
         max_context: 131072
         max_output_tokens: 8192
@@ -392,15 +349,6 @@ providers:
         cost_per_minute: 0.0058
 
 strategies:
-  default:
-    providers: [gemini, anthropic, openai, deepseek]
-    fallback: true
-  quality:
-    providers: [anthropic, gemini]
-    fallback: true
-  budget:
-    providers: [deepseek, gemini]
-    fallback: true
   transcription:
     providers: [gemini, whisper]
     fallback: true
@@ -414,112 +362,12 @@ strategies:
     providers: [deepgram, openai_stt]
     fallback: true
 
-# ── Legacy ModelRouter surface ────────────────────────────────────────────
-# The `actions` chains below are served by ModelRouter (llm/router.py). Zero
-# complete / complete_structured calls from any production path as of
-# 2026-07-19 — the live LLM routing surface is the `stages` section of
-# ladders_*.yaml, served by StageRouter. These chains are kept only so the
-# startup validator (registry.py, validate_and_flatten) still resolves them
-# against the registry. Removal date undetermined; the full removal scope (the
-# router, this section, and the unused `router` param on
-# SourceProcessor.process_raw) is tracked as DD-20-A in
-# refactoring-vision/sprint/active-debt.md.
+# STT action chain consumed by STTRouter (KD7 fallback ladder). The LLM
+# routing surface lives in config/ladders_*.yaml (StageRouter), not here.
 actions:
-  video_analysis:
-    strategy: default
-    requires: [vision, long_context]
-    chain:
-      default: [gemini-2.5-flash, gemini-2.5-pro]
-      quality: [gemini-2.5-pro, gemini-2.5-flash]
-      budget: [gemini-2.5-flash]
-
-  presentation_analysis:
-    strategy: default
-    requires: [vision, structured_output]
-    chain:
-      default: [gemini-2.5-flash, gpt-4o-mini]
-      quality: [gemini-2.5-pro, gemini-2.5-flash]
-
-  course_structuring:
-    strategy: default
-    requires: [structured_output]
-    chain:
-      # Sonnet (16384 output) is the rescue model when DeepSeek hits the
-      # 8192 max_tokens length limit on wide subtrees (4+ materials,
-      # ~11K+ input tokens). Matches the fallback pattern already used in
-      # `methodist` and documented in the deepseek-chat model comment.
-      default: [gemini-2.5-flash, deepseek-chat, claude-sonnet-4-20250514]
-      quality: [claude-sonnet-4-20250514, gemini-2.5-pro]
-      budget: [deepseek-chat]
-
-  text_processing:
-    strategy: default
-    requires: [structured_output]
-    chain:
-      default: [deepseek-chat, gemini-2.5-flash]
-      quality: [claude-sonnet-4-20250514, gemini-2.5-flash]
-      budget: [deepseek-chat]
-
   transcribe:
     strategy: stt_default
     chain:
       default: [scribe_v1, gpt-4o-mini-transcribe, nova-3]
       quality: [scribe_v1, gpt-4o-mini-transcribe]
       budget: [nova-3, gpt-4o-mini-transcribe]
-
-  material_outline:
-    strategy: default
-    requires: [structured_output]
-    chain:
-      default: [deepseek-chat, claude-sonnet-4-20250514]
-      quality: [claude-sonnet-4-20250514, gemini-2.5-pro]
-      budget: [deepseek-chat]
-      # Per-model chains for A/B spike testing
-      claude-sonnet-4-20250514: [claude-sonnet-4-20250514]
-      gpt-4o: [gpt-4o]
-      gpt-4.1: [gpt-4.1]
-      deepseek-chat: [deepseek-chat]
-
-  methodist:
-    strategy: default
-    requires: [structured_output]
-    chain:
-      default: [deepseek-chat, claude-sonnet-4-20250514]
-      quality: [claude-sonnet-4-20250514, gemini-2.5-pro]
-      budget: [deepseek-chat]
-
-  safety_check:
-    strategy: default
-    requires: [structured_output]
-    chain:
-      default: [deepseek-chat, gemini-2.5-flash]
-
-  describe_slides:
-    strategy: default
-    requires: [vision]
-    chain:
-      default:
-        - gemini-3-flash-preview
-        - gemini-2.5-flash
-        - mistral-small-latest
-        - gpt-4o-mini
-
-  vd_frame_analysis:
-    strategy: default
-    requires: [vision]
-    chain:
-      default:
-        - gemini-3-flash-preview
-        - gemini-2.5-flash
-        - mistral-small-latest
-        - gpt-4o-mini
-      quality: [gemini-2.5-pro, gemini-2.5-flash]
-      budget: [mistral-small-latest, gpt-4o-mini]
-
-  vd_memory:
-    strategy: default
-    chain:
-      default:
-        - gemini-3-flash-preview
-        - gemini-2.5-flash
-        - mistral-small-latest

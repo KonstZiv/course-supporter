@@ -1,15 +1,10 @@
 """Input-size estimation for token-budget pre-flight checks.
 
-Shared module so the formula has a single definition across both
-routers (legacy :mod:`course_supporter.llm.router` and the KD16
-:mod:`course_supporter.llm.stage_router`). KD10 «Token budget policy»
+Single definition of the formula for the KD16
+:mod:`course_supporter.llm.stage_router`. KD10 «Token budget policy»
 requires a deterministic estimate of input tokens before the LLM
 call so the router can skip rungs whose context window will not
 fit. The estimate is computed in code; the LLM is never asked.
-
-The legacy router's removal (undated; scope tracked as DD-20-A) will not
-touch this module — StageRouter's import path stays correct without
-dragging legacy-router source as a dependency.
 """
 
 from __future__ import annotations

@@ -111,6 +111,21 @@ class LLMProvider(abc.ABC):
         """
         return ErrorCategory.SEMANTIC
 
+    @classmethod
+    def supports_reasoning(cls, reasoning: dict[str, Any]) -> bool:
+        """Whether this connector can translate a ladder ``reasoning`` form.
+
+        The startup ladder check (P6,
+        :func:`course_supporter.llm.ladder_config.validate_ladders_against_registry`)
+        calls this per rung that carries a non-``None`` ``reasoning`` form,
+        provider-agnostically, to refuse booting a config the connector
+        cannot honour. Default: no provider translates any form — only the
+        connector that owns a vendor dialect (DashScope) overrides. The
+        knowledge of which forms are covered lives in the provider module,
+        never duplicated in the validator.
+        """
+        return False
+
     def _parse_structured(
         self,
         raw_json: str,

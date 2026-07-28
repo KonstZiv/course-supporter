@@ -54,6 +54,15 @@ class TestSchemaShape:
         assert "job_id" in cols
         assert cols["job_id"]["nullable"] is False
 
+    def test_unit_out_reasoning_column_nullable(self, sync_engine: Engine) -> None:
+        """Migration ``esc_reasoning_tokens`` added the nullable column (P5/P6)."""
+        cols = {
+            c["name"]: c
+            for c in inspect(sync_engine).get_columns("external_service_calls")
+        }
+        assert "unit_out_reasoning" in cols
+        assert cols["unit_out_reasoning"]["nullable"] is True
+
     def test_tenant_id_index_dropped(self, sync_engine: Engine) -> None:
         with sync_engine.connect() as conn:
             rows = conn.execute(

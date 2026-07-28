@@ -492,6 +492,9 @@ class StageRouter:
                         unit_type="tokens",
                         unit_in=response.tokens_in if response else None,
                         unit_out=response.tokens_out if response else None,
+                        unit_out_reasoning=(
+                            response.tokens_reasoning if response else None
+                        ),
                         latency_ms=(
                             response.latency_ms if response else fallback_latency_ms
                         ),

@@ -30,6 +30,7 @@ from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.dashscope import (
     DashScopeProvider,
     DashScopeResponseError,
+    UnsupportedReasoningFormError,
     _detect_image_mime,
 )
 from course_supporter.llm.schemas import LLMRequest
@@ -48,14 +49,23 @@ def _success_response(
     text: str = "Hello.",
     tokens_in: int = 42,
     tokens_out: int = 7,
+    tokens_reasoning: int | None = None,
 ) -> MagicMock:
-    """Mock matching the ``DashScopeAPIResponse`` shape consumed by ``complete``."""
+    """Mock matching the ``DashScopeAPIResponse`` shape consumed by ``complete``.
+
+    ``tokens_reasoning=None`` leaves ``reasoning_tokens`` OUT of the usage dict
+    (the real shape once ``enable_thinking=False`` takes effect — the key
+    disappears); a non-None value adds it (thinking-on shape).
+    """
     response = MagicMock()
     response.status_code = 200
     response.code = ""
     response.message = ""
     response.output = {"choices": [{"message": {"content": [{"text": text}]}}]}
-    response.usage = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    usage: dict[str, int] = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    if tokens_reasoning is not None:
+        usage["reasoning_tokens"] = tokens_reasoning
+    response.usage = usage
     return response
 
 
@@ -492,14 +502,13 @@ class TestCompleteAsync:
         assert {"text": "describe"} in user_content
 
     @pytest.mark.asyncio
-    async def test_reasoning_kwarg_propagates_to_sdk_call(
+    async def test_reasoning_exclude_translates_to_enable_thinking_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Phase 2.3 KD-2.3-S v0.3 N1: per-rung ``reasoning`` override
-        # configured on a LadderEntry flows through LLMRequest.reasoning
-        # and lands as a kwarg on the DashScope SDK call. The defensive
-        # guard for Qwen3-VL (``{"exclude": True}``) is only meaningful
-        # if the kwarg actually reaches the SDK boundary.
+        # P5 (STEP-0 probe fe23919): the ladder form ``{"exclude": True}`` is
+        # translated by the connector into the native ``enable_thinking=False``
+        # kwarg on the SDK call. The verbatim ``reasoning=`` kwarg (silently
+        # ignored server-side, mode B) must be GONE.
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
@@ -515,16 +524,16 @@ class TestCompleteAsync:
         await provider.complete(request)
 
         kwargs = fake_call.await_args.kwargs
-        assert kwargs["reasoning"] == {"exclude": True}
+        assert kwargs["enable_thinking"] is False
+        assert "reasoning" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_reasoning_kwarg_omitted_when_request_field_none(
+    async def test_no_reasoning_leaves_no_thinking_kwarg(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Backward compatibility: a request without the override must NOT
-        # surface a ``reasoning`` kwarg to the SDK — the DashScope default
-        # behaviour stays in effect for non-Qwen-VL models that share the
-        # provider class.
+        # ``reasoning=None`` → neither the legacy ``reasoning`` kwarg nor the
+        # native ``enable_thinking`` is surfaced; the model's default stays in
+        # effect for models that share the provider class.
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
@@ -538,6 +547,85 @@ class TestCompleteAsync:
 
         kwargs = fake_call.await_args.kwargs
         assert "reasoning" not in kwargs
+        assert "enable_thinking" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_uncovered_reasoning_form_raises_before_sdk_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Defence-in-depth (P5): a form the connector cannot translate is
+        # refused at call time, BEFORE the SDK is touched. The primary barrier
+        # is the startup ladder check (P6); this guards a path that bypasses it.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response())
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        request = LLMRequest(
+            prompt="hi",
+            model="qwen3-vl-32b-instruct",
+            reasoning={"exclude": False},
+            contents=[_VL_PNG],
+        )
+        with pytest.raises(UnsupportedReasoningFormError):
+            await provider.complete(request)
+        assert fake_call.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_extracted_from_usage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # C positive control on the real usage form (STEP-0-RESULTS,
+        # qwen3.5-flash thinking-on: output_tokens=1710, reasoning_tokens=1160).
+        # Present → surfaced verbatim on ``LLMResponse.tokens_reasoning``.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_success_response(tokens_out=1710, tokens_reasoning=1160)
+        )
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
+        )
+        assert response.tokens_out == 1710
+        assert response.tokens_reasoning == 1160
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_none_when_key_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Suppressed shape (enable_thinking=False): the key disappears from
+        # usage → ``tokens_reasoning`` is None (provider did not report).
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response(tokens_out=468))
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
+        )
+        assert response.tokens_reasoning is None
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_zero_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Present-zero must NOT collapse to None: the distinction "reported
+        # zero" vs "did not report" is what the accounting needs.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(return_value=_success_response(tokens_reasoning=0))
+        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
+        )
+        assert response.tokens_reasoning == 0
 
 
 # ── complete() async — text-generation branch (DD-2.4-O) ────────
@@ -547,19 +635,24 @@ def _success_response_text(
     text: str = "Hello.",
     tokens_in: int = 42,
     tokens_out: int = 7,
+    tokens_reasoning: int | None = None,
 ) -> MagicMock:
     """Mock for the ``AioGeneration`` default ``result_format='text'`` shape.
 
     DashScope text endpoint returns ``output.text`` as a plain string
     (see ``dashscope/aigc/generation.py`` line 362 — default
-    ``result_format`` is ``text``).
+    ``result_format`` is ``text``). ``tokens_reasoning`` follows the same
+    absent-key convention as :func:`_success_response`.
     """
     response = MagicMock()
     response.status_code = 200
     response.code = ""
     response.message = ""
     response.output = {"text": text}
-    response.usage = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    usage: dict[str, int] = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    if tokens_reasoning is not None:
+        usage["reasoning_tokens"] = tokens_reasoning
+    response.usage = usage
     return response
 
 
@@ -735,14 +828,13 @@ class TestCompleteAsyncText:
         assert keys_used == ["key-A", "key-B"]
 
     @pytest.mark.asyncio
-    async def test_reasoning_kwarg_omitted_when_request_field_none(
+    async def test_no_reasoning_leaves_no_thinking_kwarg_text(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Parity guard with VL — when ``LLMRequest.reasoning`` is None,
-        # the provider must NOT surface a ``reasoning`` kwarg to the
-        # text endpoint either. No live text-branch ladder rung sets
-        # this today; the guard locks the symmetry per KD-2.3-S so
-        # adding a rung later cannot regress the default.
+        # Parity guard with VL — when ``LLMRequest.reasoning`` is None, the
+        # provider surfaces neither ``reasoning`` nor ``enable_thinking`` to
+        # the text endpoint. No live text-branch rung binds this today; the
+        # guard locks the symmetry so adding one later cannot regress it.
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
@@ -754,15 +846,16 @@ class TestCompleteAsyncText:
 
         kwargs = fake_call.await_args.kwargs
         assert "reasoning" not in kwargs
+        assert "enable_thinking" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_reasoning_kwarg_propagates_to_sdk_call(
+    async def test_reasoning_exclude_translates_on_text_branch(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Mechanism-only: prove the override path reaches the SDK when
-        # set on the request. No live ladder rung activates this on
-        # text models today (the rationale lives in DD-2.4-O ratify
-        # notes — passthrough, NOT activation).
+        # Translation applies symmetrically on the text branch (P5). No live
+        # ladder rung binds this on a text model today; the unit test is the
+        # only mechanism guard for the branch (the text path was not verified
+        # live in the STEP-0 probe).
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
@@ -777,7 +870,27 @@ class TestCompleteAsyncText:
         await provider.complete(request)
 
         kwargs = fake_call.await_args.kwargs
-        assert kwargs["reasoning"] == {"exclude": True}
+        assert kwargs["enable_thinking"] is False
+        assert "reasoning" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_extracted_from_usage_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # C extraction is branch-symmetric: the text endpoint reports usage in
+        # the same ``reasoning_tokens`` sub-field.
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        fake_call = AsyncMock(
+            return_value=_success_response_text(tokens_out=900, tokens_reasoning=350)
+        )
+        monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3.7-max-2026-05-20")
+        )
+        assert response.tokens_reasoning == 350
 
     @pytest.mark.asyncio
     async def test_usage_input_output_tokens_extracted(
@@ -970,3 +1083,43 @@ class TestProviderRegistryDashScope:
         )
         providers = create_providers(s)
         assert isinstance(providers["dashscope"], DashScopeProvider)
+
+
+# ── Reasoning-form translation + capability (P5/P6) ──────────────
+
+
+class TestReasoningTranslation:
+    """The single dialect source of truth shared by ``complete`` and the
+    startup ladder validator."""
+
+    def test_none_translates_to_empty(self) -> None:
+        assert DashScopeProvider._translate_reasoning_to_native(None) == {}
+
+    def test_exclude_true_translates_to_enable_thinking_false(self) -> None:
+        assert DashScopeProvider._translate_reasoning_to_native({"exclude": True}) == {
+            "enable_thinking": False
+        }
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            {"exclude": False},
+            {},
+            {"exclude": True, "extra": 1},
+            {"unknown": "key"},
+        ],
+    )
+    def test_uncovered_forms_raise(self, form: dict[str, object]) -> None:
+        with pytest.raises(UnsupportedReasoningFormError) as exc_info:
+            DashScopeProvider._translate_reasoning_to_native(form)
+        # The message names the offending form (contract for the ladder error).
+        assert repr(form) in str(exc_info.value)
+
+    def test_supports_reasoning_true_for_covered_form(self) -> None:
+        assert DashScopeProvider.supports_reasoning({"exclude": True}) is True
+
+    @pytest.mark.parametrize("form", [{"exclude": False}, {}, {"unknown": "x"}])
+    def test_supports_reasoning_false_for_uncovered_form(
+        self, form: dict[str, object]
+    ) -> None:
+        assert DashScopeProvider.supports_reasoning(form) is False

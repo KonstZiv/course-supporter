@@ -106,13 +106,16 @@ def _config(
     )
 
 
-def _ok_response(content: str = "answer") -> LLMResponse:
+def _ok_response(
+    content: str = "answer", tokens_reasoning: int | None = None
+) -> LLMResponse:
     return LLMResponse(
         content=content,
         provider="x",
         model_id="x",
         tokens_in=12,
         tokens_out=34,
+        tokens_reasoning=tokens_reasoning,
         latency_ms=42,
         cost_usd=0.0123,
     )
@@ -248,6 +251,41 @@ class TestStageRouterDB:
         assert second.unit_in == 12
         assert second.unit_out == 34
         assert second.cost_usd == pytest.approx(0.008)
+        # The mocked response reports no reasoning tokens → new column is NULL.
+        assert second.unit_out_reasoning is None
+
+    async def test_reasoning_tokens_persisted_via_live_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        session_factory: async_sessionmaker[AsyncSession],
+        committed_job: dict[str, uuid.UUID],
+    ) -> None:
+        """C: ``LLMResponse.tokens_reasoning`` is written to
+        ``external_service_calls.unit_out_reasoning`` through the real
+        ``_persist`` accounting path (no direct column write)."""
+        _patch_load_prompt(monkeypatch)
+
+        provider = _provider_with(side_effects=[_ok_response(tokens_reasoning=1160)])
+        config = _config("demo_stage", entries=(("anthropic", "claude-x"),))
+        router = StageRouter(
+            config,
+            {"anthropic": provider},
+            session_factory=session_factory,
+            registry=registry_with(
+                model_id="claude-x", cost_per_1k_in=0.1, cost_per_1k_out=0.2
+            ),
+        )
+
+        with (
+            tenant_scope(committed_job["tenant_id"]),
+            job_scope(committed_job["job_id"]),
+        ):
+            await router.execute_for_stage("demo_stage")
+
+        escs = await _fetch_escs(session_factory, committed_job["job_id"])
+        assert len(escs) == 1
+        assert escs[0].unit_out == 34
+        assert escs[0].unit_out_reasoning == 1160
 
     async def test_full_ladder_exhaustion(
         self,

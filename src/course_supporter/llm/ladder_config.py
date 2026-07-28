@@ -175,7 +175,7 @@ def validate_ladders_against_registry(
 ) -> None:
     """Cross-check every ladder rung against the model registry (TASK-2.4.23).
 
-    Three invariants enforced fail-fast at startup:
+    Four invariants enforced fail-fast at startup:
 
     * **K — membership:** every ``rung.model`` must exist in
       ``registry.models``. A typo / rename / drift between
@@ -193,6 +193,14 @@ def validate_ladders_against_registry(
       on guard wiring. Fail-fast at config-time so a missing
       registry entry surfaces as a startup error, not as a misrouted
       production hit.
+    * **Reasoning translatability (P6):** every rung carrying a
+      non-``None`` ``reasoning`` form is checked against its provider's
+      connector via ``LLMProvider.supports_reasoning`` — the capability
+      declaration owned by the provider module (no dialect knowledge is
+      copied here). A form the connector cannot translate would be
+      SILENTLY IGNORED on the wire (STEP-0 probe); refusing it at boot
+      turns a deploy-time typo into a startup error rather than a
+      pay-for-reasoning-we-can't-see production hit.
 
     Errors are aggregated and raised as a single ``ValueError`` so a
     multi-typo config surfaces every problem at once. Mirrors the
@@ -201,14 +209,38 @@ def validate_ladders_against_registry(
 
     Raises:
         ValueError: if any rung references an unknown model, lacks a
-            capability declared in ``stage.requires``, OR (when the
-            stage declares ``input_budget_ratio``) lacks ``max_context``
-            in the registry.
+            capability declared in ``stage.requires``, (when the stage
+            declares ``input_budget_ratio``) lacks ``max_context`` in the
+            registry, OR carries a ``reasoning`` form its provider's
+            connector cannot translate.
     """
     errors: list[str] = []
 
+    # Deferred import keeps ``ladder_config`` free of the provider SDK graph at
+    # module load and avoids an import cycle; by validation time (app / worker
+    # startup) the providers are already imported. ``PROVIDER_REGISTRY`` maps a
+    # provider name → its class, so the reasoning check stays provider-agnostic
+    # and the dialect knowledge lives only in the provider modules (P6).
+    from course_supporter.llm.providers import PROVIDER_REGISTRY
+
     for stage_name, stage in cfg.stages.items():
         for i, entry in enumerate(stage.ladder):
+            # P6 — reasoning-form translatability. A rung whose ``reasoning``
+            # form its provider's connector cannot translate must fail the boot
+            # rather than no-op silently on the wire. Runs independently of the
+            # membership check below so a rung with two faults reports both.
+            if entry.reasoning is not None:
+                provider_cls = PROVIDER_REGISTRY.get(entry.provider)
+                if provider_cls is None or not provider_cls.supports_reasoning(
+                    entry.reasoning
+                ):
+                    errors.append(
+                        f"Stage '{stage_name}' rung {i} provider "
+                        f"'{entry.provider}' model '{entry.model}' declares a "
+                        f"reasoning form its connector cannot translate: "
+                        f"{entry.reasoning!r}"
+                    )
+
             if entry.model not in registry.models:
                 errors.append(
                     f"Stage '{stage_name}' rung {i} "

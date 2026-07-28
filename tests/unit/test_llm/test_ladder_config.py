@@ -553,6 +553,83 @@ class TestValidateLaddersAgainstRegistry:
         assert "Stage 'demo' rung 2" in str(exc_info.value)
 
 
+class TestValidateReasoningInvariant:
+    """P6 — the fourth invariant: reasoning-form translatability per provider.
+
+    ``model="vl-model"`` is registered in ``_two_model_registry`` so the
+    membership / capability checks pass and the reasoning check is isolated.
+    The check resolves ``entry.provider`` against ``PROVIDER_REGISTRY`` (not the
+    model registry), so the connector's capability is what decides.
+    """
+
+    @staticmethod
+    def _stage_with_reasoning(provider: str, form: dict[str, object]) -> StageConfig:
+        return StageConfig(
+            prompt_ref="prompts/x/v1.md",
+            ladder=[LadderEntry(provider=provider, model="vl-model", reasoning=form)],
+        )
+
+    def test_dashscope_covered_form_passes(self) -> None:
+        cfg = LadderConfig(
+            stages={"s": self._stage_with_reasoning("dashscope", {"exclude": True})}
+        )
+        validate_ladders_against_registry(cfg, _two_model_registry())
+
+    def test_dashscope_uncovered_form_raises_naming_stage(self) -> None:
+        cfg = LadderConfig(
+            stages={"s": self._stage_with_reasoning("dashscope", {"exclude": False})}
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        assert "Stage 's' rung 0" in msg
+        assert "dashscope" in msg
+        assert "cannot translate" in msg
+        assert "{'exclude': False}" in msg
+
+    def test_non_dashscope_provider_with_any_binding_raises(self) -> None:
+        cfg = LadderConfig(
+            stages={"s": self._stage_with_reasoning("gemini", {"exclude": True})}
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        assert "Stage 's' rung 0" in msg
+        assert "gemini" in msg
+        assert "cannot translate" in msg
+
+    def test_unknown_provider_with_binding_raises(self) -> None:
+        cfg = LadderConfig(
+            stages={"s": self._stage_with_reasoning("nonesuch", {"exclude": True})}
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        assert "cannot translate" in str(exc_info.value)
+
+    def test_reasoning_and_model_faults_both_aggregated(self) -> None:
+        # The reasoning check runs independently of membership, so a rung with
+        # BOTH an unknown model and an uncovered form surfaces both errors.
+        cfg = LadderConfig(
+            stages={
+                "s": StageConfig(
+                    prompt_ref="prompts/x/v1.md",
+                    ladder=[
+                        LadderEntry(
+                            provider="dashscope",
+                            model="typo-model",
+                            reasoning={"exclude": False},
+                        )
+                    ],
+                )
+            }
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(cfg, _two_model_registry())
+        msg = str(exc_info.value)
+        assert "cannot translate" in msg
+        assert "unknown model" in msg
+
+
 class TestProductionLaddersValidate:
     """Live config vs live registry passes day-1 (TASK-2.4.23 acceptance #3)."""
 

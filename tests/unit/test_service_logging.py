@@ -227,6 +227,31 @@ class TestPersist:
         session.add.assert_called_once()
         session.commit.assert_awaited_once()
 
+    async def test_persist_forwards_unit_out_reasoning(self) -> None:
+        """The reasoning-token subset reaches the ExternalServiceCall row (P5/P6)."""
+        from course_supporter.service_logging import _persist
+
+        session = AsyncMock()
+        factory = AsyncMock()
+        factory.__aenter__ = AsyncMock(return_value=session)
+        factory.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=factory)
+
+        set_job_from_arq(uuid.uuid4())
+        with patch("course_supporter.storage.orm.ExternalServiceCall") as mock_esc:
+            await _persist(
+                mock_factory,
+                action="presentation_pass_1_vision",
+                strategy="default",
+                provider="dashscope",
+                model_id="qwen3-vl-32b-instruct",
+                unit_type="tokens",
+                unit_out=1710,
+                unit_out_reasoning=1160,
+                success=True,
+            )
+        assert mock_esc.call_args.kwargs["unit_out_reasoning"] == 1160
+
     async def test_persist_swallows_db_error(self) -> None:
         from sqlalchemy.exc import OperationalError
 

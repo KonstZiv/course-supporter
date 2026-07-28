@@ -28,12 +28,17 @@ the presence of image bytes in ``request.contents``:
   ``qwen3.7-max-2026-05-20``).
 
 The split is required because the SDK 1.25.18 cannot serve a text
-model through the multimodal endpoint — the server returns a non-JSON
-4xx and the SDK's aiohttp branch fails to decode it
-(``StreamReader`` vs ``bytes`` mismatch in
-``dashscope/common/utils.py``), surfacing as
-``'StreamReader' object has no attribute 'decode'`` ~289 ms before
-inference.
+model through the multimodal endpoint. Beware the failure symptom is
+AMBIGUOUS: the SDK's aiohttp branch calls ``.decode`` on the raw
+``StreamReader`` for ANY non-JSON 4xx body (``dashscope/common/utils.py``),
+so *every* such error collapses to the same
+``'StreamReader' object has no attribute 'decode'`` and the real cause
+is lost. A text model on the multimodal endpoint is only ONE trigger;
+an ordinary ``403 access_denied`` (unauthorised model / workspace)
+raises the identical ``AttributeError``. To recover the real status +
+message when diagnosing it, re-issue the call against the compatible
+endpoint ``/compatible-mode/v1/chat/completions``, which returns a
+readable error instead of the decode failure.
 
 DashScope surfaces most errors as non-200 ``DashScopeAPIResponse``
 objects rather than exceptions. ``DashScopeResponseError`` wraps the
@@ -137,6 +142,27 @@ class DashScopeResponseError(Exception):
         super().__init__(f"DashScope HTTP {status_code} {code}: {message}")
 
 
+class UnsupportedReasoningFormError(ValueError):
+    """Raised when a ladder ``reasoning`` form has no DashScope translation.
+
+    P5/P6 (STEP-0 probe ``fe23919``): the connector owns the vendor
+    dialect and translates the provider-independent suppression form
+    (only ``{"exclude": True}`` today) into the native
+    ``enable_thinking=False`` kwarg. Any other non-``None`` form is
+    refused at call time as defence-in-depth; the primary barrier is the
+    startup ladder check (:func:`validate_ladders_against_registry`,
+    which queries :meth:`DashScopeProvider.supports_reasoning`).
+    """
+
+    def __init__(self, reasoning: dict[str, Any]) -> None:
+        self.reasoning = reasoning
+        super().__init__(
+            "DashScope connector cannot translate reasoning form "
+            f"{reasoning!r}; the only supported form is {{'exclude': True}} "
+            "(→ enable_thinking=False)."
+        )
+
+
 class DashScopeProvider(LLMProvider):
     """Alibaba DashScope provider for Qwen VL and text-reasoning models.
 
@@ -176,6 +202,51 @@ class DashScopeProvider(LLMProvider):
 
     def _next_key(self) -> str:
         return next(self._key_cycle)
+
+    @staticmethod
+    def _translate_reasoning_to_native(
+        reasoning: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Translate the ladder ``reasoning`` form into native SDK kwargs (P5).
+
+        The single source of truth about the DashScope reasoning dialect —
+        both :meth:`complete` (runtime) and :meth:`supports_reasoning`
+        (startup validation) derive from this one function, so the covered
+        set is declared exactly once.
+
+        Mapping:
+
+        * ``None`` → ``{}`` — no ``enable_thinking`` kwarg at all, so a rung
+          without a binding keeps the model's default behaviour.
+        * ``{"exclude": True}`` → ``{"enable_thinking": False}`` — the native
+          Qwen thinking-off switch verified live by the STEP-0 probe
+          (``fe23919`` mode C: our ``reasoning={"exclude": True}`` form was
+          SILENTLY IGNORED, ``enable_thinking=False`` took effect). The SDK
+          forwards the kwarg into the request envelope's top-level
+          ``parameters`` object on both task-groups.
+        * anything else (``{"exclude": False}``, empty dict, unknown keys) →
+          :class:`UnsupportedReasoningFormError`.
+        """
+        if reasoning is None:
+            return {}
+        if reasoning == {"exclude": True}:
+            return {"enable_thinking": False}
+        raise UnsupportedReasoningFormError(reasoning)
+
+    @classmethod
+    def supports_reasoning(cls, reasoning: dict[str, Any]) -> bool:
+        """Whether this connector can translate ``reasoning`` (P6 capability).
+
+        Delegates to :meth:`_translate_reasoning_to_native` so the startup
+        validator shares the connector's single dialect declaration instead
+        of copying the covered set. Overrides the base default (no provider
+        translates any form).
+        """
+        try:
+            cls._translate_reasoning_to_native(reasoning)
+        except UnsupportedReasoningFormError:
+            return False
+        return True
 
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Map DashScope-surfaced failures to ladder categories.
@@ -378,15 +449,17 @@ class DashScopeProvider(LLMProvider):
             kwargs["temperature"] = request.temperature
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
-        if request.reasoning is not None:
-            # Per-rung reasoning override (e.g. ``{"exclude": True}``)
-            # propagated verbatim on both branches per KD-2.3-S — the
-            # SDK forwards the kwarg to the Qwen reasoning-mode control
-            # symmetrically for VL and text models; omitting it
-            # preserves each model's default behaviour. No live ladder
-            # rung currently sets this on the text branch; the
-            # passthrough is mechanism-only.
-            kwargs["reasoning"] = request.reasoning
+        # P5 — the connector, not the ladder, owns the vendor dialect: it
+        # translates the provider-independent suppression form on
+        # ``request.reasoning`` (e.g. ``{"exclude": True}``) into DashScope's
+        # native ``enable_thinking=False`` kwarg, applied symmetrically to the
+        # multimodal and text branches below. ``None`` adds nothing, so a rung
+        # without a binding keeps the model's default. An untranslatable form
+        # raises here as defence-in-depth; the real barrier is the startup
+        # ladder check (P6, ``validate_ladders_against_registry``), which
+        # refuses to boot a config carrying a form this connector cannot
+        # translate.
+        kwargs.update(self._translate_reasoning_to_native(request.reasoning))
 
         with self._measure_latency() as timer:
             if has_images:
@@ -412,6 +485,13 @@ class DashScopeProvider(LLMProvider):
         usage = response.usage
         tokens_in = usage.get("input_tokens") if usage else None
         tokens_out = usage.get("output_tokens") if usage else None
+        # Reasoning tokens are a subset of ``output_tokens`` that the Qwen VL /
+        # text models report under ``usage.reasoning_tokens`` (STEP-0 probe
+        # ``fe23919`` + STEP-0-RESULTS: present and non-zero while thinking is
+        # on, the key DISAPPEARS from usage once ``enable_thinking=False`` takes
+        # effect). ``.get`` preserves the distinction the accounting needs:
+        # key absent → ``None`` (provider did not report), present zero → ``0``.
+        tokens_reasoning = usage.get("reasoning_tokens") if usage else None
 
         return LLMResponse(
             content=content_text,
@@ -419,6 +499,7 @@ class DashScopeProvider(LLMProvider):
             model_id=model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            tokens_reasoning=tokens_reasoning,
             latency_ms=timer.elapsed_ms,
         )
 

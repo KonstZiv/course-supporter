@@ -21,6 +21,7 @@ All SDK access is mocked; no real DashScope API call is made.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -49,24 +50,62 @@ def _success_response(
     text: str = "Hello.",
     tokens_in: int = 42,
     tokens_out: int = 7,
-    tokens_reasoning: int | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> MagicMock:
     """Mock matching the ``DashScopeAPIResponse`` shape consumed by ``complete``.
 
-    ``tokens_reasoning=None`` leaves ``reasoning_tokens`` OUT of the usage dict
-    (the real shape once ``enable_thinking=False`` takes effect — the key
-    disappears); a non-None value adds it (thinking-on shape).
+    When ``usage`` is given it becomes ``response.usage`` verbatim — this is how
+    the live-captured nested reasoning dumps below are fed in. Otherwise a
+    minimal ``{input_tokens, output_tokens}`` usage is built (no reasoning
+    sub-field — matching the enable_thinking=False shape where the key is absent).
     """
     response = MagicMock()
     response.status_code = 200
     response.code = ""
     response.message = ""
     response.output = {"choices": [{"message": {"content": [{"text": text}]}}]}
-    usage: dict[str, int] = {"input_tokens": tokens_in, "output_tokens": tokens_out}
-    if tokens_reasoning is not None:
-        usage["reasoning_tokens"] = tokens_reasoning
-    response.usage = usage
+    response.usage = (
+        usage
+        if usage is not None
+        else {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    )
     return response
+
+
+# ── Live-captured raw ``usage`` dumps (R0-STOP diagnostic, 2026-07-28) ──────────
+# Verbatim from the one-off usage capture: dashscope 1.25.18, eu-central-1 MaaS,
+# qwen3.5-flash on IfElse.pptx slide 2. reasoning_tokens live NESTED inside
+# ``output_tokens_details`` — never as a top-level ``usage.reasoning_tokens``.
+_USAGE_THINKING_ON: dict[str, Any] = {
+    # CALL 1 — no thinking parameter → the model reasoned (725 reasoning tokens).
+    "input_tokens": 2636,
+    "output_tokens": 1066,
+    "characters": 0,
+    "total_tokens": 3702,
+    "input_tokens_details": {"text_tokens": 155, "image_tokens": 2481},
+    "output_tokens_details": {"text_tokens": 341, "reasoning_tokens": 725},
+    "image_tokens": 2481,
+    "prompt_tokens_details": {},
+}
+_USAGE_SUPPRESSED: dict[str, Any] = {
+    # CALL 2 — enable_thinking=False → the ``reasoning_tokens`` key is ABSENT
+    # from ``output_tokens_details`` (not zero).
+    "input_tokens": 2638,
+    "output_tokens": 275,
+    "characters": 0,
+    "total_tokens": 2913,
+    "input_tokens_details": {"text_tokens": 157, "image_tokens": 2481},
+    "output_tokens_details": {"text_tokens": 275},
+    "image_tokens": 2481,
+    "prompt_tokens_details": {},
+}
+_USAGE_SYNTHETIC_ZERO: dict[str, Any] = {
+    # SYNTHETIC (not observed live — thinking-off drops the key entirely). Guards
+    # the present-zero vs absent-key distinction: an explicit 0 must surface as 0.
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "output_tokens_details": {"text_tokens": 50, "reasoning_tokens": 0},
+}
 
 
 def _error_response(status_code: int, code: str = "", message: str = "") -> MagicMock:
@@ -573,37 +612,53 @@ class TestCompleteAsync:
         assert fake_call.await_count == 0
 
     @pytest.mark.asyncio
-    async def test_reasoning_tokens_extracted_from_usage(
+    async def test_reasoning_tokens_extracted_from_nested_details(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # C positive control on the real usage form (STEP-0-RESULTS,
-        # qwen3.5-flash thinking-on: output_tokens=1710, reasoning_tokens=1160).
-        # Present → surfaced verbatim on ``LLMResponse.tokens_reasoning``.
+        # CALL 1 verbatim dump (thinking on): reasoning_tokens=725 nested inside
+        # output_tokens_details → surfaced on ``LLMResponse.tokens_reasoning``.
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
-        fake_call = AsyncMock(
-            return_value=_success_response(tokens_out=1710, tokens_reasoning=1160)
-        )
+        fake_call = AsyncMock(return_value=_success_response(usage=_USAGE_THINKING_ON))
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
         response = await provider.complete(
             LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
         )
-        assert response.tokens_out == 1710
-        assert response.tokens_reasoning == 1160
+        assert response.tokens_out == 1066
+        assert response.tokens_reasoning == 725
 
     @pytest.mark.asyncio
-    async def test_reasoning_tokens_none_when_key_absent(
+    async def test_reasoning_tokens_none_when_details_key_absent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Suppressed shape (enable_thinking=False): the key disappears from
-        # usage → ``tokens_reasoning`` is None (provider did not report).
+        # CALL 2 verbatim dump (enable_thinking=False): the reasoning_tokens key
+        # is ABSENT from output_tokens_details → tokens_reasoning is None.
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
-        fake_call = AsyncMock(return_value=_success_response(tokens_out=468))
+        fake_call = AsyncMock(return_value=_success_response(usage=_USAGE_SUPPRESSED))
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
+
+        response = await provider.complete(
+            LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
+        )
+        assert response.tokens_reasoning is None
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_none_when_usage_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No usage object at all → tokens_reasoning is None (nothing to read).
+        from course_supporter.llm.providers import dashscope as ds_module
+
+        provider = _make_provider()
+        resp = _success_response()
+        resp.usage = None
+        monkeypatch.setattr(
+            ds_module.AioMultiModalConversation, "call", AsyncMock(return_value=resp)
+        )
 
         response = await provider.complete(
             LLMRequest(prompt="hi", model="qwen3-vl-32b-instruct", contents=[_VL_PNG])
@@ -614,12 +669,15 @@ class TestCompleteAsync:
     async def test_reasoning_tokens_zero_preserved(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Present-zero must NOT collapse to None: the distinction "reported
-        # zero" vs "did not report" is what the accounting needs.
+        # Present-zero must NOT collapse to None: "reported zero" vs "did not
+        # report" is the distinction accounting needs. Uses the SYNTHETIC dump
+        # (live thinking-off drops the key; an explicit 0 is constructed here).
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
-        fake_call = AsyncMock(return_value=_success_response(tokens_reasoning=0))
+        fake_call = AsyncMock(
+            return_value=_success_response(usage=_USAGE_SYNTHETIC_ZERO)
+        )
         monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
 
         response = await provider.complete(
@@ -635,24 +693,25 @@ def _success_response_text(
     text: str = "Hello.",
     tokens_in: int = 42,
     tokens_out: int = 7,
-    tokens_reasoning: int | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> MagicMock:
     """Mock for the ``AioGeneration`` default ``result_format='text'`` shape.
 
     DashScope text endpoint returns ``output.text`` as a plain string
     (see ``dashscope/aigc/generation.py`` line 362 — default
-    ``result_format`` is ``text``). ``tokens_reasoning`` follows the same
-    absent-key convention as :func:`_success_response`.
+    ``result_format`` is ``text``). ``usage`` overrides the whole usage object
+    verbatim (for the nested reasoning dump); otherwise a minimal usage is built.
     """
     response = MagicMock()
     response.status_code = 200
     response.code = ""
     response.message = ""
     response.output = {"text": text}
-    usage: dict[str, int] = {"input_tokens": tokens_in, "output_tokens": tokens_out}
-    if tokens_reasoning is not None:
-        usage["reasoning_tokens"] = tokens_reasoning
-    response.usage = usage
+    response.usage = (
+        usage
+        if usage is not None
+        else {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    )
     return response
 
 
@@ -877,13 +936,24 @@ class TestCompleteAsyncText:
     async def test_reasoning_tokens_extracted_from_usage_text(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # C extraction is branch-symmetric: the text endpoint reports usage in
-        # the same ``reasoning_tokens`` sub-field.
+        # C extraction is branch-symmetric: the text endpoint reads the same
+        # NESTED output_tokens_details.reasoning_tokens sub-field. SYNTHETIC dump
+        # (no live text-endpoint capture; the nested shape is shared with the
+        # multimodal branch, which WAS captured live).
         from course_supporter.llm.providers import dashscope as ds_module
 
         provider = _make_provider()
         fake_call = AsyncMock(
-            return_value=_success_response_text(tokens_out=900, tokens_reasoning=350)
+            return_value=_success_response_text(
+                usage={
+                    "input_tokens": 80,
+                    "output_tokens": 900,
+                    "output_tokens_details": {
+                        "text_tokens": 550,
+                        "reasoning_tokens": 350,
+                    },
+                }
+            )
         )
         monkeypatch.setattr(ds_module.AioGeneration, "call", fake_call)
 

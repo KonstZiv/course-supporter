@@ -485,13 +485,19 @@ class DashScopeProvider(LLMProvider):
         usage = response.usage
         tokens_in = usage.get("input_tokens") if usage else None
         tokens_out = usage.get("output_tokens") if usage else None
-        # Reasoning tokens are a subset of ``output_tokens`` that the Qwen VL /
-        # text models report under ``usage.reasoning_tokens`` (STEP-0 probe
-        # ``fe23919`` + STEP-0-RESULTS: present and non-zero while thinking is
-        # on, the key DISAPPEARS from usage once ``enable_thinking=False`` takes
-        # effect). ``.get`` preserves the distinction the accounting needs:
-        # key absent → ``None`` (provider did not report), present zero → ``0``.
-        tokens_reasoning = usage.get("reasoning_tokens") if usage else None
+        # Reasoning tokens are a subset of ``output_tokens`` that DashScope
+        # reports NESTED at ``usage.output_tokens_details.reasoning_tokens`` —
+        # there is NO top-level ``usage.reasoning_tokens`` key (it never exists,
+        # so the earlier flat read returned NULL for every reasoning call; the R0
+        # calibration control caught it 10/10). Live capture 2026-07-28
+        # (dashscope 1.25.18, eu-central-1 MaaS): thinking on →
+        # ``output_tokens_details = {"text_tokens": 341, "reasoning_tokens":
+        # 725}``; with ``enable_thinking=False`` the ``reasoning_tokens`` key is
+        # ABSENT from details (not zero). The chained ``.get`` preserves the
+        # distinction the accounting needs: usage / details / key absent →
+        # ``None`` (provider did not report), an explicit zero in details → ``0``.
+        details = usage.get("output_tokens_details") if usage else None
+        tokens_reasoning = details.get("reasoning_tokens") if details else None
 
         return LLMResponse(
             content=content_text,

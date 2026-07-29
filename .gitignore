@@ -236,3 +236,7 @@ current-doc/stt-spike/sample.mp3
 # only the tracked manifest.md is kept.
 data/calibration/video/*
 !data/calibration/video/manifest.md
+
+# Presentation Pass 1 calibration dumps (vision-model spike) — local run
+# artifacts written by the observational dump, never committed.
+data/calibration/runs/

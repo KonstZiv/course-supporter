@@ -28,21 +28,30 @@
 # Ladder rationale (ratified 2026-05-19 per SPIKE-RESULTS-2-3-v2.md §3):
 #
 # Pass 1 — 3 rungs:
-#   1. dashscope/qwen3-vl-32b-instruct — cost-first primary.
-#      Spike v2: $0.00045/slide (cheapest), zero reasoning overhead,
-#      perfect Ukrainian preservation across 24-slide test set.
+#   1. dashscope/qwen3.5-flash — cost-first primary (TASK-4, 2026-07-31;
+#      replaced qwen3-vl-32b-instruct, which retires 2026-10-10).
+#      Calibration 2026-07-29 (vision-model-spike CALIBRATION-RESULTS.md,
+#      decision Р7): zero reasoning tokens on every call, 6/6 reference
+#      slides verbatim, ~5x cheaper / ~3x faster than the incumbent.
 #      Routes through ``DashScopeProvider`` (KD-2.3-A/D native client).
-#      Per-rung ``reasoning: {exclude: true}`` override (KD-2.3-S) acts
-#      as defensive guard so the non-reasoning VL model is never
-#      accidentally asked to reason. Propagation chain
-#      LadderEntry -> LLMRequest.reasoning -> DashScope SDK kwarg
-#      shipped in sub-area #0 (``f89ce84``).
+#      Per-rung ``reasoning: {exclude: true}`` (KD-2.3-S) is ACTIVE
+#      suppression here — the model is thinking-capable and the connector
+#      translates the binding to the native ``enable_thinking=False``
+#      (TASK-3, ``5e7d286``); without it the model reasons by default.
+#      Propagation chain LadderEntry -> LLMRequest.reasoning -> DashScope
+#      SDK kwarg shipped in sub-area #0 (``f89ce84``).
 #   2. gemini/gemini-3-flash-preview — fallback 1.
 #      Spike v2: $0.00161/slide, 4.02s avg latency (FASTEST), structured
 #      output + thinking levels capable. Pricing lives in
 #      external_services.yaml (single source of truth). Preview-tier
 #      stability acknowledged in
 #      SPIKE-RESULTS §4 deferred concern #6.
+#      Kept deliberately in TASK-4: live fallback evidence 2026-07-29
+#      (4 mid-job calls during the Lesson-1 calibration run, clean
+#      completion). Reactive replacement trigger: preview retirement
+#      notice or a throttling pattern; verified shortlist for that day
+#      (registry rates 2026-07-26): gemini-3.6-flash,
+#      gemini-3.5-flash-lite.
 #   3. gemini/gemini-2.5-flash — fallback 2 / deep tier.
 #      Spike v2: $0.00164/slide, 5.25s latency. Cross-source-type
 #      reuse with Phase 2.2 audio Pass 2a precedent (KD-2.3-X
@@ -120,7 +129,7 @@ stages:
     requires: [vision]
     ladder:
       - provider: dashscope
-        model: qwen3-vl-32b-instruct
+        model: qwen3.5-flash
         reasoning: {exclude: true}
       - provider: gemini
         model: gemini-3-flash-preview

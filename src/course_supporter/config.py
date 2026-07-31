@@ -383,7 +383,11 @@ class Settings(BaseSettings):
     # current consumer is video Pass 2a rung 1 per KD-2.4-T).
     deepseek_thinking_default_model: str = "deepseek-v4-pro"
     mistral_default_model: str = "mistral-large-2512"
-    dashscope_default_model: str = "qwen3-vl-32b-instruct"
+    # TASK-4 (2026-07-31): aligned with the vision-ladder rung-1 primary
+    # (calibration 2026-07-29); the previous default qwen3-vl-32b-instruct
+    # retires 2026-10-10. Rarely-hit fallback — StageRouter always sets
+    # the model explicitly per rung.
+    dashscope_default_model: str = "qwen3.5-flash"
 
     # --- STT Default Models ---
     elevenlabs_default_model: str = "scribe_v1"

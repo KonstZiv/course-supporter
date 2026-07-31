@@ -316,7 +316,7 @@ class TestRealConfigs:
         assert stage.prompt_ref == "prompts/presentation_pass_1_vision/v1.md"
         rungs = [(e.provider, e.model) for e in stage.ladder]
         assert rungs == [
-            ("dashscope", "qwen3-vl-32b-instruct"),
+            ("dashscope", "qwen3.5-flash"),
             ("gemini", "gemini-3-flash-preview"),
             ("gemini", "gemini-2.5-flash"),
         ]
@@ -337,15 +337,30 @@ class TestRealConfigs:
         # ``reasoning: {exclude: true}`` lands on
         # ``LadderEntry.reasoning`` as ``{"exclude": True}`` so the
         # DashScope kwarg propagation shipped in sub-area #0
-        # (f89ce84) reaches the SDK boundary. Defensive guard for
-        # Qwen3-VL non-reasoning by construction.
+        # (f89ce84) reaches the SDK boundary. For qwen3.5-flash the
+        # binding is ACTIVE suppression (thinking-capable model; native
+        # ``enable_thinking=False`` translation per TASK-3).
         config = load_ladder_config(Path("config"))
         primary = config.get_stage("presentation_pass_1_vision").ladder[0]
 
         assert primary.provider == "dashscope"
-        assert primary.model == "qwen3-vl-32b-instruct"
+        assert primary.model == "qwen3.5-flash"
         assert primary.reasoning == {"exclude": True}
         assert primary.max_output_tokens is None
+
+    def test_video_pass_1_primary_rung_carries_suppression_and_pin(self) -> None:
+        # Mirror of the presentation rung-1 gate for the video ladder —
+        # coverage gap found in the TASK-4 pre-plan (video rung 1 had no
+        # named-model assert; a YAML swap broke zero tests). The 8192 pin
+        # is the calibrated value (2026-07-29), NOT the model ceiling —
+        # see ladders_video.yaml rationale.
+        config = load_ladder_config(Path("config"))
+        primary = config.get_stage("video_pass_1_vision").ladder[0]
+
+        assert primary.provider == "dashscope"
+        assert primary.model == "qwen3.5-flash"
+        assert primary.reasoning == {"exclude": True}
+        assert primary.max_output_tokens == 8192
 
     def test_pass_2a_fallback_rung_carries_max_output_tokens_4096_override(
         self,
@@ -825,3 +840,146 @@ class TestInputBudgetRatioConfigTimeValidation:
             "rung 0" not in msg
             or "vl-model" not in msg.split("rung 0")[1].split("rung 1")[0]
         )
+
+
+# ── TASK-4 ladder model lock ───────────────────────────────────────
+# Target state of EVERY rung of EVERY stage across ALL config/ladders_*.yaml
+# files, keyed by stage name, ordered as on disk. Kept next to its test on
+# purpose: the append-only locality makes the lock trivial to extend.
+
+LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
+    # ladders_audio.yaml
+    "audio_pass_2a_mapping": [
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("gemini", "gemini-2.5-flash"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+    "audio_pass_2c_denoise": [
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("gemini", "gemini-2.5-flash"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+    # ladders_code.yaml
+    "code_skeleton_extraction": [
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "code_segment_description": [
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "code_summary": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    # ladders_mentor.yaml
+    "safety_check": [
+        ("mistral", "mistral-small-latest"),
+        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    "safety_check_authored": [
+        ("mistral", "mistral-small-latest"),
+        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    "sanity_check": [
+        ("mistral", "mistral-small-latest"),
+        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    "criteria_decomposition": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "mentor_layered_evaluation_node_course": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "mentor_layered_evaluation_industry": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "mentor_denoising": [
+        ("dashscope", "qwen3.7-max"),
+        ("gemini", "gemini-2.5-pro"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    "mentor_synthesis": [
+        ("dashscope", "qwen3.7-max"),
+        ("gemini", "gemini-2.5-pro"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    # ladders_methodist.yaml
+    "methodist_bottomup": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+    ],
+    "methodist_topdown": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
+    # ladders_pipeline.yaml
+    "pass_2a_mapping": [
+        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-2.5-flash"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+    # ladders_presentation.yaml
+    "presentation_pass_1_vision": [
+        ("dashscope", "qwen3.5-flash"),
+        ("gemini", "gemini-3-flash-preview"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    "presentation_pass_2a_mapping": [
+        ("mistral", "mistral-large-2512"),
+        ("gemini", "gemini-2.5-pro"),
+    ],
+    # ladders_video.yaml
+    "video_pass_1_vision": [
+        ("dashscope", "qwen3.5-flash"),
+        ("gemini", "gemini-3-flash-preview"),
+        ("gemini", "gemini-2.5-flash"),
+    ],
+    "video_pass_2a_mapping": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("gemini", "gemini-2.5-pro"),
+    ],
+    "video_pass_2c_denoise": [
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("gemini", "gemini-2.5-flash"),
+        ("anthropic", "claude-haiku-4-5-20251001"),
+    ],
+}
+
+
+class TestLadderModelTable:
+    """TASK-4 bidirectional (provider, model) lock over ALL ladder files.
+
+    Purpose: no model swap, rung reorder, rung add/remove or stage
+    add/remove can land without a conscious edit of this table — the red
+    test IS the feature (pre-plan finding: the video rung-1 model could
+    be swapped without breaking a single test). Overrides (reasoning,
+    max_output_tokens) are deliberately NOT locked here; they live in the
+    targeted override tests above, so number tuning does not devalue this
+    lock.
+    """
+
+    def test_stage_universe_matches_table(self) -> None:
+        config = load_ladder_config(Path("config"))
+        assert set(config.stages) == set(LADDER_MODEL_TABLE)
+
+    @pytest.mark.parametrize("stage_name", sorted(LADDER_MODEL_TABLE))
+    def test_stage_rungs_match_table(self, stage_name: str) -> None:
+        config = load_ladder_config(Path("config"))
+        rungs = [
+            (entry.provider, entry.model)
+            for entry in config.get_stage(stage_name).ladder
+        ]
+        assert rungs == LADDER_MODEL_TABLE[stage_name]

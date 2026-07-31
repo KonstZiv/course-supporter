@@ -250,6 +250,10 @@ providers:
         # on both tabs): $0.16/$0.64 per 1M — flat rate (not tiered), supersedes
         # the earlier Singapore-tier estimate.
         # Retires 2026-10-10 → DD-2.4-X.
+        # TASK-4 (2026-07-31): replaced on both vision rung-1 ladders by
+        # qwen3.5-flash; entry kept as the rollback target while the
+        # replacement accrues production mileage. Remove at the first
+        # 15-day registry revision after 2026-10-10.
         capabilities: [vision, structured_output, long_context]
         max_context: 131072
         max_output_tokens: 8192

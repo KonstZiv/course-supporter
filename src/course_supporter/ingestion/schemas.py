@@ -59,6 +59,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from course_supporter.concept_dedup import dedupe_concepts
+
 
 class VisualSceneRef(BaseModel):
     """One time-anchored visual description attached to a video segment.
@@ -272,6 +274,25 @@ class DocumentSegmentDraft(BaseModel):
                 f"start_pos ({self.start_pos}) for segment order={self.order}; "
                 "prompt rule: 'end_pos must be > start_pos'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _dedupe_concept_spellings(self) -> DocumentSegmentDraft:
+        """Collapse spelling variants within each concept list (PHASE-1 lever 1).
+
+        This runs at segment-draft build time — the single point that covers
+        all six pipelines: direct construction (code / presentation / audio /
+        video) and nested validation via ``model_validate_json`` of the
+        document draft (text / web). ``main_concepts`` and
+        ``secondary_concepts`` are consolidated independently, because a
+        concept may be main in one segment and secondary in another. Verbatim
+        winners in first-seen order — no sorting here; the segment write path
+        stays deliberately literal (PHASE-1 §3.2). Assigning inside an
+        ``after`` validator is part of construction and does not require
+        ``validate_assignment``.
+        """
+        self.main_concepts = dedupe_concepts(self.main_concepts)
+        self.secondary_concepts = dedupe_concepts(self.secondary_concepts)
         return self
 
 

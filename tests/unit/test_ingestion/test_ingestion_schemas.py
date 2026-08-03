@@ -110,6 +110,24 @@ class TestDocumentSegmentDraft:
         assert draft.main_concepts == ["lexer", "parser"]
         assert draft.secondary_concepts == ["AST"]
 
+    def test_dedupes_concept_spellings_on_direct_construction(self) -> None:
+        # Direct DocumentSegmentDraft(...) is the build path for the code,
+        # presentation, audio, and video pipelines. The after-validator must
+        # consolidate spelling variants — main and secondary independently.
+        draft = DocumentSegmentDraft(
+            order=0,
+            start_pos=0,
+            end_pos=20,
+            description="Introduces HTML templating.",
+            main_concepts=["HTML Template", "HTML templates", "HTML Template"],
+            secondary_concepts=["CSS", "css"],
+        )
+        # Variants share one key; winner "HTML Template" wins by vote count.
+        assert draft.main_concepts == ["HTML Template"]
+        # "CSS"/"css" share a key (abbreviation + short-word guards); the tie
+        # resolves to first occurrence "CSS".
+        assert draft.secondary_concepts == ["CSS"]
+
     def test_content_none_default(self) -> None:
         """KD-2.1-O text/web path: Pass 2a does NOT emit segment content."""
         draft = DocumentSegmentDraft(
@@ -258,6 +276,30 @@ class TestDocumentSummaryDraft:
         """
         payload = '{"title": "Sample", "description": "Sample doc.", "segments": []}'
         draft = DocumentSummaryDraft.model_validate_json(payload)
+        assert draft.main_concepts == []
+        assert draft.secondary_concepts == []
+
+    def test_segment_concepts_deduped_via_nested_json_validation(self) -> None:
+        """text/web path: nested segment validator fires under model_validate_json.
+
+        TextProcessor / WebProcessor build the document draft via
+        ``model_validate_json``; the nested ``DocumentSegmentDraft``
+        after-validator must fire on each parsed segment. A test on direct
+        construction alone would leave the text/web pipelines unproven.
+        """
+        payload = (
+            '{"title": "T", "description": "D", "segments": ['
+            '{"order": 0, "start_pos": 0, "end_pos": 10, "description": "d",'
+            ' "main_concepts": ["Variable", "variable", "variable"],'
+            ' "secondary_concepts": ["loop", "Loops"]}'
+            "]}"
+        )
+        draft = DocumentSummaryDraft.model_validate_json(payload)
+        # Winner by vote count: "variable" (2) over "Variable" (1).
+        assert draft.segments[0].main_concepts == ["variable"]
+        # "loop"/"Loops" share key "loop"; tie -> first occurrence "loop".
+        assert draft.segments[0].secondary_concepts == ["loop"]
+        # Document-level lists are untouched by the segment-level validator.
         assert draft.main_concepts == []
         assert draft.secondary_concepts == []
 

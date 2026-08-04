@@ -88,6 +88,7 @@ import structlog
 from arq.connections import ArqRedis
 from pydantic import ValidationError
 
+from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.config import get_settings
 from course_supporter.ingestion.base import (
     MaterialProcessor,
@@ -453,18 +454,21 @@ class AudioProcessor(MaterialProcessor):
                 )
             )
 
-        all_main: set[str] = set()
-        all_secondary: set[str] = set()
+        all_main: list[str] = []
+        all_secondary: list[str] = []
         for seg in audio_result.segments:
-            all_main.update(seg.main_concepts)
-            all_secondary.update(seg.secondary_concepts)
-        all_secondary -= all_main
+            all_main.extend(seg.main_concepts)
+            all_secondary.extend(seg.secondary_concepts)
+        main_concepts = dedupe_concepts(all_main)
+        secondary_concepts = subtract_by_key(
+            dedupe_concepts(all_secondary), main_concepts
+        )
 
         return DocumentSummaryDraft(
             title=audio_result.title or "",
             description=audio_result.description,
-            main_concepts=sorted(all_main),
-            secondary_concepts=sorted(all_secondary),
+            main_concepts=sorted(main_concepts),
+            secondary_concepts=sorted(secondary_concepts),
             segments=segment_drafts,
         )
 

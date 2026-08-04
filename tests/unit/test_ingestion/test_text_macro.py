@@ -203,6 +203,40 @@ class TestProcessMacroConceptsAggregation:
         # "yield" must NOT appear here.
         assert draft.secondary_concepts == ["StopIteration"]
 
+    @pytest.mark.asyncio
+    async def test_concepts_aggregation_consolidates_spelling_variants(self) -> None:
+        """concept-quality phase 1: cross-segment spelling variants collapse.
+
+        "HTML Template" (segment 0 main) and "HTML templates" (segment 1 main)
+        are variants of one concept split across two segments — only the
+        document-level merge can consolidate them, since the segment validator
+        sees each segment alone. The secondary variant "HTML template" is
+        dropped by the conflict rule on the normalization key, not the exact
+        string.
+        """
+        processor = TextProcessor()
+        # assemble_text() = "a\n\nb" (4 chars).
+        doc = _make_doc("a", "b")
+        router = _router_returning(
+            '{"title": "T", "description": "D",'
+            ' "segments": ['
+            '   {"order": 0, "start_pos": 0, "end_pos": 2,'
+            '    "title": null, "description": "d0",'
+            '    "main_concepts": ["HTML Template"], "secondary_concepts": []},'
+            '   {"order": 1, "start_pos": 2, "end_pos": 4,'
+            '    "title": null, "description": "d1",'
+            '    "main_concepts": ["HTML templates"],'
+            '    "secondary_concepts": ["HTML template"]}'
+            " ]}"
+        )
+
+        draft = await processor.process_macro(doc, router)
+
+        # Variants collapse to one verbatim winner (tie -> first occurrence).
+        assert draft.main_concepts == ["HTML Template"]
+        # The secondary variant is removed by the key-based conflict rule.
+        assert draft.secondary_concepts == []
+
 
 class TestProcessMacroEmptyDocument:
     """Empty document is rejected before invoking the LLM."""

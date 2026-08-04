@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Final
 import structlog
 from pydantic import ValidationError
 
+from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.ingestion.audio import chars_per_word_cumsum
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
@@ -459,27 +460,30 @@ async def step_5_pass2a_mapping(
         for idx, seg in enumerate(result.segments)
     ]
 
-    all_main: set[str] = set()
-    all_secondary: set[str] = set()
+    all_main: list[str] = []
+    all_secondary: list[str] = []
     for seg in result.segments:
-        all_main.update(seg.main_concepts)
-        all_secondary.update(seg.secondary_concepts)
-    all_secondary -= all_main
+        all_main.extend(seg.main_concepts)
+        all_secondary.extend(seg.secondary_concepts)
+    main_concepts = dedupe_concepts(all_main)
+    secondary_concepts = subtract_by_key(dedupe_concepts(all_secondary), main_concepts)
 
     logger.debug(
         "video.pass2a.done",
         job_id=str(job_id),
         segments=len(segment_drafts),
-        main_concepts=len(all_main),
-        secondary_concepts=len(all_secondary),
+        # counted AFTER consolidation: distinct concepts, not occurrences —
+        # the accumulator now carries repeats (concept-quality phase 1).
+        main_concepts=len(main_concepts),
+        secondary_concepts=len(secondary_concepts),
         words=total_word_count,
         noisy=sum(1 for seg in result.segments if seg.noisy),
     )
     return DocumentSummaryDraft(
         title=result.title or "",
         description=result.description,
-        main_concepts=sorted(all_main),
-        secondary_concepts=sorted(all_secondary),
+        main_concepts=sorted(main_concepts),
+        secondary_concepts=sorted(secondary_concepts),
         segments=segment_drafts,
     )
 

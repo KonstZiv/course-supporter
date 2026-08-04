@@ -25,7 +25,7 @@ false-merge risk without matching payoff.
 
 from __future__ import annotations
 
-__all__ = ["dedupe_concepts", "normalization_key"]
+__all__ = ["dedupe_concepts", "normalization_key", "subtract_by_key"]
 
 
 def _plural_rule_guarded(word: str) -> bool:
@@ -141,3 +141,27 @@ def dedupe_concepts(concepts: list[str]) -> list[str]:
                 best_spelling = spelling
         result.append(best_spelling)
     return result
+
+
+def subtract_by_key(concepts: list[str], minus: list[str]) -> list[str]:
+    """Drop entries of ``concepts`` whose normalization key appears in ``minus``.
+
+    The main-vs-secondary conflict rule ("a concept that is main anywhere is
+    not also secondary") compared exact strings before phase 1. After the two
+    lists are consolidated independently the surviving main and secondary
+    spellings of one idea may differ, so the subtraction must run on the
+    grouping key — while still emitting the verbatim ``concepts`` spelling.
+    This is not a change to the conflict rule, only to how the two sides are
+    compared (PHASE-1 §3.3: the conflict rule itself is unchanged).
+
+    Args:
+        concepts: The list to filter (typically the consolidated secondary
+            concepts), kept verbatim and in input order.
+        minus: The list whose keys are removed (typically the consolidated
+            main concepts).
+
+    Returns:
+        The entries of ``concepts`` whose key is absent from ``minus``.
+    """
+    minus_keys = {normalization_key(c) for c in minus}
+    return [c for c in concepts if normalization_key(c) not in minus_keys]

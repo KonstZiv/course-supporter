@@ -8,7 +8,11 @@ idempotence on a variant-free list.
 
 from __future__ import annotations
 
-from course_supporter.concept_dedup import dedupe_concepts, normalization_key
+from course_supporter.concept_dedup import (
+    dedupe_concepts,
+    normalization_key,
+    subtract_by_key,
+)
 
 # ── Normalization key: three dimensions ─────────────────────────────
 
@@ -88,3 +92,20 @@ def test_idempotent_on_variant_free_list() -> None:
     once = dedupe_concepts(concepts)
     assert once == concepts
     assert dedupe_concepts(once) == once
+
+
+# ── Conflict rule: subtraction by normalization key ─────────────────
+
+
+def test_conflict_subtraction_empties_secondary_spelling_variant() -> None:
+    # Main "HTML Template" and secondary "HTML templates" share a key, so the
+    # conflict rule (subtract by key) empties the secondary side even though
+    # the exact strings differ (PHASE-1 §3.4 mandatory case).
+    main = dedupe_concepts(["HTML Template"])
+    secondary = dedupe_concepts(["HTML templates"])
+    assert subtract_by_key(secondary, main) == []
+
+
+def test_subtract_by_key_keeps_non_matching_verbatim_in_order() -> None:
+    # Entries whose key is absent from ``minus`` survive verbatim and in order.
+    assert subtract_by_key(["loop", "State"], ["variable"]) == ["loop", "State"]

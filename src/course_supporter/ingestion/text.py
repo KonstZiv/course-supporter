@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import ValidationError
 
+from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.ingestion.base import (
     CategorisedProcessingError,
     MaterialProcessor,
@@ -338,18 +339,23 @@ class TextProcessor(MaterialProcessor):
         # Algorithmic aggregation of document-level concepts from
         # per-segment concepts (vision.md §2.2, KD-2.1-O). LLM emits
         # concepts only at segment level; ``DocumentSummary.main_concepts``
-        # is the sorted set-union over all segments. Conflict rule:
-        # any concept that appears as ``main`` in at least one segment
-        # stays in ``main_concepts`` and is removed from
-        # ``secondary_concepts``.
-        all_main: set[str] = set()
-        all_secondary: set[str] = set()
+        # is the spelling-consolidated union over all segments
+        # (concept-quality phase 1). Concepts accumulate WITH repeats so
+        # dedupe can count occurrences; main and secondary are consolidated
+        # separately. Conflict rule: any concept whose normalization key
+        # appears as ``main`` in at least one segment stays in
+        # ``main_concepts`` and is dropped from ``secondary_concepts`` by key.
+        all_main: list[str] = []
+        all_secondary: list[str] = []
         for seg in draft.segments:
-            all_main.update(seg.main_concepts)
-            all_secondary.update(seg.secondary_concepts)
-        all_secondary -= all_main
-        draft.main_concepts = sorted(all_main)
-        draft.secondary_concepts = sorted(all_secondary)
+            all_main.extend(seg.main_concepts)
+            all_secondary.extend(seg.secondary_concepts)
+        main_concepts = dedupe_concepts(all_main)
+        secondary_concepts = subtract_by_key(
+            dedupe_concepts(all_secondary), main_concepts
+        )
+        draft.main_concepts = sorted(main_concepts)
+        draft.secondary_concepts = sorted(secondary_concepts)
 
         return draft
 

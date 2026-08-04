@@ -44,6 +44,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
+from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.language import display_name
 from course_supporter.llm.error_categories import (
     LadderExhaustedError,
@@ -745,23 +746,28 @@ class MethodistAgent:
         """Algorithmic concept union (KD-2.1-O extended to methodist tier).
 
         Combines own DocumentSummary main/secondary concepts with
-        children's NodeSummaryRaw main/secondary concepts. Conflict
-        rule mirrors ``ingestion/text.py`` Pass 2a: any concept that
-        appears as ``main`` in any input stays in ``main_concepts``
-        and is removed from ``secondary_concepts``. Both lists are
-        sorted for deterministic order so the content_hash stays
+        children's NodeSummaryRaw main/secondary concepts. Inputs
+        accumulate WITH repeats, then main and secondary are
+        spelling-consolidated separately (concept-quality phase 1).
+        Conflict rule mirrors ``ingestion/text.py`` Pass 2a: any concept
+        whose normalization key appears as ``main`` in any input stays in
+        ``main_concepts`` and is dropped from ``secondary_concepts``. Both
+        lists are sorted for deterministic order so the content_hash stays
         stable across re-runs.
         """
-        main_set: set[str] = set()
-        secondary_set: set[str] = set()
+        all_main: list[str] = []
+        all_secondary: list[str] = []
         for d in own_docs:
-            main_set.update(d.main_concepts or [])
-            secondary_set.update(d.secondary_concepts or [])
+            all_main.extend(d.main_concepts or [])
+            all_secondary.extend(d.secondary_concepts or [])
         for c in child_raws:
-            main_set.update(c.get("main_concepts", []))
-            secondary_set.update(c.get("secondary_concepts", []))
-        secondary_set -= main_set
-        return sorted(main_set), sorted(secondary_set)
+            all_main.extend(c.get("main_concepts", []))
+            all_secondary.extend(c.get("secondary_concepts", []))
+        main_concepts = dedupe_concepts(all_main)
+        secondary_concepts = subtract_by_key(
+            dedupe_concepts(all_secondary), main_concepts
+        )
+        return sorted(main_concepts), sorted(secondary_concepts)
 
     @staticmethod
     def _compute_own_size(own_docs: list[DocumentSummary]) -> tuple[int, int]:

@@ -749,3 +749,73 @@ class TestFileRoles:
         for entry in included:
             seg = by_basename[entry["path"].rsplit("/", 1)[-1]]
             assert seg.is_auxiliary == (entry["role"] == "auxiliary")
+
+    async def test_spelling_variant_across_roles_consolidated_by_key(
+        self, tmp_path: Path
+    ) -> None:
+        # concept-quality phase 1 on the code merge site — the only one fed raw
+        # CodeSegmentDescription, not segment drafts. A full file teaches
+        # "HTML Template"; an auxiliary file mentions the same concept spelled
+        # "HTML templates". Both routing branches fire (full -> main,
+        # auxiliary -> secondary); the variants share a normalization key, so
+        # the conflict rule drops the auxiliary spelling from secondary even
+        # though it is a different exact string.
+        archive = tmp_path / "p.zip"
+        _write_zip(
+            archive,
+            {
+                "full.py": b'class Full:\n    """full"""\n',
+                "aux.py": b'class Aux:\n    """aux"""\n',
+            },
+        )
+        processor = CodeProcessor()
+        doc = await processor.process_raw(
+            _mock_source(
+                str(archive),
+                file_roles={
+                    "decision": {"files": {"full.py": "full", "aux.py": "auxiliary"}}
+                },
+            )
+        )
+
+        full_desc = json.dumps(
+            {
+                "description": "Teaches templating.",
+                "main_concepts": ["HTML Template"],
+                "secondary_concepts": [],
+            }
+        )
+        aux_desc = json.dumps(
+            {
+                "description": "Mentions templating.",
+                "main_concepts": ["HTML templates"],
+                "secondary_concepts": [],
+            }
+        )
+
+        async def _fake_execute(
+            stage_name: str,
+            *,
+            response_validator: Any | None = None,
+            **ctx: Any,
+        ) -> StageResult:
+            if stage_name == "code_segment_description":
+                payload = full_desc if ctx["file_path"] == "full.py" else aux_desc
+            elif stage_name == "code_summary":
+                payload = _SUMMARY_PAYLOAD
+            else:  # pragma: no cover - .py files take the AST rung, no skeleton
+                raise AssertionError(f"unexpected stage {stage_name}")
+            if response_validator is not None:
+                response_validator(payload)
+            return _stage_result(payload)
+
+        router = AsyncMock()
+        router.execute_for_stage = AsyncMock(side_effect=_fake_execute)
+
+        draft = await processor.process_macro(doc, router)
+
+        # The full file's "HTML Template" is the verbatim main winner…
+        assert draft.main_concepts == ["HTML Template"]
+        # …and the auxiliary file's variant "HTML templates" is dropped from
+        # secondary by the key-based conflict rule (not exact-string match).
+        assert draft.secondary_concepts == []

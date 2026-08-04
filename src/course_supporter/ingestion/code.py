@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from pydantic import ValidationError
 
+from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.ingestion.base import (
     CategorisedProcessingError,
     MaterialProcessor,
@@ -499,25 +500,31 @@ class CodeProcessor(MaterialProcessor):
         # Doc-level concepts: KD-2.1-O union + dedup + conflict rule, now
         # role-aware (decision 6). A full file contributes main→main /
         # secondary→secondary as before; an auxiliary file sends ALL its concepts
-        # (even the ones central WITHIN the file) to secondary only. The conflict
-        # rule (a concept primary anywhere is not also secondary) is verbatim.
-        all_main: set[str] = set()
-        all_secondary: set[str] = set()
+        # (even the ones central WITHIN the file) to secondary only. Input here
+        # is the raw CodeSegmentDescription lists (not segment drafts), so they
+        # arrive un-consolidated — the explicit dedupe on this site handles it
+        # (concept-quality phase 1). Conflict rule (a concept primary anywhere is
+        # not also secondary) is applied by normalization key.
+        all_main: list[str] = []
+        all_secondary: list[str] = []
         for chunk, desc in zip(chunks, descriptions, strict=True):
             if _role_of(chunk) == ROLE_AUXILIARY:
-                all_secondary.update(desc.main_concepts)
-                all_secondary.update(desc.secondary_concepts)
+                all_secondary.extend(desc.main_concepts)
+                all_secondary.extend(desc.secondary_concepts)
             else:  # full (structure_only never reaches a chunk)
-                all_main.update(desc.main_concepts)
-                all_secondary.update(desc.secondary_concepts)
-        all_secondary -= all_main
+                all_main.extend(desc.main_concepts)
+                all_secondary.extend(desc.secondary_concepts)
+        main_concepts = dedupe_concepts(all_main)
+        secondary_concepts = subtract_by_key(
+            dedupe_concepts(all_secondary), main_concepts
+        )
 
         draft = DocumentSummaryDraft.model_validate(
             {
                 "title": (summary.title or doc.title)[:_TITLE_MAX],
                 "description": summary.description,
-                "main_concepts": sorted(all_main),
-                "secondary_concepts": sorted(all_secondary),
+                "main_concepts": sorted(main_concepts),
+                "secondary_concepts": sorted(secondary_concepts),
                 "segments": [s.model_dump() for s in segments],
             },
             context={"reference_text_length": len(reference)},

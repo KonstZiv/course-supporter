@@ -295,6 +295,36 @@ class TestConceptUnionDeterministicByCode:
         # = {pytest, tdd, pyclean} (doctest promoted to main).
         assert raw.secondary_concepts == ["pyclean", "pytest", "tdd"]
 
+    async def test_spelling_variants_consolidated_and_conflict_by_key(self) -> None:
+        # concept-quality phase 1: the merge site consolidates spelling
+        # variants and applies the conflict rule by normalization key, not by
+        # exact string. "HTML Template" (main) and "HTML templates" (secondary)
+        # share a key, so the secondary side empties; the verbatim main winner
+        # survives. This proves the merge-site wiring end to end (the tool and
+        # subtract-by-key are unit-tested separately).
+        own = _FakeDocumentSummary(
+            title="a",
+            description="d",
+            main_concepts=["HTML Template", "HTML templates"],
+            secondary_concepts=["HTML templates"],
+        )
+        router = _FakeStageRouter(canned_response=_llm_json())
+        agent = _StubAgent(
+            router,
+            own_docs=[own],
+            child_raws=[],
+            course_title="x",
+            language="English",
+        )
+        raw = _FakeRaw()
+        node = _FakeNode(id=uuid.uuid4(), title="t")
+        await agent.generate_bottomup(node, raw)  # type: ignore[arg-type]
+
+        # Variants collapse to the verbatim first-occurrence winner…
+        assert raw.main_concepts == ["HTML Template"]
+        # …and the secondary variant is dropped by key (conflict rule).
+        assert raw.secondary_concepts == []
+
     async def test_pydantic_forbids_extra_concept_fields_in_llm_output(self) -> None:
         # If the LLM accidentally emits main_concepts/secondary_concepts,
         # the validator MUST trigger a StructuralRetryError (which the

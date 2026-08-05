@@ -19,16 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
-from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
+from course_supporter.jobs import JobType
 from course_supporter.storage.cascade import scrub_authored_document
 from course_supporter.storage.database import get_session
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import (
-    AuthoredDocument,
-    CourseNode,
-    Job,
-    ProjectBase,
-    Tenant,
+from course_supporter.storage.orm import CourseNode, Tenant
+from tests._helpers.job_factory import (
+    make_authored_document,
+    make_job,
+    make_project_base,
 )
 
 pytestmark = pytest.mark.requires_db
@@ -59,70 +58,6 @@ async def client(
     app.dependency_overrides.clear()
 
 
-# ── builders ──────────────────────────────────────────────────────────────
-
-
-async def _mk_doc(
-    session: AsyncSession,
-    node: CourseNode,
-    *,
-    source_type: str = "text",
-    filename: str | None = "lesson.txt",
-    task_type: str | None = None,
-) -> AuthoredDocument:
-    doc = AuthoredDocument(
-        course_node_id=node.id,
-        course_root_id=node.id,
-        source_type=source_type,
-        source_url=f"https://example.com/{uuid.uuid4().hex[:6]}",
-        filename=filename,
-        task_type=task_type,
-    )
-    session.add(doc)
-    await session.flush()
-    return doc
-
-
-async def _mk_base(
-    session: AsyncSession, task: AuthoredDocument, *, version: int = 1
-) -> ProjectBase:
-    base = ProjectBase(
-        authored_document_id=task.id,
-        version=version,
-        archive_key=f"bases/{uuid.uuid4().hex[:6]}/original.zip",
-        state="ready",
-    )
-    session.add(base)
-    await session.flush()
-    return base
-
-
-async def _mk_job(
-    repo: JobRepository,
-    *,
-    tenant_id: uuid.UUID,
-    node_id: uuid.UUID | None,
-    job_type: JobType,
-    subject_id: uuid.UUID | None,
-    status: str = "queued",
-) -> Job:
-    job = await repo.create(
-        tenant_id=tenant_id,
-        course_node_id=node_id,
-        job_type=job_type,
-        subject_type=JOB_SUBJECT_TYPE[job_type],
-        subject_id=subject_id,
-    )
-    if status == "queued":
-        return job
-    if status == "cancelled":
-        return await repo.update_status(job.id, "cancelled")
-    if status == "active":
-        return await repo.update_status(job.id, "active")
-    await repo.update_status(job.id, "active")
-    return await repo.update_status(job.id, status)
-
-
 # ── §7 acceptance assertions ──────────────────────────────────────────────
 
 
@@ -138,10 +73,12 @@ class TestAuthorJobList:
         by default; all four allowed kinds present."""
         repo = JobRepository(db_session)
         # one of each allowed kind under this tenant
-        doc = await _mk_doc(db_session, seed_root_node)
-        task = await _mk_doc(db_session, seed_root_node, task_type="project")
-        base = await _mk_base(db_session, task)
-        await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        task = await make_authored_document(
+            db_session, seed_root_node, task_type="project"
+        )
+        base = await make_project_base(db_session, task)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -149,7 +86,7 @@ class TestAuthorJobList:
             subject_id=doc.id,
             status="complete",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -157,14 +94,14 @@ class TestAuthorJobList:
             subject_id=task.id,
             status="complete",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
             job_type=JobType.BASE_NORMALIZE,
             subject_id=base.id,
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -173,14 +110,14 @@ class TestAuthorJobList:
             status="complete",
         )
         # excluded kinds under the same tenant
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
             job_type=JobType.HOMEWORK_PROCESSING,
             subject_id=uuid.uuid4(),
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -191,7 +128,7 @@ class TestAuthorJobList:
         other = Tenant(name=f"other-{uuid.uuid4().hex[:8]}")
         db_session.add(other)
         await db_session.flush()
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=other.id,
             node_id=None,
@@ -225,8 +162,10 @@ class TestAuthorJobList:
         """A3: a deleted document — door 1 carries the marker + deleted flags;
         door 2 shows ``processing_phase = null`` and the deletion marks."""
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node, source_type="presentation")
-        await _mk_job(
+        doc = await make_authored_document(
+            db_session, seed_root_node, source_type="presentation"
+        )
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -258,11 +197,11 @@ class TestAuthorJobList:
         """A4: base-normalize work carries the parent task's name + version;
         ``material_id`` is the parent task and its filter returns both kinds."""
         repo = JobRepository(db_session)
-        task = await _mk_doc(
+        task = await make_authored_document(
             db_session, seed_root_node, filename="proj.zip", task_type="project"
         )
-        base = await _mk_base(db_session, task, version=2)
-        await _mk_job(
+        base = await make_project_base(db_session, task, version=2)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -270,7 +209,7 @@ class TestAuthorJobList:
             subject_id=task.id,
             status="complete",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -299,7 +238,7 @@ class TestAuthorJobList:
         """A5: node-summary work — ``material_id`` empty, name is the node title;
         it never appears on the history door."""
         repo = JobRepository(db_session)
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -322,8 +261,8 @@ class TestAuthorJobList:
         """A6: work cancelled straight from the queue has no ``started_at`` but a
         ``completed_at``."""
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node)
-        await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -347,9 +286,9 @@ class TestAuthorJobList:
         split a group (anchor count independent of ``limit``)."""
         repo = JobRepository(db_session)
         for _ in range(2):  # two materials, two terminal jobs each
-            doc = await _mk_doc(db_session, seed_root_node)
+            doc = await make_authored_document(db_session, seed_root_node)
             for _ in range(2):
-                await _mk_job(
+                await make_job(
                     repo,
                     tenant_id=seed_tenant.id,
                     node_id=seed_root_node.id,
@@ -375,8 +314,8 @@ class TestAuthorJobList:
         """A8: door 2 phase resolves without the receipt-load guard tripping, and
         the last job is genuinely the newest by ``queued_at``."""
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node)
-        older = await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        older = await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -384,7 +323,7 @@ class TestAuthorJobList:
             subject_id=doc.id,
             status="complete",
         )
-        live = await _mk_job(
+        live = await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,

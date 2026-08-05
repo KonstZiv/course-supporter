@@ -21,88 +21,16 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
+from course_supporter.jobs import JobType
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import (
-    AuthoredDocument,
-    CourseNode,
-    Job,
-    ProjectBase,
-    Tenant,
+from course_supporter.storage.orm import CourseNode, Tenant
+from tests._helpers.job_factory import (
+    make_authored_document,
+    make_job,
+    make_project_base,
 )
 
 pytestmark = pytest.mark.requires_db
-
-
-# ── builders ──────────────────────────────────────────────────────────────
-
-
-async def _mk_doc(
-    session: AsyncSession,
-    node: CourseNode,
-    *,
-    source_type: str = "text",
-    filename: str | None = "lesson.txt",
-    task_type: str | None = None,
-) -> AuthoredDocument:
-    doc = AuthoredDocument(
-        course_node_id=node.id,
-        course_root_id=node.id,
-        source_type=source_type,
-        source_url=f"https://example.com/{uuid.uuid4().hex[:6]}",
-        filename=filename,
-        task_type=task_type,
-    )
-    session.add(doc)
-    await session.flush()
-    return doc
-
-
-async def _mk_base(
-    session: AsyncSession, task: AuthoredDocument, *, version: int = 1
-) -> ProjectBase:
-    base = ProjectBase(
-        authored_document_id=task.id,
-        version=version,
-        archive_key=f"bases/{uuid.uuid4().hex[:6]}/original.zip",
-        state="ready",
-    )
-    session.add(base)
-    await session.flush()
-    return base
-
-
-async def _mk_job(
-    repo: JobRepository,
-    *,
-    tenant_id: uuid.UUID,
-    node_id: uuid.UUID | None,
-    job_type: JobType,
-    subject_id: uuid.UUID | None,
-    status: str = "queued",
-    completed_now: datetime | None = None,
-) -> Job:
-    """Create a Job and walk it to ``status``.
-
-    ``subject_type`` is derived from ``JOB_SUBJECT_TYPE`` (NULL for s3_cleanup).
-    ``completed_now`` pins ``completed_at`` for the terminal transition.
-    """
-    job = await repo.create(
-        tenant_id=tenant_id,
-        course_node_id=node_id,
-        job_type=job_type,
-        subject_type=JOB_SUBJECT_TYPE[job_type],
-        subject_id=subject_id,
-    )
-    if status == "queued":
-        return job
-    if status == "cancelled":  # terminated straight from the queue (never active)
-        return await repo.update_status(job.id, "cancelled", now=completed_now)
-    if status == "active":
-        return await repo.update_status(job.id, "active")
-    # complete / failed go through active first
-    await repo.update_status(job.id, "active")
-    return await repo.update_status(job.id, status, now=completed_now)
 
 
 # ── door 1: flat list ─────────────────────────────────────────────────────
@@ -113,8 +41,8 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node)
-        await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -125,7 +53,7 @@ class TestListAuthorJobs:
         other = Tenant(name=f"other-{uuid.uuid4().hex[:8]}")
         db_session.add(other)
         await db_session.flush()
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=other.id,
             node_id=None,
@@ -141,22 +69,22 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node)
-        await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
             job_type=JobType.DOCUMENT_PROCESSING,
             subject_id=doc.id,
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
             job_type=JobType.HOMEWORK_PROCESSING,
             subject_id=uuid.uuid4(),
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -170,8 +98,8 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node)
-        await _mk_job(
+        doc = await make_authored_document(db_session, seed_root_node)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -195,13 +123,13 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        task = await _mk_doc(
+        task = await make_authored_document(
             db_session, seed_root_node, filename="project.zip", task_type="project"
         )
-        base = await _mk_base(db_session, task)
+        base = await make_project_base(db_session, task)
         # A processing job on the task itself + a base-normalize job on its base
         # version. Both anchor to the same task id.
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -209,7 +137,7 @@ class TestListAuthorJobs:
             subject_id=task.id,
             status="complete",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -231,9 +159,9 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        live_doc = await _mk_doc(db_session, seed_root_node)
-        done_doc = await _mk_doc(db_session, seed_root_node)
-        await _mk_job(
+        live_doc = await make_authored_document(db_session, seed_root_node)
+        done_doc = await make_authored_document(db_session, seed_root_node)
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -241,7 +169,7 @@ class TestListAuthorJobs:
             subject_id=live_doc.id,
             status="active",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -258,13 +186,13 @@ class TestListAuthorJobs:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        live_doc = await _mk_doc(db_session, seed_root_node)
-        old_doc = await _mk_doc(db_session, seed_root_node)
-        recent_doc = await _mk_doc(db_session, seed_root_node)
+        live_doc = await make_authored_document(db_session, seed_root_node)
+        old_doc = await make_authored_document(db_session, seed_root_node)
+        recent_doc = await make_authored_document(db_session, seed_root_node)
         old = datetime(2020, 1, 1, tzinfo=UTC)
         recent = datetime(2020, 6, 1, tzinfo=UTC)
         cutoff = datetime(2020, 3, 1, tzinfo=UTC)
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -272,7 +200,7 @@ class TestListAuthorJobs:
             subject_id=live_doc.id,
             status="active",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -281,7 +209,7 @@ class TestListAuthorJobs:
             status="complete",
             completed_now=old,
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -302,8 +230,8 @@ class TestListAuthorJobs:
         repo = JobRepository(db_session)
         created = []
         for _ in range(3):
-            doc = await _mk_doc(db_session, seed_root_node)
-            job = await _mk_job(
+            doc = await make_authored_document(db_session, seed_root_node)
+            job = await make_job(
                 repo,
                 tenant_id=seed_tenant.id,
                 node_id=seed_root_node.id,
@@ -328,10 +256,10 @@ class TestMaterialHistory:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node, filename="m.txt")
+        doc = await make_authored_document(db_session, seed_root_node, filename="m.txt")
         # prep (complete) → processing (complete) → processing (live). Three jobs,
         # one anchor. Only one may be in-flight at a time (uq index).
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -339,7 +267,7 @@ class TestMaterialHistory:
             subject_id=doc.id,
             status="complete",
         )
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -347,7 +275,7 @@ class TestMaterialHistory:
             subject_id=doc.id,
             status="complete",
         )
-        live = await _mk_job(
+        live = await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -376,7 +304,7 @@ class TestMaterialHistory:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        await _mk_job(
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -391,8 +319,10 @@ class TestMaterialHistory:
         self, db_session: AsyncSession, seed_root_node: CourseNode, seed_tenant: Tenant
     ) -> None:
         repo = JobRepository(db_session)
-        doc = await _mk_doc(db_session, seed_root_node, filename="gone.txt")
-        await _mk_job(
+        doc = await make_authored_document(
+            db_session, seed_root_node, filename="gone.txt"
+        )
+        await make_job(
             repo,
             tenant_id=seed_tenant.id,
             node_id=seed_root_node.id,
@@ -414,9 +344,9 @@ class TestMaterialHistory:
         repo = JobRepository(db_session)
         # Two materials, each with two terminal jobs.
         for _ in range(2):
-            doc = await _mk_doc(db_session, seed_root_node)
+            doc = await make_authored_document(db_session, seed_root_node)
             for _ in range(2):
-                await _mk_job(
+                await make_job(
                     repo,
                     tenant_id=seed_tenant.id,
                     node_id=seed_root_node.id,

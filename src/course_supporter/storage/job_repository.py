@@ -771,14 +771,23 @@ class JobRepository:
         """Page of materials with their work history (door 2, §4).
 
         Grouping is done entirely in SQL so a page boundary never splits a
-        group. Query 1 windows over the material anchor to pick, per anchor, the
-        latest job (``row_number`` by ``queued_at DESC``), the work count, and
-        the last-activity moment ``MAX(COALESCE(completed_at, queued_at))``,
-        ordered by last activity. Query 2 loads the anchor materials with
-        ``pending_job`` eager-loaded so :attr:`AuthoredDocument.processing_phase`
-        does not trip ``PendingJobNotLoadedError``. node_summary work is excluded
-        (no material anchor; history is materials — decision P6). Two queries per
-        page, a fixed cost — not query-per-row.
+        group. Three fixed queries per page (a constant cost — never query-per-
+        row):
+
+        1. the windowed grouping over the material anchor — per anchor the latest
+           job id (``row_number`` by ``queued_at DESC``), the work count, and the
+           last-activity moment ``MAX(COALESCE(completed_at, queued_at))``,
+           ordered by last activity and paged;
+        2. the latest jobs' own display fields, loaded through the shared door-1
+           join keyed on the page's job ids (renders each ``last_job``);
+        3. the anchor materials with ``pending_job`` eager-loaded so
+           :attr:`AuthoredDocument.processing_phase` does not trip
+           ``PendingJobNotLoadedError``.
+
+        node_summary work is excluded (no material anchor; history is materials —
+        decision P6). The §4 sketch estimated two queries; splitting the last-job
+        display off the grouping keeps that query a plain window and reuses the
+        door-1 join verbatim — the constant-per-page guarantee is unchanged.
         """
         pb = aliased(ProjectBase)
         anchor: ColumnElement[uuid.UUID | None] = case(

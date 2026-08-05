@@ -3,20 +3,33 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any, NamedTuple
 
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
-from course_supporter.api.schemas import JobResponse
+from course_supporter.api.schemas import (
+    JobListItemResponse,
+    JobListResponse,
+    JobResponse,
+    MaterialHistoryItemResponse,
+    MaterialHistoryResponse,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.jobs import JobType
-from course_supporter.storage.job_repository import JobRepository
+from course_supporter.storage.job_repository import (
+    AUTHOR_JOB_TYPES,
+    AuthorJobRow,
+    JobRepository,
+    StateClass,
+)
+from course_supporter.storage.job_state import derive_job_state
 from course_supporter.storage.orm import Job
 
 router = APIRouter(tags=["jobs"])
@@ -145,6 +158,120 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                 f"re-enqueue: {exc.args[0]!r}."
             ),
         ) from exc
+
+
+def _to_list_item(row: AuthorJobRow) -> JobListItemResponse:
+    """Map a repository row → door-1 item, computing the derived job-state token
+    and the deleted-source flag (the repository stays free of API shapes)."""
+    job = row.job
+    return JobListItemResponse(
+        id=job.id,
+        job_type=job.job_type,
+        job_state=derive_job_state(job.status),
+        queued_at=job.queued_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        subject_type=job.subject_type,
+        subject_id=job.subject_id,
+        material_id=row.material_id,
+        display_name=row.display_name,
+        display_deleted=row.material_deleted_at is not None,
+        display_deleted_at=row.material_deleted_at,
+        material_source_type=row.material_source_type,
+        base_version=row.base_version,
+        current_stage=job.current_stage,
+        stage_progress=job.stage_progress,
+    )
+
+
+# Static paths declared BEFORE ``/jobs/{job_id}`` so the parameterised route
+# never shadows them (the uuid convertor already rejects "history", but explicit
+# ordering keeps intent clear).
+@router.get("/jobs")
+async def list_jobs(
+    tenant: PrepDep,
+    session: SessionDep,
+    state_class: Annotated[StateClass | None, Query()] = None,
+    completed_after: Annotated[datetime | None, Query()] = None,
+    material_id: Annotated[uuid.UUID | None, Query()] = None,
+    job_types: Annotated[list[str] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> JobListResponse:
+    """List the author's work — live plus recent (step A door 1).
+
+    Author scope only (``require_scope(PREP)``) — deliberately tighter than the
+    single-job ``GET /jobs/{id}``, which stays shared with the check contour;
+    these doors never return homework/cleanup work. Filters mirror the storage
+    method (§4); an out-of-universe ``job_types`` value is a 422.
+    """
+    if job_types is not None:
+        invalid = sorted(set(job_types) - AUTHOR_JOB_TYPES)
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"job_types outside the author universe: {invalid}. "
+                    f"Allowed: {sorted(AUTHOR_JOB_TYPES)}."
+                ),
+            )
+    repo = JobRepository(session)
+    rows = await repo.list_author_jobs(
+        tenant.tenant_id,
+        state_class=state_class,
+        completed_after=completed_after,
+        material_id=material_id,
+        job_types=job_types,
+        limit=limit,
+        offset=offset,
+    )
+    total = await repo.count_author_jobs(
+        tenant.tenant_id,
+        state_class=state_class,
+        completed_after=completed_after,
+        material_id=material_id,
+        job_types=job_types,
+    )
+    return JobListResponse(
+        items=[_to_list_item(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/jobs/history")
+async def list_job_history(
+    tenant: PrepDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> MaterialHistoryResponse:
+    """History of the author's materials — one row per material, latest work as
+    current state plus a work count (step A door 2). Grouped server-side."""
+    repo = JobRepository(session)
+    rows = await repo.list_author_material_history(
+        tenant.tenant_id, limit=limit, offset=offset
+    )
+    total = await repo.count_author_material_anchors(tenant.tenant_id)
+    return MaterialHistoryResponse(
+        items=[
+            MaterialHistoryItemResponse(
+                material_id=r.material_id,
+                display_name=r.display_name,
+                material_deleted=r.material_deleted_at is not None,
+                material_deleted_at=r.material_deleted_at,
+                material_source_type=r.material_source_type,
+                processing_phase=r.processing_phase,
+                last_job=_to_list_item(r.last_job),
+                jobs_count=r.jobs_count,
+            )
+            for r in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/jobs/{job_id}")

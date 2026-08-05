@@ -695,6 +695,107 @@ class JobResponse(BaseModel):
     completed_at: datetime | None
 
 
+# --- Author work-list (step A) ---
+
+
+class JobListItemResponse(BaseModel):
+    """One row of the author work-list (door 1); also the ``last_job`` of a
+    history row (door 2). Fields resolve server-side over one query (step A §4)."""
+
+    id: uuid.UUID
+    job_type: str
+    job_state: str = Field(
+        description=(
+            "Work-state token (step A §3): ``queued`` | ``processing`` | "
+            "``ready`` | ``error`` | ``cancelled`` | ``obsolete``. Derived purely "
+            "from Job.status — NOT the material phase (a job row never carries "
+            "``awaiting_author``)."
+        )
+    )
+    queued_at: datetime
+    started_at: datetime | None = Field(
+        description=(
+            "Worker-pickup time; NULL for work terminated straight from the "
+            "queue (never ran)."
+        )
+    )
+    completed_at: datetime | None
+    subject_type: str | None
+    subject_id: uuid.UUID | None
+    material_id: uuid.UUID | None = Field(
+        description="Resolved material anchor; NULL for node-summary work."
+    )
+    display_name: str | None = Field(
+        description=(
+            "Material label as stored — a scrubbed marker for a deleted source; "
+            "the server neither invents nor hides it."
+        )
+    )
+    display_deleted: bool = Field(
+        description="Whether the label's source material is soft-deleted."
+    )
+    display_deleted_at: datetime | None = Field(
+        description=(
+            "Machine deletion moment from the source's ``deleted_at``; NULL when live."
+        )
+    )
+    material_source_type: str | None = Field(
+        description="Source type (document work only), for the deleted marker."
+    )
+    base_version: int | None = Field(
+        description="Base-archive version (base-normalize work only)."
+    )
+    current_stage: str | None = None
+    stage_progress: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Per-job-type progress checkpoint as stored; shape not normalised "
+            "here (a later step consumes it)."
+        ),
+    )
+
+
+class JobListResponse(BaseModel):
+    """Door 1 — a flat page of author work."""
+
+    items: list[JobListItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class MaterialHistoryItemResponse(BaseModel):
+    """Door 2 — one material with its work history (grouped server-side)."""
+
+    material_id: uuid.UUID
+    display_name: str | None
+    material_deleted: bool
+    material_deleted_at: datetime | None
+    material_source_type: str | None
+    processing_phase: str | None = Field(
+        description=(
+            "The material's real processing phase; NULL when the material is "
+            "deleted (a deleted material is a marker, not a phase)."
+        )
+    )
+    last_job: JobListItemResponse
+    jobs_count: int = Field(
+        description=(
+            "Count of work over this material (from the same list — no separate "
+            "computed number)."
+        )
+    )
+
+
+class MaterialHistoryResponse(BaseModel):
+    """Door 2 — a page of materials with their history."""
+
+    items: list[MaterialHistoryItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # --- Presigned Upload ---
 
 

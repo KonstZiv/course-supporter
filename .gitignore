@@ -240,3 +240,6 @@ data/calibration/video/*
 # Presentation Pass 1 calibration dumps (vision-model spike) — local run
 # artifacts written by the observational dump, never committed.
 data/calibration/runs/
+
+# Browser-automation session artifacts (never commit)
+.playwright-mcp/

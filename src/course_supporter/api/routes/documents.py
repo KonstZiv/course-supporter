@@ -192,13 +192,19 @@ async def _intake_video_duration_sec(
     url: str | None = None,
     filename: str = "upload",
 ) -> float | None:
-    """Probe a video's duration at intake (DD-3.3c-I-B), else ``None``.
+    """Probe a video's duration at intake and enforce the 150-min cap.
 
-    Returns ``None`` for non-video source types (they carry no video-hours
-    and so never gate). For video, ffprobes the already-local upload
-    ``content`` or resolves the remote ``url`` via yt-dlp metadata.
+    Returns the measured duration (seconds) for a video, or ``None`` for
+    non-video source types (they carry no video-hours and so never gate).
+    For video, ffprobes the already-local upload ``content`` or resolves the
+    remote ``url`` via yt-dlp metadata. Beyond measuring, this is the single
+    intake choke-point that also APPLIES the shared duration cap
+    (``max_media_duration_sec``): an over-long video is rejected here, before
+    it is stored and enqueued, covering all three callers (multipart file,
+    multipart URL, presigned confirm). The worker guards (audio post-STT,
+    video post-ffprobe) stay as the last line of defence.
 
-    Probe failure maps to a clear status, never a bare 500:
+    Failures and rejections map to clean statuses, never a bare 500:
 
     * :class:`UnsupportedFormatError` — the input itself is bad
       (private/unavailable/corrupt/non-video/no derivable duration). 422
@@ -209,21 +215,25 @@ async def _intake_video_duration_sec(
       retrying makes sense. Mirrors the gate's 503. Ordered AFTER the
       ``UnsupportedFormatError`` clause — it is a subclass, so the specific
       input-error case must match first.
+    * Duration over the cap — 400 ``INTAKE_DURATION_EXCEEDED`` with the same
+      ``{code, category, details}`` envelope the size reject uses, so the UI
+      surfaces the reason through its existing error-body reader.
     """
     if source_type != SourceType.VIDEO:
         return None
     try:
         if content is not None:
-            return await media.probe_intake_duration_from_bytes(
+            duration_sec = await media.probe_intake_duration_from_bytes(
                 content, filename=filename
             )
-        if url is None:
+        elif url is not None:
+            duration_sec = await media.probe_intake_duration_sec(url)
+        else:
             # Programmer error — every callsite supplies content or url. An
             # explicit raise (not assert, which -O strips) turns a missing
             # invariant into a loud failure instead of a silent None probe.
             msg = "video intake probe requires either content or url"
             raise ValueError(msg)
-        return await media.probe_intake_duration_sec(url)
     except UnsupportedFormatError as exc:
         raise HTTPException(
             status_code=422,
@@ -251,6 +261,26 @@ async def _intake_video_duration_sec(
                 )
             },
         ) from exc
+
+    # Enforce the shared 150-min capability cap (ARC.md §9) over the duration
+    # just measured, so an over-long video is refused at intake, before it is
+    # stored and enqueued, instead of after the worker downloads and probes it.
+    # Same ``{code, category, details}`` envelope as the size reject (the UI
+    # reads ``details``); product-language text, no internal tokens.
+    max_sec = get_settings().max_media_duration_sec
+    if duration_sec > max_sec:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INTAKE_DURATION_EXCEEDED",
+                "category": "duration_limit",
+                "details": (
+                    f"Система обробляє відео тривалістю до {max_sec // 60} "
+                    f"хвилин; це відео — {round(duration_sec / 60)} хв."
+                ),
+            },
+        )
+    return duration_sec
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]

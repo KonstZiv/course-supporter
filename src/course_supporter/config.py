@@ -158,6 +158,16 @@ class Settings(BaseSettings):
     intake_hint_max_hours: float = 84.0
     intake_hint_check_after_hours: float = 12.0
 
+    # Processing-capability duration cap (single source of truth, closes
+    # DD-2.4-A). NOT a per-context security policy: the limit is identical for
+    # authored and homework material because it is bound to speech-recognition
+    # cost and worker runtime, not to trust. It therefore lives next to the
+    # video queue-depth knobs above, not next to the size limits (which
+    # genuinely differ by context). Read by three consumers: the audio worker,
+    # the video worker (converted to ms at the use site), and the intake
+    # route's duration gate.
+    max_media_duration_sec: int = 150 * 60
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def intake_job_expires_ms(self) -> int:

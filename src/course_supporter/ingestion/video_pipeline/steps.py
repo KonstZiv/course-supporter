@@ -29,6 +29,7 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
+from course_supporter.config import get_settings
 from course_supporter.ingestion.audio import chars_per_word_cumsum
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
@@ -76,11 +77,6 @@ _PASS_2A_STAGE_NAME = "video_pass_2a_mapping"  # noqa: S105
 # calibration unit from audio Pass 2c (own ladder + prompt) per KD-2.3-X; same
 # registered cheap-tier pool. noqa: S105 as above.
 _PASS_2C_STAGE_NAME = "video_pass_2c_denoise"  # noqa: S105
-
-# 150 min — mirrors AudioProcessor.MAX_DURATION_SEC (Phase 2.2 vision §5).
-# Enforced worker-side after ffprobe, BEFORE STT, so an over-long video
-# never reaches the (billable) Scribe call.
-_MAX_DURATION_MS = 150 * 60 * 1000
 
 # Minimum inter-word silence (ms) treated as a Pass 2a boundary candidate.
 # rationale: starting default; calibrated in 2.4.5 (the real consumer of
@@ -146,10 +142,14 @@ async def step_1_ingest(
 
     file_metadata = await media.probe_metadata(video_path)
 
-    if file_metadata.duration_ms > _MAX_DURATION_MS:
+    # Single-source 150-min cap from config (``max_media_duration_sec``,
+    # DD-2.4-A), converted to ms at the use site; enforced BEFORE STT so an
+    # over-long video never reaches the (billable) Scribe call.
+    max_duration_ms = get_settings().max_media_duration_sec * 1000
+    if file_metadata.duration_ms > max_duration_ms:
         raise UnsupportedFormatError(
             f"Video duration ({file_metadata.duration_ms / 60_000:.1f} min) "
-            f"exceeds maximum {_MAX_DURATION_MS // 60_000} min."
+            f"exceeds maximum {max_duration_ms // 60_000} min."
         )
 
     return video_path, file_metadata

@@ -64,7 +64,10 @@ class TestAuthoredPolicy:
 
     def test_size_limits(self) -> None:
         assert AUTHORED_POLICY.max_file_size_bytes == 100 * 1024 * 1024
-        assert AUTHORED_POLICY.max_video_size_bytes == 5 * 1024 * 1024 * 1024
+        # Two distinct video caps (ARC.md §9): upload (browser -> route
+        # memory) is tighter than download (worker fetch by URL).
+        assert AUTHORED_POLICY.max_video_upload_bytes == 1024 * 1024 * 1024
+        assert AUTHORED_POLICY.max_video_download_bytes == 5 * 1024 * 1024 * 1024
         assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
 
     def test_archive_caps(self) -> None:
@@ -98,7 +101,8 @@ class TestHomeworkPolicy:
 
     def test_size_limits(self) -> None:
         assert HOMEWORK_POLICY.max_file_size_bytes == 1 * 1024 * 1024
-        assert HOMEWORK_POLICY.max_video_size_bytes is None
+        assert HOMEWORK_POLICY.max_video_upload_bytes is None
+        assert HOMEWORK_POLICY.max_video_download_bytes is None
         assert HOMEWORK_POLICY.max_presentation_size_bytes is None
 
     def test_archive_caps(self) -> None:
@@ -132,9 +136,11 @@ class TestPolicyResolver:
 
 class TestVideoSizeResolver:
     def test_video_extension_returns_video_cap(self) -> None:
+        # The resolver serves the UPLOAD cap (browser -> route), never the
+        # larger download cap read directly by the yt-dlp path (ARC.md §9).
         assert (
             get_max_size_for_extension("mp4", AUTHORED_POLICY)
-            == AUTHORED_POLICY.max_video_size_bytes
+            == AUTHORED_POLICY.max_video_upload_bytes
         )
 
     def test_audio_extension_returns_default(self) -> None:
@@ -153,7 +159,7 @@ class TestVideoSizeResolver:
         )
 
     def test_video_extension_in_homework_returns_default(self) -> None:
-        # HOMEWORK has no max_video_size_bytes (None) — even if the
+        # HOMEWORK has no max_video_upload_bytes (None) — even if the
         # extension is in _VIDEO_EXTENSIONS, the default applies.
         assert (
             get_max_size_for_extension("mp4", HOMEWORK_POLICY)
@@ -163,7 +169,7 @@ class TestVideoSizeResolver:
     def test_uppercase_extension_normalized(self) -> None:
         assert (
             get_max_size_for_extension("MP4", AUTHORED_POLICY)
-            == AUTHORED_POLICY.max_video_size_bytes
+            == AUTHORED_POLICY.max_video_upload_bytes
         )
 
 

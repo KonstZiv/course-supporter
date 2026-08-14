@@ -187,7 +187,6 @@ class AudioProcessor(MaterialProcessor):
     """
 
     SUPPORTED_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".flac"})
-    MAX_DURATION_SEC = 150 * 60  # vision.md §5 Phase 2.2
 
     def __init__(
         self,
@@ -283,11 +282,15 @@ class AudioProcessor(MaterialProcessor):
                 f"STT model."
             )
 
+        # The 150-min cap is a single source in config (``max_media_duration_sec``,
+        # DD-2.4-A); audio enforces it here, post-STT, because pure-audio
+        # duration is only known from the STT response.
         duration = result.audio_duration_sec
-        if duration is not None and duration > self.MAX_DURATION_SEC:
+        max_duration_sec = get_settings().max_media_duration_sec
+        if duration is not None and duration > max_duration_sec:
             raise UnsupportedFormatError(
                 f"Audio duration ({duration / 60:.1f} min) exceeds maximum "
-                f"{self.MAX_DURATION_SEC / 60:.0f} min per Phase 2.2 vision §5."
+                f"{max_duration_sec / 60:.0f} min per Phase 2.2 vision §5."
             )
 
         await self._store_words(job_id, result.words)

@@ -1810,6 +1810,51 @@ class TestIntakeVideoDurationErrorMapping:
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail["code"] == "INTAKE_DURATION_UNAVAILABLE"
 
+    async def test_url_over_cap_maps_to_400(self) -> None:
+        """A video longer than the cap is rejected at intake, before storage."""
+        from course_supporter.config import get_settings
+
+        over = float(get_settings().max_media_duration_sec + 60)
+        with (
+            patch(PROBE_URL_FUNC, new_callable=AsyncMock, return_value=over),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _intake_video_duration_sec(
+                SourceType.VIDEO, url="https://youtu.be/long"
+            )
+        exc = exc_info.value
+        assert exc.status_code == 400
+        assert isinstance(exc.detail, dict)
+        assert exc.detail["code"] == "INTAKE_DURATION_EXCEEDED"
+        # The UI reads only ``details`` — it must carry a human message.
+        assert isinstance(exc.detail["details"], str) and exc.detail["details"]
+
+    async def test_bytes_over_cap_maps_to_400(self) -> None:
+        """The uploaded-file path enforces the same cap in the same place."""
+        from course_supporter.config import get_settings
+
+        over = float(get_settings().max_media_duration_sec + 1)
+        with (
+            patch(PROBE_BYTES_FUNC, new_callable=AsyncMock, return_value=over),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _intake_video_duration_sec(
+                SourceType.VIDEO, content=b"fake", filename="a.mp4"
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["code"] == "INTAKE_DURATION_EXCEEDED"
+
+    async def test_at_cap_returns_duration(self) -> None:
+        """A video exactly at the cap is accepted (the bound is strict >)."""
+        from course_supporter.config import get_settings
+
+        at_cap = float(get_settings().max_media_duration_sec)
+        with patch(PROBE_URL_FUNC, new_callable=AsyncMock, return_value=at_cap):
+            result = await _intake_video_duration_sec(
+                SourceType.VIDEO, url="https://youtu.be/exact"
+            )
+        assert result == at_cap
+
 
 _CONFIRM_PROPOSAL = {
     "files": {

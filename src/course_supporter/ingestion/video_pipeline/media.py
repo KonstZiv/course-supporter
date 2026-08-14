@@ -38,16 +38,17 @@ from course_supporter.security.policies import AUTHORED_POLICY
 
 logger = structlog.get_logger()
 
-# Single source of truth: the authored upload policy's video size cap
-# (5 GB). Enforced worker-side for the URL path because the HTTP
-# ``file.size`` guard does not reach yt-dlp downloads (D2). Both layers —
-# yt-dlp ``--max-filesize`` and the post-download check — derive from this
-# byte value (passing bytes to yt-dlp also avoids the ``5G`` unit
-# ambiguity). ``max_video_size_bytes`` is Optional on ``ContextPolicy``;
-# the authored policy always sets it, and the fallback keeps the type
-# ``int`` with a safe default.
-_MAX_VIDEO_SIZE_BYTES: int = (
-    AUTHORED_POLICY.max_video_size_bytes or 5 * 1024 * 1024 * 1024
+# The authored policy's video DOWNLOAD cap (5 GB) -- the ceiling on a video
+# fetched from a source URL, distinct from the tighter upload cap the create
+# route enforces (ARC.md §9). Enforced worker-side for the URL path
+# because the HTTP ``file.size`` guard does not reach yt-dlp downloads (D2).
+# Both layers — yt-dlp ``--max-filesize`` and the post-download check — derive
+# from this byte value (passing bytes to yt-dlp also avoids the ``5G`` unit
+# ambiguity). ``max_video_download_bytes`` is Optional on ``ContextPolicy``;
+# the authored policy always sets it, and the fallback keeps the type ``int``
+# with a safe default.
+_MAX_VIDEO_DOWNLOAD_BYTES: int = (
+    AUTHORED_POLICY.max_video_download_bytes or 5 * 1024 * 1024 * 1024
 )
 
 # yt-dlp download (URL path). No per-video duration/size is known before the
@@ -63,7 +64,7 @@ _DOWNLOAD_TIMEOUT_CAP_SEC = 10800.0
 _DOWNLOAD_TIMEOUT_SEC = min(
     max(
         _DOWNLOAD_TIMEOUT_FLOOR_SEC,
-        _MAX_VIDEO_SIZE_BYTES / _DOWNLOAD_MIN_THROUGHPUT_BPS,
+        _MAX_VIDEO_DOWNLOAD_BYTES / _DOWNLOAD_MIN_THROUGHPUT_BPS,
     ),
     _DOWNLOAD_TIMEOUT_CAP_SEC,
 )
@@ -229,7 +230,7 @@ async def download_video(url: str, dest_dir: Path) -> Path:
         "--merge-output-format",
         "mp4",
         "--max-filesize",
-        str(_MAX_VIDEO_SIZE_BYTES),
+        str(_MAX_VIDEO_DOWNLOAD_BYTES),
         "--no-playlist",
         "--quiet",
         "--no-warnings",
@@ -255,10 +256,10 @@ def _resolve_download(dest_dir: Path, url: str) -> Path:
     video_path = max(candidates, key=lambda p: p.stat().st_size)
 
     size = video_path.stat().st_size
-    if size > _MAX_VIDEO_SIZE_BYTES:
+    if size > _MAX_VIDEO_DOWNLOAD_BYTES:
         raise UnsupportedFormatError(
             f"Downloaded video ({size / 1024**3:.2f} GB) exceeds maximum "
-            f"{_MAX_VIDEO_SIZE_BYTES // 1024**3} GB."
+            f"{_MAX_VIDEO_DOWNLOAD_BYTES // 1024**3} GB."
         )
     return video_path
 

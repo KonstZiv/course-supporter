@@ -38,10 +38,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal
 
-# Video extensions that get the dedicated ``max_video_size_bytes``
-# cap when present on the active policy. Audio extensions stay on
-# the default ``max_file_size_bytes``; they are bounded enough not
-# to need a separate ceiling.
+# Video extensions that get the dedicated video-upload cap
+# (``max_video_upload_bytes``, resolved by
+# ``get_max_size_for_extension``) when present on the active policy.
+# Audio extensions stay on the default ``max_file_size_bytes``; they
+# are bounded enough not to need a separate ceiling.
 _VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {"mp4", "mov", "avi", "mkv", "webm"}
 )
@@ -131,10 +132,19 @@ class ContextPolicy:
             :class:`tests.unit.security.test_policies.TestPolicyConsistency`).
         max_file_size_bytes: Default per-file cap for any extension
             that does not match the video override.
-        max_video_size_bytes: Override cap applied to extensions in
-            :data:`_VIDEO_EXTENSIONS`. ``None`` means video is not
-            allowed in this context (relies on
-            ``allowed_extensions`` to also exclude video).
+        max_video_upload_bytes: Cap on a video the author uploads
+            through the create route -- bounded by the route reading
+            the whole body into memory, so it is deliberately tighter
+            than the download cap. Resolved for
+            :data:`_VIDEO_EXTENSIONS` by
+            :func:`get_max_size_for_extension`. ``None`` means video
+            uploads are not allowed in this context.
+        max_video_download_bytes: Cap on a video the worker fetches
+            from a source URL -- bounded by disk and worker runtime,
+            not by the route's memory, so it stays larger. Read
+            directly by the yt-dlp download path, never through the
+            resolver. ``None`` means video is not allowed in this
+            context.
         max_presentation_size_bytes: Override cap applied to
             extensions in :data:`_PRESENTATION_EXTENSIONS` (pdf /
             pptx / ppt). ``None`` means no presentation override
@@ -162,7 +172,8 @@ class ContextPolicy:
     name: Literal["authored", "homework"]
     allowed_extensions: frozenset[str]
     max_file_size_bytes: int
-    max_video_size_bytes: int | None
+    max_video_upload_bytes: int | None
+    max_video_download_bytes: int | None
     max_presentation_size_bytes: int | None
     max_archive_unzipped_bytes: int | None
     max_archive_nesting_depth: int | None
@@ -215,7 +226,13 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # Stage 1 and the code light-gate share one source of truth.
     | CODE_EXTENSIONS,
     max_file_size_bytes=100 * 1024 * 1024,
-    max_video_size_bytes=5 * 1024 * 1024 * 1024,
+    # Two video caps, deliberately different (ARC.md §9): the upload cap is
+    # bounded by the create route reading the whole body into memory (8 GB
+    # machine); the download cap is bounded by disk and worker runtime.
+    # Merging them into one number would let the upload limit silently govern
+    # the download surface, for which a gibibyte may not be enough.
+    max_video_upload_bytes=1024 * 1024 * 1024,
+    max_video_download_bytes=5 * 1024 * 1024 * 1024,
     max_presentation_size_bytes=50 * 1024 * 1024,
     # Archive knobs mirror _PROJECT_NORMALIZE_LIMITS (normalizer/models.py):
     # same author-curated-project envelope as KD18 base archives. Depth 1 =
@@ -243,7 +260,8 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
         }
     ),
     max_file_size_bytes=1 * 1024 * 1024,
-    max_video_size_bytes=None,
+    max_video_upload_bytes=None,
+    max_video_download_bytes=None,
     max_presentation_size_bytes=None,
     max_archive_unzipped_bytes=10 * 1024 * 1024,
     max_archive_nesting_depth=3,
@@ -280,8 +298,10 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
 
     Resolution order (overrides are keyed on disjoint extension sets):
 
-    * ``policy.max_video_size_bytes`` when the extension is in
-      :data:`_VIDEO_EXTENSIONS` and the policy provides a video override.
+    * ``policy.max_video_upload_bytes`` when the extension is in
+      :data:`_VIDEO_EXTENSIONS` and the policy provides a video-upload
+      override. (The download cap ``max_video_download_bytes`` is read
+      directly by the yt-dlp path, not through this resolver.)
     * ``policy.max_presentation_size_bytes`` when the extension is in
       :data:`_PRESENTATION_EXTENSIONS` and the policy provides a
       presentation override.
@@ -291,8 +311,8 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     comparison; callers may pass either case.
     """
     ext = extension.lower()
-    if ext in _VIDEO_EXTENSIONS and policy.max_video_size_bytes is not None:
-        return policy.max_video_size_bytes
+    if ext in _VIDEO_EXTENSIONS and policy.max_video_upload_bytes is not None:
+        return policy.max_video_upload_bytes
     if (
         ext in _PRESENTATION_EXTENSIONS
         and policy.max_presentation_size_bytes is not None

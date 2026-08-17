@@ -371,7 +371,9 @@ class PresentationProcessor(MaterialProcessor):
 
         Reads the full per-slide sequence from ``self._slide_raw``
         (populated by ``process_raw``). Pass 1 runs for ALL slides,
-        including image-only ones. ``_bridge_visual_content`` then turns
+        including image-only ones, and pins its description language to
+        the course language (``doc.language``, task 2.4.14).
+        ``_bridge_visual_content`` then turns
         each image-only slide's VD into a ``SLIDE_VISUAL`` chunk in
         ``doc.chunks`` (road (a)) so its text becomes segment content;
         text slides are untouched. Pass 2a output is validated and
@@ -393,7 +395,8 @@ class PresentationProcessor(MaterialProcessor):
                 "process_macro on the same processor instance."
             )
 
-        descriptions = await self._run_pass_1(slide_raw, router)
+        language = display_name(doc.language) if doc.language else None
+        descriptions = await self._run_pass_1(slide_raw, router, language)
         await self._bridge_visual_content(doc, slide_raw, descriptions, router)
         pass2a = await self._run_pass_2a(doc, slide_raw, descriptions, router)
 
@@ -421,6 +424,7 @@ class PresentationProcessor(MaterialProcessor):
         self,
         slide_raw: list[SlideRaw],
         router: StageRouter,
+        language: str | None,
     ) -> list[str]:
         """Pass 1 — per-slide vision description, bounded-concurrency gather.
 
@@ -428,6 +432,13 @@ class PresentationProcessor(MaterialProcessor):
         ``ProcessingError`` naming the first failing slide and the
         total failure count. Plain-text output per slide (no JSON, no
         response_validator) — symmetric with the audio Pass 2c shape.
+
+        ``language`` (the course language display name, or ``None``) pins
+        the descriptive prose to the course language via the prompt's
+        ``{% if language %}`` gate — mirroring Pass 2a (task 2.4.14). It is
+        always forwarded (``None`` when unset) so the StrictUndefined Jinja
+        environment does not raise on the gate. On-slide text/code stays
+        verbatim; only the description prose is pinned.
         """
         sem = asyncio.Semaphore(_PASS_1_CONCURRENCY)
 
@@ -438,6 +449,7 @@ class PresentationProcessor(MaterialProcessor):
                     contents=[sr.image_bytes],
                     slide_number=sr.slide_number,
                     raw_text=sr.raw_text,
+                    language=language,
                 )
                 return result.content
 

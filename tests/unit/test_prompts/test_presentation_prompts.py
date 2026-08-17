@@ -39,6 +39,8 @@ class TestPresentationPass1VisionPrompt:
         assert prompt.user is not None
         assert "{{ slide_number }}" in prompt.user
         assert "{{ raw_text }}" in prompt.user
+        # Task 2.4.14 — the language-pin gate is referenced in the source.
+        assert "{{ language }}" in prompt.user
 
     def test_renders_with_sample_context(self) -> None:
         prompt = load_prompt(_PASS_1_REF, base_path=_PROMPTS_DIR)
@@ -46,6 +48,9 @@ class TestPresentationPass1VisionPrompt:
         rendered = prompt.render(
             slide_number=3,
             raw_text="def add(a, b):\n    return a + b",
+            # ``language`` is always forwarded by the processor (possibly
+            # ``None``); the {% if language %} gate needs the var defined.
+            language="Ukrainian",
         )
 
         assert rendered.user is not None
@@ -54,13 +59,29 @@ class TestPresentationPass1VisionPrompt:
         # Spike-verbatim instruction body survives the render pass.
         assert "Describe the contents of this presentation slide" in rendered.user
         assert "Output ONLY the description text" in rendered.user
+        # The language pin is emitted when a course language is supplied.
+        assert "Write your description in Ukrainian" in rendered.user
+
+    def test_language_gate_absent_when_language_none(self) -> None:
+        prompt = load_prompt(_PASS_1_REF, base_path=_PROMPTS_DIR)
+
+        rendered = prompt.render(
+            slide_number=1,
+            raw_text="x",
+            language=None,
+        )
+
+        assert rendered.user is not None
+        # The {% if language %} block collapses to nothing without a language.
+        assert "Write your description in" not in rendered.user
 
     def test_strictundefined_raises_on_missing_render_var(self) -> None:
         prompt = load_prompt(_PASS_1_REF, base_path=_PROMPTS_DIR)
 
         # ``StrictUndefined`` surfaces missing-context bugs as
         # exceptions instead of silently emitting empty strings; the
-        # processor must pass both ``slide_number`` and ``raw_text``.
+        # processor must pass ``slide_number``, ``raw_text`` and
+        # ``language`` (the last possibly ``None``).
         with pytest.raises(UndefinedError):
             prompt.render(slide_number=1)
 

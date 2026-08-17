@@ -243,3 +243,7 @@ data/calibration/runs/
 
 # Browser-automation session artifacts (never commit)
 .playwright-mcp/
+
+# Canonical refactoring-vision lives one level up (workspace root), NOT in this
+# repo. Ignore the path so a stray twin folder cannot regrow here (DD-AV-T).
+/refactoring-vision/

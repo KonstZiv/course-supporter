@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import re
 import tempfile
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +76,8 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
-from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
+from course_supporter.security.stage2 import run_stage2_safety_check
 
 if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
@@ -369,10 +371,12 @@ class PresentationProcessor(MaterialProcessor):
 
         Reads the full per-slide sequence from ``self._slide_raw``
         (populated by ``process_raw``). Pass 1 runs for ALL slides,
-        including image-only ones (their VD descriptions inform Pass 2a
-        grouping even though they emit no chunk). Pass 2a output is
-        validated and mapped onto ``DocumentSegmentDraft`` offsets via
-        the ``chars_per_slide_cumsum`` bridge.
+        including image-only ones. ``_bridge_visual_content`` then turns
+        each image-only slide's VD into a ``SLIDE_VISUAL`` chunk in
+        ``doc.chunks`` (road (a)) so its text becomes segment content;
+        text slides are untouched. Pass 2a output is validated and
+        mapped onto ``DocumentSegmentDraft`` offsets via the
+        ``chars_per_slide_cumsum`` bridge.
 
         Per task 2.4.15, Pass 2a emits per-segment ``main_concepts`` /
         ``secondary_concepts``; document-level concepts are aggregated
@@ -390,6 +394,7 @@ class PresentationProcessor(MaterialProcessor):
             )
 
         descriptions = await self._run_pass_1(slide_raw, router)
+        await self._bridge_visual_content(doc, slide_raw, descriptions, router)
         pass2a = await self._run_pass_2a(doc, slide_raw, descriptions, router)
 
         segment_drafts = self._build_segment_drafts(doc, pass2a)
@@ -454,6 +459,97 @@ class PresentationProcessor(MaterialProcessor):
             )
 
         return [r for r in results if not isinstance(r, BaseException)]
+
+    async def _bridge_visual_content(
+        self,
+        doc: SourceDocument,
+        slide_raw: list[SlideRaw],
+        descriptions: list[str],
+        router: StageRouter,
+    ) -> None:
+        """Turn each image-only slide's VD into a ``SLIDE_VISUAL`` chunk (road (a)).
+
+        For every slide with empty ``raw_text`` (image-only — it emitted no
+        ``SLIDE_TEXT`` chunk in ``process_raw``), its Pass 1 description
+        becomes a chunk in ``doc.chunks``, so downstream ``assemble_text`` /
+        ``chars_per_slide_cumsum`` / ``_build_segment_drafts`` slice real
+        content for it exactly as for a text slide — the three offset
+        invariants stay untouched. Text slides get NO ``SLIDE_VISUAL`` chunk:
+        their VD reproduces their text verbatim, so injecting it would double
+        the content. ``descriptions[i]`` is positionally aligned with
+        ``slide_raw[i]`` (``_run_pass_1`` gathers in order).
+
+        Three guards, in order:
+
+        1. **Empty-description fail-fast** — a slide with neither text nor a
+           description is a genuinely empty case; there is nothing to voice,
+           so it raises ``PRESENTATION_EMPTY_SEGMENT`` (the same category the
+           defensive ``_build_segment_drafts`` guard uses).
+        2. **Safety point (TASK section 2a)** — the descriptions become persisted
+           segment content and flow into homework criteria, yet for an
+           image-only deck the orchestrator's Stage 2 check ran over an empty
+           ``safety_text()``. So the descriptions pass the same authored
+           safety check (``content_kind="authored"``); a reject reuses the
+           orchestrator's ``SecurityRejectedError`` → ``STAGE2_REJECTED`` path.
+           Text is NFC-normalized first per the ``run_stage2_safety_check``
+           caller contract; ``course_context`` is omitted (defence-in-depth
+           over model-generated text — injection/harmful content is
+           context-independent). Only the descriptions are checked; slide text
+           was already vetted by the orchestrator's Stage 2.
+        3. **Slide-order merge** — after appending the new chunks the whole
+           list is re-sorted by ``slide_number`` (each slide owns exactly one
+           chunk, so the key is a total order), keeping cumsum / assemble_text
+           / slide_to_idx slide-aligned. Append-only would misorder them.
+
+        No-op when the deck has no image-only slide (pure-text deck unchanged).
+        """
+        visual = [
+            (sr.slide_number, descriptions[i].strip())
+            for i, sr in enumerate(slide_raw)
+            if not sr.raw_text
+        ]
+        if not visual:
+            return
+
+        for slide_number, desc in visual:
+            if not desc:
+                raise CategorisedProcessingError(
+                    ErrorCategory.PRESENTATION_EMPTY_SEGMENT,
+                    f"PRESENTATION_EMPTY_SEGMENT: slide {slide_number} has no "
+                    f"extractable text and an empty visual description; cannot "
+                    f"produce segment content.",
+                )
+
+        # The 100-slide cap (_MAX_PRESENTATION_SLIDES) bounds this surface well
+        # under the safety ladder's token budget, so no byte backstop is needed
+        # here (unlike the orchestrator's _bound_safety_text for authored text).
+        safety_surface = "\n\n".join(
+            unicodedata.normalize("NFC", desc) for _, desc in visual
+        )
+        verdict = await run_stage2_safety_check(
+            safety_surface, router=router, content_kind="authored"
+        )
+        if not verdict.is_safe:
+            logger.warning(
+                "presentation_visual_content.rejected",
+                violations=[v.value for v in verdict.violations],
+                confidence=verdict.confidence,
+            )
+            raise SecurityRejectedError(
+                ErrorCategory.STAGE2_REJECTED,
+                verdict.reasoning or "Stage 2 rejection of slide visual descriptions",
+            )
+
+        for slide_number, desc in visual:
+            doc.chunks.append(
+                ContentChunk(
+                    chunk_type=ChunkType.SLIDE_VISUAL,
+                    text=desc,
+                    index=slide_number,
+                    metadata={"slide_number": slide_number},
+                )
+            )
+        doc.chunks.sort(key=lambda c: int(c.metadata["slide_number"]))
 
     async def _run_pass_2a(
         self,
@@ -537,13 +633,14 @@ class PresentationProcessor(MaterialProcessor):
         a contiguous chunk-index block, preserving the
         ``DocumentSummaryDraft`` contiguity invariant.
 
-        Degenerate guard: a segment whose slide range contains no
-        emitted chunk (all slides image-only) cannot be sliced into a
-        non-empty char range and fails the ``DocumentSegmentDraft``
-        ``end_pos > start_pos`` invariant. Such a segment raises a
-        ``ProcessingError`` (fail-fast) rather than producing an invalid
-        draft. Not exercised by the ratified test set; surfaced for
-        vision-side handling decision.
+        Defensive guard: a segment whose slide range contains no emitted
+        chunk cannot be sliced into a non-empty char range and would fail
+        the ``DocumentSegmentDraft`` ``end_pos > start_pos`` invariant, so
+        it raises ``PRESENTATION_EMPTY_SEGMENT`` (fail-fast) rather than
+        producing an invalid draft. Unreachable on the normal path since
+        ``_bridge_visual_content`` gives every image-only slide a
+        ``SLIDE_VISUAL`` chunk; it survives only for a Pass 2a slide range
+        that falls outside ``[1, slide_count]`` (a mapping hallucination).
         """
         cumsum = chars_per_slide_cumsum(doc.chunks)
         slide_to_idx = {
@@ -559,15 +656,17 @@ class PresentationProcessor(MaterialProcessor):
                 if seg.start_slide <= s <= seg.end_slide
             ]
             if not idxs:
-                # Structural code (F4 / DD-2.3-AH): the category now rides
-                # error_category; the legacy string prefix stays in the
-                # message for log/operator continuity.
+                # Defensive (F4 / DD-2.3-AH): unreachable once every image-only
+                # slide carries a SLIDE_VISUAL chunk, so a no-chunk range means
+                # Pass 2a mapped a segment outside [1, slide_count]. The category
+                # rides error_category; the legacy string prefix stays for
+                # log/operator continuity.
                 raise CategorisedProcessingError(
                     ErrorCategory.PRESENTATION_EMPTY_SEGMENT,
                     f"PRESENTATION_EMPTY_SEGMENT: Pass 2a segment slides "
-                    f"[{seg.start_slide}-{seg.end_slide}] contains no "
-                    f"extractable text (all slides image-only); cannot map "
-                    f"to char offsets for Pass 2b slicing.",
+                    f"[{seg.start_slide}-{seg.end_slide}] map to no emitted "
+                    f"chunk (slide range outside the deck); cannot map to char "
+                    f"offsets for Pass 2b slicing.",
                 )
             drafts.append(
                 DocumentSegmentDraft(

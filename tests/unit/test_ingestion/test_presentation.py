@@ -38,6 +38,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "presentations"
 
@@ -81,17 +82,33 @@ def _ok_result(content: str, *, provider: str = "p", model: str = "m") -> StageR
     )
 
 
+def _safety_json(*, is_safe: bool) -> str:
+    """A SafetyResult JSON body as the safety_check_authored stage returns."""
+    return json.dumps(
+        {
+            "is_safe": is_safe,
+            "violations": [] if is_safe else ["prompt_injection"],
+            "confidence": 0.99,
+            "reasoning": "ok" if is_safe else "injected instructions in slide image",
+        }
+    )
+
+
 def _make_router(
     *,
     pass1_by_slide: dict[int, str] | None = None,
     pass1_error_slide: int | None = None,
     pass2a_payload: str | None = None,
+    safety_safe: bool = True,
 ) -> AsyncMock:
     """Fake StageRouter for process_macro.
 
     Pass 1 returns a per-slide description (or raises on a chosen
-    slide for the fail-fast test). Pass 2a invokes the supplied
-    ``response_validator`` with ``pass2a_payload`` then returns it.
+    slide for the fail-fast test). ``safety_check_authored`` (the
+    ``_bridge_visual_content`` safety point, fired only when a deck has
+    image-only slides) returns a SafetyResult verdict gated by
+    ``safety_safe``. Pass 2a invokes the supplied ``response_validator``
+    with ``pass2a_payload`` then returns it.
     """
     router = AsyncMock()
 
@@ -108,6 +125,8 @@ def _make_router(
                 raise RuntimeError(f"vision failed on slide {slide_number}")
             desc = (pass1_by_slide or {}).get(slide_number, f"desc {slide_number}")
             return _ok_result(desc)
+        if stage_name == "safety_check_authored":
+            return _ok_result(_safety_json(is_safe=safety_safe))
         if stage_name == "presentation_pass_2a_mapping":
             assert pass2a_payload is not None
             if response_validator is not None:
@@ -253,9 +272,12 @@ class TestProcessRaw:
     async def test_v0_3_n3_empty_slide_filter(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # raw_text=("Slide 1", "", "Slide 3") → only slides 1 + 3 emit
-        # chunks; slide_number metadata preserved on emitted chunks; the
-        # full 3-slide sequence stays available on _slide_raw for Pass 1.
+        # Stage 1 (process_raw) only: raw_text=("Slide 1", "", "Slide 3") →
+        # only slides 1 + 3 emit a SLIDE_TEXT chunk here; slide_number
+        # metadata is preserved and the full 3-slide sequence stays on
+        # _slide_raw for Pass 1. The image-only slide 2 is NOT contentless
+        # downstream — process_macro's bridge later gives it a SLIDE_VISUAL
+        # chunk (see TestVisualContentBridge); this filter is a Stage-1 fact.
         proc = PresentationProcessor()
         monkeypatch.setattr(
             proc,
@@ -542,13 +564,12 @@ class TestProcessMacro:
             (3, 3),
         ]
 
-    async def test_segment_over_empty_only_slides_fails_fast(
+    async def test_segment_over_image_only_slide_gets_visual_content(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Discovered edge case: a Pass 2a segment whose slides are ALL
-        # image-only (no emitted chunk) cannot map to char offsets.
-        # Fail-fast guard surfaces a clear ProcessingError rather than a
-        # cryptic DocumentSegmentDraft validation error.
+        # Inversion of the old fail-fast: a segment whose slide is image-only
+        # now carries that slide's VD as content (road (a)) instead of raising
+        # PRESENTATION_EMPTY_SEGMENT.
         proc = PresentationProcessor()
         monkeypatch.setattr(
             proc,
@@ -556,10 +577,28 @@ class TestProcessMacro:
             MagicMock(return_value=_slides((1, "Intro"), (2, ""), (3, "End"))),
         )
         doc = await proc.process_raw(_pdf_source(tmp_path))
-        # Segment [2-2] is entirely the image-only slide → no chunks.
         router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2), (3, 3)]))
-        with pytest.raises(ProcessingError, match="PRESENTATION_EMPTY_SEGMENT"):
-            await proc.process_macro(doc, router)
+
+        summary = await proc.process_macro(doc, router)
+
+        # Slide 2 now owns a SLIDE_VISUAL chunk carrying its Pass 1 description,
+        # merged into slide order between the two text slides.
+        assert [(c.chunk_type, c.text) for c in doc.chunks] == [
+            (ChunkType.SLIDE_TEXT, "Intro"),
+            (ChunkType.SLIDE_VISUAL, "desc 2"),
+            (ChunkType.SLIDE_TEXT, "End"),
+        ]
+        # assemble_text = "Intro\n\ndesc 2\n\nEnd"; cumsum = [0, 7, 15, 18]
+        assert [(s.start_pos, s.end_pos) for s in summary.segments] == [
+            (0, 7),
+            (7, 15),
+            (15, 18),
+        ]
+        # Pass 2b slices the visual slide's content out of the same reference;
+        # the non-final segment carries its trailing inter-slide "\n\n"
+        # (pre-existing presentation Pass 2b behaviour, cf. the text case above).
+        sliced = await proc.process_detail(doc, summary)
+        assert sliced[1].content == "desc 2\n\n"
 
 
 # ── Pass 2a concept aggregation + passthrough (task 2.4.15) ─────────
@@ -756,3 +795,168 @@ class TestRenderedSlidesAccessor:
         assert all(s.image_bytes for s in slides)
         # Same object the processor holds internally — a view, not a copy.
         assert list(slides) == proc._slide_raw
+
+
+# ── Visual-content bridge (road (a): image-only slides → SLIDE_VISUAL) ──
+
+
+def _stage_names(router: AsyncMock) -> list[str]:
+    """Ordered stage names the router was asked to execute."""
+    return [call.args[0] for call in router.execute_for_stage.await_args_list]
+
+
+class TestVisualContentBridge:
+    """``_bridge_visual_content`` — image-only slides become segment content."""
+
+    async def test_all_image_only_deck_gets_visual_content_for_every_slide(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, ""), (2, ""), (3, ""), (4, ""))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        # process_raw emits no chunk for a fully image-only deck.
+        assert doc.chunks == []
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 2), (3, 4)]))
+
+        summary = await proc.process_macro(doc, router)
+
+        # Every slide now owns a SLIDE_VISUAL chunk in slide order.
+        assert [
+            (c.chunk_type, c.text, c.metadata["slide_number"]) for c in doc.chunks
+        ] == [
+            (ChunkType.SLIDE_VISUAL, "desc 1", 1),
+            (ChunkType.SLIDE_VISUAL, "desc 2", 2),
+            (ChunkType.SLIDE_VISUAL, "desc 3", 3),
+            (ChunkType.SLIDE_VISUAL, "desc 4", 4),
+        ]
+        # assemble_text = "desc 1\n\ndesc 2\n\ndesc 3\n\ndesc 4"; cumsum step 8.
+        # The first (non-final) segment carries its trailing inter-slide "\n\n"
+        # (pre-existing presentation Pass 2b behaviour).
+        sliced = await proc.process_detail(doc, summary)
+        assert [s.content for s in sliced] == [
+            "desc 1\n\ndesc 2\n\n",
+            "desc 3\n\ndesc 4",
+        ]
+
+    async def test_visual_chunks_merged_in_slide_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Image-only slide 1 precedes text slide 2 but is appended after it
+        # (process_raw emitted only the text chunk); the merge must re-sort.
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, ""), (2, "Text"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        assert [c.metadata["slide_number"] for c in doc.chunks] == [2]
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2)]))
+
+        await proc.process_macro(doc, router)
+
+        assert [(c.chunk_type, c.metadata["slide_number"]) for c in doc.chunks] == [
+            (ChunkType.SLIDE_VISUAL, 1),
+            (ChunkType.SLIDE_TEXT, 2),
+        ]
+
+    async def test_text_slide_gets_no_visual_chunk_and_skips_safety(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "Text1"), (2, "Text2"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2)]))
+
+        await proc.process_macro(doc, router)
+
+        # No SLIDE_VISUAL chunk and — the pure-text deck being unchanged — no
+        # safety call at all (the bridge returns early).
+        assert all(c.chunk_type == ChunkType.SLIDE_TEXT for c in doc.chunks)
+        assert "safety_check_authored" not in _stage_names(router)
+
+    async def test_safety_surface_is_only_the_visual_descriptions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The already-vetted slide text is NOT re-checked; only the new VD is.
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "KeepText"), (2, ""))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 1), (2, 2)]))
+
+        await proc.process_macro(doc, router)
+
+        safety_calls = [
+            call
+            for call in router.execute_for_stage.await_args_list
+            if call.args[0] == "safety_check_authored"
+        ]
+        assert len(safety_calls) == 1
+        assert safety_calls[0].kwargs["submission_text"] == "desc 2"
+
+    async def test_empty_visual_description_fails_fast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A slide with neither text nor a description is genuinely empty.
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "Text"), (2, ""))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(
+            pass1_by_slide={2: "   "},  # whitespace-only → empty after strip
+            pass2a_payload=_pass2a_json([(1, 1), (2, 2)]),
+        )
+        with pytest.raises(ProcessingError, match="PRESENTATION_EMPTY_SEGMENT"):
+            await proc.process_macro(doc, router)
+
+    async def test_unsafe_visual_content_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, ""), (2, ""))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(
+            pass2a_payload=_pass2a_json([(1, 1), (2, 2)]),
+            safety_safe=False,
+        )
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            await proc.process_macro(doc, router)
+        assert exc_info.value.category == ErrorCategory.STAGE2_REJECTED
+        # Rejection happens before Pass 2a — no mapping call is spent.
+        assert "presentation_pass_2a_mapping" not in _stage_names(router)
+
+    async def test_assemble_text_and_cumsum_account_for_visual(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = PresentationProcessor()
+        monkeypatch.setattr(
+            proc,
+            "_extract_pdf_pages",
+            MagicMock(return_value=_slides((1, "Intro"), (2, ""), (3, "End"))),
+        )
+        doc = await proc.process_raw(_pdf_source(tmp_path))
+        router = _make_router(pass2a_payload=_pass2a_json([(1, 2), (3, 3)]))
+
+        await proc.process_macro(doc, router)
+
+        assert doc.assemble_text() == "Intro\n\ndesc 2\n\nEnd"
+        assert chars_per_slide_cumsum(doc.chunks) == [0, 7, 15, 18]

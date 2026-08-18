@@ -76,6 +76,10 @@ class ChunkType(StrEnum):
 
     TRANSCRIPT = "transcript"
     SLIDE_TEXT = "slide_text"
+    # Pass 1 visual description of an image-only presentation slide, inserted
+    # into doc.chunks so its text becomes segment content (road (a)). Distinct
+    # from VISUAL_SCENE, which is the video source_type's second stream.
+    SLIDE_VISUAL = "slide_visual"
     PARAGRAPH = "paragraph"
     HEADING = "heading"
     WEB_CONTENT = "web_content"

@@ -411,9 +411,9 @@ def _presentation_router(payload: str) -> AsyncMock:
     Pass 1 is invoked once per slide and returns a per-slide string;
     Pass 2a is invoked once and feeds ``payload`` through the
     ``response_validator`` closure that ``_run_pass_2a`` registers.
-    Only the Pass 2a call is asserted on — the per-slide Pass 1 calls
-    do not carry a ``language`` kwarg by contract (Pass 1 prompt has
-    no language pin in task 2.4.15).
+    Since task 2.4.14 the per-slide Pass 1 calls ALSO carry a
+    ``language`` kwarg (the description-language pin); both the Pass 1
+    and Pass 2a calls are asserted on below.
     """
     router = AsyncMock()
 
@@ -498,7 +498,15 @@ class TestPresentationProcessorLanguageKwarg:
 
         await processor.process_macro(doc, router)
 
-        # The Pass 2a call is the one the language kwarg flows into.
+        # Both passes carry the resolved display name; Pass 1 once per slide.
+        pass1_calls = [
+            call
+            for call in router.execute_for_stage.await_args_list
+            if call.args and call.args[0] == "presentation_pass_1_vision"
+        ]
+        assert len(pass1_calls) == 3
+        assert all(call.kwargs["language"] == "Ukrainian" for call in pass1_calls)
+
         pass2a_calls = [
             call
             for call in router.execute_for_stage.await_args_list
@@ -515,6 +523,14 @@ class TestPresentationProcessorLanguageKwarg:
         router = _presentation_router(_presentation_pass_2a_json())
 
         await processor.process_macro(doc, router)
+
+        pass1_calls = [
+            call
+            for call in router.execute_for_stage.await_args_list
+            if call.args and call.args[0] == "presentation_pass_1_vision"
+        ]
+        assert len(pass1_calls) == 3
+        assert all(call.kwargs["language"] is None for call in pass1_calls)
 
         pass2a_calls = [
             call

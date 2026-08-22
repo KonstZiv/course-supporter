@@ -132,6 +132,7 @@ async def _make_document(
     course_root_id: uuid.UUID,
     filename: str,
     deleted: bool = False,
+    material_role: str | None = None,
 ) -> AuthoredDocument:
     doc = AuthoredDocument(
         id=uuid.uuid4(),
@@ -142,6 +143,8 @@ async def _make_document(
         filename=filename,
         order=0,
     )
+    if material_role is not None:
+        doc.material_role = material_role
     if deleted:
         doc.deleted_at = datetime.now(UTC)
     session.add(doc)
@@ -300,6 +303,56 @@ class TestGetSubtreeWithActiveDocuments:
         assert loaded_child.id == child_id
         loaded_doc_ids = {d.id for d in loaded_child.documents}
         assert loaded_doc_ids == {child_active_id}
+
+        await _cleanup_tenant(hotfix7_session_factory, [tenant_id])
+
+
+@pytest.mark.requires_db
+class TestGetSubtreeDoesNotFilterByRole:
+    """The shared subtree loader is role-agnostic (step A «чисте дерево», §5).
+
+    The student-facing role allowlist lives in the portal projection
+    (``portal_courses._project_node``), NOT in the repository — the author path
+    (``GET /api/v1/nodes/{id}/detail``) goes through the SAME
+    ``get_subtree_with_active_documents`` and must keep seeing methodological
+    documents. This test turns red if a role filter is ever pushed down into the
+    shared loader.
+    """
+
+    async def test_methodological_document_is_returned(
+        self,
+        hotfix7_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with hotfix7_session_factory() as session:
+            tenant = await _make_tenant(session, "role-agnostic")
+            root = await _make_node(
+                session, tenant_id=tenant.id, parent_id=None, title="root"
+            )
+            educational = await _make_document(
+                session,
+                course_node_id=root.id,
+                course_root_id=root.id,
+                filename="lesson.txt",
+                material_role="educational",
+            )
+            methodological = await _make_document(
+                session,
+                course_node_id=root.id,
+                course_root_id=root.id,
+                filename="mentor-check.txt",
+                material_role="methodological",
+            )
+            await session.commit()
+            tenant_id, root_id = tenant.id, root.id
+            educational_id, methodological_id = educational.id, methodological.id
+
+        async with hotfix7_session_factory() as session:
+            repo = CourseNodeRepository(session)
+            tree = await repo.get_subtree_with_active_documents(root_id)
+
+        assert len(tree) == 1
+        loaded_doc_ids = {d.id for d in tree[0].documents}
+        assert loaded_doc_ids == {educational_id, methodological_id}
 
         await _cleanup_tenant(hotfix7_session_factory, [tenant_id])
 

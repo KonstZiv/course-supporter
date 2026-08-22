@@ -32,7 +32,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
-from course_supporter.api.routes._portal_shared import curated_verdict, material_label
+from course_supporter.api.routes._portal_shared import (
+    curated_verdict,
+    material_label,
+    role_visible_to_student,
+)
 from course_supporter.api.schemas import (
     PortalAttemptResult,
     PortalCourseListItem,
@@ -234,8 +238,12 @@ def _project_node(
 ) -> PortalMaterialTreeNode:
     """Recursively project a CourseNode subtree to the curated tree.
 
-    Soft-deleted documents and non-READY documents are dropped (publish-gate A
-    + READY-only: a non-READY material has no presentable media yet). Children
+    Soft-deleted, non-READY, and methodological documents are dropped
+    (publish-gate A + READY-only: a non-READY material has no presentable media
+    yet; role allowlist: a methodological document is never shown to a student —
+    :func:`role_visible_to_student`). A node left with no visible documents is
+    kept as an empty node, not pruned (P4: existence is not content, and pruning
+    would also hide legitimately-empty sections under construction). Children
     are already ordered by ``get_subtree``; soft-deleted children (and thus
     their cascade-deleted subtrees) are skipped.
     """
@@ -245,7 +253,9 @@ def _project_node(
             (
                 d
                 for d in node.documents
-                if d.deleted_at is None and d.state == MaterialState.READY
+                if d.deleted_at is None
+                and d.state == MaterialState.READY
+                and role_visible_to_student(d.material_role)
             ),
             key=lambda d: (d.order, d.created_at),
         )
@@ -281,10 +291,11 @@ async def get_portal_course_materials(
     Enrollment-gated (publish-gate A); any access failure — unknown root, a
     non-root id, a foreign tenant, soft-deleted, or not enrolled — collapses to
     one generic 404 (rule #12). The tree is curated: soft-deleted nodes /
-    documents and non-READY documents are filtered out, each document carries
-    only its task-vs-material ``kind`` + (for tasks) a submission overlay, and
-    the internal trace never leaks. The overlay is one query per course
-    (no N+1), grouped by the task anchor in Python.
+    documents, non-READY documents, and methodological documents (role
+    allowlist) are filtered out, each document carries only its
+    task-vs-material ``kind`` + (for tasks) a submission overlay, and the
+    internal trace never leaks. The overlay is one query per course (no N+1),
+    grouped by the task anchor in Python.
     """
     node_repo = CourseNodeRepository(session)
     root = await node_repo.get_by_id(root_id)

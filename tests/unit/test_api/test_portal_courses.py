@@ -20,6 +20,7 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes.portal_courses import _base_block
 from course_supporter.auth.context import StudentContext
+from course_supporter.models.source import MaterialRole
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import MaterialState
@@ -117,6 +118,7 @@ def _doc(
     state: MaterialState = MaterialState.READY,
     deleted_at: object | None = None,
     doc_id: uuid.UUID | None = None,
+    material_role: str = MaterialRole.EDUCATIONAL.value,
 ) -> MagicMock:
     doc = MagicMock()
     doc.id = doc_id or uuid.uuid4()
@@ -127,6 +129,7 @@ def _doc(
     doc.state = state
     doc.deleted_at = deleted_at
     doc.created_at = datetime.now(UTC)
+    doc.material_role = material_role
     return doc
 
 
@@ -313,6 +316,54 @@ class TestPortalMaterialsTree:
         assert overlay["submission_status"] == "error"
         assert overlay["last"] == {"score": None, "verdict": None}
         assert overlay["best"] is None
+
+
+class TestPortalMaterialsRoleFilter:
+    """Role allowlist (step A «чисте дерево», P1/P4): the student tree shows
+    only educational documents; methodological ones are dropped, but a node left
+    empty by the filter is kept, not pruned."""
+
+    async def test_methodological_hidden_educational_shown(
+        self, client: AsyncClient
+    ) -> None:
+        """A methodological document in the same node as an educational one is
+        absent from the tree; the educational one is present (composition)."""
+        educational = _doc(
+            filename="intro.pdf", material_role=MaterialRole.EDUCATIONAL.value
+        )
+        methodological = _doc(
+            filename="mentor-check.pdf",
+            material_role=MaterialRole.METHODOLOGICAL.value,
+        )
+        root = _node(documents=[educational, methodological])
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.status_code == 200
+        assert [d["label"] for d in resp.json()["documents"]] == ["intro.pdf"]
+
+    async def test_node_with_only_methodological_kept_empty(
+        self, client: AsyncClient
+    ) -> None:
+        """P4: a node whose only document is methodological stays in the tree as
+        an empty node (existence is not content; pruning would also hide
+        legitimately-empty sections under construction)."""
+        methodological = _doc(
+            filename="mentor-check.pdf",
+            material_role=MaterialRole.METHODOLOGICAL.value,
+        )
+        child = _node(title="Section", documents=[methodological])
+        root = _node(title="Root", children=[child])
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [])
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["documents"] == []
+        assert len(body["children"]) == 1
+        section = body["children"][0]
+        assert section["title"] == "Section"
+        assert section["documents"] == []
 
     async def test_error_terminal_does_not_win_best(self, client: AsyncClient) -> None:
         """An error terminal never competes for best; a prior reviewed score does.

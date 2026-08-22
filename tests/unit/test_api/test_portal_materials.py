@@ -22,6 +22,7 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.auth.context import StudentContext
+from course_supporter.models.source import MaterialRole
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -47,6 +48,7 @@ def _mock_material(
     slide_keys: list[str] | None = None,
     course_root_id: uuid.UUID | None = None,
     deleted_at: object | None = None,
+    material_role: str = MaterialRole.EDUCATIONAL.value,
 ) -> MagicMock:
     material = MagicMock()
     material.source_type = source_type
@@ -54,6 +56,7 @@ def _mock_material(
     material.slide_keys = slide_keys
     material.course_root_id = course_root_id or uuid.uuid4()
     material.deleted_at = deleted_at
+    material.material_role = material_role
     return material
 
 
@@ -267,3 +270,43 @@ class TestPortalMediaGate:
         ):
             resp = await client.get(_url(uuid.uuid4()))
         assert resp.status_code == 404
+
+
+class TestPortalMediaRoleGate:
+    """Role allowlist at the detail gate (step A «чисте дерево», P1): a
+    methodological material collapses into the SAME generic 404 as a material
+    that does not exist — indistinguishable, no new refusal text (rule #12)."""
+
+    async def test_methodological_returns_404_identical_to_unknown(
+        self, client: AsyncClient
+    ) -> None:
+        """Methodological → 404 with a body byte-identical to the unknown-id 404."""
+        with patch.object(AuthoredDocumentRepository, "get_by_id", return_value=None):
+            unknown = await client.get(_url(uuid.uuid4()))
+        assert unknown.status_code == 404
+
+        # A methodological material that otherwise passes every gate (exists,
+        # not deleted, in-tenant, enrolled) still resolves to the same 404.
+        material = _mock_material(
+            source_type="text", material_role=MaterialRole.METHODOLOGICAL.value
+        )
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            methodological = await client.get(_url(uuid.uuid4()))
+        assert methodological.status_code == 404
+        assert methodological.json() == unknown.json()
+
+    async def test_educational_control_returns_200(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Control: an educational material passes the gate (200)."""
+        material = _mock_material(
+            source_type="web",
+            source_url="https://youtu.be/abc123",
+            material_role=MaterialRole.EDUCATIONAL.value,
+        )
+        mock_s3.extract_key = MagicMock(return_value=None)
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200

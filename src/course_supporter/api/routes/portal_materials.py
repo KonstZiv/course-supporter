@@ -30,6 +30,7 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
+from course_supporter.api.routes._portal_shared import role_visible_to_student
 from course_supporter.api.schemas import PortalMediaResponse
 from course_supporter.auth.context import StudentContext
 from course_supporter.storage.authored_document_repository import (
@@ -66,9 +67,18 @@ async def _resolve_enrolled_material(
     Mirrors the T2 submission gate verbatim: AuthoredDocument → course root
     (anchor) → tenant-check root → ``is_enrolled(student, course_root_id)``.
     Course-scoped access is enrollment-gated; any failure → the same 404.
+
+    A methodological document collapses into the SAME generic 404 as a missing /
+    soft-deleted / foreign material (role allowlist, :func:`role_visible_to_student`):
+    the student cannot tell a methodological material apart from one that does
+    not exist. No new refusal text — indistinguishability is the point (rule #12).
     """
     material = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
-    if material is None or material.deleted_at is not None:
+    if (
+        material is None
+        or material.deleted_at is not None
+        or not role_visible_to_student(material.material_role)
+    ):
         raise HTTPException(status_code=404, detail=_MATERIAL_NOT_FOUND)
 
     # Tenant isolation: the material's course must be in the student's tenant.

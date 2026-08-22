@@ -11,6 +11,31 @@ logic is byte-identical to the prior ``portal_submissions._curated_verdict``.
 from __future__ import annotations
 
 from course_supporter.api.schemas import PortalVerdict
+from course_supporter.models.source import MaterialRole
+
+
+def role_visible_to_student(material_role: str) -> bool:
+    """Whether a material of this ROLE may be seen by a student in the portal.
+
+    Allowlist by design: visible ⇔ the role is exactly ``educational``. A
+    methodological material (mentor-check instructions, reference solutions) is
+    hidden from students on every portal surface that addresses a document.
+
+    Written as an allowlist, NOT ``!= 'methodological'``, on purpose: when a
+    third role is later added to the enum it stays hidden until a visibility
+    rule is chosen for it explicitly, rather than leaking to students by
+    default. The completeness test
+    (``test_portal_role_visibility.py``) pins one assertion per enum member, so
+    a new role cannot enter the vocabulary without a deliberate decision here.
+
+    Scoped to the material's ROLE only — the name says "role", not "visibility"
+    in general, so the future publication predicate (DD-6-F) sits beside this
+    rather than dissolving into it. Compares against the canonical
+    :class:`MaterialRole` member the author side writes (``update_material_role``
+    stores ``MaterialRole.<X>.value`` into the ``str`` column), never a bare
+    string literal.
+    """
+    return material_role == MaterialRole.EDUCATIONAL.value
 
 
 def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:

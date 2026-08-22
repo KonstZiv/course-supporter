@@ -29,7 +29,10 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
-from course_supporter.api.routes._portal_shared import curated_verdict
+from course_supporter.api.routes._portal_shared import (
+    curated_verdict,
+    role_visible_to_student,
+)
 from course_supporter.api.schemas import (
     PortalBaseDownload,
     PortalDeltaReceipt,
@@ -129,8 +132,9 @@ async def submit_portal_homework(
     The student supplies only the task (``authored_document_id`` in the path) +
     the file; the node-context (root course + specific node) is DERIVED from the
     task anchor (KD15). Gates, in order: file validation → the task is a real,
-    ready task in the student's tenant → the student is enrolled in its course
-    (Q1) → readiness. Every access failure collapses to a generic 404. The
+    ready, non-methodological task in the student's tenant → the student is
+    enrolled in its course (Q1) → readiness. Every access failure collapses to a
+    generic 404 (a methodological document is invisible in the tree, step A). The
     submission funnels through the shared core with ``delivery_mode='in_app'``,
     so no webhook fires and it terminates at ``completed`` for the read-path.
     """
@@ -149,10 +153,14 @@ async def submit_portal_homework(
     validate_homework_file(file, max_upload_bytes=max_upload)
 
     # --- Validate the task anchor (resolved above), derive the node-context ---
+    # A methodological document is invisible in the student's tree (step A role
+    # allowlist), so the server does not accept a submission against it — same
+    # generic 404 as a non-task, no new refusal text.
     if (
         task_doc is None
         or task_doc.deleted_at is not None
         or task_doc.task_type is None
+        or not role_visible_to_student(task_doc.material_role)
     ):
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
@@ -255,8 +263,9 @@ async def get_portal_task_base(
     (bearer-session) counterpart of the mode-1 API-key base route: the same
     active-base = latest-READY resolution and original-archive presign, re-scoped
     to the student's enrollment. Access failures — unknown task, a
-    non-project/non-task document, a foreign tenant, or not enrolled — collapse
-    to one generic 404 (rule #12). A visible task with no READY base yet returns
+    non-project/non-task document, a methodological document (invisible in the
+    tree, step A), a foreign tenant, or not enrolled — collapse to one generic
+    404 (rule #12). A visible task with no READY base yet returns
     a DISTINCT 404 (the descriptor already exposes the base state, so it leaks
     nothing new).
     """
@@ -265,6 +274,8 @@ async def get_portal_task_base(
         task_doc is None
         or task_doc.deleted_at is not None
         or task_doc.task_type != AssignmentType.PROJECT.value
+        # Methodological → invisible in the tree (step A), so no base to serve.
+        or not role_visible_to_student(task_doc.material_role)
     ):
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
@@ -390,7 +401,13 @@ async def list_portal_submissions(
     on it (own history survives un-enrollment) OR is currently enrolled in its
     course. Otherwise a generic 404 — never leaking which tasks exist outside the
     student's access. An enrolled student with no attempts gets an empty list.
-    Soft-deleted attempts are excluded (Q7).
+    Soft-deleted attempts are excluded (Q7). A methodological task is hidden
+    (step A) via the enrolled-visibility gate — a document methodological from
+    the start accepts no submissions, so it has no attempts and collapses to the
+    generic 404. Exception, by design: attempts submitted BEFORE the document was
+    switched to methodological stay listable — the own-attempts early-return
+    stands ahead of the role gate, same nature as the untouched submission-detail
+    route keyed on ``submission_id`` (own history is not retracted).
     """
     rows = await HomeworkRepository(session).list_for_student_and_task(
         student.student_id, authored_document_id
@@ -404,6 +421,9 @@ async def list_portal_submissions(
         task_doc is None
         or task_doc.deleted_at is not None
         or task_doc.task_type is None
+        # Methodological → invisible in the tree (step A): the enrolled-visibility
+        # branch must not reveal it either.
+        or not role_visible_to_student(task_doc.material_role)
     ):
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 

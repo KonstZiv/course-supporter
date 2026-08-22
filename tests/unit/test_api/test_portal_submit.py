@@ -24,6 +24,7 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.auth.context import StudentContext
+from course_supporter.models.source import MaterialRole
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -56,12 +57,14 @@ def _mock_task_doc(
     course_node_id: uuid.UUID | None = None,
     task_type: str | None = "task",
     deleted_at: object | None = None,
+    material_role: str = MaterialRole.EDUCATIONAL.value,
 ) -> MagicMock:
     doc = MagicMock()
     doc.course_root_id = course_root_id
     doc.course_node_id = course_node_id or uuid.uuid4()
     doc.task_type = task_type
     doc.deleted_at = deleted_at
+    doc.material_role = material_role
     return doc
 
 
@@ -283,6 +286,31 @@ class TestPortalSubmitGates:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Task not found."
 
+    async def test_methodological_project_task_404(self, client: AsyncClient) -> None:
+        """A methodological document (even a PROJECT task) is invisible in the
+        student's tree, so submit collapses to the same generic 404 (step A, P2)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(
+                    course_root_id=root,
+                    task_type="project",
+                    material_role=MaterialRole.METHODOLOGICAL.value,
+                ),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+        ):
+            resp = await client.post(_url(uuid.uuid4()), files=_files())
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
     async def test_not_ready_409(self, client: AsyncClient) -> None:
         """An enrolled, valid task that is not ready → 409 (exists, not ready)."""
         root = uuid.uuid4()
@@ -411,6 +439,31 @@ class TestPortalReadList:
         ):
             resp = await client.get(_url(uuid.uuid4()))
         assert resp.status_code == 404
+
+    async def test_methodological_project_task_no_attempts_404(
+        self, client: AsyncClient
+    ) -> None:
+        """No own attempts + a methodological PROJECT task (invisible in the
+        tree) → generic 404, even for an enrolled student (step A, P2)."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                HomeworkRepository, "list_for_student_and_task", return_value=[]
+            ),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(
+                    course_root_id=root,
+                    task_type="project",
+                    material_role=MaterialRole.METHODOLOGICAL.value,
+                ),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
 
 
 class TestPortalReadDetail:
@@ -703,6 +756,35 @@ class TestPortalTaskBaseDownload:
             AuthoredDocumentRepository,
             "get_by_id",
             return_value=_mock_task_doc(course_root_id=uuid.uuid4(), task_type="task"),
+        ):
+            resp = await client.get(_base_url(uuid.uuid4()))
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Task not found."
+
+    async def test_methodological_project_task_generic_404(
+        self, client: AsyncClient
+    ) -> None:
+        """A methodological PROJECT task is invisible in the tree → generic
+        'Task not found.' (collapses before the base-availability check; step A,
+        P2). Tenant/enrollment are mocked as passing, so only the role gate can
+        produce this 404."""
+        root = uuid.uuid4()
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(
+                    course_root_id=root,
+                    task_type="project",
+                    material_role=MaterialRole.METHODOLOGICAL.value,
+                ),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
         ):
             resp = await client.get(_base_url(uuid.uuid4()))
         assert resp.status_code == 404

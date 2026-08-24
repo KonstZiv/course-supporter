@@ -13,6 +13,7 @@ from course_supporter.config import get_settings
 from course_supporter.ingestion.audio import (
     AudioProcessor,
     chars_per_word_cumsum,
+    partition_words_into_chunks,
 )
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.schemas import (
@@ -313,6 +314,124 @@ class TestProcessRaw:
 
         # Fail-fast — cache must not be populated on rejected upload.
         assert redis._store == {}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# partition_words_into_chunks (KD-2.2-E full-coverage invariant).
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestPartitionWordsIntoChunks:
+    """KD-2.2-E — chunk partitioning covers every word (gap-drop regression).
+
+    The earlier ``seg.start_sec <= w.start_sec < seg.end_sec`` interval filter
+    dropped words whose start_sec fell in a gap between provider segments,
+    shortening ``assemble_text`` vs ``" ".join(words)`` and tripping the
+    process_raw invariant. These cases pin full coverage: every word in exactly
+    one chunk, in order, no drops, no duplicates.
+    """
+
+    @staticmethod
+    def _assert_full_coverage(words: list[STTWord], chunks: list[ContentChunk]) -> None:
+        doc = SourceDocument(
+            source_type=SourceType.AUDIO,
+            source_url="x",
+            title="",
+            chunks=chunks,
+        )
+        expected = " ".join(w.text for w in words)
+        # Invariant equality (audio assemble_text uses the single-space join).
+        assert doc.assemble_text() == expected
+        # No drops / no duplication: the words emitted across chunks, in order,
+        # are exactly the input word texts (synthetic words carry no spaces).
+        emitted = doc.assemble_text().split(" ") if chunks else []
+        assert emitted == [w.text for w in words]
+
+    def test_gap_between_segments_keeps_all_words(self) -> None:
+        # 'hello' starts in the gap 1.0..2.0 — the old interval filter dropped it.
+        words = [
+            _word("aa", 0.0, 0.4),
+            _word("bb", 0.5, 0.9),
+            _word("hello", 1.5, 1.9),
+            _word("cc", 2.1, 2.4),
+            _word("dd", 2.5, 2.9),
+        ]
+        segments = [
+            STTSegment(start_sec=0.0, end_sec=1.0, text="aa bb"),
+            STTSegment(start_sec=2.0, end_sec=3.0, text="cc dd"),
+        ]
+        chunks = partition_words_into_chunks(words, segments)
+        self._assert_full_coverage(words, chunks)
+
+    def test_word_before_first_segment_joins_first(self) -> None:
+        words = [
+            _word("pre", 0.1, 0.3),  # before the first segment start (0.5)
+            _word("aa", 0.6, 0.9),
+            _word("bb", 1.1, 1.4),
+        ]
+        segments = [
+            STTSegment(start_sec=0.5, end_sec=1.0, text="aa"),
+            STTSegment(start_sec=1.0, end_sec=1.5, text="bb"),
+        ]
+        chunks = partition_words_into_chunks(words, segments)
+        self._assert_full_coverage(words, chunks)
+        assert chunks[0].text.startswith("pre")
+
+    def test_word_after_last_segment_joins_last(self) -> None:
+        words = [
+            _word("aa", 0.0, 0.4),
+            _word("bb", 0.5, 0.9),
+            _word("post", 5.0, 5.4),  # after the last segment end (1.0)
+        ]
+        segments = [STTSegment(start_sec=0.0, end_sec=1.0, text="aa bb")]
+        chunks = partition_words_into_chunks(words, segments)
+        self._assert_full_coverage(words, chunks)
+        assert chunks[-1].text.endswith("post")
+
+    def test_contiguous_coverage_regression(self) -> None:
+        # Segments tile the stream with no gap — still holds, one chunk each.
+        words = [
+            _word("aa", 0.0, 0.4),
+            _word("bb", 0.5, 0.9),
+            _word("cc", 1.1, 1.4),
+            _word("dd", 1.6, 1.9),
+        ]
+        segments = [
+            STTSegment(start_sec=0.0, end_sec=1.0, text="aa bb"),
+            STTSegment(start_sec=1.0, end_sec=2.0, text="cc dd"),
+        ]
+        chunks = partition_words_into_chunks(words, segments)
+        self._assert_full_coverage(words, chunks)
+        assert len(chunks) == 2
+
+    def test_no_segments_single_chunk_covers_all(self) -> None:
+        words = [_word("aa", 0.0, 0.4), _word("bb", 0.5, 0.9)]
+        chunks = partition_words_into_chunks(words, [])
+        self._assert_full_coverage(words, chunks)
+        assert len(chunks) == 1
+
+    async def test_process_raw_gap_no_longer_trips_invariant(self) -> None:
+        # End-to-end: the prod symptom path — process_raw must NOT raise the
+        # KD-2.2-E AssertionError when a word lands in a segment gap.
+        words = [
+            _word("aa", 0.0, 0.4),
+            _word("bb", 0.5, 0.9),
+            _word("hello", 1.5, 1.9),  # gap word
+            _word("cc", 2.1, 2.4),
+        ]
+        segments = [
+            STTSegment(start_sec=0.0, end_sec=1.0, text="aa bb"),
+            STTSegment(start_sec=2.0, end_sec=3.0, text="cc"),
+        ]
+        proc = AudioProcessor(
+            stt_router=_mock_stt_router(_stt_result(words, segments)),
+            redis=_mock_redis(),
+        )
+        set_job_from_arq(uuid.uuid4())
+
+        doc = await proc.process_raw(_mock_authored_document())
+
+        assert doc.assemble_text() == " ".join(w.text for w in words)
 
     async def test_duration_at_exact_boundary_proceeds(self) -> None:
         """D4 strict `>` — 150 min exactly passes (boundary inclusive)."""

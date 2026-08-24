@@ -79,6 +79,7 @@ construction here violates segment-ordering invariants.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import json
 import uuid
 from collections.abc import Sequence
@@ -110,7 +111,7 @@ from course_supporter.models.source import (
 )
 from course_supporter.service_logging import get_current_job_id
 from course_supporter.stt.router import STTRouter
-from course_supporter.stt.schemas import STTWord
+from course_supporter.stt.schemas import STTSegment, STTWord
 
 if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
@@ -174,6 +175,73 @@ def chars_per_word_cumsum(words: Sequence[SupportsText]) -> list[int]:
         space = 1 if i < last_idx else 0
         cumsum.append(cumsum[-1] + len(w.text) + space)
     return cumsum
+
+
+def partition_words_into_chunks(
+    words: Sequence[STTWord],
+    segments: Sequence[STTSegment],
+) -> list[ContentChunk]:
+    """Partition the STT word stream into TRANSCRIPT chunks, covering every word.
+
+    KD-2.2-E invariant: ``assemble_text(doc) == " ".join(w.text for w in
+    words)``. The word stream (``result.words``) is authoritative; segments
+    supply only the chunk boundaries and timestamps. A word is placed in the
+    last segment whose ``start_sec`` does not exceed the word's ``start_sec``;
+    a word before the first segment falls into the first, and a word after the
+    last segment — or in a gap between two segments — into the preceding one.
+    Every word therefore lands in exactly one chunk with no drop and no
+    duplication, even when provider segment spans do not tile the word stream
+    (the defect an earlier ``seg.start_sec <= w.start_sec < seg.end_sec``
+    interval filter caused: gap words silently vanished from assemble_text).
+
+    Chunks are cut by walking ``words`` in order and opening a new chunk each
+    time the target segment changes, so word order is preserved and the joined
+    chunk texts reconstruct ``" ".join(words)`` by construction. Segments are
+    assumed provider time-ordered (Scribe v2 contract) — the same ordering the
+    word-index bridge in :func:`chars_per_word_cumsum` relies on. With no
+    segments (words-only provider output) a single chunk spans the stream.
+    """
+    if not words:
+        return []
+    if not segments:
+        return [
+            ContentChunk(
+                chunk_type=ChunkType.TRANSCRIPT,
+                text=" ".join(w.text for w in words),
+                index=0,
+                start_sec=words[0].start_sec,
+                end_sec=words[-1].end_sec,
+            )
+        ]
+
+    seg_starts = [seg.start_sec for seg in segments]
+
+    def _seg_index(start_sec: float) -> int:
+        # Last segment whose start_sec <= the word's start; a before-first
+        # word (bisect result -1) clamps into the first segment.
+        idx = bisect.bisect_right(seg_starts, start_sec) - 1
+        return idx if idx >= 0 else 0
+
+    chunks: list[ContentChunk] = []
+    n = len(words)
+    run_start = 0
+    while run_start < n:
+        seg_idx = _seg_index(words[run_start].start_sec)
+        run_end = run_start + 1
+        while run_end < n and _seg_index(words[run_end].start_sec) == seg_idx:
+            run_end += 1
+        seg = segments[seg_idx]
+        chunks.append(
+            ContentChunk(
+                chunk_type=ChunkType.TRANSCRIPT,
+                text=" ".join(w.text for w in words[run_start:run_end]),
+                index=seg_idx,
+                start_sec=seg.start_sec,
+                end_sec=seg.end_sec,
+            )
+        )
+        run_start = run_end
+    return chunks
 
 
 class AudioProcessor(MaterialProcessor):
@@ -295,22 +363,12 @@ class AudioProcessor(MaterialProcessor):
 
         await self._store_words(job_id, result.words)
 
-        chunks: list[ContentChunk] = []
-        for idx, seg in enumerate(result.segments):
-            seg_words = [
-                w for w in result.words if seg.start_sec <= w.start_sec < seg.end_sec
-            ]
-            if not seg_words:
-                continue
-            chunks.append(
-                ContentChunk(
-                    chunk_type=ChunkType.TRANSCRIPT,
-                    text=" ".join(w.text for w in seg_words),
-                    index=idx,
-                    start_sec=seg.start_sec,
-                    end_sec=seg.end_sec,
-                )
-            )
+        # Full-coverage partition (KD-2.2-E): a segment-interval filter dropped
+        # words whose start_sec fell in a gap between provider segments, which
+        # silently shortened assemble_text vs " ".join(words) and tripped the
+        # invariant below. partition_words_into_chunks guarantees every word
+        # lands in exactly one chunk, in order.
+        chunks = partition_words_into_chunks(result.words, result.segments)
 
         doc = SourceDocument(
             source_type=source.source_type,

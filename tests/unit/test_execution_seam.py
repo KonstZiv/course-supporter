@@ -328,6 +328,27 @@ async def test_exception_writes_failed_with_category(
     assert store[jid].error_category == ErrorCategory.STAGE2_REJECTED.value
 
 
+async def test_exception_without_category_defaults_to_pipeline_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DD-SP-D invariant: a body exception that carries NO structural category
+    still terminalises with a non-NULL category — the seam defaults to
+    PIPELINE_FAILURE and never leaves the failure category empty."""
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "authored_document", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise RuntimeError("uncategorised boom")
+
+    await task(_ctx(store, calls), str(jid))  # swallowed (job is terminal)
+    assert store[jid].status == "failed"
+    assert store[jid].error_message == "uncategorised boom"
+    assert store[jid].error_category == ErrorCategory.PIPELINE_FAILURE.value
+
+
 # ── GO condition 1: arq.Retry is control flow, NOT a failure ─────────────
 
 
@@ -394,6 +415,8 @@ async def test_retry_on_final_attempt_writes_failed_then_reraises(
         await task(_ctx(store, calls, job_try=3), str(jid))
     assert store[jid].status == "failed"  # honest terminal now, not after restart
     assert store[jid].error_message == "connection kept flapping"
+    # DD-SP-D: retry-exhaustion also carries the PIPELINE_FAILURE default.
+    assert store[jid].error_category == ErrorCategory.PIPELINE_FAILURE.value
 
 
 # ── replay: active on entry → body re-runs, active write no-op ───────────

@@ -35,7 +35,9 @@ Lifecycle a wrapped task goes through:
     * otherwise → ``active`` (+ ``started_at``; a no-op on replay).
 * **Body** — the wrapped task runs. A normal return → ``complete`` (+
   ``store_result`` when the body returned a dict). An exception → ``failed`` (+
-  its structural ``error_category`` when it carries one). **``arq.Retry`` is
+  its structural ``error_category`` when it carries one, else the
+  ``PIPELINE_FAILURE`` default — DD-SP-D: the seam never leaves a NULL
+  category). **``arq.Retry`` is
   control flow, NOT a failure** (GO condition 1): it propagates untouched — the
   seam neither converts it to ``failed`` nor swallows it, so ARQ's retry and any
   domain-driven retry keep working.
@@ -293,6 +295,9 @@ async def _run_seam(
             terminal = SeamTerminal(
                 status="failed",
                 error_message=str(cause) if cause else "retry budget exhausted",
+                # DD-SP-D: retry-exhaustion is an internal pipeline failure; the
+                # seam never leaves a NULL category (see the body-except below).
+                error_category=ErrorCategory.PIPELINE_FAILURE,
             )
             if await _write_terminal(session_factory, jid, terminal, logger):
                 await _invoke_on_terminal(
@@ -304,7 +309,15 @@ async def _run_seam(
         terminal = SeamTerminal(
             status="failed",
             error_message=str(exc),
-            error_category=category if isinstance(category, ErrorCategory) else None,
+            # DD-SP-D: a failure that does not carry its own structural category
+            # is an internal pipeline failure by default — the seam never
+            # persists a NULL category. External-source points (yt-dlp download,
+            # web scrape) declare EXTERNAL_SOURCE_UNAVAILABLE explicitly.
+            error_category=(
+                category
+                if isinstance(category, ErrorCategory)
+                else ErrorCategory.PIPELINE_FAILURE
+            ),
         )
         landed = await _write_terminal(session_factory, jid, terminal, logger)
         # "No terminal — no post-terminal": if the write was skipped (a race

@@ -14,8 +14,12 @@ import asyncio
 
 import structlog
 
-from course_supporter.ingestion.base import ProcessingError
+from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
+    ProcessingError,
+)
 from course_supporter.ingestion.heavy_steps import ScrapedContent, ScrapeWebParams
+from course_supporter.security.exceptions import ErrorCategory
 
 
 async def local_scrape_web(
@@ -56,11 +60,17 @@ async def local_scrape_web(
         )
     except Exception as exc:
         logger.error("web_scraping_failed", error=str(exc))
-        raise ProcessingError(f"Failed to fetch URL: {exc}") from exc
+        raise CategorisedProcessingError(
+            ErrorCategory.EXTERNAL_SOURCE_UNAVAILABLE,
+            f"Failed to fetch URL: {exc}",
+        ) from exc
 
     if raw_html is None:
         logger.error("web_scraping_failed", error="fetch returned None")
-        raise ProcessingError(f"Failed to fetch URL (no response): {url}")
+        raise CategorisedProcessingError(
+            ErrorCategory.EXTERNAL_SOURCE_UNAVAILABLE,
+            f"Failed to fetch URL (no response): {url}",
+        )
 
     try:
         extracted: str | None = await loop.run_in_executor(

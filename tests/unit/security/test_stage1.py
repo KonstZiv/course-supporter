@@ -456,7 +456,7 @@ class TestStructuredLogging:
 
 
 class TestErrorCategoryPublicContract:
-    def test_eleven_categories_present(self) -> None:
+    def test_all_error_categories_present(self) -> None:
         # 7 categories Phase 0.6 baseline + 2 Phase 2.1 C2 additions:
         # ARCHIVE_BOMB + SYMLINK_VIOLATION per KD-2.1-I (2-set ratify
         # 2026-05-11) — legacy safety/exceptions.py raisers migrated
@@ -467,6 +467,9 @@ class TestErrorCategoryPublicContract:
         # + 2 task-code-materials F4 additions: EMPTY_DOCUMENT +
         # PRESENTATION_EMPTY_SEGMENT (async structural codes persisted
         # to error_category by the ingestion failure callback).
+        # + 2 DD-SP-D additions (student-path step V phase 0):
+        # EXTERNAL_SOURCE_UNAVAILABLE + PIPELINE_FAILURE (failure-classifier
+        # async classes; PIPELINE_FAILURE is the execution seam's default).
         assert {c.value for c in ErrorCategory} == {
             "size_limit",
             "forbidden_type",
@@ -481,6 +484,8 @@ class TestErrorCategoryPublicContract:
             "slide_count_limit",
             "empty_document",
             "presentation_empty_segment",
+            "external_source_unavailable",
+            "pipeline_failure",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))

@@ -32,8 +32,13 @@ from typing import Any
 
 import structlog
 
-from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
+from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
+    ProcessingError,
+    UnsupportedFormatError,
+)
 from course_supporter.ingestion.video_pipeline.schemas import VideoFileMetadata
+from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.policies import AUTHORED_POLICY
 
 logger = structlog.get_logger()
@@ -240,9 +245,10 @@ async def download_video(url: str, dest_dir: Path) -> Path:
     ]
     rc, _out, err = await _run(cmd, timeout_sec=_DOWNLOAD_TIMEOUT_SEC)
     if rc != 0:
-        raise ProcessingError(
+        raise CategorisedProcessingError(
+            ErrorCategory.EXTERNAL_SOURCE_UNAVAILABLE,
             f"yt-dlp download failed (code {rc}) for {url}: "
-            f"{err.decode(errors='replace')[-_ERR_TAIL:]}"
+            f"{err.decode(errors='replace')[-_ERR_TAIL:]}",
         )
     # Filesystem inspection off the event loop (ASYNC240).
     return await asyncio.to_thread(_resolve_download, dest_dir, url)
@@ -252,7 +258,10 @@ def _resolve_download(dest_dir: Path, url: str) -> Path:
     """Locate the merged yt-dlp output and enforce the 5 GB cap (sync)."""
     candidates = [p for p in dest_dir.glob("source.*") if p.is_file()]
     if not candidates:
-        raise ProcessingError(f"yt-dlp produced no output file for {url}.")
+        raise CategorisedProcessingError(
+            ErrorCategory.EXTERNAL_SOURCE_UNAVAILABLE,
+            f"yt-dlp produced no output file for {url}.",
+        )
     video_path = max(candidates, key=lambda p: p.stat().st_size)
 
     size = video_path.stat().st_size

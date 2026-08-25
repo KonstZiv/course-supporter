@@ -19,7 +19,7 @@ leaks which materials exist outside the student's access.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Final
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -55,6 +55,36 @@ S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 # soft-deleted, foreign tenant, or not enrolled — so the portal never leaks
 # which materials exist outside the student's access (rule #12 + P6).
 _MATERIAL_NOT_FOUND = "Material not found."
+
+# Charset-bearing ``Content-Type`` override for text materials, keyed by
+# extension. The stored object Content-Type from B2/MinIO carries no charset,
+# so a UTF-8 ``.txt`` / ``.md`` rendered in the portal iframe (or opened for
+# ``.md``) is decoded as a single-byte codepage -> mojibake. We override it on
+# the presigned GET (``ResponseContentType``). The extension is the SAME signal
+# the client uses to pick its render branch (student-path step B ratify P1: the
+# extension in the signed key path); this map is its server-side mirror on the
+# other side of the URL. Non-text source_types never reach this map (gated on
+# ``source_type == "text"`` at the call site), so audio / video / code / slides
+# stay byte-identical.
+_TEXT_CHARSET_BY_EXT: Final[dict[str, str]] = {
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/plain; charset=utf-8",
+    "markdown": "text/plain; charset=utf-8",
+    "html": "text/html; charset=utf-8",
+    "htm": "text/html; charset=utf-8",
+}
+
+
+def _text_charset_override(name: str) -> str | None:
+    """Charset-bearing ``Content-Type`` for a text material by extension, else None.
+
+    ``name`` is ``material.filename or key`` — the key preserves the original
+    filename (``sanitize_s3_key``), so the extension survives even when
+    ``filename`` is NULL. An unknown or missing extension → ``None`` → the
+    presigned URL carries no ``ResponseContentType`` (legacy byte-identical).
+    """
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return _TEXT_CHARSET_BY_EXT.get(ext)
 
 
 async def _resolve_enrolled_material(
@@ -145,7 +175,15 @@ async def get_portal_material(
                 content_disposition=f'attachment; filename="{filename}"',
             )
             return PortalMediaResponse(kind="file", url=url)
-        url = await s3.generate_presigned_get_url(key)
+        # Text materials (source_type == "text") get a charset-bearing
+        # Content-Type so the browser reads UTF-8 instead of guessing a
+        # single-byte codepage (mojibake); every other kind stays byte-identical.
+        override = (
+            _text_charset_override(material.filename or key)
+            if material.source_type == "text"
+            else None
+        )
+        url = await s3.generate_presigned_get_url(key, response_content_type=override)
         return PortalMediaResponse(kind="file", url=url)
 
     return PortalMediaResponse(kind="external", url=material.source_url)

@@ -440,6 +440,7 @@ class S3Client:
         *,
         expires_in: int = PRESIGNED_GET_TTL_SEC,
         content_disposition: str | None = None,
+        response_content_type: str | None = None,
     ) -> str:
         """Generate a presigned GET URL for direct client read (Phase 6 T3).
 
@@ -449,7 +450,11 @@ class S3Client:
         issues Range requests to S3 directly — the backend never proxies
         media bytes (KD17). Unlike the PUT variant, ``ContentType`` is not
         a signed parameter; the object's stored ``Content-Type`` (e.g.
-        ``image/webp`` for persisted slides) drives the browser render.
+        ``image/webp`` for persisted slides) drives the browser render. A
+        caller may override that stored type per-request via
+        ``response_content_type`` (signed as ``ResponseContentType``) when it
+        is wrong or missing a charset — UTF-8 text served without one renders
+        as mojibake.
 
         Args:
             key: Object key to sign for reading.
@@ -461,6 +466,12 @@ class S3Client:
                 legacy behavior byte-identical for every existing caller.
                 Code materials pass ``attachment; ...`` per the ratified
                 R3 security norm (download-only, never rendered in-page).
+            response_content_type: Optional ``Content-Type`` signed as
+                ``ResponseContentType`` — S3 then serves the object with that
+                header, overriding the stored one. ``None`` (default) keeps the
+                legacy behavior byte-identical for every existing caller. Text
+                materials pass ``text/plain; charset=utf-8`` etc. so the browser
+                reads UTF-8 instead of guessing a single-byte codepage.
 
         Returns:
             Presigned GET URL string.
@@ -472,6 +483,8 @@ class S3Client:
         params: dict[str, str] = {"Bucket": self._bucket, "Key": key}
         if content_disposition is not None:
             params["ResponseContentDisposition"] = content_disposition
+        if response_content_type is not None:
+            params["ResponseContentType"] = response_content_type
         url: str = await self._client.generate_presigned_url(
             "get_object",
             Params=params,

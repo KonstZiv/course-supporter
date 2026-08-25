@@ -310,3 +310,125 @@ class TestPortalMediaRoleGate:
         with get_by_id, node_by_id, enrolled:
             resp = await client.get(_url(uuid.uuid4()))
         assert resp.status_code == 200
+
+
+class TestPortalTextCharsetOverride:
+    """Text materials are presigned with a charset-bearing Content-Type so the
+    browser reads UTF-8, not a single-byte guess (mojibake). Extension-keyed,
+    gated on source_type == 'text'; every other kind stays byte-identical
+    (fix(storage): charset override on presigned GET for text materials)."""
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("notes.txt", "text/plain; charset=utf-8"),
+            ("konspekt.md", "text/plain; charset=utf-8"),
+            ("readme.markdown", "text/plain; charset=utf-8"),
+            ("page.html", "text/html; charset=utf-8"),
+            ("page.HTM", "text/html; charset=utf-8"),
+        ],
+    )
+    async def test_text_material_signs_charset(
+        self,
+        client: AsyncClient,
+        mock_s3: AsyncMock,
+        filename: str,
+        expected: str,
+    ) -> None:
+        """txt/md/markdown → text/plain; html/htm → text/html (case-insensitive)."""
+        material = _mock_material(
+            source_type="text",
+            source_url=f"http://localhost:9000/bucket/t/{filename}",
+        )
+        material.filename = filename
+        mock_s3.extract_key = MagicMock(return_value=f"t/{filename}")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert call.kwargs["response_content_type"] == expected
+
+    async def test_text_unknown_extension_no_override(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """A text material with a non-mapped extension (e.g. .pdf) → no override."""
+        material = _mock_material(
+            source_type="text",
+            source_url="http://localhost:9000/bucket/t/report.pdf",
+        )
+        material.filename = "report.pdf"
+        mock_s3.extract_key = MagicMock(return_value="t/report.pdf")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert call.kwargs["response_content_type"] is None
+
+    async def test_text_filename_none_key_without_ext_no_override(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Ratified extra case: filename=None + key without extension → None
+        (the empty-extension map branch, explicitly covered)."""
+        material = _mock_material(
+            source_type="text",
+            source_url="http://localhost:9000/bucket/t/plainname",
+        )
+        material.filename = None
+        mock_s3.extract_key = MagicMock(return_value="t/plainname")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert call.kwargs["response_content_type"] is None
+
+    async def test_video_file_no_override(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Byte-immutability: a non-text file (video) → response_content_type None."""
+        material = _mock_material(
+            source_type="video",
+            source_url="http://localhost:9000/bucket/t/v.mp4",
+        )
+        material.filename = "v.mp4"
+        mock_s3.extract_key = MagicMock(return_value="t/v.mp4")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert call.kwargs["response_content_type"] is None
+
+    async def test_code_no_response_content_type_kwarg(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Byte-immutability: code keeps its attachment path, no charset kwarg."""
+        material = _mock_material(
+            source_type="code",
+            source_url="http://localhost:9000/bucket/t/script.py",
+        )
+        material.filename = "script.py"
+        mock_s3.extract_key = MagicMock(return_value="t/script.py")
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert "response_content_type" not in call.kwargs
+
+    async def test_slides_no_response_content_type_kwarg(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Byte-immutability: slide WebP URLs are signed with no charset kwarg."""
+        material = _mock_material(
+            source_type="presentation",
+            slide_keys=["t/n/slides/d/0001.webp"],
+        )
+        get_by_id, node_by_id, enrolled = _enrolled_material(material)
+        with get_by_id, node_by_id, enrolled:
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        call = mock_s3.generate_presigned_get_url.await_args
+        assert "response_content_type" not in call.kwargs

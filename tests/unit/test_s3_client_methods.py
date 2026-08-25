@@ -112,6 +112,33 @@ class TestGeneratePresignedGetUrl:
             'attachment; filename="script.py"'
         )
 
+    async def test_response_content_type_signed_when_set(self) -> None:
+        """response_content_type signs ResponseContentType (text charset path).
+
+        boto serialises this Param into the ``response-content-type`` query of
+        the presigned URL, so S3/B2 serves the object with that Content-Type.
+        """
+        client = _make_client()
+        client._client.generate_presigned_url = AsyncMock(return_value="url")
+
+        await client.generate_presigned_get_url(
+            "key",
+            response_content_type="text/plain; charset=utf-8",
+        )
+
+        params = client._client.generate_presigned_url.call_args.kwargs["Params"]
+        assert params["ResponseContentType"] == "text/plain; charset=utf-8"
+
+    async def test_response_content_type_absent_when_none(self) -> None:
+        """No response_content_type (default) → ResponseContentType not signed."""
+        client = _make_client()
+        client._client.generate_presigned_url = AsyncMock(return_value="url")
+
+        await client.generate_presigned_get_url("key")
+
+        params = client._client.generate_presigned_url.call_args.kwargs["Params"]
+        assert "ResponseContentType" not in params
+
     async def test_raises_without_init(self) -> None:
         """Raises RuntimeError if client not initialized."""
         client = S3Client("http://x", "a", "b", "c")

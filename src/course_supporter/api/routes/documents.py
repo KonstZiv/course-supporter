@@ -360,16 +360,24 @@ def _enforce_presentation_slide_cap(
     :class:`SecurityRejectedError` (KD-2.3-M — no new exception class); the
     caller's existing ``except SecurityRejectedError`` block maps it to the
     uniform HTTP 400 ``SECURITY_REJECTED`` shape.
+
+    DD-SP-D (variant B): unlike the checks inside :func:`run_stage1`,
+    this rejection is raised here — outside ``run_stage1`` — so the shared
+    ``stage1.rejected`` journal would never record it. It logs the full
+    technical text itself before raising, so a later human-facing UI phrase
+    does not become its only copy.
     """
     if source_type != SourceType.PRESENTATION:
         return
     count = _presentation_slide_count(ext, content)
     if count is not None and count > _MAX_PRESENTATION_SLIDES:
-        raise SecurityRejectedError(
+        exc = SecurityRejectedError(
             ErrorCategory.SLIDE_COUNT_LIMIT,
             f"slide count {count} exceeds presentation limit "
             f"{_MAX_PRESENTATION_SLIDES}",
         )
+        logger.warning("stage1.rejected", **exc.as_log_dict())
+        raise exc
 
 
 async def _require_node_for_tenant(

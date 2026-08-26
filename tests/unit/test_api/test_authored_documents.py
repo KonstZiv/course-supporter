@@ -677,6 +677,23 @@ class TestEnforcePresentationSlideCap:
             )
         assert exc_info.value.category == ErrorCategory.SLIDE_COUNT_LIMIT
 
+    def test_over_limit_emits_stage1_rejected_log(self) -> None:
+        # DD-SP-D (variant B): the slide-cap reject is raised OUTSIDE
+        # run_stage1, so it must journal the technical text itself — otherwise
+        # it is the one authored sync reject with no server-side record once
+        # the UI shows a human phrase.
+        with (
+            capture_logs() as logs,
+            pytest.raises(SecurityRejectedError),
+        ):
+            _enforce_presentation_slide_cap(
+                SourceType.PRESENTATION, "pdf", _make_pdf_bytes(101)
+            )
+        rejected = [e for e in logs if e.get("event") == "stage1.rejected"]
+        assert len(rejected) == 1
+        assert rejected[0]["category"] == ErrorCategory.SLIDE_COUNT_LIMIT.value
+        assert "slide count" in rejected[0]["detail"]
+
     def test_passes_at_limit(self) -> None:
         # Exactly 100 is allowed; only > 100 rejects.
         _enforce_presentation_slide_cap(

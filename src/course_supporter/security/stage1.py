@@ -457,6 +457,14 @@ def _run_text_content_checks(
             text = content.decode("utf-8", errors="replace")
 
     nfkc_text = nfkc_for_security(text)
+    # DD-SP-E: a single leading U+FEFF is a legitimate UTF-8 byte-order mark
+    # (the common source is a Google Docs "export as plain text", which
+    # prepends one), not an in-text zero-width obfuscation attempt. Strip
+    # exactly one leading BOM at the input to the unicode hard-reject so a
+    # benign encoding mark does not falsely reject the upload; in-text
+    # zero-width characters are still rejected by check_text_unicode_safety.
+    if nfkc_text.startswith("\ufeff"):
+        nfkc_text = nfkc_text[1:]
     check_text_unicode_safety(nfkc_text)
 
     matched = match_text(nfkc_text)

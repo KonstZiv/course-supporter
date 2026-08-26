@@ -304,6 +304,31 @@ class TestTextChecks:
             )
         assert exc_info.value.category is ErrorCategory.SUSPICIOUS_UNICODE
 
+    def test_authored_txt_with_leading_bom_passes(self) -> None:
+        # DD-SP-E: a single leading UTF-8 BOM (the common source is a Google
+        # Docs "export as plain text") is a benign encoding mark — it must not
+        # falsely trip the zero-width hard-reject.
+        content = b"\xef\xbb\xbf" + b"A clean authored note with no hidden chars.\n"
+        result = run_stage1(filename="note.txt", content=content, context="authored")
+        assert result.nfc_text is not None
+        assert "A clean authored note" in result.nfc_text
+
+    def test_authored_txt_with_intext_zero_width_still_rejected(self) -> None:
+        # DD-SP-E: only the LEADING position is trimmed — a zero-width character
+        # inside the text is still a hard reject.
+        content = "Clean start\ufeffhidden tail.\n".encode()
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            run_stage1(filename="note.txt", content=content, context="authored")
+        assert exc_info.value.category is ErrorCategory.SUSPICIOUS_UNICODE
+
+    def test_authored_txt_leading_bom_does_not_mask_intext_zero_width(self) -> None:
+        # DD-SP-E: stripping the one leading BOM must not swallow a SECOND
+        # zero-width further in.
+        content = "\ufeffClean\ufeffx\n".encode()
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            run_stage1(filename="note.txt", content=content, context="authored")
+        assert exc_info.value.category is ErrorCategory.SUSPICIOUS_UNICODE
+
     def test_homework_full_width_injection_rejected(self) -> None:
         # NFKC collapses U+FF29 / U+FF47 / U+FF4E / U+FF4F / U+FF52
         # / U+FF45 (full-width Latin Ignore) to ASCII "ignore"
@@ -456,7 +481,7 @@ class TestStructuredLogging:
 
 
 class TestErrorCategoryPublicContract:
-    def test_eleven_categories_present(self) -> None:
+    def test_all_error_categories_present(self) -> None:
         # 7 categories Phase 0.6 baseline + 2 Phase 2.1 C2 additions:
         # ARCHIVE_BOMB + SYMLINK_VIOLATION per KD-2.1-I (2-set ratify
         # 2026-05-11) — legacy safety/exceptions.py raisers migrated
@@ -467,6 +492,9 @@ class TestErrorCategoryPublicContract:
         # + 2 task-code-materials F4 additions: EMPTY_DOCUMENT +
         # PRESENTATION_EMPTY_SEGMENT (async structural codes persisted
         # to error_category by the ingestion failure callback).
+        # + 2 DD-SP-D additions (student-path step V phase 0):
+        # EXTERNAL_SOURCE_UNAVAILABLE + PIPELINE_FAILURE (failure-classifier
+        # async classes; PIPELINE_FAILURE is the execution seam's default).
         assert {c.value for c in ErrorCategory} == {
             "size_limit",
             "forbidden_type",
@@ -481,6 +509,8 @@ class TestErrorCategoryPublicContract:
             "slide_count_limit",
             "empty_document",
             "presentation_empty_segment",
+            "external_source_unavailable",
+            "pipeline_failure",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))

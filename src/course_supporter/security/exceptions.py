@@ -105,6 +105,13 @@ class ErrorCategory(StrEnum):
     # failure callback so the author UI can map them to stable messages.
     EMPTY_DOCUMENT = "empty_document"
     PRESENTATION_EMPTY_SEGMENT = "presentation_empty_segment"
+    # DD-SP-D (student-path step V, phase 0): the two failure-classifier async
+    # classes. EXTERNAL_SOURCE_UNAVAILABLE is declared explicitly at the
+    # external-fetch points (yt-dlp download, web scrape); PIPELINE_FAILURE is
+    # the execution seam's default so a failed ingestion Job never persists a
+    # NULL category (the seam-default invariant).
+    EXTERNAL_SOURCE_UNAVAILABLE = "external_source_unavailable"
+    PIPELINE_FAILURE = "pipeline_failure"
 
 
 class SecurityRejectedError(Exception):

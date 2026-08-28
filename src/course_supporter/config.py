@@ -70,7 +70,12 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_allowed_origins: list[str] = []
     cors_allow_credentials: bool = False
-    cors_allowed_methods: list[str] = ["GET", "POST", "DELETE"]
+    # PATCH is required: the SPA edits via PATCH (node rename, node-summary
+    # Final, document, homework). Omitting it makes the browser CORS-preflight
+    # reject every PATCH before it is sent. NOTE: prod overrides this via the
+    # CORS_ALLOWED_METHODS env var (.env.prod) — this default is not the value
+    # that runs in production.
+    cors_allowed_methods: list[str] = ["GET", "POST", "DELETE", "PATCH"]
     cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key", "Authorization"]
 
     # --- Student portal session (Phase 6 T1, KD17) ---

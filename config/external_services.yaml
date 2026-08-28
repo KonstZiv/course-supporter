@@ -4,12 +4,29 @@
 # Covers LLM providers, transcription, and future integrations.
 # StageRouter (config/ladders_*.yaml) is the live LLM routing surface; this
 # registry supplies the model catalog and the STT ``transcribe`` action chain.
+#
+# ── Periodic revision log (vision-rules#17, 15-day cadence) ──
+# 2026-08-28 full sweep: every model/service number below re-verified against
+#   live provider pages (prior full sweep 2026-07-26). Changes this sweep:
+#   - deepseek-v4-pro / deepseek-v4-flash: DeepSeek moved to peak/off-peak
+#     billing + raised list rates effective 2026-08-16 (see per-entry notes).
+#     Registry now pins the off-peak (standard, modal) rate; peak = +100%,
+#     documented inline. deepseek-v4-pro is the Methodist ladder PRIMARY, so
+#     the ratified Methodist-pass estimate must be recomputed on the new rate.
+#   - deepgram nova-3: $0.0058 -> $0.0052/min (multilingual pre-recorded PAYG).
+#   Notes-only (rate unchanged): gemini-3.6-flash intro discount through
+#     2026-12-31; elevenlabs scribe_v1 deprecated -> scribe_v2 (same rate);
+#     qwen3-vl-32b-instruct retirement 2026-10-10 (DD-2.4-X) not carried on the
+#     live pricing page but the model remains listed + priced.
+#   yt-dlp backend lock (separate file, uv.lock) at 2026.8.19 = current latest
+#     stable per PyPI + GitHub releases on 2026-08-28 -> no bump needed this
+#     sweep (vision-rules#17 downloader item / DD-SP-F).
 
 providers:
   gemini:
     type: llm
     models:
-      # Pricing verified 2026-07-26 against ai.google.dev/gemini-api/docs/pricing
+      # Pricing verified 2026-08-28 against ai.google.dev/gemini-api/docs/pricing
       # (paid tier, text input). Registry uses per-1k = per-1M / 1000.
       - id: gemini-3.5-flash
         # Latest Gemini flash (registered 2026-05-23). $1.50 / $9.00 per 1M.
@@ -31,6 +48,7 @@ providers:
         cost_per_1k_out: 0.0015
       - id: gemini-3-flash-preview
         # Preview model — relief when gemini-2.5-flash is throttled (503).
+        # Still Preview (not GA) as of 2026-08-28.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -53,12 +71,16 @@ providers:
         max_output_tokens: 65536
         unit_type: tokens
         # Corrected 2026-05-23 (out was 0.005, understated 2×): official
-        # $1.25 / $10.00 per 1M (≤200k-prompt tier).
+        # $1.25 / $10.00 per 1M (≤200k-prompt tier). >200k tier is
+        # $2.50 / $15.00 per 1M (re-confirmed live 2026-08-28).
         cost_per_1k_in: 0.00125
         cost_per_1k_out: 0.010
       - id: gemini-3.6-flash
         # ai.google.dev/gemini-api/docs/pricing + model page, verified
-        # 2026-07-26. $1.50 / $7.50 per 1M.
+        # 2026-08-28. $1.50 / $7.50 per 1M is the durable list rate; an
+        # introductory discount ($0.75 / $3.75 per 1M) is live through
+        # 2026-12-31 and reverts to list on 2027-01-01 — registry pins the
+        # durable rate to avoid a self-reverting stamp.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -67,7 +89,7 @@ providers:
         cost_per_1k_out: 0.0075
       - id: gemini-3.5-flash-lite
         # ai.google.dev/gemini-api/docs/pricing + model page, verified
-        # 2026-07-26. Single input rate for text/image/video/audio.
+        # 2026-08-28. Single input rate for text/image/video/audio.
         # $0.30 / $2.50 per 1M.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
@@ -79,8 +101,8 @@ providers:
   anthropic:
     type: llm
     # Date-pinned snapshot IDs (reproducibility). Live pricing (Sonnet 4.5,
-    # Haiku 4.5) verified 2026-07-26 against
-    # platform.claude.com/docs/en/about-claude/pricing.
+    # Haiku 4.5) verified 2026-08-28 against
+    # platform.claude.com/docs/en/about-claude/pricing (both unchanged).
     models:
       - id: claude-sonnet-4-5-20250929
         # Sonnet 4.5 — current Sonnet snapshot (registered 2026-05-23;
@@ -108,9 +130,9 @@ providers:
     type: llm
     models:
       - id: gpt-4o-mini
-        # $0.15/$0.60 та $2/$8 per 1M; legacy models absent from the main
+        # $0.15/$0.60 per 1M; legacy models absent from the main
         # pricing page; source: OpenAI model catalog (developers.openai.com),
-        # cross-checked 2026-07-26.
+        # cross-checked 2026-08-28.
         capabilities: [vision, structured_output]
         max_context: 128000
         max_output_tokens: 16384
@@ -118,9 +140,9 @@ providers:
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
       - id: gpt-4.1
-        # $0.15/$0.60 та $2/$8 per 1M; legacy models absent from the main
+        # $2/$8 per 1M; legacy models absent from the main
         # pricing page; source: OpenAI model catalog (developers.openai.com),
-        # cross-checked 2026-07-26.
+        # cross-checked 2026-08-28.
         capabilities: [vision, structured_output, long_context]
         max_context: 1047576
         max_output_tokens: 32768
@@ -128,7 +150,7 @@ providers:
         cost_per_1k_in: 0.002
         cost_per_1k_out: 0.008
       - id: gpt-4o
-        # Rates verified 2026-07-26 against the model page
+        # Rates verified 2026-08-28 against the model page
         # (developers.openai.com). $2.50/$10 per 1M.
         capabilities: [vision, structured_output, long_context]
         max_context: 128000
@@ -142,14 +164,21 @@ providers:
     # Live IDs verified 2026-05-23 (api.deepseek.com/models): the lineup is now
     # deepseek-v4-flash + deepseek-v4-pro. The legacy chat / reasoner aliases
     # were retired by DeepSeek 2026-07-24 (they mapped to the non-thinking /
-    # thinking modes of deepseek-v4-flash). Pricing per api-docs.deepseek.com/pricing.
+    # thinking modes of deepseek-v4-flash / v4-pro; retirement re-confirmed
+    # 2026-08-28). Pricing per api-docs.deepseek.com/quick_start/pricing.
     models:
       - id: deepseek-v4-flash
         # Current flash tier (replaces the retired chat alias). Referenced by the
         # safety_check / safety_check_authored / pass_2a_mapping ladders —
-        # registered 2026-05-23 to close their cost-tracking gap. $0.14/$0.28
-        # per 1M (rates re-verified 2026-07-26 against api-docs.deepseek.com,
-        # Models & Pricing). Context 1M / max output 384K per api-docs.deepseek.com
+        # registered 2026-05-23 to close their cost-tracking gap. DeepSeek moved
+        # to peak/off-peak billing + raised list rates effective 2026-08-16
+        # (verified 2026-08-28 against api-docs.deepseek.com/quick_start/pricing,
+        # fetched live): cache-miss input off-peak $0.22 / peak $0.44 per 1M,
+        # output off-peak $0.66 / peak $1.32 per 1M, cache-hit input off-peak
+        # $0.007. Peak = 01:00-04:00 & 06:00-10:00 UTC Mon-Fri; off-peak = half,
+        # all other hours + weekends. Registry pins the off-peak (standard,
+        # modal) rate; peak is +100%. Was $0.14/$0.28 flat pre-2026-08-16.
+        # Context 1M / max output 384K per api-docs.deepseek.com
         # ("MAX OUTPUT | MAXIMUM: 384K"), verified 2026-07-19 with live
         # api.deepseek.com calls (max_tokens 16384/65536/384000 all HTTP 200;
         # the V3-era [1, 8192] wall does not apply here). 384000 is the
@@ -160,16 +189,22 @@ providers:
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
-        cost_per_1k_in: 0.00014
-        cost_per_1k_out: 0.00028
+        cost_per_1k_in: 0.00022
+        cost_per_1k_out: 0.00066
       - id: deepseek-v4-pro
-        # "Smart" / deep-reasoning tier. $0.435/$0.87 per 1M — verified
-        # 2026-07-26 against DeepSeek official pricing (api-docs.deepseek.com,
-        # Models & Pricing): the prior 75% promo
-        # became the permanent list rate after the old $1.74/$3.48 durable
-        # rate was retired 2026-05-31, so promo and durable now coincide
-        # (supersedes the earlier "keep durable, ignore promo" note). Context
-        # 1M / max output 384K per the official DeepSeek docs verified 2026-06-05;
+        # "Smart" / deep-reasoning tier — Methodist ladder PRIMARY (bottomup +
+        # topdown). DeepSeek moved to peak/off-peak billing + raised list rates
+        # effective 2026-08-16 (verified 2026-08-28 against
+        # api-docs.deepseek.com/quick_start/pricing, fetched live): cache-miss
+        # input off-peak $0.66 / peak $1.32 per 1M, output off-peak $1.98 /
+        # peak $3.96 per 1M, cache-hit input off-peak $0.022. Peak = 01:00-04:00
+        # & 06:00-10:00 UTC Mon-Fri; off-peak = half, all other hours +
+        # weekends. Registry pins the off-peak (standard, modal) rate; peak is
+        # +100% — schedule the Methodist pass off-peak to pay the pinned rate.
+        # Was $0.435/$0.87 flat (verified 2026-07-26; that rate was itself the
+        # post-promo permanent list after the old $1.74/$3.48 durable retired
+        # 2026-05-31). Context 1M / max output 384K per the official DeepSeek
+        # docs verified 2026-06-05;
         # the conservative ``max_output_tokens`` here (65536) mirrors the video
         # Pass 2a ladder pin — the model's true output ceiling is far higher,
         # but the cap above which we have empirical evidence of clean emission
@@ -184,8 +219,8 @@ providers:
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.000435
-        cost_per_1k_out: 0.00087
+        cost_per_1k_in: 0.00066
+        cost_per_1k_out: 0.00198
 
   mistral:
     type: llm
@@ -193,7 +228,7 @@ providers:
       - id: mistral-large-2512
         # Mistral Large 3. Rates + 256k context per mistral.ai/pricing/api and
         # the official model card (docs.mistral.ai, mistral-large-3-25-12),
-        # verified 2026-07-26. Previous $2/$6 was the Large 2 rate.
+        # verified 2026-08-28. Previous $2/$6 was the Large 2 rate.
         # max_output_tokens left at 8192: first-party ceiling is not published
         # (Bedrock's 32K is a different platform).
         capabilities: [structured_output, long_context]
@@ -204,7 +239,7 @@ providers:
         cost_per_1k_out: 0.0015
       - id: mistral-small-latest
         # Alias now resolves to Mistral Small 4; rates per mistral.ai/pricing/api,
-        # verified 2026-07-26. Context/output not re-verified: no live routing
+        # verified 2026-08-28. Context/output not re-verified: no live routing
         # references this record (the legacy action chains that used it were
         # removed by the DD-20-A dismantle). Kept pending a removal decision.
         capabilities: [vision, structured_output]
@@ -219,12 +254,16 @@ providers:
     # Qwen text-reasoning flagships available in the eu-central-1 MaaS workspace
     # (verified 2026-05-23 against the workspace /models list). Date-pinned per
     # the snapshot convention. Pricing: workspace scope Global; Global pricing
-    # tab, console eu-central-1; verified 2026-07-26. Reasoning/"thinking"
+    # tab, console eu-central-1; verified 2026-08-28. Reasoning/"thinking"
     # variants (qwen3-235b-a22b-thinking-2507, qwen3-next-80b-a3b-thinking) are
-    # also workspace-available — add on demand.
+    # also workspace-available — add on demand. NB (2026-08-28): the live
+    # flagship generation has advanced to qwen3.8-max / qwen3.7-plus /
+    # qwen3.8-flash (qwen3.8-max shares qwen3.7-max's $1.65/$4.951 Global rate);
+    # the entries below remain listed + priced but are a generation behind.
     models:
       - id: qwen3.7-max
         # Latest Qwen flagship "Max" (text reasoning; released 2026-05-20).
+        # Methodist ladder FALLBACK — re-verified EXACT 2026-08-28.
         # Registered under the canonical alias (NOT the date-pinned
         # ``qwen3.7-max-2026-05-20`` variant) because curl-probe 2026-06-05
         # confirmed the workspace (ws-kyxnm2ipitv2bwlr, eu-central-1) grants
@@ -232,11 +271,11 @@ providers:
         # Model.AccessDenied (separate unauthorized entity, lower limits).
         # Mirrors the VL alias precedent (qwen3-vl-32b-instruct).
         # Workspace scope Global; Global pricing tab, console eu-central-1,
-        # verified 2026-07-26: $1.65/$4.951 per 1M is the list rate (flat).
-        # Earlier registry held $2.50/$7.50 as the presumed durable rate
-        # treating $1.65/$4.951 as promo; the console now presents it as the
-        # list price. Canonical alias resolves to the dated snapshot per the
-        # console card; the alias may advance silently.
+        # verified 2026-08-28: $1.65/$4.951 per 1M is the list rate (flat,
+        # 0<Token≤1M). NB the US-anchored "International" scope is a different,
+        # higher rate ($2.50/$7.50) — do NOT use it; aggregators (OpenRouter)
+        # also quote non-Global numbers. Canonical alias resolves to the dated
+        # snapshot per the console card; the alias may advance silently.
         capabilities: [structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -245,11 +284,13 @@ providers:
         cost_per_1k_out: 0.004951
       - id: qwen3-vl-32b-instruct
         # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
-        # Pricing verified 2026-07-26 against DashScope Model Studio (workspace
+        # Pricing verified 2026-08-28 against DashScope Model Studio (workspace
         # scope Global; Global pricing tab, console eu-central-1; numbers match
         # on both tabs): $0.16/$0.64 per 1M — flat rate (not tiered), supersedes
-        # the earlier Singapore-tier estimate.
-        # Retires 2026-10-10 → DD-2.4-X.
+        # the earlier Singapore-tier estimate. Still listed + actively priced on
+        # the pricing page 2026-08-28 (no EOL notice there).
+        # Retires 2026-10-10 → DD-2.4-X (that date is from the Alibaba
+        # model-lifecycle announcement, not the pricing page).
         # TASK-4 (2026-07-31): replaced on both vision rung-1 ladders by
         # qwen3.5-flash; entry kept as the rollback target while the
         # replacement accrues production mileage. Remove at the first
@@ -262,7 +303,7 @@ providers:
         cost_per_1k_out: 0.00064
       - id: qwen3.5-flash
         # Workspace scope Global; Global pricing tab / model card, console
-        # eu-central-1, verified 2026-07-26. Card: Context Window 1M, Maximum
+        # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
@@ -276,7 +317,7 @@ providers:
         cost_per_1k_out: 0.000287
       - id: qwen3.6-flash
         # Workspace scope Global; Global pricing tab / model card, console
-        # eu-central-1, verified 2026-07-26. Card: Context Window 1M, Maximum
+        # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M $0.66/$3.961.
@@ -288,7 +329,7 @@ providers:
         cost_per_1k_out: 0.00099
       - id: qwen3.5-plus
         # Workspace scope Global; Global pricing tab / model card, console
-        # eu-central-1, verified 2026-07-26. Card: Context Window 1M, Maximum
+        # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
@@ -301,7 +342,7 @@ providers:
         cost_per_1k_out: 0.000688
       - id: qwen3.6-plus
         # Workspace scope Global; Global pricing tab / model card, console
-        # eu-central-1, verified 2026-07-26. Card: Context Window 1M, Maximum
+        # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M
@@ -325,10 +366,14 @@ providers:
     type: stt
     models:
       - id: scribe_v1
-        # Official: Scribe $0.22/hour (elevenlabs.io/pricing/api, verified
-        # 2026-07-26); 0.0037/min is the rounded-up per-minute form. NB: the
-        # page now documents Scribe v2 — validity of the scribe_v1 id to be
-        # confirmed by a live call at the next STT touch.
+        # Official: Scribe $0.22/hour (elevenlabs.io/pricing/api); 0.0037/min is
+        # the rounded-up per-minute form. Rate unchanged, verified 2026-08-28.
+        # STATUS: scribe_v1 is now DEPRECATED — the pricing page documents only
+        # scribe_v2 (same $0.22/hr) and scribe_v2 Realtime ($0.39/hr); the v1 id
+        # still appears in the docs' deprecated-models table (a 2026-06-08
+        # changelog announced removal 2026-07-09 but the id persists). Migrating
+        # the transcribe chain id scribe_v1 → scribe_v2 is a pending follow-up
+        # (routing change, out of scope for a price-only revision).
         unit_type: minutes
         cost_per_minute: 0.0037
 
@@ -337,7 +382,7 @@ providers:
     models:
       - id: gpt-4o-mini-transcribe
         # $0.003/min per the official pricing page (developers.openai.com),
-        # verified 2026-07-26 ($1.25/$5 per 1M tokens).
+        # verified 2026-08-28 ($1.25/$5 per 1M tokens).
         unit_type: minutes
         cost_per_minute: 0.003
 
@@ -346,11 +391,11 @@ providers:
     models:
       - id: nova-3
         # Nova-3 Multilingual, pre-recorded, Pay-As-You-Go — the tier that
-        # applies to Ukrainian audio. deepgram.com/pricing, verified 2026-07-26.
-        # Adjacent tiers for reference: monolingual pre-recorded $0.0048/min,
-        # streaming $0.0077 (mono) / $0.0092 (multi).
+        # applies to Ukrainian audio. deepgram.com/pricing, verified 2026-08-28:
+        # $0.0052/min (was $0.0058/min at 2026-07-26 — price drop). Adjacent
+        # tier for reference: monolingual/English pre-recorded $0.0043/min.
         unit_type: minutes
-        cost_per_minute: 0.0058
+        cost_per_minute: 0.0052
 
 strategies:
   transcription:

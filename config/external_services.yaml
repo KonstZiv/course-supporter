@@ -189,6 +189,11 @@ providers:
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
+        # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
+        #   rate = LOWER BOUND. Peak bills 2× during 01:00-04:00 & 06:00-10:00
+        #   UTC, Monday-Friday (off-peak = all other hours + weekends);
+        #   DeepSeek introduced this split 2026-08-16. A bill reconciled
+        #   against this number reads up to 2× higher for peak-hour calls.
         cost_per_1k_in: 0.00022
         cost_per_1k_out: 0.00066
       - id: deepseek-v4-pro
@@ -219,6 +224,11 @@ providers:
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
+        # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
+        #   rate = LOWER BOUND. Peak bills 2× during 01:00-04:00 & 06:00-10:00
+        #   UTC, Monday-Friday (off-peak = all other hours + weekends);
+        #   DeepSeek introduced this split 2026-08-16. A bill reconciled
+        #   against this number reads up to 2× higher for peak-hour calls.
         cost_per_1k_in: 0.00066
         cost_per_1k_out: 0.00198
 

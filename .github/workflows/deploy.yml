@@ -22,7 +22,7 @@ jobs:
             git pull origin main
 
             echo "=== Build ==="
-            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker homework-worker
 
             echo "=== Migrations (before app start) ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml run --rm -T app \

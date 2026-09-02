@@ -284,7 +284,6 @@ class Settings(BaseSettings):
     # did not exist -- ``safety_archive_max_nesting: int = 1`` in particular
     # read as "nesting is capped at one" while homework actually allows three.
     safety_archive_max_files: int = 1000
-    homework_max_content_chars: int = 80_000
 
     # --- S3 / MinIO ---
     s3_endpoint: str = "http://localhost:9000"

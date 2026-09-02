@@ -118,6 +118,12 @@ class ErrorCategory(StrEnum):
     # submission that names the entry to the student needs it in the same
     # code vocabulary as every other reason it shows.
     NESTED_ARCHIVE = "nested_archive"
+    # Distinct from SIZE_LIMIT on purpose: that one is about bytes at the
+    # door, this one about how much text the reading models can hold. A
+    # submission can be comfortably under the upload cap and still carry more
+    # text than the tightest context window accepts, and the two ask the
+    # student for different things.
+    OVER_BUDGET = "over_budget"
 
 
 class SecurityRejectedError(Exception):

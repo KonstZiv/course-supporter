@@ -595,6 +595,9 @@ class TestErrorCategoryPublicContract:
             # named to the student, so the outcome needs a code here and not
             # only an EntryVerdict.
             "nested_archive",
+            # gates §1.7: more text than the reading models can hold. Not
+            # SIZE_LIMIT — that is bytes at the door, this is context window.
+            "over_budget",
         }
 
     @pytest.mark.parametrize("category", list(ErrorCategory))

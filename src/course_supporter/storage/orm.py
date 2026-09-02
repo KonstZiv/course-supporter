@@ -664,8 +664,10 @@ class DocumentSummary(SoftDeleteMixin, Base):
         comment="Self-contained summary title (≤128 per vision §2.2)",
     )
     description: Mapped[str | None] = mapped_column(
-        String(512),
-        comment="Optional brief description (≤512 per vision §2.2)",
+        Text,
+        comment="Optional brief description; ≤512 is a MODEL instruction "
+        "(vision §2.2), enforced where the draft schema carries max_length -- "
+        "not by the column, which would truncate-or-500 instead of validating",
     )
     main_concepts: Mapped[list[str]] = mapped_column(
         JSONB,
@@ -832,7 +834,7 @@ class DocumentSegment(SoftDeleteMixin, Base):
         "NOT in content_hash formula -- DD-2.1-W defers to Phase 1.3/1.4.",
     )
     description: Mapped[str | None] = mapped_column(
-        String(512),
+        Text,
         comment="1-2 sentence segment description (Pass 2a LLM emits per "
         "segment; populated for text/web at C7, NULL for media pre-Pass-2c). "
         "NOT in content_hash formula -- DD-2.1-W defers to Phase 1.3/1.4.",
@@ -1156,7 +1158,10 @@ class ExternalServiceCall(Base):
     strategy: Mapped[str] = mapped_column(String(50), default="default")
     provider: Mapped[str] = mapped_column(String(50))
     model_id: Mapped[str] = mapped_column(String(100))
-    prompt_ref: Mapped[str | None] = mapped_column(String(50))
+    # Not String(50): the longest prompt_ref in the ladders is already 51
+    # ("prompts/mentor_layered_evaluation_node_course/v1.md"). The column has
+    # never overflowed only because nothing writes it yet (DD-CQ-C).
+    prompt_ref: Mapped[str | None] = mapped_column(Text)
     unit_type: Mapped[str | None] = mapped_column(String(20))
     unit_in: Mapped[int | None] = mapped_column(Integer)
     unit_out: Mapped[int | None] = mapped_column(Integer)
@@ -1323,7 +1328,9 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         String(2000), comment="S3/B2 path to the uploaded file"
     )
     file_type: Mapped[str] = mapped_column(
-        String(50), comment="MIME type of the uploaded file"
+        Text,
+        comment="MIME type as declared by the client; not width-bounded -- "
+        "the docx type alone is 71 characters",
     )
     original_filename: Mapped[str | None] = mapped_column(String(500))
     file_hash: Mapped[str | None] = mapped_column(

@@ -276,10 +276,14 @@ class Settings(BaseSettings):
         return self
 
     # --- Safety Checker ---
-    safety_archive_max_uncompressed_mb: int = 50
+    # Ceiling on archive MEMBER COUNT, read by
+    # ``security.archive.extract_archive_safely``. The sibling knobs for
+    # uncompressed size and nesting depth were dropped with the legacy
+    # submission extractor (DD-6-S): the canonical extractor takes both from
+    # ``ContextPolicy`` instead, so leaving them here claimed a control that
+    # did not exist -- ``safety_archive_max_nesting: int = 1`` in particular
+    # read as "nesting is capped at one" while homework actually allows three.
     safety_archive_max_files: int = 1000
-    safety_archive_max_nesting: int = 1
-    safety_max_content_chars: int = 100_000
     homework_max_content_chars: int = 80_000
 
     # --- S3 / MinIO ---

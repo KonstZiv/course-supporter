@@ -130,7 +130,7 @@ class TestSizeCheck:
         # Documents ride the 10 MiB document cap, not the 1 MiB text cap: a
         # Word export with two screenshots clears a megabyte without trying,
         # and the student cannot make it smaller.
-        cap = HOMEWORK_POLICY.max_document_size_bytes
+        cap = HOMEWORK_POLICY.max_primary_format_bytes
         assert cap == 10 * 1024 * 1024
         oversize_pdf = PDF_BYTES + b"\x00" * (cap + 1 - len(PDF_BYTES))
         with pytest.raises(SecurityRejectedError) as exc_info:
@@ -138,7 +138,7 @@ class TestSizeCheck:
         assert exc_info.value.category is ErrorCategory.SIZE_LIMIT
 
     def test_homework_text_file_stays_on_the_smaller_cap(self) -> None:
-        # The document cap must not leak onto prose and code.
+        # The primary-format cap must not leak onto prose and code.
         assert get_max_size_for_extension("md", HOMEWORK_POLICY) == 1 * 1024 * 1024
         oversize_md = b"a\n" * (600 * 1024)
         with pytest.raises(SecurityRejectedError) as exc_info:
@@ -992,3 +992,47 @@ class TestDocumentConveyor:
         assert result.not_opened[0].reason is ErrorCategory.FORBIDDEN_TYPE
         assert result.archive_entries is not None
         assert [e.arcname for e in result.archive_entries] == ["work.py"]
+
+
+class TestPrimaryFormatCap:
+    """A container is bounded at the door size, not at the per-text-file size.
+
+    Ratified after STOP-1: what a student submits AS the work — an archive, a
+    document — is a primary format and is bounded by what the door accepts.
+    The 1 MiB rule is about one text file inside it. Leaving containers on the
+    text cap reproduced the exact asymmetry this pass exists to remove: the
+    route accepts 10 MiB, the worker refuses anything over one.
+    """
+
+    @staticmethod
+    def _zip_of_size(payload_bytes: int) -> bytes:
+        # ZIP_STORED so the archive on disk is the size of its payload: the
+        # test is about the UPLOAD size, and a compressed fixture would prove
+        # nothing about the cap being measured.
+        line = b"a line of ordinary submission text\n"
+        body = line * (payload_bytes // len(line))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr("main.py", b'print("hi")\n')
+            zf.writestr("notes.txt", body)
+        return buf.getvalue()
+
+    def test_archive_between_one_and_ten_mib_passes(self) -> None:
+        archive = self._zip_of_size(2 * 1024 * 1024)
+        assert 1 * 1024 * 1024 < len(archive) < 10 * 1024 * 1024
+        result = run_stage1(filename="project.zip", content=archive, context="homework")
+        assert result.archive_entries is not None
+        assert {e.arcname for e in result.archive_entries} == {
+            "main.py",
+            "notes.txt",
+        }
+
+    def test_archive_over_ten_mib_is_refused_on_size(self) -> None:
+        oversize = self._zip_of_size(11 * 1024 * 1024)
+        assert len(oversize) > 10 * 1024 * 1024
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            run_stage1(filename="project.zip", content=oversize, context="homework")
+        # SIZE_LIMIT, not ARCHIVE_VIOLATION: the upload cap fires before any
+        # extraction, so the student is told the file is too big rather than
+        # that their archive is malformed.
+        assert exc_info.value.category is ErrorCategory.SIZE_LIMIT

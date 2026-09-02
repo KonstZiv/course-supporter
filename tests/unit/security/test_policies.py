@@ -226,12 +226,22 @@ class TestPresentationSizeResolver:
         assert HOMEWORK_POLICY.max_presentation_size_bytes is None
         assert (
             get_max_size_for_extension("pdf", HOMEWORK_POLICY)
-            == HOMEWORK_POLICY.max_document_size_bytes
+            == HOMEWORK_POLICY.max_primary_format_bytes
             == 10 * 1024 * 1024
         )
 
-    def test_homework_document_cap_does_not_leak_onto_text(self) -> None:
-        for ext in ("md", "txt", "py", "zip"):
+    def test_homework_primary_cap_covers_containers_too(self) -> None:
+        # Archives are primary formats by the same reasoning as documents:
+        # a project archive is the work, not one file inside it.
+        for ext in ("zip", "gz", "tgz"):
+            assert (
+                get_max_size_for_extension(ext, HOMEWORK_POLICY)
+                == HOMEWORK_POLICY.max_primary_format_bytes
+                == 10 * 1024 * 1024
+            ), ext
+
+    def test_homework_primary_cap_does_not_leak_onto_text(self) -> None:
+        for ext in ("md", "txt", "py", "ipynb"):
             assert (
                 get_max_size_for_extension(ext, HOMEWORK_POLICY)
                 == HOMEWORK_POLICY.max_file_size_bytes

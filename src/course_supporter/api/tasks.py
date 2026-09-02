@@ -803,7 +803,6 @@ async def arq_process_homework(
     )
     from course_supporter.models.source import AssignmentType
     from course_supporter.normalizer.classify import denylist_prefix
-    from course_supporter.security.archive import extract_submission_content
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import (
         CourseContext,
@@ -945,23 +944,6 @@ async def arq_process_homework(
                         return
                     submission_text = project_text
                 else:
-                    # Extract content (handles archives)
-                    content = await extract_submission_content(file_path)
-
-                    # Log non-fatal security warnings at WARNING level
-                    for sw in content.security_warnings:
-                        log.warning(
-                            "security_warning",
-                            **sw.as_log_dict(),
-                        )
-
-                    log.info(
-                        "homework_content_extracted",
-                        files=len(content.files),
-                        total_size=content.total_size,
-                        security_warnings=len(content.security_warnings),
-                    )
-
                     # --- KD14 Stage 1 — synchronous validation ---
                     # HOMEWORK_POLICY caps at 1 MB so the in-memory read above is
                     # safe (per Phase 1.2 §6.2 option a ratify).
@@ -1020,6 +1002,24 @@ async def arq_process_homework(
 
                     not_opened = stage1_result.not_opened
                     submission_text += _not_opened_block(not_opened)
+
+                    # Replaces the removed ``homework_content_extracted`` /
+                    # ``security_warning`` pair (DD-6-S): same question --
+                    # what did we actually read out of this upload -- now
+                    # answered from the single extractor's result.
+                    log.info(
+                        "homework_content_read",
+                        files=(
+                            0
+                            if stage1_result.archive_entries is None
+                            else len(stage1_result.archive_entries)
+                        ),
+                        total_size=sum(
+                            len(e.content)
+                            for e in (stage1_result.archive_entries or ())
+                        ),
+                        not_opened=len(not_opened),
+                    )
 
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).

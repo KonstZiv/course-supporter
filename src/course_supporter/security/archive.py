@@ -85,16 +85,14 @@ from __future__ import annotations
 
 import gzip
 import io
-import stat
 import tarfile
 import zipfile
+import zlib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
 from typing import IO, Literal, overload
 
-import anyio
 import structlog
 
 from course_supporter.config import get_settings
@@ -107,11 +105,6 @@ from course_supporter.security.file_type import (
     verify_extension_matches_content,
 )
 from course_supporter.security.normalization import normalize_filename
-from course_supporter.security.schemas import (
-    FileContent,
-    SecurityWarning,
-    SubmissionContent,
-)
 
 logger = structlog.get_logger()
 
@@ -137,6 +130,10 @@ _COMPRESSION_RATIO_LIMIT = 100
 
 # Streaming chunk size for content extraction.
 _CHUNK_SIZE = 64 * 1024
+
+# Enough decompressed bytes to prove a gzip stream is real without giving a
+# decompression bomb anywhere to go.
+_GZIP_PROBE_BYTES = 512
 
 # Unix-mode bit positions for ZIP external_attr (creator system 3 == Unix).
 _ZIP_MODE_MASK = 0xF000
@@ -354,17 +351,41 @@ def extract_archive_safely(
     by production Stage 1 callers.
     """
     budget = _Budget(max_unzipped_size)
+    # Read once at the entry point rather than per archive level: the ceiling
+    # is a deployment knob, and threading it keeps the recursive helpers free
+    # of global lookups.
     yield from _extract_recursive(
         archive_bytes,
         archive_kind=archive_kind,
         budget=budget,
         max_unzipped_size=max_unzipped_size,
         max_nesting_depth=max_nesting_depth,
+        max_files=get_settings().safety_archive_max_files,
         allowed_extensions=allowed_extensions,
         current_depth=0,
         classify=classify,
         skip_matcher=skip_matcher,
     )
+
+
+def _check_entry_count(count: int, *, kind: str, max_files: int) -> None:
+    """Refuse an archive carrying more members than the configured ceiling.
+
+    Inherited from the legacy submission extractor, which was the only place
+    that had it; the canonical extractor bounded total BYTES but not member
+    COUNT, so an archive of a hundred thousand empty files passed the budget
+    and cost its price downstream instead. Applied to both kinds and in both
+    modes: the annotated mode sets members aside rather than raising, which
+    would otherwise turn this ceiling into a very long list of annotations.
+
+    Skip-zone members are exempt, mirroring the byte accounting above (№14):
+    packaging noise is not the student's file count.
+    """
+    if count > max_files:
+        raise SecurityRejectedError(
+            ErrorCategory.ARCHIVE_BOMB,
+            f"{kind} archive contains {count} files; max allowed: {max_files}",
+        )
 
 
 # ── Internal recursion ─────────────────────────────────────────────
@@ -377,6 +398,7 @@ def _extract_recursive(
     budget: _Budget,
     max_unzipped_size: int,
     max_nesting_depth: int,
+    max_files: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
@@ -395,6 +417,7 @@ def _extract_recursive(
             budget=budget,
             max_unzipped_size=max_unzipped_size,
             max_nesting_depth=max_nesting_depth,
+            max_files=max_files,
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
             classify=classify,
@@ -406,6 +429,7 @@ def _extract_recursive(
             budget=budget,
             max_unzipped_size=max_unzipped_size,
             max_nesting_depth=max_nesting_depth,
+            max_files=max_files,
             allowed_extensions=allowed_extensions,
             current_depth=current_depth,
             classify=classify,
@@ -424,6 +448,7 @@ def _extract_zip(
     budget: _Budget,
     max_unzipped_size: int,
     max_nesting_depth: int,
+    max_files: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
@@ -456,6 +481,16 @@ def _extract_zip(
                 f"zip declared total size {declared_total} > "
                 f"budget {max_unzipped_size}",
             )
+        _check_entry_count(
+            sum(
+                1
+                for info in infos
+                if skip_matcher is None
+                or skip_matcher(normalize_filename(info.filename)) is None
+            ),
+            kind="zip",
+            max_files=max_files,
+        )
 
         for info in infos:
             # Per-member jurisdiction order (№14): hostility -> skip ->
@@ -527,10 +562,53 @@ def _extract_zip(
                 budget=budget,
                 max_unzipped_size=max_unzipped_size,
                 max_nesting_depth=max_nesting_depth,
+                max_files=max_files,
                 allowed_extensions=allowed_extensions,
                 classify=classify,
                 skip_matcher=skip_matcher,
             )
+
+
+def _tar_gz_open_failure(
+    archive_bytes: bytes, exc: tarfile.TarError
+) -> SecurityRejectedError:
+    """Tell a bare gzip apart from a genuinely corrupt tar.gz.
+
+    Both reach here as a ``TarError``, but they are different mistakes and
+    deserve different answers. ``work.py.gz`` is a single compressed file: the
+    gzip framing is perfectly valid, only the payload is not a tar. Reporting
+    that as a malformed archive tells the student their file is broken when it
+    is merely the wrong shape, and gives them nothing to do about it.
+
+    The probe decompresses a bounded prefix only -- enough to prove the gzip
+    stream is real, never enough for a decompression bomb to matter. It
+    separates VALID framing from BROKEN framing, not complete from truncated:
+    a tar.gz cut off mid-body still starts as a real gzip and lands on the
+    content answer. That is the tolerable side to err on -- the student is
+    told to repack, which fixes a truncated upload too.
+
+    ``zlib.error`` is caught alongside the OS errors deliberately: a corrupt
+    deflate stream raises it and it is NOT an ``OSError``, unlike
+    ``BadGzipFile``. Missing it would report broken bytes as a bare gzip.
+    """
+    if archive_bytes.startswith(b"\x1f\x8b"):
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(archive_bytes)) as gz:
+                gz.read(_GZIP_PROBE_BYTES)
+        except (OSError, EOFError, zlib.error):
+            pass  # gzip framing itself is broken -> genuinely malformed
+        else:
+            return SecurityRejectedError(
+                ErrorCategory.MAGIC_MISMATCH,
+                (
+                    "single compressed file, not a project archive: the gzip "
+                    "stream is valid but its payload is not a tar"
+                ),
+            )
+    return SecurityRejectedError(
+        ErrorCategory.ARCHIVE_VIOLATION,
+        f"malformed tar.gz archive: {exc}",
+    )
 
 
 def _extract_tar_gz(
@@ -539,6 +617,7 @@ def _extract_tar_gz(
     budget: _Budget,
     max_unzipped_size: int,
     max_nesting_depth: int,
+    max_files: int,
     allowed_extensions: frozenset[str],
     current_depth: int,
     classify: bool,
@@ -550,10 +629,7 @@ def _extract_tar_gz(
             mode="r:gz",
         )
     except tarfile.TarError as exc:
-        raise SecurityRejectedError(
-            ErrorCategory.ARCHIVE_VIOLATION,
-            f"malformed tar.gz archive: {exc}",
-        ) from exc
+        raise _tar_gz_open_failure(archive_bytes, exc) from exc
 
     with tf:
         members = tf.getmembers()
@@ -572,6 +648,16 @@ def _extract_tar_gz(
                 f"tar.gz declared total size {declared_total} > "
                 f"budget {max_unzipped_size}",
             )
+        _check_entry_count(
+            sum(
+                1
+                for m in members
+                if skip_matcher is None
+                or skip_matcher(normalize_filename(m.name)) is None
+            ),
+            kind="tar.gz",
+            max_files=max_files,
+        )
 
         # Total compression ratio (gzip wraps whole tar).
         if archive_bytes:
@@ -639,6 +725,7 @@ def _extract_tar_gz(
                 budget=budget,
                 max_unzipped_size=max_unzipped_size,
                 max_nesting_depth=max_nesting_depth,
+                max_files=max_files,
                 allowed_extensions=allowed_extensions,
                 classify=classify,
                 skip_matcher=skip_matcher,
@@ -653,6 +740,7 @@ def _yield_or_recurse(
     budget: _Budget,
     max_unzipped_size: int,
     max_nesting_depth: int,
+    max_files: int,
     allowed_extensions: frozenset[str],
     classify: bool,
     skip_matcher: SkipMatcher | None,
@@ -687,6 +775,7 @@ def _yield_or_recurse(
             budget=budget,
             max_unzipped_size=max_unzipped_size,
             max_nesting_depth=max_nesting_depth,
+            max_files=max_files,
             allowed_extensions=allowed_extensions,
             current_depth=depth + 1,
             classify=classify,
@@ -854,321 +943,3 @@ def _read_chunked(stream: IO[bytes], budget: _Budget) -> bytes:
         budget.consume(len(chunk))
         buf.extend(chunk)
     return bytes(buf)
-
-
-# ── Submission extraction (Phase 2.1 C2 migration per KD-2.1-H) ───
-#
-# extract_submission_content + helpers migrated from safety/archive.py.
-# Adapted to raise canonical SecurityRejectedError with ErrorCategory
-# values (ARCHIVE_BOMB / SYMLINK_VIOLATION) instead of legacy
-# SymlinkViolationError / ArchiveBombError subclasses. Per KD-2.1-I
-# 2-set ratify: PATH_TRAVERSAL + CONTENT_SAFETY values NOT promoted
-# (legacy classes had 0 raisers in production — verified at Phase 2.1
-# pre-flight 2026-05-11).
-#
-# Helpers prefixed _submission_* to coexist with extract_archive_safely
-# helpers above. Settings prefix kept as safety_archive_* for backward-
-# compat with deployed configs; not renamed in C2.
-
-# Text-like extensions for content extraction (kept as legacy set —
-# no functional change vs safety/archive.py:24-63).
-_SUBMISSION_TEXT_EXTENSIONS = frozenset(
-    {
-        ".py",
-        ".js",
-        ".ts",
-        ".java",
-        ".c",
-        ".cpp",
-        ".cs",
-        ".sql",
-        ".md",
-        ".txt",
-        ".html",
-        ".htm",
-        ".ipynb",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".cfg",
-        ".ini",
-        ".xml",
-        ".csv",
-        ".sh",
-        ".bash",
-        ".css",
-        ".jsx",
-        ".tsx",
-        ".rb",
-        ".go",
-        ".rs",
-        ".kt",
-        ".swift",
-        ".r",
-        ".R",
-        ".scala",
-        ".h",
-        ".hpp",
-    }
-)
-
-
-def _submission_decode_bytes(raw: bytes) -> str:
-    """Decode raw bytes to text, trying common encodings."""
-    for encoding in ("utf-8", "utf-8-sig"):
-        try:
-            return raw.decode(encoding)
-        except (UnicodeDecodeError, ValueError):
-            continue
-    return raw.decode("utf-8", errors="replace")
-
-
-def _submission_read_text_file(path: Path) -> str:
-    """Read a file as text, trying common encodings."""
-    return _submission_decode_bytes(path.read_bytes())
-
-
-def _submission_is_text_file(filename: str) -> bool:
-    """Check if a filename has a text-like extension."""
-    return Path(filename).suffix.lower() in _SUBMISSION_TEXT_EXTENSIONS
-
-
-def _submission_is_zip_symlink(info: zipfile.ZipInfo) -> bool:
-    """Check if a ZIP entry is a symbolic link (Unix external attributes)."""
-    return stat.S_ISLNK(info.external_attr >> 16)
-
-
-def _submission_sanitize_filename(raw_name: str) -> str | None:
-    """Sanitize an archive entry filename, stripping path traversal.
-
-    Returns ``None`` if the name is unsafe and should be skipped
-    entirely (e.g. resolves to empty after stripping or is an
-    absolute path that fully resolves out of bounds).
-    """
-    parts = PurePosixPath(raw_name).parts
-    clean_parts = [p for p in parts if p not in ("/", "..")]
-    if not clean_parts:
-        return None
-    return str(PurePosixPath(*clean_parts))
-
-
-async def extract_submission_content(file_path: Path) -> SubmissionContent:
-    """Extract text content from a submission file or archive.
-
-    Migrated from ``safety/archive.py:109`` per Phase 2.1 C2
-    (KD-2.1-H). Adapted to raise canonical
-    :class:`SecurityRejectedError` with :class:`ErrorCategory`
-    values instead of legacy subclass hierarchy:
-
-    * Symlink rejection: ``ErrorCategory.SYMLINK_VIOLATION``
-      (was ``SymlinkViolationError``).
-    * Bomb / size / count rejection: ``ErrorCategory.ARCHIVE_BOMB``
-      (was ``ArchiveBombError``).
-
-    Supports:
-
-    * Single text files (read directly).
-    * ``.zip`` archives (extract with bomb protection).
-    * ``.gz`` files (decompress single file).
-
-    Limits configurable via environment variables (``safety_archive_*``
-    settings — prefix kept for backward-compat with deployed configs).
-
-    Args:
-        file_path: Path to the submission file.
-
-    Returns:
-        :class:`SubmissionContent` with extracted file contents and
-        any non-fatal :class:`SecurityWarning` observations.
-
-    Raises:
-        SecurityRejectedError: If the file is a symlink
-            (``SYMLINK_VIOLATION``), archive exceeds decompression
-            bomb limits (``ARCHIVE_BOMB``), or archive structure is
-            malformed (``ARCHIVE_VIOLATION`` — captures
-            ``BadZipFile`` / ``BadGzipFile`` per canonical exception
-            consolidation, mirroring :func:`extract_archive_safely`
-            precedent in the same module).
-    """
-    if await anyio.Path(file_path).is_symlink():
-        raise SecurityRejectedError(
-            ErrorCategory.SYMLINK_VIOLATION,
-            f"refusing to process symlink: {file_path.name}",
-        )
-
-    suffix = file_path.suffix.lower()
-
-    if suffix == ".zip":
-        return await anyio.to_thread.run_sync(_extract_submission_zip, file_path)
-    if suffix == ".gz":
-        return await anyio.to_thread.run_sync(_extract_submission_gz, file_path)
-    return await anyio.to_thread.run_sync(_read_single_submission_file, file_path)
-
-
-def _read_single_submission_file(file_path: Path) -> SubmissionContent:
-    """Read a single text file into a :class:`SubmissionContent`."""
-    content = _submission_read_text_file(file_path)
-    fc = FileContent(
-        filename=file_path.name,
-        content=content,
-        size=len(content.encode("utf-8")),
-    )
-    return SubmissionContent(files=[fc], total_size=fc.size)
-
-
-def _extract_submission_zip(file_path: Path) -> SubmissionContent:
-    """Extract a ZIP archive with decompression bomb protection."""
-    settings = get_settings()
-    max_bytes = settings.safety_archive_max_uncompressed_mb * 1024 * 1024
-    max_files = settings.safety_archive_max_files
-    max_nesting = settings.safety_archive_max_nesting
-
-    try:
-        with zipfile.ZipFile(file_path, "r") as zf:
-            warnings: list[SecurityWarning] = []
-
-            # Check for nested archives
-            for info in zf.infolist():
-                nested_suffix = PurePosixPath(info.filename).suffix.lower()
-                if (
-                    nested_suffix in (".zip", ".gz", ".tar", ".bz2", ".xz")
-                    and max_nesting < 2
-                ):
-                    raise SecurityRejectedError(
-                        ErrorCategory.ARCHIVE_BOMB,
-                        (
-                            f"nested archive detected: {info.filename}; "
-                            f"max nesting depth: {max_nesting}"
-                        ),
-                    )
-
-            # Filter symlinks and collect warnings
-            all_entries = [i for i in zf.infolist() if not i.is_dir()]
-            infos: list[zipfile.ZipInfo] = []
-            for entry in all_entries:
-                if _submission_is_zip_symlink(entry):
-                    warnings.append(
-                        SecurityWarning(
-                            violation_type="symlink",
-                            message=f"Symlink entry skipped: {entry.filename}",
-                            raw_filename=entry.filename,
-                        )
-                    )
-                    continue
-                infos.append(entry)
-
-            if len(infos) > max_files:
-                raise SecurityRejectedError(
-                    ErrorCategory.ARCHIVE_BOMB,
-                    (f"archive contains {len(infos)} files; max allowed: {max_files}"),
-                )
-
-            # Check total uncompressed size
-            total_uncompressed = sum(i.file_size for i in infos)
-            if total_uncompressed > max_bytes:
-                raise SecurityRejectedError(
-                    ErrorCategory.ARCHIVE_BOMB,
-                    (
-                        f"archive uncompressed size {total_uncompressed} "
-                        f"bytes exceeds limit {max_bytes} bytes"
-                    ),
-                )
-
-            files: list[FileContent] = []
-            total_size = 0
-
-            for info in infos:
-                safe_name = _submission_sanitize_filename(info.filename)
-                if safe_name is None:
-                    warnings.append(
-                        SecurityWarning(
-                            violation_type="path_traversal",
-                            message=(f"Entry resolves to empty path: {info.filename}"),
-                            raw_filename=info.filename,
-                        )
-                    )
-                    continue
-
-                if safe_name != info.filename:
-                    warnings.append(
-                        SecurityWarning(
-                            violation_type="path_traversal",
-                            message=(
-                                f"Path traversal sanitized: "
-                                f"{info.filename} -> {safe_name}"
-                            ),
-                            raw_filename=info.filename,
-                            filename=safe_name,
-                        )
-                    )
-
-                if not _submission_is_text_file(safe_name):
-                    logger.debug(
-                        "skipping_non_text_file",
-                        filename=safe_name,
-                    )
-                    continue
-
-                raw = zf.read(info.filename)
-                total_size += len(raw)
-
-                if total_size > max_bytes:
-                    raise SecurityRejectedError(
-                        ErrorCategory.ARCHIVE_BOMB,
-                        (
-                            f"cumulative extracted size {total_size} bytes "
-                            f"exceeds limit {max_bytes} bytes"
-                        ),
-                    )
-
-                text = _submission_decode_bytes(raw)
-
-                files.append(
-                    FileContent(
-                        filename=safe_name,
-                        content=text,
-                        size=len(raw),
-                    )
-                )
-
-            return SubmissionContent(
-                files=files,
-                total_size=total_size,
-                security_warnings=warnings,
-            )
-
-    except zipfile.BadZipFile as exc:
-        raise SecurityRejectedError(
-            ErrorCategory.ARCHIVE_VIOLATION,
-            f"invalid ZIP file: {exc}",
-        ) from exc
-
-
-def _extract_submission_gz(file_path: Path) -> SubmissionContent:
-    """Decompress a .gz file (single file compression)."""
-    settings = get_settings()
-    max_bytes = settings.safety_archive_max_uncompressed_mb * 1024 * 1024
-
-    try:
-        with gzip.open(file_path, "rb") as f:
-            raw = f.read(max_bytes + 1)
-
-        if len(raw) > max_bytes:
-            raise SecurityRejectedError(
-                ErrorCategory.ARCHIVE_BOMB,
-                f"decompressed size exceeds limit {max_bytes} bytes",
-            )
-
-        # Determine inner filename (strip .gz)
-        inner_name = file_path.stem
-        text = _submission_decode_bytes(raw)
-
-        fc = FileContent(filename=inner_name, content=text, size=len(raw))
-        return SubmissionContent(files=[fc], total_size=fc.size)
-
-    except gzip.BadGzipFile as exc:
-        raise SecurityRejectedError(
-            ErrorCategory.ARCHIVE_VIOLATION,
-            f"invalid gzip file: {exc}",
-        ) from exc

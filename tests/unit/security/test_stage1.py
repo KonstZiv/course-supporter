@@ -264,16 +264,25 @@ class TestArchiveExtraction:
         # Per-entry text content checks ran inside the archive.
         assert exc_info.value.category is ErrorCategory.PROMPT_INJECTION
 
-    def test_homework_bare_gz_rejected_as_malformed(self) -> None:
-        # ``.gz`` routed to tar.gz archive_kind; bare gzip is not a
-        # tar so the archive layer raises ARCHIVE_VIOLATION via the
-        # malformed-tar.gz path. This is the option-(i) narrowest
-        # behavior chosen for 0.6.
+    def test_homework_bare_gz_rejected_by_content_not_as_malformed(self) -> None:
+        # Inverted at gates §1.5. ``.gz`` routes to the tar.gz kind, and a bare
+        # gzip is not a tar -- but the gzip framing is perfectly valid, so
+        # "malformed archive" told the student their file was broken when it
+        # was merely the wrong shape. The content answer (MAGIC_MISMATCH) is
+        # the one that maps to an action: repack as .zip or .tar.gz.
         import gzip
 
         bare_gz = gzip.compress(b"hello world\n")
         with pytest.raises(SecurityRejectedError) as exc_info:
             run_stage1(filename="hw.gz", content=bare_gz, context="homework")
+        assert exc_info.value.category is ErrorCategory.MAGIC_MISMATCH
+
+    def test_homework_corrupt_gz_is_still_a_malformed_archive(self) -> None:
+        # The other side of the same split: when the gzip stream itself is
+        # broken, "malformed" is the truthful answer and must survive.
+        broken = b"\x1f\x8b\x08\x00" + b"\x00" * 40
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            run_stage1(filename="hw.gz", content=broken, context="homework")
         assert exc_info.value.category is ErrorCategory.ARCHIVE_VIOLATION
 
     def test_homework_zip_path_traversal_rejected(self) -> None:

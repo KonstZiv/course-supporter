@@ -12,7 +12,6 @@ from course_supporter.security.archive import (
     EntryVerdict,
     ExtractedFile,
     extract_archive_safely,
-    extract_submission_content,
 )
 from course_supporter.security.exceptions import (
     ErrorCategory,
@@ -82,7 +81,6 @@ __all__ = [
     "detect_mime_type",
     "extension_of",
     "extract_archive_safely",
-    "extract_submission_content",
     "get_max_size_for_extension",
     "match_text",
     "nfc_for_storage",

@@ -29,8 +29,12 @@ from typing import TYPE_CHECKING
 import structlog
 from fastapi import HTTPException, UploadFile
 
-from course_supporter.api.upload_validation import file_extension
+from course_supporter.api.upload_validation import (
+    PROJECT_ARCHIVE_MAX_UPLOAD_BYTES,
+    file_extension,
+)
 from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
@@ -52,31 +56,24 @@ logger = structlog.get_logger()
 # 10 MB max file size (single-file KD15 submissions).
 MAX_HOMEWORK_SIZE = 10 * 1024 * 1024
 
-# 100 MB raw-upload cap for a PROJECT submission (KD18 P3, Edit I-a). A project
-# submission is a superset of its base, so it mirrors the author base-attach
-# route's compressed cap (``documents._BASE_ARCHIVE_MAX_UPLOAD_BYTES``) rather
-# than the 10 MB single-file cap — an asymmetric cap would reject valid projects
-# the base itself passed. Distinct from the normalizer's UNPACK guard
-# (``_PROJECT_NORMALIZE_LIMITS``); this bounds the uploaded (compressed) bytes.
-PROJECT_SUBMISSION_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+# Raw-upload cap for a PROJECT submission (KD18 P3, Edit I-a). Re-exported from
+# its shared home (DD-6-Y) so existing callers keep the name they import.
+PROJECT_SUBMISSION_MAX_UPLOAD_BYTES = PROJECT_ARCHIVE_MAX_UPLOAD_BYTES
 
+# The door of the submission routes. DERIVED from the Stage 1 policy, not a
+# second list: the two disagreed in both directions until now -- eight
+# extensions were admitted here and refused by the worker, while ``tgz`` and
+# ``pdf`` were refused here and admitted there, so a student met either a
+# rejection with no explanation or a 422 for a format the system accepts.
+#
+# The two sides genuinely differ in SHAPE, not membership: this door reads
+# ``file_extension`` ("..py" -> ".py"), Stage 1 reads ``extension_of``
+# ("..py" -> "py"). The prefix transform is therefore explicit and one-way, and
+# ``TestDoorMatchesPolicy`` locks equality of the two sets AFTER normalisation
+# rather than textual identity -- comparing the raw sets would be green while
+# meaning nothing.
 ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
-    {
-        ".py",
-        ".js",
-        ".ts",
-        ".java",
-        ".c",
-        ".cpp",
-        ".cs",
-        ".sql",
-        ".md",
-        ".txt",
-        ".html",
-        ".ipynb",
-        ".zip",
-        ".gz",
-    }
+    f".{ext}" for ext in HOMEWORK_POLICY.allowed_extensions
 )
 
 

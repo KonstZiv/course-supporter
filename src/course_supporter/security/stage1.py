@@ -85,6 +85,8 @@ from course_supporter.security.normalization import (
     normalize_filename,
 )
 from course_supporter.security.policies import (
+    _PROSE,
+    CODE_EXTENSIONS,
     ContextPolicy,
     get_max_size_for_extension,
     policy_for,
@@ -92,14 +94,23 @@ from course_supporter.security.policies import (
 from course_supporter.security.regex_patterns import match_text
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
-# Extensions that should be decoded and run through the text
-# content pipeline (charset, unicode, regex). Narrowed deliberately:
-# .json / .csv / .xml / source-code formats other than .py / .ipynb
-# are NOT treated as text-content inputs in 0.6 -- they are either
-# excluded from policy whitelists or treated as binary blobs whose
-# contents do not need NFKC + regex pre-screen. Adding new entries
-# is explicit per audit.
-_TEXT_EXTENSIONS: frozenset[str] = frozenset({"txt", "md", "html", "py", "ipynb"})
+# Extensions decoded and run through the text content pipeline (charset,
+# unicode hard-reject, prompt-injection pre-screen).
+#
+# DERIVED, not listed. The 0.6 hand-written set ({txt, md, html, py, ipynb})
+# was the third, quietest member of the drift family DD-19-B names: it decides
+# not admission but whether an admitted file is SCREENED, so its incompleteness
+# failed open -- a .json / .yaml / .ts payload reached the model past the
+# unicode reject and past the injection pre-screen, silently. Deriving it from
+# the same CODE_EXTENSIONS the policy admits closes that by construction:
+# a format the student may send is a format that gets screened.
+#
+# The union is monotonic in the same one-directional sense as
+# ``normalizer/classify.py``'s ``_TEXT_EXTS``: widening CODE_EXTENSIONS widens
+# screening; nothing here narrows it. Locked by
+# ``TestTextExtensionsDerived`` (empty set difference), which guards the
+# CONSTRUCTION rather than the values.
+_TEXT_EXTENSIONS: frozenset[str] = _PROSE | CODE_EXTENSIONS
 
 # Charsets accepted when policy.enable_charset_strict is True. The
 # strict gate is the homework baseline -- modern submissions ship

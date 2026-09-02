@@ -18,10 +18,22 @@ documented in POST-MERGE-NOTES "Ratified whitelist drift" section).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel
+
+# DD-6-Y: one home for the raw-upload cap on a project archive (compressed
+# bytes). The author base-attach route and the student project-submission route
+# must carry the SAME number -- a submission is a superset of its base, so an
+# asymmetric cap would reject projects the base itself passed. The value lived
+# in two files, each with its own comment explaining it had to match the other;
+# that is a drift point, not a design. This module is the shared home because
+# both callers already depend on it and the direction stays route -> shared,
+# never route -> route. Distinct from the normalizer's UNPACK budget
+# (``_PROJECT_NORMALIZE_LIMITS``); this bounds the bytes as uploaded.
+PROJECT_ARCHIVE_MAX_UPLOAD_BYTES: Final[int] = 100 * 1024 * 1024
 
 
 def file_extension(filename: str | None) -> str:

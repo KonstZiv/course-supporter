@@ -28,9 +28,15 @@ driver for tenant-specific overrides emerges.
   5 GB for video, 200 MB unzipped / depth 1 for archives. LLM
   safety check enabled (KD-2.1-P defense-in-depth).
   Charset-strict off (legacy encodings tolerated).
-* **homework**: pdf/md/txt/py/ipynb/zip/gz/tgz. 1 MB cap. Archives
-  capped at 10 MB unzipped, 3 levels nesting. LLM safety check
-  enabled (Stage 2). Charset-strict on (modern UTF-8 baseline).
+* **homework**: prose (:data:`_PROSE`) + source code
+  (:data:`CODE_EXTENSIONS`) + containers (:data:`_ARCHIVES`) +
+  documents (:data:`_DOCUMENTS`), as a derived union rather than a
+  list; :data:`HOMEWORK_CONVEYORS` names the checking pipeline for
+  each. 1 MB cap. Archives capped at 10 MB unzipped, 3 levels
+  nesting. LLM safety check enabled (Stage 2). Charset-strict on
+  (modern UTF-8 baseline). See
+  ``refactoring-vision/sprint/tasks/student-path/gates/FORMATS.md``
+  for the ratified product statement behind each group.
 """
 
 from __future__ import annotations
@@ -245,20 +251,53 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
 )
 
 
+# ── Homework surface: four groups, one reason each ────────────────
+#
+# The product answer to "what may a student submit" is a UNION OF GROUPS,
+# not a list. A hand-written list is the class that produced four defects
+# out of four (DD-19-B): it drifts against its twins silently, and its
+# incompleteness degrades the result rather than raising. Each group below
+# carries the reason it exists; membership follows from the reason.
+#
+# gates/FORMATS.md is the ratified product statement these mirror.
+
+# Prose a student writes directly. ``markdown`` / ``rst`` deliberately
+# absent: no consumer, and ``rst`` would need a new family-map entry.
+_PROSE: Final[frozenset[str]] = frozenset({"md", "txt"})
+
+# Containers. ``gz`` is present because ``extension_of`` reduces
+# ``work.tar.gz`` to the token ``gz`` (lowest suffix only, by contract) --
+# admitting ``tar.gz`` therefore admits the token. A bare single-file gzip
+# is refused later, by content, not by extension.
+_ARCHIVES: Final[frozenset[str]] = frozenset({"zip", "gz", "tgz"})
+
+# Documents a student exports from the editor they have at home (Word,
+# Google Docs, Pages, LibreOffice). ``odt`` is absent by measurement, not
+# by preference: neither PyMuPDF nor python-docx opens it, so it would
+# need a third extraction branch.
+_DOCUMENTS: Final[frozenset[str]] = frozenset({"docx", "pdf"})
+
+Conveyor = Literal["text", "archive", "document"]
+
+# Which pipeline verifies each accepted format. Product policy ("may a
+# student send this?") and security mechanism ("how is it checked?") are
+# separate questions, so they are separate structures -- but every accepted
+# format must answer BOTH, which is what TestConveyorTable locks. Derived
+# from the same groups, so a format cannot enter the policy without also
+# acquiring a conveyor here.
+HOMEWORK_CONVEYORS: Final[dict[str, Conveyor]] = {
+    **{ext: "text" for ext in _PROSE | CODE_EXTENSIONS},
+    **{ext: "archive" for ext in _ARCHIVES},
+    **{ext: "document" for ext in _DOCUMENTS},
+}
+
+
 HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     name="homework",
-    allowed_extensions=frozenset(
-        {
-            "pdf",
-            "md",
-            "txt",
-            "py",
-            "ipynb",
-            "zip",
-            "gz",
-            "tgz",
-        }
-    ),
+    # Derived union, mirroring AUTHORED_POLICY's ``| CODE_EXTENSIONS`` form:
+    # widening CODE_EXTENSIONS widens the student surface automatically, and
+    # the two contours cannot drift apart by anyone forgetting a list.
+    allowed_extensions=_PROSE | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS,
     max_file_size_bytes=1 * 1024 * 1024,
     max_video_upload_bytes=None,
     max_video_download_bytes=None,

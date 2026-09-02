@@ -47,7 +47,10 @@ from course_supporter.api.schemas import (
     ProjectBaseManifestResponse,
     ProjectBaseStateResponse,
 )
-from course_supporter.api.upload_validation import check_platform
+from course_supporter.api.upload_validation import (
+    PROJECT_ARCHIVE_MAX_UPLOAD_BYTES,
+    check_platform,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
@@ -95,9 +98,11 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["documents"])
 
 # KD18 P2 (Decision 1, 1A): raw-upload size cap for an author base archive
-# (compressed bytes). Distinct from the shared _PROJECT_NORMALIZE_LIMITS, which
-# bound the UNPACK. Enforced by streaming cutoff (never buffer-then-check).
-_BASE_ARCHIVE_MAX_UPLOAD_BYTES: Final[int] = 100 * 1024 * 1024
+# (compressed bytes). Shared with the student project-submission route from one
+# home (DD-6-Y) — the two must not drift. Distinct from the shared
+# _PROJECT_NORMALIZE_LIMITS, which bound the UNPACK. Enforced by streaming
+# cutoff (never buffer-then-check).
+_BASE_ARCHIVE_MAX_UPLOAD_BYTES: Final[int] = PROJECT_ARCHIVE_MAX_UPLOAD_BYTES
 _BASE_UPLOAD_CHUNK_BYTES: Final[int] = 1024 * 1024
 
 

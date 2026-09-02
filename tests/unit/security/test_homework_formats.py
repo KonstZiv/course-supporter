@@ -23,11 +23,18 @@ from pathlib import Path
 import pytest
 from scripts.magic_format_gate import _builders
 
+from course_supporter.normalizer.extract import DefaultTextExtractor
+from course_supporter.normalizer.models import EntryClass
 from course_supporter.security.exceptions import SecurityRejectedError
 from course_supporter.security.policies import HOMEWORK_CONVEYORS, HOMEWORK_POLICY
 from course_supporter.security.stage1 import Stage1Result, run_stage1
 
 ACCEPTED = sorted(HOMEWORK_POLICY.allowed_extensions)
+
+
+def _doc_extractor(raw: bytes) -> str | None:
+    """The seam ``api/tasks.py`` wires in production."""
+    return DefaultTextExtractor().extract(EntryClass.DOCUMENT, raw)
 
 
 @pytest.fixture
@@ -53,7 +60,12 @@ def test_accepted_format_passes_stage1(
 ) -> None:
     content = sample(ext)
     try:
-        result = run_stage1(filename=f"work.{ext}", content=content, context="homework")
+        result = run_stage1(
+            filename=f"work.{ext}",
+            content=content,
+            context="homework",
+            document_extractor=_doc_extractor,
+        )
     except SecurityRejectedError as exc:  # pragma: no cover - failure detail
         pytest.fail(
             f"{ext!r} is accepted by HOMEWORK_POLICY but Stage 1 rejected a "
@@ -67,7 +79,12 @@ def test_accepted_format_passes_stage1(
 def test_accepted_format_reaches_its_conveyor(
     ext: str, sample: Callable[[str], bytes]
 ) -> None:
-    result = run_stage1(filename=f"work.{ext}", content=sample(ext), context="homework")
+    result = run_stage1(
+        filename=f"work.{ext}",
+        content=sample(ext),
+        context="homework",
+        document_extractor=_doc_extractor,
+    )
     conveyor = HOMEWORK_CONVEYORS[ext]
 
     if conveyor == "text":
@@ -85,9 +102,11 @@ def test_accepted_format_reaches_its_conveyor(
             "README.md",
         }
     else:
-        # The document conveyor itself lands with the extraction work; today
-        # Stage 1 only has to accept the file and identify it. Tightening this
-        # branch to assert extracted text is what proves that conveyor exists.
+        # Tightened once the conveyor existed (gates §1.6): a document is not
+        # merely accepted, its text is extracted and screened like any other
+        # text before anything reaches the model.
         assert conveyor == "document"
         assert result.detected_mime is not None
-        assert result.nfc_text is None
+        assert result.nfc_text is not None
+        assert result.nfc_text.strip() != ""
+        assert result.archive_entries is None

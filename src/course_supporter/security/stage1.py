@@ -59,6 +59,7 @@ validation is intentionally silent at this layer -- callers
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
@@ -186,6 +187,7 @@ def run_stage1(
     content: bytes,
     context: Literal["authored", "homework"],
     archive_skip_matcher: SkipMatcher | None = None,
+    document_extractor: DocumentTextExtractor | None = None,
 ) -> Stage1Result:
     """Run the synchronous Stage 1 pipeline; raise on first violation.
 
@@ -251,6 +253,8 @@ def run_stage1(
         verify_extension_matches_content(filename, content)
         detected_mime = detect_mime_type(content)
 
+        conveyor = None if policy.conveyors is None else policy.conveyors.get(ext)
+
         archive_kind = archive_kind_for_filename(filename)
         if archive_kind is not None:
             return _handle_archive_input(
@@ -262,6 +266,17 @@ def run_stage1(
                 policy=policy,
                 context=context,
                 skip_matcher=archive_skip_matcher,
+            )
+
+        if conveyor == "document":
+            return _handle_document_input(
+                filename=filename,
+                content=content,
+                extension=ext,
+                detected_mime=detected_mime,
+                policy=policy,
+                context=context,
+                extractor=document_extractor,
             )
 
         nfc_text: str | None = None
@@ -293,6 +308,14 @@ def run_stage1(
 
 
 # ── Archive handling ───────────────────────────────────────────────
+
+
+# Pulls review-facing text out of a document's raw bytes. Injected rather
+# than imported: the only implementation lives in the normalizer, which
+# already depends on this package, and importing it back would make the two
+# mutually dependent. Same seam as ``archive_skip_matcher`` -- the caller
+# supplies the normalizer-side collaborator (see ``api/tasks.py``).
+DocumentTextExtractor = Callable[[bytes], str | None]
 
 
 # Extractor verdicts that become a "not opened" record, mapped onto the one
@@ -393,6 +416,25 @@ def _handle_archive_input(
             continue
 
         entry_ext = extension_of(entry.arcname)
+
+        if policy.conveyors is not None and (
+            policy.conveyors.get(entry_ext) == "document"
+        ):
+            # A document is accepted on its own, not inside an archive. Running
+            # the extractor per member would multiply the surface (a bomb in
+            # any of N documents, N times the extraction) for a case nobody has
+            # actually submitted yet; without extraction its raw bytes decoded
+            # into the prompt would be mojibake the Mentor would try to grade.
+            # So it is named, with the action the student can take.
+            not_opened.append(
+                NotOpenedEntry(
+                    arcname=entry.arcname,
+                    reason=ErrorCategory.FORBIDDEN_TYPE,
+                    size=len(entry.content),
+                )
+            )
+            continue
+
         if _is_text_extension(entry_ext):
             try:
                 # Return value discarded -- inside-archive entries are handed
@@ -445,6 +487,116 @@ def _handle_archive_input(
         not_opened=tuple(not_opened),
         context=context,
     )
+
+
+def _handle_document_input(
+    *,
+    filename: str,
+    content: bytes,
+    extension: str,
+    detected_mime: str,
+    policy: ContextPolicy,
+    context: Literal["authored", "homework"],
+    extractor: DocumentTextExtractor | None,
+) -> Stage1Result:
+    """Pull a document's text out and screen it like any other text.
+
+    A student who does not live in a terminal writes their work in Word or
+    Google Docs and exports it; refusing that is refusing the work. What the
+    Mentor reads, though, must be text that went through the same gates as a
+    ``.md`` file -- otherwise a docx becomes the one way to put a
+    prompt-injection payload in front of the model unscreened.
+
+    Order matters: structure first, then extraction, then screening. A docx is
+    a zip, so it can carry a traversal or a bomb exactly like a submitted
+    archive can, and those are hostility signals that must fire before any
+    library is pointed at the bytes.
+    """
+    if extractor is None:
+        # A wiring bug, not a bad upload: the policy declares a document
+        # conveyor but the caller supplied nothing to run it with. Loud, and
+        # never reachable from user input.
+        raise ValueError(
+            f"context {context!r} routes {extension!r} to the document "
+            f"conveyor but no document_extractor was supplied"
+        )
+
+    if extension == "docx":
+        _screen_document_structure(content, policy=policy)
+
+    try:
+        text = extractor(content)
+    except Exception as exc:
+        # The extraction libraries raise their own vocabulary -- BadZipFile
+        # from a zip renamed to .docx, KeyError from a zip that is not an
+        # OOXML package, FileDataError from PyMuPDF. The family check upstream
+        # cannot catch these: a plain zip named .docx satisfies the docx family
+        # (which admits application/zip). Left unhandled they would surface as
+        # a 500 on a merely mislabelled upload, so they are answered as what
+        # they are -- the extension and the content disagree.
+        raise SecurityRejectedError(
+            ErrorCategory.MAGIC_MISMATCH,
+            f"{filename!r} is not a readable {extension}: {type(exc).__name__}",
+        ) from exc
+
+    if text is None or not text.strip():
+        # An image-only PDF (a phone photo of handwriting, a scan) extracts to
+        # page separators and nothing else -- ``'\n\n\n\n'`` for five pages,
+        # which is truthy. Testing ``.strip()`` rather than falsiness is the
+        # whole difference between refusing it and sending the Mentor an empty
+        # body at full price.
+        raise SecurityRejectedError(
+            ErrorCategory.EMPTY_DOCUMENT,
+            f"{filename!r} carries no extractable text",
+        )
+
+    return Stage1Result(
+        filename=nfc_for_storage(filename),
+        extension=extension,
+        detected_mime=detected_mime,
+        detected_charset=None,
+        nfc_text=_screen_text(text, filename=filename),
+        archive_entries=None,
+        context=context,
+    )
+
+
+def _screen_document_structure(content: bytes, *, policy: ContextPolicy) -> None:
+    """Run a docx through the archive structural guards, and nothing else.
+
+    Deliberately WITHOUT an entry allowlist: the OOXML parts of a real
+    document (``word/_rels/document.xml.rels`` and friends) are not the
+    student's files and have no business being judged against the submission
+    whitelist -- measured on a real docx, the strict mode dies on ``.rels``
+    before reading a word. The annotated mode gives exactly what is wanted
+    here: the structural guards (traversal, bomb, symlink, depth) still raise,
+    while the content verdicts become annotations this function discards. Only
+    the extracted text ever reaches the model, so what the parts are called
+    does not matter; what they might do to the extractor does.
+    """
+    if (
+        policy.max_archive_unzipped_bytes is None
+        or policy.max_archive_nesting_depth is None
+    ):
+        # Same defensive invariant as the archive branch: a context that
+        # accepts a docx without archive caps configured cannot be checked,
+        # and passing it on unchecked is the one thing not on offer.
+        raise SecurityRejectedError(
+            ErrorCategory.FORBIDDEN_TYPE,
+            (
+                f"document uploads not configured for context "
+                f"{policy.name!r}; internal policy invariant violation"
+            ),
+        )
+    for _ in extract_archive_safely(
+        content,
+        archive_kind="zip",
+        max_unzipped_size=policy.max_archive_unzipped_bytes,
+        max_nesting_depth=policy.max_archive_nesting_depth,
+        allowed_extensions=frozenset(),
+        classify=True,
+    ):
+        pass
 
 
 def archive_kind_for_filename(
@@ -559,6 +711,19 @@ def _run_text_content_checks(
             )
             text = content.decode("utf-8", errors="replace")
 
+    return _screen_text(text, filename=filename)
+
+
+def _screen_text(text: str, *, filename: str) -> str:
+    """Run the content half of the text pipeline and return NFC for storage.
+
+    Split out of :func:`_run_text_content_checks` so the document conveyor can
+    reuse it: a docx has no charset to gate and no bytes to decode -- its text
+    arrives already decoded from the extractor -- but everything from NFKC on
+    applies to it exactly as it does to a ``.py`` file. Duplicating these four
+    steps for documents would have been a second place to forget the unicode
+    reject.
+    """
     nfkc_text = nfkc_for_security(text)
     # DD-SP-E: a single leading U+FEFF is a legitimate UTF-8 byte-order mark
     # (the common source is a Google Docs "export as plain text", which

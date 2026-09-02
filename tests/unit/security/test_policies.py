@@ -218,13 +218,24 @@ class TestPresentationSizeResolver:
     def test_authored_policy_presentation_size_cap_50mb(self) -> None:
         assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
 
-    def test_homework_presentation_extension_returns_default(self) -> None:
-        # HOMEWORK has no presentation override (None) -- pdf falls back to
-        # the 1 MB default cap, not the authored 50 MB presentation cap.
+    def test_homework_presentation_extension_takes_the_document_cap(self) -> None:
+        # HOMEWORK has no presentation override (None), so pdf falls THROUGH
+        # it -- and lands on the document cap, not the text default: the
+        # conveyor table routes pdf to ``document``. The authored 50 MB
+        # presentation cap is untouched either way.
+        assert HOMEWORK_POLICY.max_presentation_size_bytes is None
         assert (
             get_max_size_for_extension("pdf", HOMEWORK_POLICY)
-            == HOMEWORK_POLICY.max_file_size_bytes
+            == HOMEWORK_POLICY.max_document_size_bytes
+            == 10 * 1024 * 1024
         )
+
+    def test_homework_document_cap_does_not_leak_onto_text(self) -> None:
+        for ext in ("md", "txt", "py", "zip"):
+            assert (
+                get_max_size_for_extension(ext, HOMEWORK_POLICY)
+                == HOMEWORK_POLICY.max_file_size_bytes
+            ), ext
 
     def test_ppt_in_authored_whitelist(self) -> None:
         assert "ppt" in AUTHORED_POLICY.allowed_extensions

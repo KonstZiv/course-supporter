@@ -121,6 +121,22 @@ def _bound_safety_text(text: str, *, log: Any) -> str:
     return bounded
 
 
+def _extract_document_text(raw: bytes) -> str | None:
+    """Stage 1's document seam, backed by the normalizer's extractor.
+
+    Supplied from here rather than imported inside ``security`` so the two
+    packages keep their one-way dependency: the normalizer already reads the
+    security policies, and importing it back would tie them together. The same
+    extractor serves the project-submission path (``homework/
+    project_submission.py``), so a docx cannot mean one thing there and
+    another here.
+    """
+    from course_supporter.normalizer.extract import DefaultTextExtractor
+    from course_supporter.normalizer.models import EntryClass
+
+    return DefaultTextExtractor().extract(EntryClass.DOCUMENT, raw)
+
+
 def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
     """Render the tail block naming the archive members that were not read.
 
@@ -957,6 +973,7 @@ async def arq_process_homework(
                             content=file_bytes,
                             context="homework",
                             archive_skip_matcher=denylist_prefix,
+                            document_extractor=_extract_document_text,
                         )
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult

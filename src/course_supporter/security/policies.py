@@ -41,6 +41,7 @@ driver for tenant-specific overrides emerges.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -162,6 +163,19 @@ class ContextPolicy:
         max_archive_nesting_depth: Maximum archive-within-archive
             recursion depth; ``None`` means archives are not allowed
             in this context.
+        max_document_size_bytes: Override cap for extensions the
+            conveyor table routes to ``document``. Documents are
+            PRIMARY formats here, not text files: a Word export with
+            two screenshots passes a megabyte without trying, and the
+            student has no way to make it smaller. They are bounded
+            like the archives they resemble; what reaches the model is
+            bounded separately, by the text budget. ``None`` means no
+            document override applies.
+        conveyors: Which pipeline verifies each accepted extension --
+            ``text`` / ``archive`` / ``document``. ``None`` means the
+            context runs no document conveyor: authored documents are
+            opened later by the ingestion processors, and Stage 1 has
+            no business extracting their text.
         enable_llm_safety_check: When ``True``, Stage 1 dispatches
             to Stage 2 LLM safety check after sync validation
             passes. Both authored and homework run Stage 2 post
@@ -194,6 +208,8 @@ class ContextPolicy:
     max_presentation_size_bytes: int | None
     max_archive_unzipped_bytes: int | None
     max_archive_nesting_depth: int | None
+    max_document_size_bytes: int | None
+    conveyors: Mapping[str, Conveyor] | None
     archive_soft_exclude: bool
     enable_llm_safety_check: bool
     enable_charset_strict: bool
@@ -258,6 +274,8 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # is excluded (classify mode), never recursed — bomb vector unreachable.
     max_archive_unzipped_bytes=200 * 1024 * 1024,
     max_archive_nesting_depth=1,
+    max_document_size_bytes=None,
+    conveyors=None,
     # Authored uploads stay all-or-nothing: the author is present, iterating,
     # and a half-read course archive is worse for them than a clear refusal.
     archive_soft_exclude=False,
@@ -319,6 +337,8 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     max_presentation_size_bytes=None,
     max_archive_unzipped_bytes=10 * 1024 * 1024,
     max_archive_nesting_depth=3,
+    max_document_size_bytes=10 * 1024 * 1024,
+    conveyors=HOMEWORK_CONVEYORS,
     archive_soft_exclude=True,
     enable_llm_safety_check=True,
     enable_charset_strict=True,
@@ -360,6 +380,11 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     * ``policy.max_presentation_size_bytes`` when the extension is in
       :data:`_PRESENTATION_EXTENSIONS` and the policy provides a
       presentation override.
+    * ``policy.max_document_size_bytes`` when the policy's conveyor
+      table routes the extension to ``document``. Keyed off the table
+      rather than a fourth hand-written extension set -- adding a
+      document format to the policy must not silently leave it on the
+      text cap.
     * ``policy.max_file_size_bytes`` otherwise.
 
     The extension argument is lower-cased internally for whitelist
@@ -373,4 +398,10 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
         and policy.max_presentation_size_bytes is not None
     ):
         return policy.max_presentation_size_bytes
+    if (
+        policy.conveyors is not None
+        and policy.conveyors.get(ext) == "document"
+        and policy.max_document_size_bytes is not None
+    ):
+        return policy.max_document_size_bytes
     return policy.max_file_size_bytes

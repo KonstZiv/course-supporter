@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -28,6 +28,7 @@ from course_supporter.service_logging import (
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
+    from course_supporter.security.schemas import NotOpenedEntry
     from course_supporter.storage.s3 import S3Client
 
 
@@ -118,6 +119,22 @@ def _bound_safety_text(text: str, *, log: Any) -> str:
         cap_bytes=_SAFETY_TEXT_MAX_BYTES,
     )
     return bounded
+
+
+def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
+    """Render the tail block naming the archive members that were not read.
+
+    Appended to ``submission_text`` so the Mentor cannot rest a review on a
+    partial reading without knowing it did. Deliberately shaped UNLIKE the
+    ``--- name ---`` file separator: a different frame, one block, and no body
+    after each name, so the model cannot mistake the list for more work to
+    grade. Reasons stay service keys — the Mentor is a black box here and its
+    prompts are not touched; the human wording lives on the portal.
+    """
+    if not entries:
+        return ""
+    lines = "\n".join(f"{e.arcname} · {e.reason.value} · {e.size}" for e in entries)
+    return f"\n\n=== NOT OPENED ({len(entries)}) ===\n{lines}\n"
 
 
 async def _ingest_on_terminal(
@@ -905,6 +922,11 @@ async def arq_process_homework(
                     and task_doc.task_type == AssignmentType.PROJECT.value
                 )
 
+                # Set aside by Stage 1's archive pass; empty for a project
+                # submission (its own normalizer reports exclusions) and for
+                # any non-archive single file.
+                not_opened: tuple[NotOpenedEntry, ...] = ()
+
                 if is_project:
                     project_text = await process_project_submission(
                         session=session,
@@ -984,6 +1006,8 @@ async def arq_process_homework(
                     # both None (binary like PDF) → best-effort UTF-8 decode
                     #   (legacy ``safety/archive._read_text_file`` parity).
                     if stage1_result.archive_entries is not None:
+                        # ``archive_entries`` carries only what was read, so
+                        # nothing set aside is decoded into the prompt here.
                         submission_text = "\n".join(
                             f"--- {entry.arcname} ---\n"
                             f"{entry.content.decode('utf-8', errors='replace')}"
@@ -993,6 +1017,9 @@ async def arq_process_homework(
                         submission_text = stage1_result.nfc_text
                     else:
                         submission_text = file_bytes.decode("utf-8", errors="replace")
+
+                    not_opened = stage1_result.not_opened
+                    submission_text += _not_opened_block(not_opened)
 
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).
@@ -1005,6 +1032,10 @@ async def arq_process_homework(
                     router=stage_router,
                     course_context=course_ctx,
                 )
+                # Carried onto the persisted verdict because this column is
+                # what the read path reads: a submission that PASSES must
+                # still be able to tell the student which files were skipped.
+                safety_result.not_opened = list(not_opened)
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )

@@ -168,6 +168,17 @@ class ContextPolicy:
             Phase 2.1 C6 (KD-2.1-P defense-in-depth — authored
             ingestion calls Stage 2 before Pass 2a to protect the
             downstream LLM from prompt injection in raw text).
+        archive_soft_exclude: When ``True``, an archive member the
+            checker cannot read is NAMED and set aside instead of
+            failing the whole upload, and an archive with nothing
+            readable left is rejected as empty rather than passed on.
+            Formatting problems (unknown extension, magic mismatch,
+            nested archive, non-UTF-8 text) are the student's mistake,
+            not an attack; a real project archive almost always holds
+            one. Deliberately does NOT soften the structural guards
+            (traversal, bomb, symlink, depth) or the two hostility
+            signals (unicode hard-reject, prompt-injection pre-screen)
+            — naming and skipping those would be a ready-made bypass.
         enable_charset_strict: When ``True``, Stage 1 rejects text
             content whose libmagic-detected charset is neither
             UTF-8 nor US-ASCII. Modern submissions baseline UTF-8;
@@ -183,6 +194,7 @@ class ContextPolicy:
     max_presentation_size_bytes: int | None
     max_archive_unzipped_bytes: int | None
     max_archive_nesting_depth: int | None
+    archive_soft_exclude: bool
     enable_llm_safety_check: bool
     enable_charset_strict: bool
 
@@ -246,6 +258,9 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # is excluded (classify mode), never recursed — bomb vector unreachable.
     max_archive_unzipped_bytes=200 * 1024 * 1024,
     max_archive_nesting_depth=1,
+    # Authored uploads stay all-or-nothing: the author is present, iterating,
+    # and a half-read course archive is worse for them than a clear refusal.
+    archive_soft_exclude=False,
     enable_llm_safety_check=True,
     enable_charset_strict=False,
 )
@@ -304,6 +319,7 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     max_presentation_size_bytes=None,
     max_archive_unzipped_bytes=10 * 1024 * 1024,
     max_archive_nesting_depth=3,
+    archive_soft_exclude=True,
     enable_llm_safety_check=True,
     enable_charset_strict=True,
 )

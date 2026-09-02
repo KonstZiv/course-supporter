@@ -61,6 +61,32 @@ class ViolationCategory(StrEnum):
     SUSPICIOUS_BEHAVIOR = "suspicious_behavior"
 
 
+class NotOpenedEntry(BaseModel):
+    """One archive member the checker did not read, and why.
+
+    A formatting problem in one file must not cost the student the whole
+    submission, so an unreadable member is NAMED rather than fatal: the rest
+    of the work is reviewed and this record says what was skipped. The
+    student sees it on the submission detail; the Mentor sees the same list
+    appended to the submission text, so a review cannot silently rest on a
+    partial reading.
+
+    ``reason`` is an :class:`ErrorCategory` rather than a free string so the
+    read path renders it from the one code table the rest of the surface
+    already uses, instead of growing a second vocabulary.
+
+    Denylist-skipped members (``__MACOSX/`` and friends) are deliberately
+    NOT recorded: they are packaging noise, not the student's content, and
+    listing them would bury the entries that matter.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    arcname: str
+    reason: ErrorCategory
+    size: int
+
+
 class SafetyResult(BaseModel):
     """Stage 2 safety classifier output parsed from LLM JSON.
 
@@ -92,6 +118,11 @@ class SafetyResult(BaseModel):
     violations: list[ViolationCategory]
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    # Stage 1 fact carried on the Stage 2 verdict because this column is what
+    # the read path reads: a passing submission must still be able to tell the
+    # student which of their files were not read. Empty for every non-archive
+    # submission and for archives read in full.
+    not_opened: list[NotOpenedEntry] = Field(default_factory=list)
 
 
 class Stage1RejectionResult(BaseModel):

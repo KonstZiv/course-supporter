@@ -112,6 +112,12 @@ class ErrorCategory(StrEnum):
     # NULL category (the seam-default invariant).
     EXTERNAL_SOURCE_UNAVAILABLE = "external_source_unavailable"
     PIPELINE_FAILURE = "pipeline_failure"
+    # An archive inside an archive is never opened (the bomb vector stays
+    # unreachable). ``EntryVerdict`` has carried this outcome since the
+    # classify mode existed, but only as an extractor-internal value; a
+    # submission that names the entry to the student needs it in the same
+    # code vocabulary as every other reason it shows.
+    NESTED_ARCHIVE = "nested_archive"
 
 
 class SecurityRejectedError(Exception):

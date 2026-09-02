@@ -59,12 +59,14 @@ validation is intentionally silent at this layer -- callers
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Final, Literal
 
 import structlog
 
 from course_supporter.security.archive import (
+    ClassifiedEntry,
+    EntryVerdict,
     ExtractedFile,
     SkipMatcher,
     extract_archive_safely,
@@ -92,6 +94,7 @@ from course_supporter.security.policies import (
     policy_for,
 )
 from course_supporter.security.regex_patterns import match_text
+from course_supporter.security.schemas import NotOpenedEntry
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 # Extensions decoded and run through the text content pipeline (charset,
@@ -150,11 +153,18 @@ class Stage1Result:
             and downstream LLM ingestion. Set only for non-archive
             inputs whose extension is in :data:`_TEXT_EXTENSIONS`;
             ``None`` for binary or archive inputs.
-        archive_entries: Tuple of every validated entry inside the
-            archive (recursively flattened, in archive-iteration
-            order). ``None`` for non-archive inputs; empty tuple
-            for archive inputs that are structurally valid but
-            contain no files (e.g. directory-only).
+        archive_entries: The archive members that were READ, in
+            archive-iteration order. ``None`` for non-archive inputs.
+            A strict context yields :class:`ExtractedFile`; a context
+            with ``archive_soft_exclude`` yields
+            :class:`ClassifiedEntry`. In both cases only members that
+            passed every check are here, so a caller may decode the
+            content of anything in this tuple without filtering
+            further. What was set aside is in :attr:`not_opened`.
+        not_opened: Members the checker did not read, each with its
+            reason. Always empty in a strict context (there an
+            unreadable member raises instead) and for non-archive
+            inputs.
         context: Active context discriminator -- echoed for
             downstream callers that compose Stage 1 with later
             stages and want a single object to pass through.
@@ -165,8 +175,9 @@ class Stage1Result:
     detected_mime: str
     detected_charset: str | None
     nfc_text: str | None
-    archive_entries: tuple[ExtractedFile, ...] | None
+    archive_entries: tuple[ExtractedFile | ClassifiedEntry, ...] | None
     context: Literal["authored", "homework"]
+    not_opened: tuple[NotOpenedEntry, ...] = field(default=())
 
 
 def run_stage1(
@@ -284,6 +295,16 @@ def run_stage1(
 # ── Archive handling ───────────────────────────────────────────────
 
 
+# Extractor verdicts that become a "not opened" record, mapped onto the one
+# code vocabulary the rest of the surface already uses. DENYLIST_SKIP is
+# absent on purpose (see the loop); INCLUDED never reaches here.
+_VERDICT_REASON: Final[dict[EntryVerdict, ErrorCategory]] = {
+    EntryVerdict.FORBIDDEN_TYPE: ErrorCategory.FORBIDDEN_TYPE,
+    EntryVerdict.MAGIC_MISMATCH: ErrorCategory.MAGIC_MISMATCH,
+    EntryVerdict.NESTED_ARCHIVE: ErrorCategory.NESTED_ARCHIVE,
+}
+
+
 def _handle_archive_input(
     *,
     filename: str,
@@ -320,29 +341,99 @@ def _handle_archive_input(
             ),
         )
 
-    entries = tuple(
-        extract_archive_safely(
-            content,
-            archive_kind=archive_kind,
-            max_unzipped_size=policy.max_archive_unzipped_bytes,
-            max_nesting_depth=policy.max_archive_nesting_depth,
-            allowed_extensions=policy.allowed_extensions,
-            skip_matcher=skip_matcher,
+    soft = policy.archive_soft_exclude
+    # ``classify`` is typed as a Literal on the overloads (it selects the
+    # yielded type), so the branch is explicit rather than a passed-through
+    # bool -- that is what keeps the two return types apart under --strict.
+    entries: tuple[ExtractedFile | ClassifiedEntry, ...]
+    if soft:
+        entries = tuple(
+            extract_archive_safely(
+                content,
+                archive_kind=archive_kind,
+                max_unzipped_size=policy.max_archive_unzipped_bytes,
+                max_nesting_depth=policy.max_archive_nesting_depth,
+                allowed_extensions=policy.allowed_extensions,
+                classify=True,
+                skip_matcher=skip_matcher,
+            )
         )
-    )
+    else:
+        entries = tuple(
+            extract_archive_safely(
+                content,
+                archive_kind=archive_kind,
+                max_unzipped_size=policy.max_archive_unzipped_bytes,
+                max_nesting_depth=policy.max_archive_nesting_depth,
+                allowed_extensions=policy.allowed_extensions,
+                skip_matcher=skip_matcher,
+            )
+        )
+
+    read: list[ExtractedFile | ClassifiedEntry] = []
+    not_opened: list[NotOpenedEntry] = []
 
     for entry in entries:
+        if (
+            isinstance(entry, ClassifiedEntry)
+            and entry.verdict is not EntryVerdict.INCLUDED
+        ):
+            if entry.verdict is EntryVerdict.DENYLIST_SKIP:
+                # Packaging noise (__MACOSX/, node_modules/ ...). Dropped
+                # rather than reported: naming it would bury the entries the
+                # student can actually act on.
+                continue
+            not_opened.append(
+                NotOpenedEntry(
+                    arcname=entry.arcname,
+                    reason=_VERDICT_REASON[entry.verdict],
+                    size=entry.declared_size,
+                )
+            )
+            continue
+
         entry_ext = extension_of(entry.arcname)
         if _is_text_extension(entry_ext):
-            # Return value discarded -- inside-archive entries are
-            # handed to downstream callers as raw bytes via
-            # archive_entries; the storage-side NFC pass happens
-            # there. Here we only enforce the validation gates.
-            _run_text_content_checks(
-                content=entry.content,
-                filename=entry.arcname,
-                enable_charset_strict=policy.enable_charset_strict,
-            )
+            try:
+                # Return value discarded -- inside-archive entries are handed
+                # to downstream callers as raw bytes via ``archive_entries``;
+                # the storage-side NFC pass happens there. Here we only
+                # enforce the validation gates.
+                _run_text_content_checks(
+                    content=entry.content,
+                    filename=entry.arcname,
+                    enable_charset_strict=policy.enable_charset_strict,
+                )
+            except SecurityRejectedError as exc:
+                # The split that defines the soft mode: a file saved in the
+                # wrong encoding is a formatting mistake, so it is set aside
+                # and the rest of the work is still reviewed. A unicode
+                # hard-reject or an injection hit is not a mistake, so it
+                # propagates and takes the whole submission with it --
+                # "name it and skip it" there would be a ready-made bypass.
+                if not (soft and exc.category is ErrorCategory.CHARSET_VIOLATION):
+                    raise
+                not_opened.append(
+                    NotOpenedEntry(
+                        arcname=entry.arcname,
+                        reason=ErrorCategory.CHARSET_VIOLATION,
+                        size=len(entry.content),
+                    )
+                )
+                continue
+
+        read.append(entry)
+
+    if soft and not read:
+        # Nothing survived. An empty body would buy a confident review of
+        # nothing, at full price; the student is told instead.
+        raise SecurityRejectedError(
+            ErrorCategory.EMPTY_DOCUMENT,
+            (
+                f"archive {filename!r} contains no readable file "
+                f"({len(not_opened)} set aside)"
+            ),
+        )
 
     return Stage1Result(
         filename=nfc_for_storage(filename),
@@ -350,7 +441,8 @@ def _handle_archive_input(
         detected_mime=detected_mime,
         detected_charset=None,
         nfc_text=None,
-        archive_entries=entries,
+        archive_entries=tuple(read),
+        not_opened=tuple(not_opened),
         context=context,
     )
 

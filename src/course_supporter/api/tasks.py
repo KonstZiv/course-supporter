@@ -982,11 +982,14 @@ async def arq_process_homework(
 
                     # --- KD14 Stage 2 — LLM safety classifier (canonical) ---
                     # Assemble submission_text per Stage 1 output shape:
-                    # archive_entries → concatenate entries with separators
-                    #   (legacy SubmissionContent.full_text parity);
+                    # archive_entries → concatenate the members that were
+                    #   read, each under its own ``--- name ---`` separator;
                     # nfc_text → use directly (NFC-normalized text body);
-                    # both None (binary like PDF) → best-effort UTF-8 decode
-                    #   (legacy ``safety/archive._read_text_file`` parity).
+                    # both None (binary like PDF) → best-effort UTF-8 decode.
+                    # The two "legacy parity" notes that stood here named
+                    # SubmissionContent.full_text and safety/archive as the
+                    # shapes being matched; both were deleted with the second
+                    # extractor (DD-6-S), so the parity they claimed is gone.
                     if stage1_result.archive_entries is not None:
                         # ``archive_entries`` carries only what was read, so
                         # nothing set aside is decoded into the prompt here.

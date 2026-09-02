@@ -43,12 +43,9 @@ from course_supporter.security.regex_patterns import (
 )
 from course_supporter.security.schemas import (
     CourseContext,
-    FileContent,
     SafetyResult,
     SecurityContext,
-    SecurityWarning,
     Stage1RejectionResult,
-    SubmissionContent,
     ViolationCategory,
 )
 from course_supporter.security.stage1 import Stage1Result, run_stage1
@@ -66,15 +63,12 @@ __all__ = [
     "EntryVerdict",
     "ErrorCategory",
     "ExtractedFile",
-    "FileContent",
     "SafetyResult",
     "SafetyValidationError",
     "SecurityContext",
     "SecurityRejectedError",
-    "SecurityWarning",
     "Stage1RejectionResult",
     "Stage1Result",
-    "SubmissionContent",
     "ViolationCategory",
     "check_text_unicode_safety",
     "detect_charset",

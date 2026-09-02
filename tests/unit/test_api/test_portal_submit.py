@@ -379,7 +379,9 @@ class TestPortalReadList:
         items = resp.json()
         assert len(items) == 1
         item = items[0]
-        # List item is light — no review_markdown, no internal trace.
+        # List item is light — no review_markdown, no internal trace. The
+        # ``rejection`` / ``not_opened`` pair is the reason code and the skipped
+        # files, both derived on read; neither carries the trace (gates §1.7).
         assert set(item) == {
             "id",
             "status",
@@ -387,6 +389,8 @@ class TestPortalReadList:
             "verdict",
             "created_at",
             "original_filename",
+            "rejection",
+            "not_opened",
         }
         assert item["verdict"] == {"passed": True, "correctness": "correct"}
         assert "review_markdown" not in item
@@ -486,6 +490,8 @@ class TestPortalReadDetail:
             "created_at",
             "original_filename",
             "delta",
+            "rejection",
+            "not_opened",
         }
         assert data["status"] == "completed"
         assert data["score"] == 87
@@ -498,8 +504,10 @@ class TestPortalReadDetail:
         assert "review_result" not in data
         assert "safety_result" not in data
         assert "sanity_result" not in data
+        assert "error_message" not in data
         assert "INTERNAL" not in body
         assert "denoised_score" not in body
+        assert "internal_flags" not in body
         assert "confidence" not in body
 
     async def test_verdict_none_until_reviewed(self, client: AsyncClient) -> None:
@@ -812,3 +820,143 @@ class TestPortalTaskBaseDownload:
         ):
             resp = await client.get(_base_url(uuid.uuid4()))
         assert resp.status_code == 404
+
+
+def _mock_terminal_submission(
+    *,
+    status: str,
+    safety_result: object = None,
+    error_message: str | None = None,
+) -> MagicMock:
+    sub = MagicMock()
+    sub.id = uuid.uuid4()
+    sub.status = status
+    sub.score = None
+    sub.review_markdown = None
+    sub.review_result = None
+    sub.safety_result = safety_result
+    sub.sanity_result = None
+    sub.error_message = error_message
+    sub.created_at = datetime.now(UTC)
+    sub.original_filename = "submission.zip"
+    sub.snapshot_manifest = None
+    sub.base_id = None
+    return sub
+
+
+class TestCuratedRejection:
+    """One code per outcome, read from whichever source decided it.
+
+    Three sources write a terminal outcome in three shapes (DD-SP-Q records
+    that the two families store it differently and why). The read path derives
+    the code rather than reading a fourth column that would have to be kept in
+    step — and never reads ``error_message``, which is a developer string.
+    """
+
+    def test_stage1_refusal_yields_its_category(self) -> None:
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="rejected",
+            safety_result={
+                "source": "stage1",
+                "is_safe": False,
+                "category": "magic_mismatch",
+                "detail": "extension 'zip' expects ('application/zip',) but …",
+            },
+            error_message="extension 'zip' expects ('application/zip',) but …",
+        )
+        rejection = curated_rejection(sub)
+        assert rejection is not None
+        assert rejection.code == "magic_mismatch"
+        # The curated detail is the filename, never the raiser's message.
+        assert rejection.details == "submission.zip"
+
+    def test_sanity_mismatch_yields_the_verdict(self) -> None:
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        rejection = curated_rejection(_mock_terminal_submission(status="mismatch"))
+        assert rejection is not None
+        assert rejection.code == "mismatch"
+
+    def test_stage2_refusal_yields_stage2_rejected(self) -> None:
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="rejected",
+            safety_result={
+                "source": "stage2",
+                "is_safe": False,
+                "violations": ["harmful_content"],
+                "reasoning": "INTERNAL classifier reasoning",
+            },
+        )
+        rejection = curated_rejection(sub)
+        assert rejection is not None
+        assert rejection.code == "stage2_rejected"
+
+    def test_stage2_pass_is_not_a_rejection(self) -> None:
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="completed",
+            safety_result={"source": "stage2", "is_safe": True, "violations": []},
+        )
+        assert curated_rejection(sub) is None
+
+    def test_unknown_source_falls_back_to_the_status_phrase(self) -> None:
+        # A normalizer rejection (DD-6-Z): no honest code to derive, so none is
+        # invented and the interface keeps using its status phrase.
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="rejected",
+            safety_result={"source": "normalizer", "reason": "unpack failed"},
+        )
+        assert curated_rejection(sub) is None
+
+
+class TestCuratedNotOpened:
+    def test_listed_on_a_passing_submission(self) -> None:
+        # The whole point: a review that rested on part of the work must say so
+        # even when it passed.
+        from course_supporter.api.routes._portal_shared import curated_not_opened
+
+        sub = _mock_terminal_submission(
+            status="completed",
+            safety_result={
+                "source": "stage2",
+                "is_safe": True,
+                "violations": [],
+                "not_opened": [
+                    {"arcname": ".gitignore", "reason": "forbidden_type", "size": 40},
+                    {"arcname": "logo.png", "reason": "forbidden_type", "size": 2048},
+                ],
+            },
+        )
+        entries = curated_not_opened(sub)
+        assert [e.path for e in entries] == [".gitignore", "logo.png"]
+        assert entries[1].size == 2048
+
+    def test_empty_when_everything_was_read(self) -> None:
+        from course_supporter.api.routes._portal_shared import curated_not_opened
+
+        sub = _mock_terminal_submission(
+            status="completed",
+            safety_result={"source": "stage2", "is_safe": True, "violations": []},
+        )
+        assert curated_not_opened(sub) == []
+
+    def test_malformed_records_are_skipped_not_crashed_on(self) -> None:
+        # ``safety_result`` is free-form JSONB written by older code too; a row
+        # that does not match the shape must not take the read path down.
+        from course_supporter.api.routes._portal_shared import curated_not_opened
+
+        sub = _mock_terminal_submission(
+            status="completed",
+            safety_result={
+                "source": "stage2",
+                "not_opened": ["a string", {"arcname": "ok.png"}, None],
+            },
+        )
+        assert curated_not_opened(sub) == []

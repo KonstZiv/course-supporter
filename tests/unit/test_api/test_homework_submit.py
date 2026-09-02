@@ -339,7 +339,12 @@ class TestSubmitHomework:
             },
         )
         assert resp.status_code == 422
-        assert "'.exe' is not allowed" in resp.json()["detail"]
+        # gates §1.7: the door answers with a code the interface can phrase,
+        # not a sentence it has to show verbatim. ``details`` is the fallback
+        # for a code the interface does not know yet.
+        detail = resp.json()["detail"]
+        assert detail["code"] == "forbidden_type"
+        assert ".exe" in detail["details"]
 
     async def test_course_node_not_found_returns_404(
         self,
@@ -613,7 +618,9 @@ class TestSubmitHomework:
                 },
             )
         assert resp.status_code == 422
-        assert "too large" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["code"] == "size_limit"
+        assert "larger than" in detail["details"]
         mock_s3.delete_object.assert_awaited_once()
 
     async def test_duplicate_file_returns_cached(

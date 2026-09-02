@@ -34,6 +34,7 @@ from course_supporter.api.upload_validation import (
     file_extension,
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -77,6 +78,28 @@ ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 
+def _door_refusal(code: ErrorCategory, details: str) -> dict[str, str]:
+    """Body shape for a refusal at the submission door.
+
+    ``{code, details}`` rather than a bare string, matching the project
+    preflight the interface already reads (``submissionCodes.ts``). The code is
+    an ``ErrorCategory`` value, the same vocabulary the read path returns for a
+    refusal decided later — a student meeting the same problem at the door and
+    in the worker should not meet two different words for it.
+
+    ``details`` is the fallback the interface shows when it does not recognise
+    the code yet; it never carries a library message.
+    """
+    return {"code": code.value, "details": details}
+
+
+def _too_large_details(max_upload_bytes: int) -> str:
+    return (
+        f"The file is larger than {max_upload_bytes // (1024 * 1024)} MB. "
+        f"Remove what the work does not need and submit again."
+    )
+
+
 def validate_homework_file(
     file: UploadFile, *, max_upload_bytes: int = MAX_HOMEWORK_SIZE
 ) -> None:
@@ -97,19 +120,20 @@ def validate_homework_file(
     if ext not in ALLOWED_HOMEWORK_EXTENSIONS:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"File extension '{ext}' is not allowed. "
-                f"Accepted: {sorted(ALLOWED_HOMEWORK_EXTENSIONS)}"
+            detail=_door_refusal(
+                ErrorCategory.FORBIDDEN_TYPE,
+                (
+                    f"File extension {ext!r} is not accepted. Send the work as "
+                    f"text, a document, code, or an archive."
+                ),
             ),
         )
 
     if file.size is not None and file.size > max_upload_bytes:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"File too large ({file.size} bytes). "
-                f"Maximum: {max_upload_bytes} bytes "
-                f"({max_upload_bytes // (1024 * 1024)} MB)."
+            detail=_door_refusal(
+                ErrorCategory.SIZE_LIMIT, _too_large_details(max_upload_bytes)
             ),
         )
 
@@ -303,10 +327,8 @@ async def create_and_dispatch_submission(
         await s3.delete_object(key)
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"File too large ({uploaded_bytes} bytes). "
-                f"Maximum: {max_upload_bytes} bytes "
-                f"({max_upload_bytes // (1024 * 1024)} MB)."
+            detail=_door_refusal(
+                ErrorCategory.SIZE_LIMIT, _too_large_details(max_upload_bytes)
             ),
         )
 

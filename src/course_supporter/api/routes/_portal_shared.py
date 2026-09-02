@@ -10,8 +10,18 @@ logic is byte-identical to the prior ``portal_submissions._curated_verdict``.
 
 from __future__ import annotations
 
-from course_supporter.api.schemas import PortalVerdict
+from typing import TYPE_CHECKING
+
+from course_supporter.api.schemas import (
+    PortalNotOpened,
+    PortalRejection,
+    PortalVerdict,
+)
 from course_supporter.models.source import MaterialRole
+from course_supporter.security.exceptions import ErrorCategory
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import HomeworkSubmission
 
 
 def role_visible_to_student(material_role: str) -> bool:
@@ -54,6 +64,86 @@ def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | 
         passed=bool(verdict.get("passed", False)),
         correctness=str(verdict.get("correctness", "incorrect")),
     )
+
+
+def curated_rejection(
+    submission: HomeworkSubmission,
+) -> PortalRejection | None:
+    """Derive the caller-facing reason code, or ``None`` if there is none.
+
+    Three sources write a terminal outcome and each says "why" in its own
+    shape, so the code is read from whichever one applies rather than from a
+    fourth column that would have to be kept in step (``DD-SP-Q`` records the
+    choice and the debt of the two families differing):
+
+    * Stage 1 — ``safety_result`` with ``source='stage1'`` carries an
+      ``ErrorCategory`` in ``category``: the extension, the magic, the
+      encoding, the budget.
+    * Sanity — a ``mismatch`` status means the work did not answer the task;
+      the code is the verdict itself.
+    * Stage 2 — ``safety_result`` with ``source='stage2'`` and ``is_safe``
+      false is the LLM safety refusal.
+
+    Anything else (a normalizer rejection, ``DD-6-Z``) returns ``None`` and the
+    interface falls back to its status phrase — the same behaviour as today,
+    rather than inventing a code this function cannot honestly derive.
+
+    ``details`` carries only the filename. The internal ``error_message`` is
+    never read here: it is a developer string, and putting it on the wire is
+    exactly what ``DD-6-D`` forbids.
+    """
+    if submission.status == "mismatch":
+        return PortalRejection(code="mismatch", details=submission.original_filename)
+
+    safety = submission.safety_result
+    if not isinstance(safety, dict):
+        return None
+
+    source = safety.get("source")
+    if source == "stage1":
+        category = safety.get("category")
+        if isinstance(category, str):
+            return PortalRejection(code=category, details=submission.original_filename)
+        return None
+    if source == "stage2" and safety.get("is_safe") is False:
+        return PortalRejection(
+            code=ErrorCategory.STAGE2_REJECTED.value,
+            details=submission.original_filename,
+        )
+    return None
+
+
+def curated_not_opened(
+    submission: HomeworkSubmission,
+) -> list[PortalNotOpened]:
+    """List the files the checker skipped, on a passing attempt as on a refused one.
+
+    Read from ``safety_result``, where Stage 1 recorded them alongside the
+    verdict. A student whose archive was reviewed still needs to know that
+    three of their files were not part of that review.
+    """
+    safety = submission.safety_result
+    if not isinstance(safety, dict):
+        return []
+    raw = safety.get("not_opened")
+    if not isinstance(raw, list):
+        return []
+    out: list[PortalNotOpened] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        arcname, reason, size = (
+            item.get("arcname"),
+            item.get("reason"),
+            item.get("size"),
+        )
+        if (
+            isinstance(arcname, str)
+            and isinstance(reason, str)
+            and isinstance(size, int)
+        ):
+            out.append(PortalNotOpened(path=arcname, reason=reason, size=size))
+    return out
 
 
 def material_label(*, filename: str | None, source_type: str, order: int) -> str:

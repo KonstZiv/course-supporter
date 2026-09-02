@@ -8,19 +8,37 @@ Vision conformance for the §KD14 policy table:
 * :class:`TestVideoSizeResolver` -- ``get_max_size_for_extension``.
 * :class:`TestPolicyConsistency` -- regression guard against drift
   between policy whitelists and the file_type MIME map.
+* :class:`TestConveyorTable` -- every accepted format names a checking
+  pipeline, and only accepted formats do.
+* :class:`TestDoorMatchesPolicy` -- route door == Stage 1 policy after
+  the prefix transform.
+* :class:`TestTextExtensionsDerived` -- everything admitted as text is
+  screened as text.
 """
 
 import pytest
 
+# ``homework.submission_core`` imports ``api.upload_validation``, and
+# ``api/__init__`` eagerly imports the FastAPI app -- so importing the door
+# module first hits a circular import. The cycle is pre-existing (identical on
+# eae1c7d, not introduced by the gates work); importing the api package up
+# front resolves the order without hiding it.
+import course_supporter.api  # noqa: F401
+from course_supporter.homework.submission_core import ALLOWED_HOMEWORK_EXTENSIONS
 from course_supporter.security.file_type import _EXTENSION_TO_MIME_FAMILIES
 from course_supporter.security.policies import (
+    _ARCHIVES,
+    _DOCUMENTS,
+    _PROSE,
     AUTHORED_POLICY,
     CODE_EXTENSIONS,
+    HOMEWORK_CONVEYORS,
     HOMEWORK_POLICY,
     ContextPolicy,
     get_max_size_for_extension,
     policy_for,
 )
+from course_supporter.security.stage1 import _TEXT_EXTENSIONS
 
 # ── Authored policy ────────────────────────────────────────────────
 
@@ -88,10 +106,23 @@ class TestHomeworkPolicy:
     def test_name(self) -> None:
         assert HOMEWORK_POLICY.name == "homework"
 
-    def test_extensions_match_table(self) -> None:
-        assert HOMEWORK_POLICY.allowed_extensions == frozenset(
-            {"pdf", "md", "txt", "py", "ipynb", "zip", "gz", "tgz"}
+    def test_extensions_are_the_derived_union(self) -> None:
+        # Was a literal eight-item list; now the union it is built from. The
+        # assertion moved from the VALUES to the CONSTRUCTION on purpose --
+        # re-listing the members here would recreate, inside the test, the
+        # hand-maintained twin the derived form exists to remove (DD-19-B).
+        assert HOMEWORK_POLICY.allowed_extensions == (
+            _PROSE | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS
         )
+
+    def test_groups_are_disjoint(self) -> None:
+        # Overlap would make a format's conveyor ambiguous: HOMEWORK_CONVEYORS
+        # is built by merging the group dicts, so a member of two groups would
+        # silently take whichever comes last.
+        groups = (_PROSE, CODE_EXTENSIONS, _ARCHIVES, _DOCUMENTS)
+        for i, first in enumerate(groups):
+            for second in groups[i + 1 :]:
+                assert first & second == set(), f"{first & second!r} in two groups"
 
     def test_no_video_extensions(self) -> None:
         # Homework context does not accept video uploads.
@@ -187,13 +218,34 @@ class TestPresentationSizeResolver:
     def test_authored_policy_presentation_size_cap_50mb(self) -> None:
         assert AUTHORED_POLICY.max_presentation_size_bytes == 50 * 1024 * 1024
 
-    def test_homework_presentation_extension_returns_default(self) -> None:
-        # HOMEWORK has no presentation override (None) -- pdf falls back to
-        # the 1 MB default cap, not the authored 50 MB presentation cap.
+    def test_homework_presentation_extension_takes_the_document_cap(self) -> None:
+        # HOMEWORK has no presentation override (None), so pdf falls THROUGH
+        # it -- and lands on the document cap, not the text default: the
+        # conveyor table routes pdf to ``document``. The authored 50 MB
+        # presentation cap is untouched either way.
+        assert HOMEWORK_POLICY.max_presentation_size_bytes is None
         assert (
             get_max_size_for_extension("pdf", HOMEWORK_POLICY)
-            == HOMEWORK_POLICY.max_file_size_bytes
+            == HOMEWORK_POLICY.max_primary_format_bytes
+            == 10 * 1024 * 1024
         )
+
+    def test_homework_primary_cap_covers_containers_too(self) -> None:
+        # Archives are primary formats by the same reasoning as documents:
+        # a project archive is the work, not one file inside it.
+        for ext in ("zip", "gz", "tgz"):
+            assert (
+                get_max_size_for_extension(ext, HOMEWORK_POLICY)
+                == HOMEWORK_POLICY.max_primary_format_bytes
+                == 10 * 1024 * 1024
+            ), ext
+
+    def test_homework_primary_cap_does_not_leak_onto_text(self) -> None:
+        for ext in ("md", "txt", "py", "ipynb"):
+            assert (
+                get_max_size_for_extension(ext, HOMEWORK_POLICY)
+                == HOMEWORK_POLICY.max_file_size_bytes
+            ), ext
 
     def test_ppt_in_authored_whitelist(self) -> None:
         assert "ppt" in AUTHORED_POLICY.allowed_extensions
@@ -267,3 +319,93 @@ class TestPolicyConsistency:
             f"their code (see _TEXT_EXTS = _NORMALIZER_TEXT_EXTS | "
             f"CODE_EXTENSIONS in normalizer/classify.py)"
         )
+
+
+# ── Derived-surface locks (gates, §1.2) ────────────────────────────
+
+
+class TestConveyorTable:
+    """Every accepted format names its checking pipeline, and only those.
+
+    The product question ("may a student send this?") and the security
+    question ("how is it verified?") live in two structures on purpose, so
+    the lock is that neither may answer without the other. It guards the
+    CONSTRUCTION: silencing it by adding a name to the table is impossible
+    without also naming a conveyor, which is the whole point.
+    """
+
+    def test_every_accepted_format_has_a_conveyor(self) -> None:
+        unrouted = HOMEWORK_POLICY.allowed_extensions - set(HOMEWORK_CONVEYORS)
+        assert unrouted == set(), (
+            f"accepted extensions {unrouted!r} have no conveyor; a format the "
+            f"student may send with no named way to check it is exactly what "
+            f"the table exists to forbid"
+        )
+
+    def test_no_conveyor_for_an_unaccepted_format(self) -> None:
+        orphans = set(HOMEWORK_CONVEYORS) - HOMEWORK_POLICY.allowed_extensions
+        assert orphans == set(), (
+            f"conveyors {orphans!r} route extensions no policy accepts — dead "
+            f"routing drifts into a false sense of coverage"
+        )
+
+    def test_lock_reddens_on_a_format_without_a_conveyor(self) -> None:
+        # The lock is only worth having if it actually fires. Prove the
+        # predicate on a policy widened past the table, rather than trusting
+        # that a tautology under the derived construction would catch drift.
+        widened = HOMEWORK_POLICY.allowed_extensions | {"rst"}
+        assert widened - set(HOMEWORK_CONVEYORS) == {"rst"}
+
+    def test_conveyor_values_are_the_three_known_pipelines(self) -> None:
+        assert set(HOMEWORK_CONVEYORS.values()) == {"text", "archive", "document"}
+
+
+class TestDoorMatchesPolicy:
+    """The route door and Stage 1 accept the same set, in two shapes.
+
+    They must not be compared textually: the door carries a leading dot
+    (``file_extension``) and the policy does not (``extension_of``). A
+    textual comparison would be green and meaningless, so the lock
+    normalises first — and separately pins that the shapes really do differ,
+    so the transform cannot quietly become a no-op.
+    """
+
+    def test_door_equals_policy_after_normalisation(self) -> None:
+        normalised = {ext.removeprefix(".") for ext in ALLOWED_HOMEWORK_EXTENSIONS}
+        assert normalised == HOMEWORK_POLICY.allowed_extensions, (
+            "the submission door and the Stage 1 policy disagree; a student "
+            "would meet either a 422 for a format the worker accepts, or a "
+            "silent worker rejection after a 202"
+        )
+
+    def test_door_carries_the_dot_prefix(self) -> None:
+        assert all(ext.startswith(".") for ext in ALLOWED_HOMEWORK_EXTENSIONS)
+        assert not any(
+            ext.startswith(".") for ext in HOMEWORK_POLICY.allowed_extensions
+        )
+
+
+class TestTextExtensionsDerived:
+    """Everything a student may send as text is screened as text.
+
+    Sibling of ``test_code_extensions_are_text_in_normalizer``: same empty
+    set difference, same reason. Here the failure mode is worse than a poor
+    review — an unscreened extension skips the unicode hard-reject and the
+    prompt-injection pre-screen entirely.
+    """
+
+    def test_every_code_extension_is_screened(self) -> None:
+        unscreened = CODE_EXTENSIONS - _TEXT_EXTENSIONS
+        assert unscreened == set(), (
+            f"code extensions {unscreened!r} are admitted but not run through "
+            f"the text content checks; they would reach the model past the "
+            f"unicode reject and the injection pre-screen (see _TEXT_EXTENSIONS "
+            f"= _PROSE | CODE_EXTENSIONS in security/stage1.py)"
+        )
+
+    def test_prose_is_screened(self) -> None:
+        assert _PROSE <= _TEXT_EXTENSIONS
+
+    def test_text_conveyor_and_screened_set_agree(self) -> None:
+        routed_as_text = {e for e, c in HOMEWORK_CONVEYORS.items() if c == "text"}
+        assert routed_as_text == _TEXT_EXTENSIONS

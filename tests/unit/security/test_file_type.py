@@ -370,8 +370,24 @@ class TestCodeExtensionsTextualInvariant:
             assert exc_info.value.category is ErrorCategory.MAGIC_MISMATCH, ext
 
     def test_typescript_family_is_the_regression_case(self) -> None:
-        # The three that shipped broken: libmagic calls them
-        # application/javascript, which the old ("text/",) table rejected.
+        # The three that shipped broken: the old ("text/",) family table
+        # rejected them because libmagic answers with a javascript type, not a
+        # text/* one — which is why code extensions are governed by the textual
+        # invariant instead of a family entry (see the sibling guard
+        # test_code_extensions_absent_from_family_map).
+        #
+        # The exact spelling of that answer is not stable across libmagic
+        # releases: 5.47 (the pinned image) says "application/javascript",
+        # 5.48 (homebrew, developer hosts) says "text/javascript" — and the
+        # whole js family moved together. Pinning one spelling made this test
+        # red on the dev machine while the invariant it guards was intact.
+        # Accept both; what must hold is that the answer is NOT a text/plain
+        # family match and that verification passes either way.
         for ext in ("ts", "tsx", "jsx"):
-            assert detect_mime_type(_CODE_FIXTURES[ext]) == "application/javascript"
+            detected = detect_mime_type(_CODE_FIXTURES[ext])
+            assert detected in {"application/javascript", "text/javascript"}, (
+                f"{ext}: unexpected libmagic answer {detected!r}; №17 is "
+                f"precisely that a hand-maintained family table cannot track "
+                f"this value across libmagic releases"
+            )
             verify_extension_matches_content(f"a.{ext}", _CODE_FIXTURES[ext])

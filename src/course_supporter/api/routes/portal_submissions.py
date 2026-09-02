@@ -30,6 +30,8 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.api.routes._portal_shared import (
+    curated_not_opened,
+    curated_rejection,
     curated_verdict,
     role_visible_to_student,
 )
@@ -308,6 +310,8 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
         verdict=curated_verdict(submission.review_result),
         created_at=submission.created_at,
         original_filename=submission.original_filename,
+        rejection=curated_rejection(submission),
+        not_opened=curated_not_opened(submission),
     )
 
 
@@ -380,6 +384,8 @@ def _to_detail(
         created_at=submission.created_at,
         original_filename=submission.original_filename,
         delta=delta,
+        rejection=curated_rejection(submission),
+        not_opened=curated_not_opened(submission),
     )
 
 

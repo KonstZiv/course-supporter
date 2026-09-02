@@ -23,16 +23,16 @@ Submission extraction + audit context (Phase 2.1 C2 migration per
 KD-2.1-I + KD-2.1-J + implementer discretion within KD-2.1-I body
 authorization):
 
-* :class:`FileContent`, :class:`SubmissionContent` -- Pydantic models
-  for archive-extraction output (formerly in ``models/safety.py``).
 * :class:`CourseContext` -- Pydantic model for Stage 2 prompt input
   (formerly in ``models/safety.py``).
 * :class:`SecurityContext` -- frozen dataclass for audit metadata
   attached to :class:`SecurityRejectedError` via ``.enrich()``
   (formerly in ``safety/exceptions.py``).
-* :class:`SecurityWarning` -- mutable dataclass for non-fatal security
-  observations collected during extraction (formerly in
-  ``safety/exceptions.py``).
+
+``FileContent`` / ``SubmissionContent`` / ``SecurityWarning`` lived here
+too, as the output shape of the legacy submission extractor. KD-1.2-K kept
+them while that transitional path existed; the path was deleted in DD-6-S,
+and with it the only thing that ever built them.
 """
 
 from __future__ import annotations
@@ -59,6 +59,32 @@ class ViolationCategory(StrEnum):
     OFF_TOPIC = "off_topic"
     POLICY_VIOLATION = "policy_violation"
     SUSPICIOUS_BEHAVIOR = "suspicious_behavior"
+
+
+class NotOpenedEntry(BaseModel):
+    """One archive member the checker did not read, and why.
+
+    A formatting problem in one file must not cost the student the whole
+    submission, so an unreadable member is NAMED rather than fatal: the rest
+    of the work is reviewed and this record says what was skipped. The
+    student sees it on the submission detail; the Mentor sees the same list
+    appended to the submission text, so a review cannot silently rest on a
+    partial reading.
+
+    ``reason`` is an :class:`ErrorCategory` rather than a free string so the
+    read path renders it from the one code table the rest of the surface
+    already uses, instead of growing a second vocabulary.
+
+    Denylist-skipped members (``__MACOSX/`` and friends) are deliberately
+    NOT recorded: they are packaging noise, not the student's content, and
+    listing them would bury the entries that matter.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    arcname: str
+    reason: ErrorCategory
+    size: int
 
 
 class SafetyResult(BaseModel):
@@ -92,6 +118,11 @@ class SafetyResult(BaseModel):
     violations: list[ViolationCategory]
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    # Stage 1 fact carried on the Stage 2 verdict because this column is what
+    # the read path reads: a passing submission must still be able to tell the
+    # student which of their files were not read. Empty for every non-archive
+    # submission and for archives read in full.
+    not_opened: list[NotOpenedEntry] = Field(default_factory=list)
 
 
 class Stage1RejectionResult(BaseModel):
@@ -125,16 +156,12 @@ class Stage1RejectionResult(BaseModel):
     detail: str
 
 
-# ── Submission extraction + audit context ─────────────────────────
+# ── Audit context + Stage 2 input ─────────────────────────────────
 #
 # Migrated 2026-05-11 (Phase 2.1 C2 per KD-2.1-H/I/J).
-# - FileContent / SubmissionContent / CourseContext: from
-#   models/safety.py (Pydantic models per KD-2.1-J).
-# - SecurityContext / SecurityWarning: from safety/exceptions.py
-#   (@dataclass data carriers per KD-2.1-I body authorization +
-#   implementer discretion: SecurityWarning is consumed by
-#   SubmissionContent.security_warnings field, so co-locating
-#   avoids backward canonical→legacy import dependency).
+# - CourseContext: from models/safety.py (Pydantic model per KD-2.1-J).
+# - SecurityContext: from safety/exceptions.py (@dataclass data carrier
+#   per KD-2.1-I body authorization).
 
 
 @dataclass(frozen=True)
@@ -162,69 +189,6 @@ class SecurityContext:
     def as_log_dict(self) -> dict[str, Any]:
         """Return non-None fields as a dict suitable for structlog binding."""
         return {k: str(v) for k, v in self.__dict__.items() if v is not None}
-
-
-@dataclass
-class SecurityWarning:
-    """Non-fatal security observation collected during extraction.
-
-    Migrated from ``safety/exceptions.py`` per Phase 2.1 C2 (implementer
-    discretion within KD-2.1-I scope — see module docstring). Mutable
-    dataclass — populated incrementally by
-    :func:`course_supporter.security.archive.extract_submission_content`
-    as it processes archive entries and emits per-entry observations
-    (symlinks skipped, path traversal sanitized).
-    """
-
-    violation_type: str
-    message: str
-    filename: str | None = None
-    raw_filename: str | None = None
-
-    def as_log_dict(self) -> dict[str, Any]:
-        """Structured payload for log emission."""
-        return {k: v for k, v in self.__dict__.items() if v is not None}
-
-
-class FileContent(BaseModel):
-    """Content of a single file extracted from a submission.
-
-    Migrated from ``models/safety.py`` per Phase 2.1 C2 (KD-2.1-J).
-    """
-
-    filename: str = Field(description="Filename or path within archive.")
-    content: str = Field(description="Text content of the file.")
-    size: int = Field(description="Size in bytes of the raw content.")
-
-
-class SubmissionContent(BaseModel):
-    """Aggregated content extracted from a homework submission.
-
-    Migrated from ``models/safety.py`` per Phase 2.1 C2 (KD-2.1-J).
-    ``security_warnings`` field is now typed as
-    ``list[SecurityWarning]`` (was ``list[Any]`` in legacy location) —
-    type-narrowing improvement enabled by SecurityWarning canonical
-    relocation.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    files: list[FileContent] = Field(description="Individual file contents.")
-    total_size: int = Field(description="Total size in bytes across all files.")
-    security_warnings: list[SecurityWarning] = Field(
-        default_factory=list,
-        description="Non-fatal security observations found during extraction.",
-        exclude=True,
-    )
-
-    @property
-    def full_text(self) -> str:
-        """Concatenate all file contents for analysis."""
-        parts: list[str] = []
-        for f in self.files:
-            parts.append(f"--- {f.filename} ---")
-            parts.append(f.content)
-        return "\n".join(parts)
 
 
 class CourseContext(BaseModel):

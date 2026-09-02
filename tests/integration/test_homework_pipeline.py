@@ -239,17 +239,9 @@ def _patch_pipeline(
             "course_supporter.security.stage1.run_stage1",
             new=MagicMock(
                 return_value=SimpleNamespace(
-                    archive_entries=None, nfc_text="def f(): return 1"
-                )
-            ),
-        )
-    )
-    stack.enter_context(
-        patch(
-            "course_supporter.security.archive.extract_submission_content",
-            new=AsyncMock(
-                return_value=SimpleNamespace(
-                    files=[], total_size=18, security_warnings=[]
+                    archive_entries=None,
+                    nfc_text="def f(): return 1",
+                    not_opened=(),
                 )
             ),
         )

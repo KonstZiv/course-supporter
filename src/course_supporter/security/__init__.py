@@ -12,7 +12,6 @@ from course_supporter.security.archive import (
     EntryVerdict,
     ExtractedFile,
     extract_archive_safely,
-    extract_submission_content,
 )
 from course_supporter.security.exceptions import (
     ErrorCategory,
@@ -44,12 +43,9 @@ from course_supporter.security.regex_patterns import (
 )
 from course_supporter.security.schemas import (
     CourseContext,
-    FileContent,
     SafetyResult,
     SecurityContext,
-    SecurityWarning,
     Stage1RejectionResult,
-    SubmissionContent,
     ViolationCategory,
 )
 from course_supporter.security.stage1 import Stage1Result, run_stage1
@@ -67,22 +63,18 @@ __all__ = [
     "EntryVerdict",
     "ErrorCategory",
     "ExtractedFile",
-    "FileContent",
     "SafetyResult",
     "SafetyValidationError",
     "SecurityContext",
     "SecurityRejectedError",
-    "SecurityWarning",
     "Stage1RejectionResult",
     "Stage1Result",
-    "SubmissionContent",
     "ViolationCategory",
     "check_text_unicode_safety",
     "detect_charset",
     "detect_mime_type",
     "extension_of",
     "extract_archive_safely",
-    "extract_submission_content",
     "get_max_size_for_extension",
     "match_text",
     "nfc_for_storage",

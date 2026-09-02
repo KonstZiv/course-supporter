@@ -28,13 +28,22 @@ driver for tenant-specific overrides emerges.
   5 GB for video, 200 MB unzipped / depth 1 for archives. LLM
   safety check enabled (KD-2.1-P defense-in-depth).
   Charset-strict off (legacy encodings tolerated).
-* **homework**: pdf/md/txt/py/ipynb/zip/gz/tgz. 1 MB cap. Archives
-  capped at 10 MB unzipped, 3 levels nesting. LLM safety check
-  enabled (Stage 2). Charset-strict on (modern UTF-8 baseline).
+* **homework**: prose (:data:`_PROSE`) + source code
+  (:data:`CODE_EXTENSIONS`) + containers (:data:`_ARCHIVES`) +
+  documents (:data:`_DOCUMENTS`), as a derived union rather than a
+  list; :data:`HOMEWORK_CONVEYORS` names the checking pipeline for
+  each. 1 MB cap on a prose or code file submitted on its own; 10 MB
+  on a primary format (an archive or a document), matching what the
+  route door accepts. Archives capped at 10 MB unzipped, 3 levels
+  nesting. LLM safety check enabled (Stage 2). Charset-strict on
+  (modern UTF-8 baseline). See
+  ``refactoring-vision/sprint/tasks/student-path/gates/FORMATS.md``
+  for the ratified product statement behind each group.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -156,12 +165,39 @@ class ContextPolicy:
         max_archive_nesting_depth: Maximum archive-within-archive
             recursion depth; ``None`` means archives are not allowed
             in this context.
+        max_primary_format_bytes: Override cap for extensions the
+            conveyor table routes to ``archive`` or ``document`` --
+            the PRIMARY formats, the ones a student submits as the
+            work itself rather than as one file inside it. A Word
+            export with two screenshots, or a project archive with a
+            virtual environment left in, passes a megabyte without
+            trying, and the student has no way to make it smaller.
+            They are bounded at the door size instead; what reaches
+            the model is bounded separately, by the text budget.
+            ``None`` means no primary-format override applies, and
+            everything falls back to ``max_file_size_bytes``.
+        conveyors: Which pipeline verifies each accepted extension --
+            ``text`` / ``archive`` / ``document``. ``None`` means the
+            context runs no document conveyor: authored documents are
+            opened later by the ingestion processors, and Stage 1 has
+            no business extracting their text.
         enable_llm_safety_check: When ``True``, Stage 1 dispatches
             to Stage 2 LLM safety check after sync validation
             passes. Both authored and homework run Stage 2 post
             Phase 2.1 C6 (KD-2.1-P defense-in-depth — authored
             ingestion calls Stage 2 before Pass 2a to protect the
             downstream LLM from prompt injection in raw text).
+        archive_soft_exclude: When ``True``, an archive member the
+            checker cannot read is NAMED and set aside instead of
+            failing the whole upload, and an archive with nothing
+            readable left is rejected as empty rather than passed on.
+            Formatting problems (unknown extension, magic mismatch,
+            nested archive, non-UTF-8 text) are the student's mistake,
+            not an attack; a real project archive almost always holds
+            one. Deliberately does NOT soften the structural guards
+            (traversal, bomb, symlink, depth) or the two hostility
+            signals (unicode hard-reject, prompt-injection pre-screen)
+            — naming and skipping those would be a ready-made bypass.
         enable_charset_strict: When ``True``, Stage 1 rejects text
             content whose libmagic-detected charset is neither
             UTF-8 nor US-ASCII. Modern submissions baseline UTF-8;
@@ -177,6 +213,9 @@ class ContextPolicy:
     max_presentation_size_bytes: int | None
     max_archive_unzipped_bytes: int | None
     max_archive_nesting_depth: int | None
+    max_primary_format_bytes: int | None
+    conveyors: Mapping[str, Conveyor] | None
+    archive_soft_exclude: bool
     enable_llm_safety_check: bool
     enable_charset_strict: bool
 
@@ -240,31 +279,76 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # is excluded (classify mode), never recursed — bomb vector unreachable.
     max_archive_unzipped_bytes=200 * 1024 * 1024,
     max_archive_nesting_depth=1,
+    max_primary_format_bytes=None,
+    conveyors=None,
+    # Authored uploads stay all-or-nothing: the author is present, iterating,
+    # and a half-read course archive is worse for them than a clear refusal.
+    archive_soft_exclude=False,
     enable_llm_safety_check=True,
     enable_charset_strict=False,
 )
 
 
+# ── Homework surface: four groups, one reason each ────────────────
+#
+# The product answer to "what may a student submit" is a UNION OF GROUPS,
+# not a list. A hand-written list is the class that produced four defects
+# out of four (DD-19-B): it drifts against its twins silently, and its
+# incompleteness degrades the result rather than raising. Each group below
+# carries the reason it exists; membership follows from the reason.
+#
+# gates/FORMATS.md is the ratified product statement these mirror.
+
+# Prose a student writes directly. ``markdown`` / ``rst`` deliberately
+# absent: no consumer, and ``rst`` would need a new family-map entry.
+_PROSE: Final[frozenset[str]] = frozenset({"md", "txt"})
+
+# Containers. ``gz`` is present because ``extension_of`` reduces
+# ``work.tar.gz`` to the token ``gz`` (lowest suffix only, by contract) --
+# admitting ``tar.gz`` therefore admits the token. A bare single-file gzip
+# is refused later, by content, not by extension.
+_ARCHIVES: Final[frozenset[str]] = frozenset({"zip", "gz", "tgz"})
+
+# Documents a student exports from the editor they have at home (Word,
+# Google Docs, Pages, LibreOffice). ``odt`` is absent by measurement, not
+# by preference: neither PyMuPDF nor python-docx opens it, so it would
+# need a third extraction branch.
+_DOCUMENTS: Final[frozenset[str]] = frozenset({"docx", "pdf"})
+
+Conveyor = Literal["text", "archive", "document"]
+
+# Which pipeline verifies each accepted format. Product policy ("may a
+# student send this?") and security mechanism ("how is it checked?") are
+# separate questions, so they are separate structures -- but every accepted
+# format must answer BOTH, which is what TestConveyorTable locks. Derived
+# from the same groups, so a format cannot enter the policy without also
+# acquiring a conveyor here.
+HOMEWORK_CONVEYORS: Final[dict[str, Conveyor]] = {
+    **{ext: "text" for ext in _PROSE | CODE_EXTENSIONS},
+    **{ext: "archive" for ext in _ARCHIVES},
+    **{ext: "document" for ext in _DOCUMENTS},
+}
+
+
 HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     name="homework",
-    allowed_extensions=frozenset(
-        {
-            "pdf",
-            "md",
-            "txt",
-            "py",
-            "ipynb",
-            "zip",
-            "gz",
-            "tgz",
-        }
-    ),
+    # Derived union, mirroring AUTHORED_POLICY's ``| CODE_EXTENSIONS`` form:
+    # widening CODE_EXTENSIONS widens the student surface automatically, and
+    # the two contours cannot drift apart by anyone forgetting a list.
+    allowed_extensions=_PROSE | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS,
     max_file_size_bytes=1 * 1024 * 1024,
     max_video_upload_bytes=None,
     max_video_download_bytes=None,
     max_presentation_size_bytes=None,
     max_archive_unzipped_bytes=10 * 1024 * 1024,
     max_archive_nesting_depth=3,
+    # The door accepts 10 MiB (``MAX_HOMEWORK_SIZE``); archives and documents
+    # are bounded by that same number, not by the 1 MiB per-text-file rule.
+    # The unzipped budget below is a separate, unchanged KD14 guard: a 10 MiB
+    # archive may still not expand past 10 MiB.
+    max_primary_format_bytes=10 * 1024 * 1024,
+    conveyors=HOMEWORK_CONVEYORS,
+    archive_soft_exclude=True,
     enable_llm_safety_check=True,
     enable_charset_strict=True,
 )
@@ -305,6 +389,11 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     * ``policy.max_presentation_size_bytes`` when the extension is in
       :data:`_PRESENTATION_EXTENSIONS` and the policy provides a
       presentation override.
+    * ``policy.max_primary_format_bytes`` when the policy's conveyor
+      table routes the extension to ``archive`` or ``document``. Keyed
+      off the table rather than a fourth hand-written extension set --
+      adding a container or a document format to the policy must not
+      silently leave it on the per-text-file cap.
     * ``policy.max_file_size_bytes`` otherwise.
 
     The extension argument is lower-cased internally for whitelist
@@ -318,4 +407,10 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
         and policy.max_presentation_size_bytes is not None
     ):
         return policy.max_presentation_size_bytes
+    if (
+        policy.conveyors is not None
+        and policy.conveyors.get(ext) in {"archive", "document"}
+        and policy.max_primary_format_bytes is not None
+    ):
+        return policy.max_primary_format_bytes
     return policy.max_file_size_bytes

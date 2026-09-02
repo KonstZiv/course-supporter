@@ -791,3 +791,58 @@ class TestBoundSafetyText:
         assert len(bounded.encode()) <= _SAFETY_TEXT_MAX_BYTES
         # No replacement chars from a split multi-byte sequence.
         assert "�" not in bounded
+
+
+class TestNotOpenedBlock:
+    """The tail block that tells the Mentor what it is NOT looking at.
+
+    A review that silently rests on a partial reading is worse than a
+    rejection: it grades work it never saw. The block exists so the omission
+    travels with the text.
+    """
+
+    def test_empty_when_nothing_was_set_aside(self) -> None:
+        from course_supporter.api.tasks import _not_opened_block
+
+        assert _not_opened_block(()) == ""
+
+    def test_names_each_entry_with_reason_and_size(self) -> None:
+        from course_supporter.api.tasks import _not_opened_block
+        from course_supporter.security.exceptions import ErrorCategory
+        from course_supporter.security.schemas import NotOpenedEntry
+
+        block = _not_opened_block(
+            (
+                NotOpenedEntry(
+                    arcname="assets/logo.png",
+                    reason=ErrorCategory.FORBIDDEN_TYPE,
+                    size=2048,
+                ),
+                NotOpenedEntry(
+                    arcname="notes.txt",
+                    reason=ErrorCategory.CHARSET_VIOLATION,
+                    size=17,
+                ),
+            )
+        )
+        assert "=== NOT OPENED (2) ===" in block
+        assert "assets/logo.png · forbidden_type · 2048" in block
+        assert "notes.txt · charset_violation · 17" in block
+
+    def test_frame_differs_from_the_file_separator(self) -> None:
+        # The body uses ``--- name ---`` per file. If the block reused that
+        # frame the model could read the skipped names as more work to grade,
+        # which is the opposite of the point.
+        from course_supporter.api.tasks import _not_opened_block
+        from course_supporter.security.exceptions import ErrorCategory
+        from course_supporter.security.schemas import NotOpenedEntry
+
+        block = _not_opened_block(
+            (
+                NotOpenedEntry(
+                    arcname="a.bin", reason=ErrorCategory.MAGIC_MISMATCH, size=1
+                ),
+            )
+        )
+        assert "--- a.bin ---" not in block
+        assert block.lstrip().startswith("=== NOT OPENED")

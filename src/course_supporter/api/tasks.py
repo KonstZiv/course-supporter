@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -28,6 +28,8 @@ from course_supporter.service_logging import (
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
+    from course_supporter.security.schemas import NotOpenedEntry
+    from course_supporter.security.stage1 import Stage1Result
     from course_supporter.storage.s3 import S3Client
 
 
@@ -118,6 +120,91 @@ def _bound_safety_text(text: str, *, log: Any) -> str:
         cap_bytes=_SAFETY_TEXT_MAX_BYTES,
     )
     return bounded
+
+
+def _extract_document_text(raw: bytes) -> str | None:
+    """Stage 1's document seam, backed by the normalizer's extractor.
+
+    Supplied from here rather than imported inside ``security`` so the two
+    packages keep their one-way dependency: the normalizer already reads the
+    security policies, and importing it back would tie them together. The same
+    extractor serves the project-submission path (``homework/
+    project_submission.py``), so a docx cannot mean one thing there and
+    another here.
+    """
+    from course_supporter.normalizer.extract import DefaultTextExtractor
+    from course_supporter.normalizer.models import EntryClass
+
+    return DefaultTextExtractor().extract(EntryClass.DOCUMENT, raw)
+
+
+def _assemble_submission_text(
+    result: Stage1Result, *, file_bytes: bytes, filename: str
+) -> tuple[str, tuple[NotOpenedEntry, ...]]:
+    """Build the text the Mentor reads, and the list of what it will not see.
+
+    Three shapes come out of Stage 1: an archive yields the members that were
+    read, a text or document input yields screened text, and anything else
+    falls back to a best-effort decode. All three are then bounded by what the
+    reading models can hold -- an archive by dropping the files that do not
+    fit, a single input by being refused outright, never by truncation. A
+    review of half a solution, presented as a review of the solution, is worse
+    than no review.
+
+    The block naming everything left out is appended last and covers both
+    reasons a file went unread: the checker could not open it, or it did not
+    fit.
+    """
+    from course_supporter.homework.text_budget import (
+        ensure_single_file_fits,
+        fit_archive_entries,
+        submission_text_budget_chars,
+    )
+    from course_supporter.security.exceptions import (
+        ErrorCategory,
+        SecurityRejectedError,
+    )
+
+    budget = submission_text_budget_chars()
+
+    if result.archive_entries is not None:
+        # ``archive_entries`` carries only what was read, so nothing set aside
+        # is decoded into the prompt here.
+        fitted = fit_archive_entries(result.archive_entries, budget_chars=budget)
+        body = fitted.text
+        not_opened = result.not_opened + fitted.over_budget
+        if not body:
+            # Everything the checker could read was then too large to read.
+            raise SecurityRejectedError(
+                ErrorCategory.OVER_BUDGET,
+                f"no file in {filename!r} fits the {budget}-character review",
+            )
+    else:
+        body = (
+            result.nfc_text
+            if result.nfc_text is not None
+            else file_bytes.decode("utf-8", errors="replace")
+        )
+        ensure_single_file_fits(body, filename=filename, budget_chars=budget)
+        not_opened = result.not_opened
+
+    return body + _not_opened_block(not_opened), not_opened
+
+
+def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
+    """Render the tail block naming the archive members that were not read.
+
+    Appended to ``submission_text`` so the Mentor cannot rest a review on a
+    partial reading without knowing it did. Deliberately shaped UNLIKE the
+    ``--- name ---`` file separator: a different frame, one block, and no body
+    after each name, so the model cannot mistake the list for more work to
+    grade. Reasons stay service keys — the Mentor is a black box here and its
+    prompts are not touched; the human wording lives on the portal.
+    """
+    if not entries:
+        return ""
+    lines = "\n".join(f"{e.arcname} · {e.reason.value} · {e.size}" for e in entries)
+    return f"\n\n=== NOT OPENED ({len(entries)}) ===\n{lines}\n"
 
 
 async def _ingest_on_terminal(
@@ -762,9 +849,15 @@ async def arq_process_homework(
     terminal" inversion — see the module tests).
 
     Orchestrates the full homework pipeline (KD13 / KD15):
-    safety → sanity → review → delivery. Safety and the sanity gate both
-    short-circuit to a terminal (``rejected`` / ``mismatch``) + webhook; only
-    submissions that clear both reach the Mentor review graph (T6).
+    Stage 1 → safety → sanity → review → delivery. Stage 1 is synchronous and
+    free: it decides what can be read at all (format, structure, encoding) and
+    what will fit the reading models, so a submission that cannot be reviewed
+    never costs a token. Its refusal, the Stage 2 safety verdict and the sanity
+    gate all short-circuit to a terminal (``rejected`` / ``mismatch``) +
+    webhook; only submissions that clear all three reach the Mentor review
+    graph (T6). What Stage 1 could not read is carried forward rather than
+    dropped — appended to ``submission_text`` so the review cannot rest on a
+    partial reading unknowingly, and persisted for the student to see.
 
     Args:
         ctx: ARQ worker context (session_factory, stage_router, s3_client).
@@ -786,7 +879,6 @@ async def arq_process_homework(
     )
     from course_supporter.models.source import AssignmentType
     from course_supporter.normalizer.classify import denylist_prefix
-    from course_supporter.security.archive import extract_submission_content
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import (
         CourseContext,
@@ -905,6 +997,11 @@ async def arq_process_homework(
                     and task_doc.task_type == AssignmentType.PROJECT.value
                 )
 
+                # Set aside by Stage 1's archive pass; empty for a project
+                # submission (its own normalizer reports exclusions) and for
+                # any non-archive single file.
+                not_opened: tuple[NotOpenedEntry, ...] = ()
+
                 if is_project:
                     project_text = await process_project_submission(
                         session=session,
@@ -923,23 +1020,6 @@ async def arq_process_homework(
                         return
                     submission_text = project_text
                 else:
-                    # Extract content (handles archives)
-                    content = await extract_submission_content(file_path)
-
-                    # Log non-fatal security warnings at WARNING level
-                    for sw in content.security_warnings:
-                        log.warning(
-                            "security_warning",
-                            **sw.as_log_dict(),
-                        )
-
-                    log.info(
-                        "homework_content_extracted",
-                        files=len(content.files),
-                        total_size=content.total_size,
-                        security_warnings=len(content.security_warnings),
-                    )
-
                     # --- KD14 Stage 1 — synchronous validation ---
                     # HOMEWORK_POLICY caps at 1 MB so the in-memory read above is
                     # safe (per Phase 1.2 §6.2 option a ratify).
@@ -953,6 +1033,17 @@ async def arq_process_homework(
                             content=file_bytes,
                             context="homework",
                             archive_skip_matcher=denylist_prefix,
+                            document_extractor=_extract_document_text,
+                        )
+                        # Assembled inside the same ``try`` deliberately: a
+                        # submission whose text will not fit the reading models
+                        # is refused the same way any other pre-LLM refusal is,
+                        # through the one handler below, rather than growing a
+                        # second persistence path for the same kind of answer.
+                        submission_text, not_opened = _assemble_submission_text(
+                            stage1_result,
+                            file_bytes=file_bytes,
+                            filename=(submission.original_filename or file_path.name),
                         )
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult
@@ -977,22 +1068,23 @@ async def arq_process_homework(
                         return
 
                     # --- KD14 Stage 2 — LLM safety classifier (canonical) ---
-                    # Assemble submission_text per Stage 1 output shape:
-                    # archive_entries → concatenate entries with separators
-                    #   (legacy SubmissionContent.full_text parity);
-                    # nfc_text → use directly (NFC-normalized text body);
-                    # both None (binary like PDF) → best-effort UTF-8 decode
-                    #   (legacy ``safety/archive._read_text_file`` parity).
-                    if stage1_result.archive_entries is not None:
-                        submission_text = "\n".join(
-                            f"--- {entry.arcname} ---\n"
-                            f"{entry.content.decode('utf-8', errors='replace')}"
-                            for entry in stage1_result.archive_entries
-                        )
-                    elif stage1_result.nfc_text is not None:
-                        submission_text = stage1_result.nfc_text
-                    else:
-                        submission_text = file_bytes.decode("utf-8", errors="replace")
+                    # Replaces the removed ``homework_content_extracted`` /
+                    # ``security_warning`` pair (DD-6-S): same question --
+                    # what did we actually read out of this upload -- now
+                    # answered from the single extractor's result.
+                    log.info(
+                        "homework_content_read",
+                        files=(
+                            0
+                            if stage1_result.archive_entries is None
+                            else len(stage1_result.archive_entries)
+                        ),
+                        total_size=sum(
+                            len(e.content)
+                            for e in (stage1_result.archive_entries or ())
+                        ),
+                        not_opened=len(not_opened),
+                    )
 
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).
@@ -1005,6 +1097,10 @@ async def arq_process_homework(
                     router=stage_router,
                     course_context=course_ctx,
                 )
+                # Carried onto the persisted verdict because this column is
+                # what the read path reads: a submission that PASSES must
+                # still be able to tell the student which files were skipped.
+                safety_result.not_opened = list(not_opened)
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )

@@ -452,5 +452,10 @@ class TestTaskAwareCap:
                 files={"file": ("big.py", b"x=1", "text/x-python")},
             )
         assert resp.status_code == 422
-        assert "too large" in resp.json()["detail"].lower()
+        # gates §1.7: the post-upload size re-check answers with the same
+        # {code, details} shape as the pre-upload one, and the same
+        # ErrorCategory vocabulary the read path uses.
+        detail = resp.json()["detail"]
+        assert detail["code"] == "size_limit"
+        assert "larger than" in detail["details"]
         s3_mock.delete_object.assert_awaited_once()

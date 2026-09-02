@@ -1444,6 +1444,41 @@ class PortalVerdict(BaseModel):
     )
 
 
+class PortalNotOpened(BaseModel):
+    """One file from the submission the checker did not read, and why.
+
+    Shown to the student on both a passing and a refused attempt: a review
+    that quietly rested on part of the work is the thing this exists to
+    prevent. ``reason`` is the same code vocabulary as
+    :class:`PortalRejection`, so the interface keeps one dictionary.
+    """
+
+    path: str = Field(description="Name of the file inside the archive.")
+    reason: str = Field(description="Why it was not read (ErrorCategory value).")
+    size: int = Field(description="Size in bytes, as declared by the archive.")
+
+
+class PortalRejection(BaseModel):
+    """Why an attempt was refused, in terms the interface can phrase.
+
+    Carries the CODE, never the internal message. ``DD-6-D`` forbade exposing
+    the trace and that stands: ``error_message`` is a developer string with
+    library vocabulary in it, and it is not serialized here or anywhere on the
+    portal. The review of that ban (ratified 2026-09-02) was narrow — the
+    prohibition is on technical detail, not on telling the student what
+    happened, and a stable code is what lets the interface say it in their
+    language.
+
+    ``details`` is only the short curated fact the phrase cannot know by
+    itself, such as which file it was.
+    """
+
+    code: str = Field(description="Reason code (ErrorCategory value or status).")
+    details: str | None = Field(
+        default=None, description="Curated short specifics — never the trace."
+    )
+
+
 class PortalSubmissionListItem(BaseModel):
     """One attempt in the read-path list (Phase 6 T2). NO review_markdown.
 
@@ -1458,6 +1493,13 @@ class PortalSubmissionListItem(BaseModel):
     verdict: PortalVerdict | None = Field(default=None)
     created_at: datetime
     original_filename: str | None = None
+    rejection: PortalRejection | None = Field(
+        default=None, description="Why the attempt was refused; null if it was not."
+    )
+    not_opened: list[PortalNotOpened] = Field(
+        default_factory=list,
+        description="Files skipped during checking — also on a passing attempt.",
+    )
 
 
 class PortalDeltaReceipt(BaseModel):
@@ -1515,6 +1557,13 @@ class PortalSubmissionDetail(BaseModel):
         default=None,
         description="I2 delta receipt (KD18 P5) for a project submission — "
         "counters + staleness; null for a non-project submission.",
+    )
+    rejection: PortalRejection | None = Field(
+        default=None, description="Why the attempt was refused; null if it was not."
+    )
+    not_opened: list[PortalNotOpened] = Field(
+        default_factory=list,
+        description="Files skipped during checking — also on a passing attempt.",
     )
 
 

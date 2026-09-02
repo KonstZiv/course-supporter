@@ -112,6 +112,18 @@ class ErrorCategory(StrEnum):
     # NULL category (the seam-default invariant).
     EXTERNAL_SOURCE_UNAVAILABLE = "external_source_unavailable"
     PIPELINE_FAILURE = "pipeline_failure"
+    # An archive inside an archive is never opened (the bomb vector stays
+    # unreachable). ``EntryVerdict`` has carried this outcome since the
+    # classify mode existed, but only as an extractor-internal value; a
+    # submission that names the entry to the student needs it in the same
+    # code vocabulary as every other reason it shows.
+    NESTED_ARCHIVE = "nested_archive"
+    # Distinct from SIZE_LIMIT on purpose: that one is about bytes at the
+    # door, this one about how much text the reading models can hold. A
+    # submission can be comfortably under the upload cap and still carry more
+    # text than the tightest context window accepts, and the two ask the
+    # student for different things.
+    OVER_BUDGET = "over_budget"
 
 
 class SecurityRejectedError(Exception):

@@ -32,7 +32,9 @@ driver for tenant-specific overrides emerges.
   (:data:`CODE_EXTENSIONS`) + containers (:data:`_ARCHIVES`) +
   documents (:data:`_DOCUMENTS`), as a derived union rather than a
   list; :data:`HOMEWORK_CONVEYORS` names the checking pipeline for
-  each. 1 MB cap. Archives capped at 10 MB unzipped, 3 levels
+  each. 1 MB cap on a prose or code file submitted on its own; 10 MB
+  on a primary format (an archive or a document), matching what the
+  route door accepts. Archives capped at 10 MB unzipped, 3 levels
   nesting. LLM safety check enabled (Stage 2). Charset-strict on
   (modern UTF-8 baseline). See
   ``refactoring-vision/sprint/tasks/student-path/gates/FORMATS.md``

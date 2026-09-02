@@ -849,9 +849,15 @@ async def arq_process_homework(
     terminal" inversion — see the module tests).
 
     Orchestrates the full homework pipeline (KD13 / KD15):
-    safety → sanity → review → delivery. Safety and the sanity gate both
-    short-circuit to a terminal (``rejected`` / ``mismatch``) + webhook; only
-    submissions that clear both reach the Mentor review graph (T6).
+    Stage 1 → safety → sanity → review → delivery. Stage 1 is synchronous and
+    free: it decides what can be read at all (format, structure, encoding) and
+    what will fit the reading models, so a submission that cannot be reviewed
+    never costs a token. Its refusal, the Stage 2 safety verdict and the sanity
+    gate all short-circuit to a terminal (``rejected`` / ``mismatch``) +
+    webhook; only submissions that clear all three reach the Mentor review
+    graph (T6). What Stage 1 could not read is carried forward rather than
+    dropped — appended to ``submission_text`` so the review cannot rest on a
+    partial reading unknowingly, and persisted for the student to see.
 
     Args:
         ctx: ARQ worker context (session_factory, stage_router, s3_client).

@@ -329,13 +329,16 @@ def extract_archive_safely(
     Raises:
         SecurityRejectedError: with ``ARCHIVE_VIOLATION`` on any
             structural violation (path traversal, bomb, symlink,
-            depth limit, encoding); ``FORBIDDEN_TYPE`` on whitelist
-            failure for a file inside the archive;
-            ``MAGIC_MISMATCH`` on extension/content disagreement
-            for a non-archive entry. In classify mode the three
-            content-level signals are demoted to annotated yields
-            (see below); the structural ``ARCHIVE_VIOLATION`` guards
-            still raise.
+            depth limit, encoding); ``ARCHIVE_BOMB`` when the member
+            count exceeds ``settings.safety_archive_max_files``;
+            ``MAGIC_MISMATCH`` when a ``tar.gz`` turns out to be a
+            bare single-file gzip rather than a tar, and on
+            extension/content disagreement for a non-archive entry;
+            ``FORBIDDEN_TYPE`` on whitelist failure for a file inside
+            the archive. In classify mode the three content-level
+            signals are demoted to annotated yields (see below); the
+            structural guards -- including the member-count ceiling --
+            still raise in both modes.
 
     Classify mode (``classify=True``, KD18 P1 KD-A): yields
     :class:`ClassifiedEntry` instead of :class:`ExtractedFile`.

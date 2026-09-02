@@ -2,8 +2,8 @@
 
 Single entry point for the security layer's pre-LLM gate. Composes
 the per-concern modules (size cap, magic detection, whitelist,
-archive extraction, charset, unicode hard-reject, regex pre-screen)
-behind one call:
+archive extraction, document text extraction, charset, unicode
+hard-reject, regex pre-screen) behind one call:
 
     >>> result = run_stage1(filename="hw.txt", content=b"...", context="homework")
 
@@ -17,16 +17,31 @@ runs only when ``run_stage1`` returns successfully.
 1. **Extension extraction** -- NFKC-normalized, lowest-suffix only.
 2. **Whitelist** -- ``policy.allowed_extensions`` membership.
 3. **Size cap** -- ``len(content)`` against the extension-specific
-   limit (video override applies inside ``get_max_size_for_extension``).
+   limit; ``get_max_size_for_extension`` resolves the video,
+   presentation and primary-format (archive / document) overrides.
 4. **Magic / extension match** -- ``verify_extension_matches_content``
    (also rejects empty content).
-5. **Archive recursion** -- if extension dispatches to an archive
-   kind, drain the iterator eagerly (all-or-nothing); each text
-   entry inside the archive is independently routed through the
-   text-content checks.
-6. **Text content checks** -- charset (when strict), three-tier
-   decode, NFKC, unicode hard-reject, regex pre-screen.
-7. **Build result** -- NFC text for storage on text inputs.
+5. **Conveyor dispatch** -- the policy's ``conveyors`` table decides
+   which of the three paths below the input takes. A context with no
+   table (authored) runs the archive and text paths only.
+
+   * **Archive** -- drain the iterator eagerly. All-or-nothing in a
+     strict context; with ``archive_soft_exclude`` an unreadable
+     member is instead recorded in ``not_opened`` and the rest is
+     read, and an archive with nothing readable left is refused as
+     ``EMPTY_DOCUMENT``. Structural guards raise in both modes.
+   * **Document** -- extract text through the injected
+     ``document_extractor``, then run the content half of the text
+     checks on the result. An empty extraction is refused as
+     ``EMPTY_DOCUMENT``.
+   * **Text** -- charset (when strict), three-tier decode, then the
+     content half below.
+
+6. **Text content checks** -- NFKC, single leading BOM strip, unicode
+   hard-reject, regex pre-screen (``_screen_text``, shared by the text
+   and document paths).
+7. **Build result** -- NFC text for storage; ``archive_entries`` for
+   what an archive yielded, ``not_opened`` for what it did not.
 
 ## Acceptance trade-off (vision-blocking)
 

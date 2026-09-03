@@ -20,6 +20,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: course-supporter-app
     restart: unless-stopped
     env_file: .env.prod
@@ -38,6 +40,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: course-supporter-worker
     restart: unless-stopped
     env_file: .env.prod
@@ -59,6 +63,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: course-supporter-homework-worker
     restart: unless-stopped
     env_file: .env.prod

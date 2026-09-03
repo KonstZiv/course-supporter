@@ -89,6 +89,15 @@ RUN python scripts/magic_format_gate.py --image app
 
 USER app
 
+# Identity carrier for the deploy gate. The workflow passes the commit it is
+# deploying; the gate then reads this label off every running container and
+# compares it with that commit, so a container silently left on an older image
+# turns the run red instead of passing unnoticed. The ``unknown`` default is
+# deliberate: a build without the arg must fail that comparison rather than
+# pass itself off as the target commit.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$GIT_SHA
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 

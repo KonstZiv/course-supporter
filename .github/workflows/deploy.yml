@@ -69,23 +69,45 @@ jobs:
             echo "=== Deploy ==="
             # Two commands on purpose. The first applies every compose change,
             # infrastructure services included, and returns once containers are
-            # started. The second waits — but only on the services that carry
-            # our code: netdata going unhealthy must not paint a deploy red, and
-            # postgres-cs and redis are already covered by the
-            # depends_on: service_healthy conditions of these three. For a
-            # container the first command left in place, the second is a wait
-            # and not a recreation. --wait replaces the former poll loop and
-            # aborts the moment a container reports unhealthy rather than
-            # waiting the timeout out, which is why the timeout equals the app
-            # image HEALTHCHECK start-period: the shorter of the two is the
-            # budget that actually applies.
+            # started. The second waits, and only on app, because compose
+            # refuses to wait on an explicitly named service that has no
+            # healthcheck — "container course-supporter-worker has no
+            # healthcheck configured", run 33746637125 — and both workers
+            # disable theirs in this compose file. Giving them one is a deferred
+            # debt; until then the running check below proves the narrower thing
+            # that is still enough: they are up, and on the target commit.
+            # netdata is left out so its health cannot paint a deploy red;
+            # postgres-cs and redis stay covered by the
+            # depends_on: service_healthy conditions. --wait aborts the moment a
+            # container reports unhealthy rather than waiting the timeout out,
+            # which is why the timeout equals the app image HEALTHCHECK
+            # start-period: the shorter of the two is the budget that applies.
             docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
-            if ! docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d --wait --wait-timeout 600 $BUILD_SERVICES; then
-              echo "Services did not become healthy." >&2
+            if ! docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d --wait --wait-timeout 600 app; then
+              echo "App did not become healthy." >&2
               # ps first: if a worker failed to come up, the app log is silent
               # and only the service table names the culprit.
               docker compose --env-file .env.prod -f docker-compose.prod.yaml ps
               docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail 60
+              exit 1
+            fi
+
+            echo "=== Running check ==="
+            # What --wait can no longer say about the workers. A container that
+            # exited, or was never created, has to fail here: the identity check
+            # below would still pass it, because docker inspect reads labels off
+            # stopped containers just as happily as off running ones.
+            RUNNING_FAILED=0
+            for svc in $BUILD_SERVICES; do
+              state=$(docker inspect --format='{{.State.Status}}' "course-supporter-$svc" 2>/dev/null || true)
+              echo "  $svc: ${state:-<missing>}"
+              if [ "$state" != "running" ]; then
+                RUNNING_FAILED=1
+              fi
+            done
+            if [ "$RUNNING_FAILED" -ne 0 ]; then
+              echo "Running check failed: a service is not running." >&2
+              docker compose --env-file .env.prod -f docker-compose.prod.yaml ps
               exit 1
             fi
 

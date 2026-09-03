@@ -98,11 +98,29 @@ USER app
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+# start-period shares one ceiling with the gate's --wait-timeout in deploy.yml,
+# and must not be shorter: compose --wait aborts the moment a container reports
+# unhealthy instead of waiting its timeout out (v2.39.1 carries the error
+# "container %s is unhealthy"), so a shorter start-period would cap the gate
+# below its own budget. Measured cold start on the 2026-09-02 deploy was
+# 250-280s from container start to the first successful probe; 600s is the
+# ceiling, not the expectation. Detection during normal operation is unchanged:
+# the first successful probe ends the start period, after which three failed
+# probes 30s apart still mark the container unhealthy within 90s.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
+# --timeout-worker-healthcheck raises uvicorn's supervisor ping timeout off its
+# 5s default. The parent pings each worker over a pipe and kills any that fails
+# to answer in time, logging only "Child process died"; on the 2026-09-02 deploy
+# that killed 24 consecutive children over 134s before one survived, while three
+# containers were importing the application at once. 120s is a ceiling chosen to
+# sit well above that contention window, not a measured value — the cause of the
+# ping failures is not proven. It costs nothing while workers answer: the timeout
+# only bounds how long a genuinely hung worker is left in place.
 CMD ["python", "-m", "uvicorn", "course_supporter.api:app", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "2", "--log-level", "info"]
+     "--workers", "2", "--log-level", "info", \
+     "--timeout-worker-healthcheck", "120"]

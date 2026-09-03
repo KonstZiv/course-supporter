@@ -13,45 +13,119 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 20m
+          command_timeout: 40m
           script: |
             set -e
             cd /opt/course-supporter
 
+            # The services that carry our code, named once so the sync check
+            # below and the build step cannot drift apart. A service present in
+            # compose but missing here is how homework-worker ran a stale image
+            # for three months (DD-SP-B); the check turns that class red.
+            BUILD_SERVICES="app worker homework-worker"
+
             echo "=== Pull latest ==="
             git pull origin main
+            # The commit every later step is judged against: it goes into the
+            # images as a label and is read back off the containers below.
+            GIT_SHA=$(git rev-parse HEAD)
+            export GIT_SHA
+            echo "Target commit: $GIT_SHA"
+
+            echo "=== Build list vs compose (DD-SP-O) ==="
+            # Services that declare a build section, read back from the resolved
+            # config. jq is not installed on this host, so awk walks the YAML.
+            COMPOSE_BUILDS=$(docker compose --env-file .env.prod -f docker-compose.prod.yaml config 2>/dev/null | awk '
+              /^services:/ {in_services=1; next}
+              in_services && /^[a-z]/ {in_services=0}
+              in_services && /^  [a-zA-Z0-9._-]+:$/ {svc=$1; sub(/:$/, "", svc); next}
+              in_services && /^    build:$/ {print svc}
+            ' | sort | tr '\n' ' ')
+            EXPECTED_BUILDS=$(printf '%s\n' $BUILD_SERVICES | sort | tr '\n' ' ')
+            if [ "$COMPOSE_BUILDS" != "$EXPECTED_BUILDS" ]; then
+              echo "Build list is out of sync with compose." >&2
+              echo "  compose services with a build section: $COMPOSE_BUILDS" >&2
+              echo "  build list in this workflow:           $EXPECTED_BUILDS" >&2
+              exit 1
+            fi
+            echo "In sync: $EXPECTED_BUILDS"
+
+            # Image ids before the deploy, so the gate can tell "deployed new
+            # code" from "there was nothing to deploy". A container that does
+            # not exist yet yields an empty id, which reads as changed.
+            IMAGES_BEFORE=""
+            for svc in $BUILD_SERVICES; do
+              id=$(docker inspect --format='{{.Image}}' "course-supporter-$svc" 2>/dev/null || true)
+              IMAGES_BEFORE="$IMAGES_BEFORE $svc=$id"
+            done
 
             echo "=== Build ==="
-            docker compose --env-file .env.prod -f docker-compose.prod.yaml build app worker homework-worker
+            docker compose --env-file .env.prod -f docker-compose.prod.yaml build $BUILD_SERVICES
 
             echo "=== Migrations (before app start) ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml run --rm -T app \
                 python -m alembic upgrade head
 
             echo "=== Deploy ==="
+            # Two commands on purpose. The first applies every compose change,
+            # infrastructure services included, and returns once containers are
+            # started. The second waits — but only on the services that carry
+            # our code: netdata going unhealthy must not paint a deploy red, and
+            # postgres-cs and redis are already covered by the
+            # depends_on: service_healthy conditions of these three. For a
+            # container the first command left in place, the second is a wait
+            # and not a recreation. --wait replaces the former poll loop and
+            # aborts the moment a container reports unhealthy rather than
+            # waiting the timeout out, which is why the timeout equals the app
+            # image HEALTHCHECK start-period: the shorter of the two is the
+            # budget that actually applies.
             docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
+            if ! docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d --wait --wait-timeout 600 $BUILD_SERVICES; then
+              echo "Services did not become healthy." >&2
+              # ps first: if a worker failed to come up, the app log is silent
+              # and only the service table names the culprit.
+              docker compose --env-file .env.prod -f docker-compose.prod.yaml ps
+              docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail 60
+              exit 1
+            fi
 
-            echo "=== Health check (via Docker health status) ==="
-            for i in $(seq 1 30); do
-              status=$(docker inspect --format='{{.State.Health.Status}}' course-supporter-app 2>/dev/null || echo "unknown")
-              if [ "$status" = "healthy" ]; then
-                echo "Application is healthy."
-                break
-              fi
-              echo "Waiting for healthy status... ($i/30) current=$status"
-              sleep 5
-              if [ "$i" -eq 30 ]; then
-                echo "Health check failed after 30 retries." >&2
-                docker compose --env-file .env.prod -f docker-compose.prod.yaml logs app --tail 30
-                exit 1
+            echo "=== Identity check ==="
+            # Healthy is not current: a container this deploy never touched is
+            # perfectly healthy. Only the label says which commit is running.
+            IDENTITY_FAILED=0
+            for svc in $BUILD_SERVICES; do
+              label=$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' "course-supporter-$svc" 2>/dev/null || true)
+              echo "  $svc: ${label:-<none>} (target $GIT_SHA)"
+              if [ "$label" != "$GIT_SHA" ]; then
+                IDENTITY_FAILED=1
               fi
             done
+            if [ "$IDENTITY_FAILED" -ne 0 ]; then
+              echo "Identity check failed: a container is not running $GIT_SHA." >&2
+              exit 1
+            fi
+
+            # Say which of the two green outcomes this was, so a run that
+            # replaced nothing cannot read as a deploy.
+            RECREATED=""
+            for svc in $BUILD_SERVICES; do
+              before=$(printf '%s\n' $IMAGES_BEFORE | grep "^$svc=" | cut -d= -f2- || true)
+              after=$(docker inspect --format='{{.Image}}' "course-supporter-$svc" 2>/dev/null || true)
+              if [ "$before" != "$after" ]; then
+                RECREATED="$RECREATED $svc"
+              fi
+            done
+            if [ -z "$RECREATED" ]; then
+              echo "Nothing to deploy: $BUILD_SERVICES already at $GIT_SHA"
+            else
+              echo "Recreated:$RECREATED"
+            fi
 
             echo "=== Cleanup ==="
             docker image prune -af --filter "until=24h"
             docker builder prune -af --filter "until=24h"
 
-            echo "=== Deploy complete: $(date) ==="
+            echo "=== Deploy complete: $GIT_SHA at $(date) ==="
 
       - name: Smoke test
         env:

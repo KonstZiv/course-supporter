@@ -13,14 +13,6 @@ Python backend service that:
 
 **Target architecture is in `../refactoring-vision/vision.md`.** The code you see in `src/` is mid-migration; it does not match vision yet.
 
-## Stack (unchanged by refactoring)
-
-- Python 3.13+, `src/` layout (`src/course_supporter/`)
-- FastAPI + async SQLAlchemy (psycopg v3) + ARQ workers
-- PostgreSQL 17 with pgvector, MinIO (S3-compatible), Redis
-- `uv` for dependency management, `ruff`, `mypy --strict`, `pytest` + `pytest-asyncio`
-- UUIDv7 primary keys (via `uuid-utils`)
-
 ## Commands (most-used)
 
 ```bash
@@ -103,18 +95,6 @@ The router (`llm/` module) implements the fallback ladder per KD7 + KD16:
 - **Semantic/truncation/empty:** fallback immediately.
 
 Every call — successful or not — creates an `ExternalServiceCall` row.
-
-## Directory orientation
-
-- `src/course_supporter/api/` — FastAPI routes, schemas.
-- `src/course_supporter/auth/` — API key + tenant context.
-- `src/course_supporter/ingestion/` — source processors (video/audio/presentation/text/web).
-- `src/course_supporter/agents/` — MethodistAgent, MentorAgent (+ previously ArchitectAgent/ReconcilerAgent which are being removed).
-- `src/course_supporter/llm/` — ModelRouter with ladder. Config in `config/ladders_*.yaml` (new).
-- `src/course_supporter/storage/` — ORM models + repository pattern.
-- `src/course_supporter/worker.py` — ARQ worker.
-- `prompts/` — prompt YAMLs per agent.
-- `migrations/` — Alembic.
 
 ## Archived documentation
 

@@ -43,7 +43,7 @@ def test_normalize_valid_iso_but_not_in_whitelist() -> None:
     with pytest.raises(LanguageNotAllowedError) as exc_info:
         normalize_and_validate("lat")
     assert exc_info.value.code == "lat"
-    assert exc_info.value.allowed_count == 57
+    assert exc_info.value.allowed_count == 58
 
 
 def test_chinese_macrolanguage_zh_is_rejected() -> None:
@@ -55,13 +55,13 @@ def test_chinese_macrolanguage_zh_is_rejected() -> None:
     assert exc_info.value.code == "zho"
 
 
-def test_list_allowed_returns_57_entries_with_english_names() -> None:
+def test_list_allowed_returns_58_entries_with_english_names() -> None:
     entries = list_allowed()
-    assert len(entries) == 57
+    assert len(entries) == 58
 
     codes = [e.code for e in entries]
     # Every code must be unique 3-letter lowercase.
-    assert len(set(codes)) == 57
+    assert len(set(codes)) == 58
     for code in codes:
         assert len(code) == 3
         assert code == code.lower()

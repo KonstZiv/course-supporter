@@ -9,9 +9,10 @@
 # before it reaches the DB; storage and API responses are always 639-3.
 #
 # Set composition: ElevenLabs Scribe WER-tier "Excellent + High"
-# (≤10% WER per the official model card, verified 2026-06-02). The list
-# is grouped only for human readability — the loader treats it as a
-# flat 57-entry whitelist. Tier metadata (Excellent vs High) lives in
+# (≤10% WER per the official model card, verified 2026-06-02), plus the
+# platform languages admitted outside those tiers (see Caveats). The
+# list is grouped only for human readability — the loader treats it as a
+# flat 58-entry whitelist. Tier metadata (Excellent vs High) lives in
 # the comments below; if a downstream consumer ever needs it, lift the
 # split into structured YAML at that point (reactive trigger).
 #
@@ -23,7 +24,16 @@
 # accepted simplification.
 #
 # Caveats:
-#   * Albanian is absent from ElevenLabs Scribe entirely (no tier).
+#   * Albanian is absent from ElevenLabs Scribe entirely (no tier), and
+#     is absent here too.
+#   * Montenegrin (``cnr``) is outside the Scribe tiers as well, but is
+#     admitted anyway: it is a language the platform serves (operator
+#     decision, 2026-09-04). Admitting it cannot degrade transcription,
+#     because the course language never reaches the provider as a hint
+#     — both call sites pass ``language=None`` and let Scribe
+#     auto-detect (``ingestion/audio.py``,
+#     ``ingestion/video_pipeline/steps.py``), so no tier promise is
+#     being relied on. Like ``yue``, it has no ISO 639-1 code.
 #   * The set is shared across all source_types deliberately, even
 #     though only STT is genuinely constrained by it.
 #
@@ -91,3 +101,5 @@ languages:
   - swa  # Swahili
   - tam  # Tamil
   - tel  # Telugu
+  # Outside the Scribe tiers — platform languages (see Caveats), 1 code:
+  - cnr  # Montenegrin (no 639-1 code)

@@ -75,6 +75,11 @@ class CodeStructureReason(StrEnum):
     # №21: a segment-worthy custom file the AUTHOR demoted to structure_only via
     # a file-role decision (no typicality reason of its own).
     AUTHOR_STRUCTURE_ONLY = "author_structure_only"
+    # The file is not UTF-8 and its encoding could not be established, so its
+    # text is not knowable. Same token as the security category of the same
+    # cause on the two upload surfaces, deliberately: one product vocabulary
+    # for one thing that happened to the author's file.
+    CHARSET_VIOLATION = "charset_violation"
 
 
 # The ONLY bridge from the security layer's EntryVerdict into the code
@@ -162,11 +167,15 @@ _LLM_PHRASE: Final[dict[CodeStructureReason, str]] = {
     CodeStructureReason.AUTHOR_STRUCTURE_ONLY: (
         "рішення автора — подано лише структурою"
     ),
+    CodeStructureReason.CHARSET_VIOLATION: (
+        "не вдалося встановити кодування — файл не прочитано"
+    ),
 }
 
-# Tokens that can appear on an ``excluded`` structure row. The remaining
-# four (vendored_dir / lockfile / generated_artifact / oversize) are
-# produced only by the typicality layer, which always yields
+# Tokens that can appear on an ``excluded`` structure row. The typicality
+# tokens (vendored_dir / lockfile / generated_artifact / oversize /
+# build_config / author_structure_only) are produced only by the
+# typicality and file-role layers, which always yield
 # ``description_only`` — never ``excluded``. _aggregate_excluded guards
 # this loudly: a description-only token reaching the excluded set would
 # otherwise vanish from the prompt with no error (a silent drop — the very
@@ -178,6 +187,7 @@ _EXCLUDED_TOKENS: Final[frozenset[CodeStructureReason]] = frozenset(
         CodeStructureReason.NON_CODE_TYPE,
         CodeStructureReason.MAGIC_MISMATCH,
         CodeStructureReason.NESTED_ARCHIVE,
+        CodeStructureReason.CHARSET_VIOLATION,
     }
 )
 

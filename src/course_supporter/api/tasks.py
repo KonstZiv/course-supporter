@@ -207,6 +207,39 @@ def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
     return f"\n\n=== NOT OPENED ({len(entries)}) ===\n{lines}\n"
 
 
+async def _inherit_course_language(
+    entry: Any,
+    node_repo: Any,
+    *,
+    log: Any,
+) -> None:
+    """Fill a material's language from its course root when it has none.
+
+    Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
+    the root always carries ``default_language``, so this fires before any
+    processing and the entry is persisted with the root's language; STT
+    auto-detect is observational only (no cache-back since 2.4.21).
+
+    Shared by both phases that process a material, because both now need
+    the answer: role proposal and final assembly each read a code file's
+    bytes, and reading them means recovering their encoding, which is
+    verified against this language. Were only one phase to inherit it, the
+    same file could be dropped as unreadable while proposing roles and
+    recovered while assembling -- two phases describing one project
+    differently.
+    """
+    if entry.language is not None:
+        return
+    root = await node_repo.get_root_for(entry.course_node_id)
+    if root is not None and root.default_language:
+        entry.language = root.default_language
+        log.debug(
+            "language_inherited_from_course",
+            language=entry.language,
+            root_id=str(root.id),
+        )
+
+
 async def _ingest_on_terminal(
     ctx: dict[str, Any],
     job_id: str,
@@ -343,20 +376,7 @@ async def arq_ingest_material(
             msg = f"AuthoredDocument {material_id} vanished after liveness check"
             raise ValueError(msg)
 
-        # Resolve effective language: entry override → course default → None.
-        # Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
-        # the root always has ``default_language``, so inheritance fires before
-        # STT runs and the entry is persisted with the root's language; STT
-        # auto-detect is observational only (no cache-back since 2.4.21).
-        if entry.language is None:
-            root = await node_repo.get_root_for(entry.course_node_id)
-            if root is not None and root.default_language:
-                entry.language = root.default_language
-                log.debug(
-                    "language_inherited_from_course",
-                    language=entry.language,
-                    root_id=str(root.id),
-                )
+        await _inherit_course_language(entry, node_repo, log=log)
 
         try:
             # Job → active is owned by the seam (already written on entry). The
@@ -750,6 +770,9 @@ async def arq_prepare_document(
     from course_supporter.storage.authored_document_repository import (
         AuthoredDocumentRepository,
     )
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
 
     jid = uuid.UUID(job_id)
     mid = uuid.UUID(material_id)
@@ -770,6 +793,12 @@ async def arq_prepare_document(
             # of the row vanishing in between. Raise → the seam writes ``failed``.
             msg = f"AuthoredDocument {material_id} vanished after liveness check"
             raise ValueError(msg)
+
+        # Both phases inherit the course language before reading bytes: the
+        # encoding recovery inside ``process_raw`` verifies against it, and a
+        # phase that skipped the inheritance would judge the same file by a
+        # different standard than the other.
+        await _inherit_course_language(entry, CourseNodeRepository(session), log=log)
 
         # CodeProcessor.process_raw needs a local path; _resolve_s3_url downloads
         # the archive to a temp file and yields a proxy over the entry. The

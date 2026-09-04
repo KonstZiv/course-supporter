@@ -103,6 +103,7 @@ from course_supporter.normalizer.classify import (
 )
 from course_supporter.normalizer.hashing import canonicalize_path
 from course_supporter.security.archive import EntryVerdict, extract_archive_safely
+from course_supporter.security.charset_recovery import recover_text
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.file_type import (
     extension_of,
@@ -215,6 +216,11 @@ class CodeProcessor(MaterialProcessor):
         # decision. A promoted config becomes a segment; a demoted custom file
         # goes description-only. ``role_map`` (raw path → role) is threaded to
         # ``process_macro`` via the SourceDocument metadata.
+        # The material's own language, inherited from the course root before
+        # either processing phase starts (``api/tasks.py``). Empty when the
+        # material has none: recovery then verifies nothing and a non-UTF-8
+        # file is dropped with its reason rather than read as noise.
+        languages = [source.language] if source.language else []
         roles = decision_roles(source.file_roles)
         role_map: dict[str, str] = {}
         description_only: list[dict[str, Any]] = []
@@ -249,7 +255,38 @@ class CodeProcessor(MaterialProcessor):
                     role=role,
                 )
                 continue
-            text = body.decode("utf-8", errors="replace")
+            recovered = recover_text(body, languages=languages)
+            if not recovered.verified:
+                # Not readable, so not knowable: a file whose encoding cannot
+                # be established has no text to put in front of the model.
+                # Excluded rather than description-only -- the latter means
+                # "named on purpose", and this is "could not be read". The
+                # material is never rejected over one file (R5): the rest of
+                # the project is assembled and the author is told which file
+                # dropped out and why.
+                self._excluded.append(
+                    _excluded_row(
+                        member_path,
+                        len(body),
+                        CodeStructureReason.CHARSET_VIOLATION,
+                    )
+                )
+                logger.warning(
+                    "code_file_not_read",
+                    file_path=member_path,
+                    size_bytes=len(body),
+                    reason=recovered.reason,
+                    languages=list(languages),
+                )
+                continue
+            text = recovered.text
+            if recovered.encoding != "utf-8":
+                logger.info(
+                    "code_file_charset_recovered",
+                    file_path=member_path,
+                    size_bytes=len(body),
+                    encoding=recovered.encoding,
+                )
             chunks.append(
                 ContentChunk(
                     chunk_type=ChunkType.CODE_FILE,
@@ -261,6 +298,20 @@ class CodeProcessor(MaterialProcessor):
                     },
                 )
             )
+        if not chunks and not description_only:
+            # Nothing was read at all. The sibling guard above catches "no
+            # includable files"; this catches "every includable file was
+            # unreadable", which recovery made possible for the first time.
+            # An empty material would otherwise go on to the summarising
+            # ladder and be charged for, which is the shape of silence this
+            # work exists to remove -- one file dropping out is fine (R5),
+            # all of them is not.
+            raise CategorisedProcessingError(
+                ErrorCategory.EMPTY_DOCUMENT,
+                "Code material contains no readable source file "
+                f"({len(self._excluded)} excluded)",
+            )
+
         self._description_only = description_only
 
         logger.info(

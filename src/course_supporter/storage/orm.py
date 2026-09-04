@@ -268,9 +268,10 @@ class CourseNode(SoftDeleteMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     default_language: Mapped[str | None] = mapped_column(
         String(10),
-        comment="Default ISO 639-1 language for materials under this subtree. "
-        "Usually set on the root (course) node; inherited by children and "
-        "their materials unless overridden on the material itself.",
+        comment="Default language for materials under this subtree: ISO 639-3, "
+        "normalized on entry. Usually set on the root (course) node; "
+        "inherited by children and their materials unless overridden on "
+        "the material itself.",
     )
     order: Mapped[int | None] = mapped_column(
         Integer,
@@ -449,9 +450,10 @@ class AuthoredDocument(SoftDeleteMixin, Base):
     # ── Language ──
     language: Mapped[str | None] = mapped_column(
         String(10),
-        comment="ISO 639-1 language of the material. NULL = inherit from course "
-        "(root CourseNode.default_language) or auto-detect at STT time. "
-        "Auto-detected language is cached back to this column on first success.",
+        comment="Language of the material: ISO 639-3, normalized on entry. "
+        "NULL = inherit from course (root CourseNode.default_language) or "
+        "auto-detect at STT time. Auto-detected language is cached back to "
+        "this column on first success.",
     )
 
     # ── Processed layer ──
@@ -1245,7 +1247,8 @@ class Student(SoftDeleteMixin, Base):
 
     preferred_language: Mapped[str | None] = mapped_column(
         String(10),
-        comment="ISO 639-1 language code from last review (e.g. uk, en)",
+        comment="Language the student last asked their review in: ISO 639-3, "
+        "normalized on entry (e.g. ukr, eng).",
     )
     mentor_preferences: Mapped[str | None] = mapped_column(
         Text,
@@ -1404,7 +1407,7 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     # Language
     response_language: Mapped[str | None] = mapped_column(
         String(10),
-        comment="ISO 639-1 language used for the review response",
+        comment="Language requested for this review: ISO 639-3, normalized on entry.",
     )
     student_note: Mapped[str | None] = mapped_column(
         Text,

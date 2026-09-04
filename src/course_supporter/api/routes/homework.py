@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.schemas import (
     HomeworkSubmitResponse,
+    OptionalLanguageForm,
     ProjectBaseDescriptorResponse,
     TenantWebhookResponse,
 )
@@ -100,10 +101,11 @@ async def submit_homework(
         ),
     ] = None,
     response_language: Annotated[
-        str | None,
+        OptionalLanguageForm,
         Form(
-            description="ISO 639-1 language for the review response "
-            "(e.g. uk, en). Auto-detected if omitted.",
+            description="Language of the review; ISO 639-1 or 639-3 accepted, "
+            "stored as 639-3. If omitted: the student's stored "
+            "preference, then the course language.",
         ),
     ] = None,
     student_note: Annotated[

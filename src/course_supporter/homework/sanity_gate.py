@@ -26,6 +26,7 @@ from course_supporter.homework.sanity_config import (
     get_sanity_config,
 )
 from course_supporter.homework.task_context import load_task_context
+from course_supporter.language import display_name
 from course_supporter.models.sanity import SanityClassification
 
 if TYPE_CHECKING:
@@ -91,7 +92,7 @@ class SanityGateService:
             task_description=task_description,
             task_text=task_text,
             submission_text=submission_text,
-            language=language,
+            language=display_name(language) if language else None,
         )
         gated = is_gated(classification, self._config.confidence_threshold)
         logger.info(

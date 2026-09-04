@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
 from course_supporter.homework.task_text import stitch_task_text
+from course_supporter.language import display_name
 from course_supporter.storage.orm import (
     AuthoredDocument,
     DocumentSegment,
@@ -129,7 +130,12 @@ class CriteriaCacheService:
             task_description=summary.description or "",
             task_text=task_text,
             task_type=doc.task_type,
-            language=doc.language,
+            # The course language, by name. The source stays the course --
+            # criteria are cached per task and shared by every student, so no
+            # one student's preference may decide how they read. What changes
+            # is only the form the model is handed: ``Ukrainian``, not the
+            # stored ``ukr``.
+            language=display_name(doc.language) if doc.language else None,
         )
         await self._repo.release_active(authored_document_id)
         row = await self._repo.create(

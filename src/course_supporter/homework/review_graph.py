@@ -53,6 +53,7 @@ from course_supporter.homework.review_scoring import (
     derive_verdict,
 )
 from course_supporter.homework.task_context import load_task_context
+from course_supporter.language import display_name
 from course_supporter.models.mentor_review import (
     HistoryReconciliation,
     Layer,
@@ -116,6 +117,12 @@ class MentorReviewService:
         """
         doc = await self._session.get(AuthoredDocument, submission.authored_document_id)
         author_notes = doc.author_mentor_notes if doc else None
+        # The model is told the language by name, never by code. Storage is
+        # ISO 639-3, so the raw value is ``ukr`` -- which reads as an opaque
+        # token to a model that recognises "Ukrainian" reliably. The
+        # ingestion family has rendered it this way since 2.4.14; the Mentor
+        # was the one circuit that did not.
+        language_name = display_name(language) if language else None
 
         criteria_row = await self._criteria.get_or_compute(
             submission.authored_document_id
@@ -144,14 +151,14 @@ class MentorReviewService:
                 course_summary=course_summary,
                 author_mentor_notes=author_notes,
                 submission_text=submission_text,
-                language=language,
+                language=language_name,
             ),
             self._agent.evaluate_industry(
                 task_title=task_title,
                 task_description=task_description,
                 task_text=task_text,
                 submission_text=submission_text,
-                language=language,
+                language=language_name,
             ),
         )
 
@@ -179,7 +186,7 @@ class MentorReviewService:
             ],
             history=history,
             denoise_cap=self._config.denoise.cap,
-            language=language,
+            language=language_name,
         )
         denoised = apply_denoise(aggregate, denoise.delta, self._config.denoise.cap)
         effective_delta = denoised - aggregate  # the actually-applied (clamped) move
@@ -221,7 +228,7 @@ class MentorReviewService:
             history_reconciliation=review_result.history_reconciliation.model_dump(),
             score_signals=[signal.model_dump() for signal in score_signals],
             student_note=submission.student_note,
-            language=language,
+            language=language_name,
         )
 
         logger.info(

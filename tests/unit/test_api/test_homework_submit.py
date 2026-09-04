@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import uuid
+from contextlib import ExitStack
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -53,10 +55,17 @@ def _mock_node(
     return node
 
 
-def _mock_student(student_id: uuid.UUID | None = None) -> MagicMock:
+def _mock_student(
+    student_id: uuid.UUID | None = None,
+    *,
+    preferred_language: str | None = None,
+) -> MagicMock:
     """Create a mock Student."""
     student = MagicMock()
     student.id = student_id or uuid.uuid4()
+    # Explicit: a bare MagicMock attribute would never equal the incoming
+    # language, so the "already stored" case could not be told apart.
+    student.preferred_language = preferred_language
     return student
 
 
@@ -165,6 +174,7 @@ def _submit_form(
     student_external_id: str = "ext-student-1",
     webhook_url: str | None = None,
     student_note: str | None = None,
+    response_language: str | None = None,
 ) -> dict[str, object]:
     """Build form data + files for submit_homework."""
     data: dict[str, object] = {
@@ -177,7 +187,175 @@ def _submit_form(
         data["webhook_url"] = webhook_url
     if student_note is not None:
         data["student_note"] = student_note
+    if response_language is not None:
+        data["response_language"] = response_language
     return data
+
+
+class TestPreferredLanguageWriter:
+    """The standing preference finally gets a writer.
+
+    ``students.preferred_language`` has existed since Phase 6 with zero
+    writers and zero readers, so a student who said twice which language
+    they read in was answered in the course's both times.
+    """
+
+    @staticmethod
+    def _patches(
+        *,
+        student: MagicMock,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+    ) -> list[Any]:
+        def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
+            if requested_id == course_node_id:
+                return _mock_node(node_id=course_node_id)
+            if requested_id == node_id:
+                return _mock_node(node_id=node_id, parent_id=course_node_id)
+            return None
+
+        return [
+            patch.object(CourseNodeRepository, "get_by_id", side_effect=get_node_by_id),
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=course_node_id),
+            ),
+            patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary(status="ready"),
+            ),
+            patch.object(
+                StudentRepository, "get_or_create", return_value=(student, True)
+            ),
+            patch.object(HomeworkRepository, "find_duplicate", return_value=None),
+            patch.object(
+                HomeworkRepository,
+                "create",
+                return_value=_mock_submission(student_id=student.id),
+            ),
+            patch.object(HomeworkRepository, "set_job_id", return_value=None),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=_mock_job()),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
+        ]
+
+    async def _submit(
+        self,
+        client: AsyncClient,
+        student: MagicMock,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+        response_language: str | None,
+    ) -> MagicMock:
+        with ExitStack() as stack:
+            for ctx in self._patches(
+                student=student, course_node_id=course_node_id, node_id=node_id
+            ):
+                stack.enter_context(ctx)
+            writer = stack.enter_context(
+                patch.object(
+                    StudentRepository, "set_preferred_language", return_value=None
+                )
+            )
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(
+                    course_node_id=course_node_id,
+                    node_id=node_id,
+                    authored_document_id=authored_document_id,
+                    response_language=response_language,
+                ),
+                files={
+                    "file": (
+                        "solution.py",
+                        io.BytesIO(b"print('hello')"),
+                        "text/x-python",
+                    )
+                },
+            )
+        assert resp.status_code == 202, resp.text
+        return writer
+
+    async def test_writes_the_normalized_code_when_asked(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> None:
+        student = _mock_student()
+        writer = await self._submit(
+            client, student, course_node_id, node_id, authored_document_id, "uk"
+        )
+        # 639-1 in, 639-3 stored: one alphabet of codes inside.
+        writer.assert_awaited_once_with(student.id, "ukr")
+
+    async def test_does_not_write_when_no_language_was_given(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> None:
+        student = _mock_student()
+        writer = await self._submit(
+            client, student, course_node_id, node_id, authored_document_id, None
+        )
+        writer.assert_not_awaited()
+
+    async def test_does_not_write_when_the_value_is_unchanged(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> None:
+        # A student who submits ten times in the same language costs one
+        # write, not ten.
+        student = _mock_student(preferred_language="ukr")
+        writer = await self._submit(
+            client, student, course_node_id, node_id, authored_document_id, "ukr"
+        )
+        writer.assert_not_awaited()
+
+    async def test_a_bad_language_never_reaches_the_writer(
+        self,
+        client: AsyncClient,
+        course_node_id: uuid.UUID,
+        node_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> None:
+        student = _mock_student()
+        with ExitStack() as stack:
+            for ctx in self._patches(
+                student=student, course_node_id=course_node_id, node_id=node_id
+            ):
+                stack.enter_context(ctx)
+            writer = stack.enter_context(
+                patch.object(
+                    StudentRepository, "set_preferred_language", return_value=None
+                )
+            )
+            resp = await client.post(
+                "/api/v1/homework/submit",
+                data=_submit_form(
+                    course_node_id=course_node_id,
+                    node_id=node_id,
+                    authored_document_id=authored_document_id,
+                    response_language="xx",
+                ),
+                files={
+                    "file": (
+                        "solution.py",
+                        io.BytesIO(b"print('hello')"),
+                        "text/x-python",
+                    )
+                },
+            )
+        assert resp.status_code == 422
+        writer.assert_not_awaited()
 
 
 class TestSubmitHomework:

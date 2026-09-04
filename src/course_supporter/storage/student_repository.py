@@ -123,6 +123,27 @@ class StudentRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def set_preferred_language(
+        self,
+        student_id: uuid.UUID,
+        language: str,
+    ) -> None:
+        """Remember the language a student last asked their review in.
+
+        Mirror of :meth:`set_display_name`. Written only when the student
+        said which language they wanted, and only when the answer changed,
+        so an unchanged submission costs no write. The column has been
+        there since Phase 6 and had no writer at all until now, which is
+        why the review language fell back to the course's for everyone.
+        """
+        stmt = (
+            update(Student)
+            .where(Student.id == student_id)
+            .values(preferred_language=language)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def get_by_id(self, student_id: uuid.UUID) -> Student | None:
         """Get a student by primary key."""
         return await self._session.get(Student, student_id)

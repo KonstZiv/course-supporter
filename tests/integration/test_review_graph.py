@@ -160,6 +160,14 @@ class TestAssembly:
             submission=submission, submission_text="def f(): ...", language="ukr"
         )
 
+        # The model is told the language by name. Storage is 639-3, so the
+        # raw value here is ``ukr`` -- an opaque token to a model that knows
+        # "Ukrainian".
+        assert agent.calls["node_course"]["language"] == "Ukrainian"
+        assert agent.calls["industry"]["language"] == "Ukrainian"
+        assert agent.calls["reconcile"]["language"] == "Ukrainian"
+        assert agent.calls["synthesize"]["language"] == "Ukrainian"
+
         # Config weights applied: 0.5*80 + 0.3*70 + 0.2*60 = 73; denoise -3 -> 70.
         assert output.review_result.aggregate_score == 73
         assert output.score == 70

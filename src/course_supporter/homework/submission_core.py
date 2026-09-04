@@ -40,6 +40,7 @@ from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import upload_file_chunks
+from course_supporter.storage.student_repository import StudentRepository
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
@@ -386,6 +387,22 @@ async def create_and_dispatch_submission(
             delivery_mode=delivery_mode,
             base_id=base_id,
         )
+
+        # Remember the language, but only when the student actually asked for
+        # one and only when the answer changed. The column has existed since
+        # Phase 6 with no writer, so today every review after the first falls
+        # back to the course language even for a student who has said twice
+        # which language they read in. One place for both submission routes,
+        # because both arrive here with the student already resolved.
+        if response_language and student.preferred_language != response_language:
+            await StudentRepository(session).set_preferred_language(
+                student.id, response_language
+            )
+            logger.info(
+                "student_preferred_language_updated",
+                student_id=str(student.id),
+                language=response_language,
+            )
 
         # Create the durable Job + submission↔job link (DB only — no dispatch
         # yet), then commit everything staged (student + submission + job).

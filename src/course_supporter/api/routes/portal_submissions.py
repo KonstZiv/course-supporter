@@ -36,6 +36,7 @@ from course_supporter.api.routes._portal_shared import (
     role_visible_to_student,
 )
 from course_supporter.api.schemas import (
+    OptionalLanguageForm,
     PortalBaseDownload,
     PortalDeltaReceipt,
     PortalSubmissionDetail,
@@ -106,10 +107,11 @@ async def submit_portal_homework(
         File(description="Homework file (code, text, or archive)."),
     ],
     response_language: Annotated[
-        str | None,
+        OptionalLanguageForm,
         Form(
-            description="ISO 639-1 language for the review response "
-            "(e.g. uk, en). Auto-detected if omitted.",
+            description="Language of the review; ISO 639-1 or 639-3 accepted, "
+            "stored as 639-3. If omitted: the student's stored "
+            "preference, then the course language.",
         ),
     ] = None,
     student_note: Annotated[

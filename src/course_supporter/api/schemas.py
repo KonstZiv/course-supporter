@@ -1516,7 +1516,9 @@ class PortalSubmissionListItem(BaseModel):
 
     The list is intentionally light: the heavy ``review_markdown`` is fetched
     only in the detail view. The internal trace
-    (``review_result``/``safety_result``/``sanity_result``) is NEVER included.
+    (``review_result``/``safety_result``/``sanity_result``) is NEVER included
+    — ``not_opened`` and ``recovered_encoding`` are curated projections OF
+    that trace, two facts about how the file was read, not the trace itself.
     """
 
     id: uuid.UUID
@@ -1531,6 +1533,14 @@ class PortalSubmissionListItem(BaseModel):
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,
         description="Files skipped during checking — also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="How the submitted file was read: ``utf-8`` when its "
+        "bytes decoded directly, another encoding name when recovery "
+        "established one and the review was written from that reading, or "
+        "null when the question does not apply (an archive recovers its "
+        "members individually; a document arrives already decoded).",
     )
 
 
@@ -1596,6 +1606,14 @@ class PortalSubmissionDetail(BaseModel):
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,
         description="Files skipped during checking — also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="How the submitted file was read: ``utf-8`` when its "
+        "bytes decoded directly, another encoding name when recovery "
+        "established one and the review was written from that reading, or "
+        "null when the question does not apply (an archive recovers its "
+        "members individually; a document arrives already decoded).",
     )
 
 

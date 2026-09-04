@@ -126,9 +126,12 @@ class SafetyResult(BaseModel):
 
     # Carried onto the verdict the same way, and for the same reason: the
     # answer to "how was this file read" is decided in Stage 1 and needed
-    # on the read path. ``None`` when the input decoded as UTF-8 directly,
-    # which is the ordinary case; a name here means recovery established
-    # and verified an encoding, and the review was done on that reading.
+    # on the read path. ``"utf-8"`` when the bytes decoded directly (the
+    # ordinary case); another name when recovery established and verified
+    # one, and the review was done on that reading; ``None`` when the
+    # question does not apply -- an archive recovers its members one by one
+    # and a document arrives already decoded, so neither carries a single
+    # answer here.
     recovered_encoding: str | None = None
 
 

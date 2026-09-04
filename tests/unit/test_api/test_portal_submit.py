@@ -380,8 +380,11 @@ class TestPortalReadList:
         assert len(items) == 1
         item = items[0]
         # List item is light — no review_markdown, no internal trace. The
-        # ``rejection`` / ``not_opened`` pair is the reason code and the skipped
-        # files, both derived on read; neither carries the trace (gates §1.7).
+        # ``rejection`` / ``not_opened`` / ``recovered_encoding`` trio is the
+        # reason code, the skipped files and how the file was read, all derived
+        # on read; none carries the trace (gates §1.7, step Г2 §1.2). All three
+        # ride the LIST row because the error and pending branches of the review
+        # detail do not fetch (DD-6-D).
         assert set(item) == {
             "id",
             "status",
@@ -391,6 +394,7 @@ class TestPortalReadList:
             "original_filename",
             "rejection",
             "not_opened",
+            "recovered_encoding",
         }
         assert item["verdict"] == {"passed": True, "correctness": "correct"}
         assert "review_markdown" not in item
@@ -492,6 +496,7 @@ class TestPortalReadDetail:
             "delta",
             "rejection",
             "not_opened",
+            "recovered_encoding",
         }
         assert data["status"] == "completed"
         assert data["score"] == 87
@@ -960,3 +965,91 @@ class TestCuratedNotOpened:
             },
         )
         assert curated_not_opened(sub) == []
+
+
+class TestCuratedRecoveredEncoding:
+    """Three values, three different facts — the reader must keep them apart.
+
+    ``utf-8`` and ``None`` both mean "nothing to tell the student", but for
+    different reasons, and the projection is not allowed to collapse them:
+    the interface decides what to show, and a server that answered ``None``
+    for a direct decode would make "was it an archive?" unanswerable.
+    """
+
+    @staticmethod
+    def _read(safety_result: object) -> str | None:
+        from course_supporter.api.routes._portal_shared import (
+            curated_recovered_encoding,
+        )
+
+        return curated_recovered_encoding(
+            _mock_terminal_submission(status="completed", safety_result=safety_result)
+        )
+
+    def test_names_the_recovered_encoding(self) -> None:
+        assert (
+            self._read(
+                {"source": "stage2", "is_safe": True, "recovered_encoding": "cp1251"}
+            )
+            == "cp1251"
+        )
+
+    def test_utf8_is_carried_through_not_flattened(self) -> None:
+        assert (
+            self._read(
+                {"source": "stage2", "is_safe": True, "recovered_encoding": "utf-8"}
+            )
+            == "utf-8"
+        )
+
+    def test_absent_for_an_archive_or_document(self) -> None:
+        # Neither branch writes the key: an archive recovers its members one
+        # by one, a document arrives decoded from the extractor.
+        assert self._read({"source": "stage2", "is_safe": True}) is None
+
+    def test_no_safety_result_at_all(self) -> None:
+        assert self._read(None) is None
+
+    def test_malformed_values_do_not_crash_the_read_path(self) -> None:
+        # Same reason as ``not_opened``: this column is free-form JSONB with
+        # older writers behind it.
+        assert self._read({"recovered_encoding": 1251}) is None
+        assert self._read({"recovered_encoding": ""}) is None
+        assert self._read("not a dict at all") is None
+
+
+class TestRecoveredEncodingOnTheWire:
+    """The encoding reaches BOTH read surfaces, list as well as detail.
+
+    Two assertions rather than one because the two projections are separate
+    functions: the review detail's error and pending branches render from the
+    list row without fetching (DD-6-D), so a file that was refused would never
+    show how it was read if only the detail carried the field.
+    """
+
+    async def test_list_row_carries_it(self, client: AsyncClient) -> None:
+        sub = _mock_reviewed_submission()
+        sub.safety_result = {"source": "stage2", "recovered_encoding": "cp1251"}
+        with patch.object(
+            HomeworkRepository, "list_for_student_and_task", return_value=[sub]
+        ):
+            resp = await client.get(_url(uuid.uuid4()))
+        assert resp.status_code == 200
+        assert resp.json()[0]["recovered_encoding"] == "cp1251"
+
+    async def test_detail_carries_it(self, client: AsyncClient) -> None:
+        sub = _mock_reviewed_submission()
+        sub.safety_result = {"source": "stage2", "recovered_encoding": "cp1251"}
+        with patch.object(HomeworkRepository, "get_owned", return_value=sub):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        assert resp.json()["recovered_encoding"] == "cp1251"
+
+    async def test_null_when_the_column_never_carried_one(
+        self, client: AsyncClient
+    ) -> None:
+        sub = _mock_reviewed_submission()  # safety_result without the key
+        with patch.object(HomeworkRepository, "get_owned", return_value=sub):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.status_code == 200
+        assert resp.json()["recovered_encoding"] is None

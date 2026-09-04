@@ -195,9 +195,9 @@ def _submit_form(
 class TestPreferredLanguageWriter:
     """The standing preference finally gets a writer.
 
-    ``students.preferred_language`` has existed since Phase 6 with zero
-    writers and zero readers, so a student who said twice which language
-    they read in was answered in the course's both times.
+    ``students.preferred_language`` sat unwritten from Phase 6, so a student
+    who said twice which language they read in was answered in the course's
+    both times. The reader is ``GET /portal/me`` (step Г2 §1.1).
     """
 
     @staticmethod

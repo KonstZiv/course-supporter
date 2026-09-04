@@ -27,6 +27,9 @@ from course_supporter.api.routes.jobs import router as jobs_router
 from course_supporter.api.routes.node_summaries import router as node_summaries_router
 from course_supporter.api.routes.nodes import router as nodes_router
 from course_supporter.api.routes.portal_auth import router as portal_auth_router
+from course_supporter.api.routes.portal_config import (
+    router as portal_config_router,
+)
 from course_supporter.api.routes.portal_courses import (
     router as portal_courses_router,
 )
@@ -280,6 +283,7 @@ app.include_router(cost_router, prefix="/api/v1")
 app.include_router(storage_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(portal_auth_router, prefix="/api/v1")
+app.include_router(portal_config_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")

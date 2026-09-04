@@ -80,9 +80,9 @@ class SanityGateService:
 
         ``language`` is resolved once per submission by the caller. It used
         to be read here as ``submission.response_language`` alone, with no
-        fallback -- and since no interface sends that field, the classifier
-        was asked to judge in no language at all on every real submission
-        while the review two stages later used the course's.
+        fallback -- and no interface offered that field then, so the
+        classifier was asked to judge in no language at all on every real
+        submission while the review two stages later used the course's.
         """
         task_title, task_description, task_text = await load_task_context(
             self._session, submission.authored_document_id

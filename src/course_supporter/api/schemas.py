@@ -1222,6 +1222,12 @@ class PortalMeResponse(BaseModel):
     display_name: str | None = None
     recovery_email: str | None = None
     recovery_email_confirmed: bool = False
+    preferred_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language the student last asked a "
+        "review in, or null if they never asked. The submission form opens on "
+        "it, so a standing preference is visible instead of only remembered.",
+    )
 
 
 class RecoveryEmailRequest(BaseModel):

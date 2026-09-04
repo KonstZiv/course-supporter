@@ -37,3 +37,10 @@ class StudentContext:
     tenant_id: uuid.UUID
     login: str
     display_name: str | None
+    # The language this student last asked their review in (ISO 639-3), or
+    # None. Carried on the context rather than read again in the one route
+    # that serves it: the resolver already loads the whole ``Student`` row to
+    # authenticate, so this is a field that was being discarded, not a query.
+    # Defaulted so the three route-test stubs that build a context by hand
+    # keep working without knowing about a field they do not exercise.
+    preferred_language: str | None = None

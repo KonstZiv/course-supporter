@@ -9,6 +9,8 @@ Coverage:
 * The acceptance flow: provision → login → /portal/me → revoke → both a new
   login AND the previously-issued bearer token are rejected (401).
 * /portal/me without a token → 401.
+* /portal/me carries the standing review-language preference, null until the
+  student asks for one (step Г2 §1.1).
 * Provisioning: manual duplicate external_id → 409; weak password → 422;
   existing-Student mode attaches a credential.
 * Enrollment: bind a root course → 201; bind a non-root node → 422;
@@ -35,6 +37,7 @@ from course_supporter.storage.orm import (
     StudentEnrollment,
     Tenant,
 )
+from course_supporter.storage.student_repository import StudentRepository
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
@@ -146,6 +149,19 @@ async def _provision(
     return resp.json()
 
 
+async def _login(client: AsyncClient, seed: dict[str, uuid.UUID], login: str) -> str:
+    resp = await client.post(
+        "/api/v1/portal/login",
+        json={
+            "tenant_id": str(seed["tenant_id"]),
+            "login": login,
+            "password": _PASSWORD,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return str(resp.json()["access_token"])
+
+
 class TestAcceptanceFlow:
     async def test_provision_login_me_revoke(
         self, portal_client: AsyncClient, portal_seed: dict[str, uuid.UUID]
@@ -220,6 +236,51 @@ class TestAuthEdges:
             },
         )
         assert resp.status_code == 401
+
+
+class TestPreferredLanguageReadBack:
+    """The standing preference is readable, not just writable (step Г2 §1.1).
+
+    ``submission_core`` writes ``students.preferred_language`` when a student
+    asks for a language explicitly; until now nothing served it back, so the
+    form could not open on the student's own standing choice. This is the
+    read side, exercised through the real bearer flow rather than a stub —
+    the value travels session context → schema, and a stub context would
+    prove neither leg.
+    """
+
+    async def test_null_until_the_student_asks(
+        self, portal_client: AsyncClient, portal_seed: dict[str, uuid.UUID]
+    ) -> None:
+        await _provision(portal_client, "erin")
+        token = await _login(portal_client, portal_seed, "erin")
+        me = await portal_client.get(
+            "/api/v1/portal/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert me.status_code == 200, me.text
+        assert me.json()["preferred_language"] is None
+
+    async def test_serves_the_stored_code(
+        self,
+        portal_client: AsyncClient,
+        portal_seed: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        provisioned = await _provision(portal_client, "frank")
+        student_id = uuid.UUID(str(provisioned["student_id"]))
+        # Write the column the way a submission with an explicit language
+        # would (``StudentRepository.set_preferred_language``), then read it
+        # back through the route — the point under test is the read path.
+        async with session_factory() as session:
+            await StudentRepository(session).set_preferred_language(student_id, "eng")
+            await session.commit()
+
+        token = await _login(portal_client, portal_seed, "frank")
+        me = await portal_client.get(
+            "/api/v1/portal/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert me.status_code == 200, me.text
+        assert me.json()["preferred_language"] == "eng"
 
 
 class TestProvisioning:

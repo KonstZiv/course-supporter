@@ -1139,17 +1139,26 @@ async def arq_process_homework(
                     # ``security_warning`` pair (DD-6-S): same question --
                     # what did we actually read out of this upload -- now
                     # answered from the single extractor's result.
+                    #
+                    # One unit for both shapes: bytes of the text that was
+                    # read, summed over the archive's members or taken from
+                    # the single file. The archive arm was the only one wired
+                    # when this line replaced its predecessor, so a
+                    # single-file submission has been logging "0 files, 0
+                    # bytes" ever since -- true of the archive count, and
+                    # simply wrong about what was read. ``files`` stays the
+                    # member count and is 1 for a single file, not 0: one
+                    # file was read.
+                    entries = stage1_result.archive_entries
+                    read_bytes = (
+                        sum(len(e.content) for e in entries)
+                        if entries is not None
+                        else len((stage1_result.nfc_text or "").encode("utf-8"))
+                    )
                     log.info(
                         "homework_content_read",
-                        files=(
-                            0
-                            if stage1_result.archive_entries is None
-                            else len(stage1_result.archive_entries)
-                        ),
-                        total_size=sum(
-                            len(e.content)
-                            for e in (stage1_result.archive_entries or ())
-                        ),
+                        files=len(entries) if entries is not None else 1,
+                        read_text_bytes=read_bytes,
                         not_opened=len(not_opened),
                     )
 

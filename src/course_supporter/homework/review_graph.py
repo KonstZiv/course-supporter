@@ -104,11 +104,18 @@ class MentorReviewService:
         *,
         submission: HomeworkSubmission,
         submission_text: str,
+        language: str | None,
     ) -> MentorReviewOutput:
-        """Produce the full review (result + markdown + score) for a submission."""
+        """Produce the full review (result + markdown + score) for a submission.
+
+        ``language`` is resolved once per submission by the caller, from the
+        student's explicit request, their stored preference and the course
+        -- in that order. This method used to make its own two-source
+        version of that choice, which is how the sanity gate came to answer
+        the same question differently.
+        """
         doc = await self._session.get(AuthoredDocument, submission.authored_document_id)
         author_notes = doc.author_mentor_notes if doc else None
-        language = submission.response_language or (doc.language if doc else None)
 
         criteria_row = await self._criteria.get_or_compute(
             submission.authored_document_id

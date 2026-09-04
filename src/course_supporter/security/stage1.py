@@ -74,8 +74,8 @@ validation is intentionally silent at this layer -- callers
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
 import structlog
@@ -87,6 +87,7 @@ from course_supporter.security.archive import (
     SkipMatcher,
     extract_archive_safely,
 )
+from course_supporter.security.charset_recovery import recover_text
 from course_supporter.security.exceptions import (
     ErrorCategory,
     SecurityRejectedError,
@@ -131,13 +132,6 @@ from course_supporter.security.unicode_check import check_text_unicode_safety
 # CONSTRUCTION rather than the values.
 _TEXT_EXTENSIONS: frozenset[str] = _PROSE | CODE_EXTENSIONS
 
-# Charsets accepted when policy.enable_charset_strict is True. The
-# strict gate is the homework baseline -- modern submissions ship
-# UTF-8; legacy encodings (Windows-1251, KOI8-R, ISO-8859-*) reach
-# CHARSET_VIOLATION. ASCII is a UTF-8 subset; libmagic reports it
-# as ``us-ascii`` so both spellings are honored.
-_STRICT_ALLOWED_CHARSETS: frozenset[str] = frozenset({"utf-8", "us-ascii", "ascii"})
-
 
 logger = structlog.get_logger(__name__)
 
@@ -161,6 +155,13 @@ class Stage1Result:
         detected_mime: libmagic MIME for the input bytes. Echoed
             from :func:`detect_mime_type`; matches the extension
             family per :func:`verify_extension_matches_content`.
+        recovered_encoding: How a text input was actually read --
+            ``"utf-8"`` when it decoded directly, otherwise the
+            encoding recovery established and verified. ``None`` for
+            non-text inputs and for archives, whose members are
+            recovered individually. Distinct from
+            ``detected_charset``, which is the detector's label and
+            is never the answer for a non-UTF-8 file.
         detected_charset: libmagic charset label for text inputs;
             ``None`` for binary content, empty input, or archive
             inputs (where charset is meaningful only per entry,
@@ -194,6 +195,7 @@ class Stage1Result:
     archive_entries: tuple[ExtractedFile | ClassifiedEntry, ...] | None
     context: Literal["authored", "homework"]
     not_opened: tuple[NotOpenedEntry, ...] = field(default=())
+    recovered_encoding: str | None = None
 
 
 def run_stage1(
@@ -201,6 +203,7 @@ def run_stage1(
     filename: str,
     content: bytes,
     context: Literal["authored", "homework"],
+    languages: Sequence[str] = (),
     archive_skip_matcher: SkipMatcher | None = None,
     document_extractor: DocumentTextExtractor | None = None,
 ) -> Stage1Result:
@@ -215,6 +218,12 @@ def run_stage1(
         context: ``"authored"`` (course author uploads) or
             ``"homework"`` (student submissions). Resolves the
             active :class:`ContextPolicy`.
+        languages: ISO 639-3 codes the text is expected to be written
+            in -- the course language, plus the reader's language when
+            it differs. Used only to verify a recovered encoding, and
+            fail-closed: the default empty sequence verifies nothing,
+            so a caller that forgets it gets non-UTF-8 text refused
+            rather than accepted on trust.
         archive_skip_matcher: Optional denylist skip gate for the
             archive branch (№14): matched entries are silently
             dropped before resource accounting instead of
@@ -273,6 +282,7 @@ def run_stage1(
         archive_kind = archive_kind_for_filename(filename)
         if archive_kind is not None:
             return _handle_archive_input(
+                languages=languages,
                 filename=filename,
                 content=content,
                 extension=ext,
@@ -295,11 +305,12 @@ def run_stage1(
             )
 
         nfc_text: str | None = None
+        recovered_encoding: str | None = None
         if _is_text_extension(ext):
-            nfc_text = _run_text_content_checks(
+            nfc_text, recovered_encoding = _run_text_content_checks(
                 content=content,
                 filename=filename,
-                enable_charset_strict=policy.enable_charset_strict,
+                languages=languages,
             )
 
         return Stage1Result(
@@ -310,6 +321,7 @@ def run_stage1(
             nfc_text=nfc_text,
             archive_entries=None,
             context=context,
+            recovered_encoding=recovered_encoding,
         )
     except SecurityRejectedError as exc:
         logger.warning(
@@ -345,6 +357,7 @@ _VERDICT_REASON: Final[dict[EntryVerdict, ErrorCategory]] = {
 
 def _handle_archive_input(
     *,
+    languages: Sequence[str],
     filename: str,
     content: bytes,
     extension: str,
@@ -452,15 +465,22 @@ def _handle_archive_input(
 
         if _is_text_extension(entry_ext):
             try:
-                # Return value discarded -- inside-archive entries are handed
-                # to downstream callers as raw bytes via ``archive_entries``;
-                # the storage-side NFC pass happens there. Here we only
-                # enforce the validation gates.
-                _run_text_content_checks(
+                member_text, member_encoding = _run_text_content_checks(
                     content=entry.content,
                     filename=entry.arcname,
-                    enable_charset_strict=policy.enable_charset_strict,
+                    languages=languages,
                 )
+                if member_encoding != "utf-8":
+                    # Members travel onward as raw bytes, and the caller
+                    # decodes them as UTF-8 with replacement
+                    # (``homework/text_budget.py``). For a member that was
+                    # only readable after recovery, those raw bytes would
+                    # decode right back into the noise recovery just undid,
+                    # so the recovered text replaces them. Members that were
+                    # already UTF-8 are left byte-for-byte alone: re-encoding
+                    # them would quietly apply this pass's NFC normalization
+                    # to content nobody asked us to change.
+                    entry = replace(entry, content=member_text.encode("utf-8"))
             except SecurityRejectedError as exc:
                 # The split that defines the soft mode: a file saved in the
                 # wrong encoding is a formatting mistake, so it is set aside
@@ -654,79 +674,78 @@ def _run_text_content_checks(
     *,
     content: bytes,
     filename: str,
-    enable_charset_strict: bool,
-) -> str:
-    """Decode, NFKC-normalize, run unicode + regex; return NFC for storage.
+    languages: Sequence[str],
+) -> tuple[str, str]:
+    """Recover the text, NFKC-normalize, run unicode + regex; return NFC.
 
     Pipeline order (cheap-fail-fast):
 
-    1. Charset gate (when strict). Library-detected charset must
-       be UTF-8 / ASCII; legacy encodings reach
-       :attr:`ErrorCategory.CHARSET_VIOLATION` here so the upload
-       fails before any decode work.
-    2. Three-tier decode -- see :func:`_decode_text`.
-    3. NFKC normalization for security (compatibility-folding so
+    1. Recovery -- see
+       :func:`course_supporter.security.charset_recovery.recover_text`.
+       Bytes that cannot be read back as text of ``languages`` reach
+       :attr:`ErrorCategory.CHARSET_VIOLATION` here, before any
+       screening work.
+    2. NFKC normalization for security (compatibility-folding so
        full-width / circled / presentation forms collapse to ASCII
        before the regex layer scans).
-    4. Unicode hard-reject (zero-width / bidi / tag / control).
-    5. Regex pre-screen for known prompt-injection phrases.
-    6. NFC normalization for storage.
+    3. Unicode hard-reject (zero-width / bidi / tag / control).
+    4. Regex pre-screen for known prompt-injection phrases.
+    5. NFC normalization for storage.
+
+    What used to stand in front of all this was a gate on the label the
+    format detector reports. That gate is gone, and with it two silences.
+    It refused homework by a name the detector never gets right -- no
+    Cyrillic single-byte encoding is ever named -- and it let authored
+    material through to be decoded *by* that wrong name, which for
+    ``iso-8859-1`` never raises and never warns, so the file became noise
+    on its way to the Methodist. It also had a hole in the other
+    direction: the detector reads roughly the first 64 KiB, so a file with
+    that much Latin ahead of one Cyrillic byte was labelled ``us-ascii``,
+    passed, and raised an unguarded ``UnicodeDecodeError`` afterwards.
+    Deciding by decoding closes both.
 
     Args:
-        content: Bytes to decode and validate.
+        content: Bytes to read and validate.
         filename: Used in error / log detail to identify which
             entry failed (especially inside archives).
-        enable_charset_strict: When ``True``, non-UTF-8 / non-ASCII
-            charsets raise :attr:`ErrorCategory.CHARSET_VIOLATION`
-            and decoding is forced to UTF-8.
+        languages: ISO 639-3 codes the text is expected to be in.
+            Empty, or carrying no language with letter and word data,
+            means nothing can be verified -- a non-UTF-8 file is then
+            refused rather than guessed at.
 
     Returns:
-        NFC-normalized text body suitable for downstream storage
-        and LLM ingestion.
+        The NFC-normalized text body, and the name of the encoding it
+        was read as (``"utf-8"`` for anything that decoded directly).
 
     Raises:
         SecurityRejectedError: with one of
             ``CHARSET_VIOLATION`` / ``SUSPICIOUS_UNICODE`` /
             ``PROMPT_INJECTION`` depending on which gate failed.
     """
-    detected = detect_charset(content)
-
-    if enable_charset_strict and (
-        detected is None or detected.lower() not in _STRICT_ALLOWED_CHARSETS
-    ):
+    recovered = recover_text(content, languages=languages)
+    if not recovered.verified:
+        # Operator language: the reason code is what the interface turns
+        # into a phrase for a person (``charset_violation`` in the two
+        # dictionaries), so this string exists for the log and support.
         raise SecurityRejectedError(
             ErrorCategory.CHARSET_VIOLATION,
             (
-                f"strict charset enforcement: {filename!r} reports charset "
-                f"{detected!r}; expected one of {sorted(_STRICT_ALLOWED_CHARSETS)}"
+                f"{filename!r} is not UTF-8 and its encoding could not be "
+                f"established ({recovered.reason}); detector label "
+                f"{detect_charset(content)!r}"
             ),
         )
-
-    if enable_charset_strict:
-        # Strict: charset gate above guaranteed UTF-8 / ASCII.
-        # A naked UnicodeDecodeError here would mean mid-file
-        # corruption that libmagic's head-only inspection missed;
-        # it propagates unchanged (rare bug-not-policy concern).
-        text = _decode_text(content, detected, strict=True)
-    else:
-        try:
-            text = _decode_text(content, detected, strict=False)
-        except (UnicodeDecodeError, LookupError) as exc:
-            # Non-strict tier-2 failure: libmagic detected a charset
-            # but the bytes do not decode cleanly OR the label is
-            # not a registered Python codec. Lossy UTF-8-with-
-            # replacement fallback preserves the upload but emits a
-            # structured warning so production telemetry can surface
-            # encoding anomalies without blocking authored content.
-            logger.warning(
-                "stage1_charset_decode_fallback",
-                filename=filename,
-                detected_charset=detected,
-                error=str(exc),
-            )
-            text = content.decode("utf-8", errors="replace")
-
-    return _screen_text(text, filename=filename)
+    if recovered.encoding != "utf-8":
+        logger.info(
+            "stage1_charset_recovered",
+            filename=filename,
+            encoding=recovered.encoding,
+            detector_label=detect_charset(content),
+            byte_length=len(content),
+            char_length=len(recovered.text),
+            languages=list(languages),
+        )
+    return _screen_text(recovered.text, filename=filename), recovered.encoding
 
 
 def _screen_text(text: str, *, filename: str) -> str:
@@ -758,36 +777,3 @@ def _screen_text(text: str, *, filename: str) -> str:
         )
 
     return nfc_for_storage(text)
-
-
-def _decode_text(content: bytes, charset: str | None, *, strict: bool) -> str:
-    """Decode ``content`` per the three-tier policy.
-
-    Tier 1 -- strict: UTF-8 only. The charset gate has already
-    confirmed the libmagic label is UTF-8 / ASCII, so this decode
-    is expected to succeed; a stray ``UnicodeDecodeError`` would
-    indicate a bug or a corrupted middle-of-file (libmagic only
-    inspects the head). Propagated unchanged.
-
-    Tier 2 -- non-strict, library-detected charset: try the label
-    libmagic reported. Authored content frequently ships in
-    Windows-1251 / KOI8-R / ISO-8859 series; honoring the detected
-    label lets the orchestrator preserve content semantics. May
-    raise :class:`UnicodeDecodeError` (label valid but bytes do
-    not decode) or :class:`LookupError` (label is not a registered
-    Python codec). The caller in :func:`_run_text_content_checks`
-    catches these and falls through to a UTF-8-with-replacement
-    decode, emitting a structured ``stage1_charset_decode_fallback``
-    warning so production telemetry can detect anomalies.
-
-    Tier 3 -- non-strict fallback (charset is ``None`` here): UTF-8
-    with replacement. Lossy by design; never raises. Reached only
-    when libmagic cannot determine a charset at all.
-    """
-    if strict:
-        return content.decode("utf-8")
-
-    if charset is not None:
-        return content.decode(charset)
-
-    return content.decode("utf-8", errors="replace")

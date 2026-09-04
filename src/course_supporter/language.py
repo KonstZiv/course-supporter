@@ -22,7 +22,9 @@ only when a second module joins it.
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import iso639
 import yaml
@@ -192,6 +194,65 @@ def display_name(code: str) -> str:
     """
     lang = iso639.Language.from_part3(code)
     return str(lang.name)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewLanguage:
+    """The language a review will be written in, and where it came from.
+
+    ``source`` exists so the choice is visible in the log and in
+    acceptance: three sources feed one answer, and "which one won" is the
+    only part a reader cannot reconstruct from the code afterwards.
+    """
+
+    code: str | None
+    source: Literal["explicit", "preferred", "course", "none"]
+
+
+def resolve_review_language(
+    *,
+    explicit: str | None,
+    preferred: str | None,
+    course: str | None,
+) -> ReviewLanguage:
+    """Pick the review language from the three sources, in one place.
+
+    Order: what the student asked for on this submission, then what the
+    student has stored as a standing preference, then the language of the
+    course. Course criteria are deliberately outside this: they are cached
+    per task and shared by every student, so the first submitter's
+    preference must not decide how the criteria read for everyone after.
+
+    Every input is normalized on the way in, so a caller may pass a 639-1
+    code, a 639-3 code or an English name and still get the canonical
+    639-3 form back. An input that does not resolve is skipped rather than
+    raising -- a stale value in a column must not be able to stop a review
+    that has two other sources to fall back on. Route input is validated
+    at the door instead, where the caller can be told.
+
+    Returns:
+        The resolved code with the source that supplied it; ``code`` is
+        ``None`` only when all three sources are empty or unusable.
+
+    Before this existed the same question was answered in three places
+    with three different answers: the review graph took the explicit value
+    or the course, the sanity gate took the explicit value alone and got
+    ``None`` whenever the student had not asked (which is always, today --
+    no interface sends the field), and the criteria cache took the course.
+    """
+    for value, source in (
+        (explicit, "explicit"),
+        (preferred, "preferred"),
+        (course, "course"),
+    ):
+        if not value:
+            continue
+        try:
+            code = normalize_and_validate(value)
+        except (InvalidLanguageError, LanguageNotAllowedError):
+            continue
+        return ReviewLanguage(code=code, source=source)  # type: ignore[arg-type]
+    return ReviewLanguage(code=None, source="none")
 
 
 def list_allowed() -> list[LanguageEntry]:

@@ -198,11 +198,6 @@ class ContextPolicy:
             (traversal, bomb, symlink, depth) or the two hostility
             signals (unicode hard-reject, prompt-injection pre-screen)
             — naming and skipping those would be a ready-made bypass.
-        enable_charset_strict: When ``True``, Stage 1 rejects text
-            content whose libmagic-detected charset is neither
-            UTF-8 nor US-ASCII. Modern submissions baseline UTF-8;
-            authored content tolerates legacy encodings (Cyrillic
-            in Windows-1251, etc.).
     """
 
     name: Literal["authored", "homework"]
@@ -217,7 +212,6 @@ class ContextPolicy:
     conveyors: Mapping[str, Conveyor] | None
     archive_soft_exclude: bool
     enable_llm_safety_check: bool
-    enable_charset_strict: bool
 
 
 AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
@@ -285,7 +279,6 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # and a half-read course archive is worse for them than a clear refusal.
     archive_soft_exclude=False,
     enable_llm_safety_check=True,
-    enable_charset_strict=False,
 )
 
 
@@ -350,7 +343,6 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     conveyors=HOMEWORK_CONVEYORS,
     archive_soft_exclude=True,
     enable_llm_safety_check=True,
-    enable_charset_strict=True,
 )
 
 

@@ -59,12 +59,12 @@ class ErrorCategory(StrEnum):
       tag / disallowed control characters per vision §KD14.
     * ``PROMPT_INJECTION`` -- regex pre-screen matched a known
       injection pattern after NFKC normalization.
-    * ``CHARSET_VIOLATION`` -- the active context policy has
-      ``enable_charset_strict=True`` and libmagic reports a charset
-      that is neither ``utf-8`` nor ``us-ascii``. Modern submission
-      contexts (homework) baseline UTF-8; legacy encodings reach
-      this category. Authored content keeps the strict flag off and
-      never raises this.
+    * ``CHARSET_VIOLATION`` -- the bytes are not UTF-8 and could not
+      be read back as text of the languages the upload is expected to
+      be written in. Both contexts raise it: recovery either
+      establishes an encoding and verifies the result, or refuses.
+      What the detector calls the charset is not part of that
+      decision -- it names no Cyrillic single-byte encoding at all.
     * ``ARCHIVE_BOMB`` -- archive decompression exceeds size, file
       count, or nesting depth limits per ``safety_archive_*``
       settings. Added Phase 2.1 C2 per KD-2.1-I migration of legacy

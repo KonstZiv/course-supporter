@@ -877,6 +877,7 @@ async def arq_process_homework(
         deliver_webhook,
         resolve_webhook_url,
     )
+    from course_supporter.language import resolve_review_language
     from course_supporter.models.source import AssignmentType
     from course_supporter.normalizer.classify import denylist_prefix
     from course_supporter.security.exceptions import SecurityRejectedError
@@ -982,6 +983,40 @@ async def arq_process_homework(
                     ),
                 )
 
+                # One resolution per submission, before Stage 1 -- because
+                # Stage 1 needs it too. Recovery of a non-UTF-8 file is
+                # verified against the language the text is expected to be
+                # in, so the language question has to be answered before the
+                # file is read, not after. The same answer then travels to
+                # the sanity gate and the review graph, which used to work it
+                # out separately and disagree.
+                student = await StudentRepository(session).get_by_id(
+                    submission.student_id
+                )
+                task_doc = await AuthoredDocumentRepository(session).get_by_id(
+                    submission.authored_document_id
+                )
+                review_language = resolve_review_language(
+                    explicit=submission.response_language,
+                    preferred=student.preferred_language if student else None,
+                    course=task_doc.language if task_doc is not None else None,
+                )
+                log.info(
+                    "review_language_resolved",
+                    source=review_language.source,
+                    value=review_language.code,
+                )
+                # Verification languages: the course's, plus the reader's when
+                # it differs. A student reviewing in Russian on a Ukrainian
+                # course may legitimately submit in either, and judging their
+                # letters against only one alphabet would refuse the other.
+                course_language = task_doc.language if task_doc is not None else None
+                verify_languages = [
+                    code
+                    for code in dict.fromkeys([course_language, review_language.code])
+                    if code
+                ]
+
                 # --- KD18 P3: branch on task_type ---
                 # A project submission bypasses the single-file path's
                 # extract_submission_content + run_stage1 (fail-closed on a real
@@ -989,9 +1024,6 @@ async def arq_process_homework(
                 # 1A) and is normalized via the classify normalizer instead,
                 # BEFORE safety. Non-project submissions are byte-unchanged.
                 file_bytes = file_path.read_bytes()
-                task_doc = await AuthoredDocumentRepository(session).get_by_id(
-                    submission.authored_document_id
-                )
                 is_project = (
                     task_doc is not None
                     and task_doc.task_type == AssignmentType.PROJECT.value
@@ -1001,6 +1033,10 @@ async def arq_process_homework(
                 # submission (its own normalizer reports exclusions) and for
                 # any non-archive single file.
                 not_opened: tuple[NotOpenedEntry, ...] = ()
+                # How the file was read. ``None`` for a project submission,
+                # which never goes through Stage 1, and for anything that
+                # decoded as UTF-8 without recovery.
+                stage1_recovered_encoding: str | None = None
 
                 if is_project:
                     project_text = await process_project_submission(
@@ -1032,6 +1068,7 @@ async def arq_process_homework(
                             filename=submission.original_filename or file_path.name,
                             content=file_bytes,
                             context="homework",
+                            languages=verify_languages,
                             archive_skip_matcher=denylist_prefix,
                             document_extractor=_extract_document_text,
                         )
@@ -1045,6 +1082,7 @@ async def arq_process_homework(
                             file_bytes=file_bytes,
                             filename=(submission.original_filename or file_path.name),
                         )
+                        stage1_recovered_encoding = stage1_result.recovered_encoding
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult
                         # (synthetic shape; ``source='stage1'`` discriminates from
@@ -1101,6 +1139,10 @@ async def arq_process_homework(
                 # what the read path reads: a submission that PASSES must
                 # still be able to tell the student which files were skipped.
                 safety_result.not_opened = list(not_opened)
+                # Same carry as ``not_opened`` directly above, for the same
+                # reason: Stage 1 knows how the file was read, and the read
+                # path is where that answer is needed.
+                safety_result.recovered_encoding = stage1_recovered_encoding
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )
@@ -1137,6 +1179,7 @@ async def arq_process_homework(
                 sanity_outcome = await sanity_service.evaluate(
                     submission=submission,
                     submission_text=submission_text,
+                    language=review_language.code,
                 )
                 await hw_repo.store_sanity_result(
                     sid, sanity_outcome.classification.model_dump(mode="json")
@@ -1185,6 +1228,7 @@ async def arq_process_homework(
                 review_output = await review_service.review(
                     submission=submission,
                     submission_text=submission_text,
+                    language=review_language.code,
                 )
                 await hw_repo.store_review_result(
                     sid,

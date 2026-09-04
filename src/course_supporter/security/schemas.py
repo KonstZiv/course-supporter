@@ -124,6 +124,13 @@ class SafetyResult(BaseModel):
     # submission and for archives read in full.
     not_opened: list[NotOpenedEntry] = Field(default_factory=list)
 
+    # Carried onto the verdict the same way, and for the same reason: the
+    # answer to "how was this file read" is decided in Stage 1 and needed
+    # on the read path. ``None`` when the input decoded as UTF-8 directly,
+    # which is the ordinary case; a name here means recovery established
+    # and verified an encoding, and the review was done on that reading.
+    recovered_encoding: str | None = None
+
 
 class Stage1RejectionResult(BaseModel):
     """Synthetic safety result for Stage 1 rejections.

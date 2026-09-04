@@ -94,9 +94,15 @@ class TestAuthoredPolicy:
         assert AUTHORED_POLICY.max_archive_unzipped_bytes == 200 * 1024 * 1024
         assert AUTHORED_POLICY.max_archive_nesting_depth == 1
 
-    def test_safety_and_charset_flags(self) -> None:
+    def test_safety_flag(self) -> None:
         assert AUTHORED_POLICY.enable_llm_safety_check is True
-        assert AUTHORED_POLICY.enable_charset_strict is False
+
+    def test_no_charset_flag_remains(self) -> None:
+        # Encoding is no longer a policy switch. Both contexts take the one
+        # path: recover and verify, or refuse. The flag existed to let
+        # authored content through non-strict decoding, which is exactly the
+        # silence the recovery work removed.
+        assert not hasattr(AUTHORED_POLICY, "enable_charset_strict")
 
 
 # ── Homework policy ────────────────────────────────────────────────
@@ -140,9 +146,11 @@ class TestHomeworkPolicy:
         assert HOMEWORK_POLICY.max_archive_unzipped_bytes == 10 * 1024 * 1024
         assert HOMEWORK_POLICY.max_archive_nesting_depth == 3
 
-    def test_safety_and_charset_flags(self) -> None:
+    def test_safety_flag(self) -> None:
         assert HOMEWORK_POLICY.enable_llm_safety_check is True
-        assert HOMEWORK_POLICY.enable_charset_strict is True
+
+    def test_no_charset_flag_remains(self) -> None:
+        assert not hasattr(HOMEWORK_POLICY, "enable_charset_strict")
 
 
 # ── Policy resolver ────────────────────────────────────────────────

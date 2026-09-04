@@ -22,6 +22,7 @@ Routes
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import uuid
 from typing import Annotated, Final
@@ -385,6 +386,43 @@ def _enforce_presentation_slide_cap(
         raise exc
 
 
+async def _verification_languages(
+    session: AsyncSession,
+    *,
+    node_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    explicit: str | None,
+) -> list[str]:
+    """Languages an authored upload's text is expected to be written in.
+
+    Stage 1 verifies a recovered encoding by asking whether the recovered
+    text is written in a language the course uses, so it has to be told
+    which. Order: the language the author declared for this material, then
+    the course's own -- which lives on the ROOT node (Phase 2.4.13 makes it
+    mandatory there via a CHECK constraint) and is reached by walking the
+    parent chain, since the node being uploaded into usually carries NULL.
+
+    An empty answer is a real answer, not a failure: with no language to
+    verify against, a non-UTF-8 file is refused with ``charset_violation``
+    rather than decoded on a guess. That is the same refusal the student
+    side has always given; what changes is that the author now gets it too,
+    instead of silently getting noise.
+    """
+    for candidate in (explicit, None):
+        if not candidate:
+            continue
+        with contextlib.suppress(InvalidLanguageError, LanguageNotAllowedError):
+            # Normalized here rather than trusted: the multipart route
+            # validates its form value, the confirm route's body field is a
+            # plain string, and both end up in this one place.
+            return [normalize_and_validate(candidate)]
+    root = await CourseNodeRepository(session).get_root_for(
+        node_id, tenant_id=tenant_id
+    )
+    language = getattr(root, "default_language", None)
+    return [language] if language else []
+
+
 async def _require_node_for_tenant(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -602,6 +640,12 @@ async def create_document(
                     filename=upload_filename,
                     content=upload_content,
                     context="authored",
+                    languages=await _verification_languages(
+                        session,
+                        node_id=node_id,
+                        tenant_id=tenant.tenant_id,
+                        explicit=language,
+                    ),
                 )
                 _enforce_presentation_slide_cap(source_type, upload_ext, upload_content)
             except SecurityRejectedError as exc:
@@ -838,6 +882,12 @@ async def confirm_upload(
                 filename=actual_filename,
                 content=body_bytes,
                 context="authored",
+                languages=await _verification_languages(
+                    session,
+                    node_id=node_id,
+                    tenant_id=tenant.tenant_id,
+                    explicit=body.language,
+                ),
             )
             _enforce_presentation_slide_cap(body.source_type, upload_ext, body_bytes)
         except SecurityRejectedError as exc:

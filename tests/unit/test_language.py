@@ -10,6 +10,7 @@ from course_supporter.language import (
     display_name,
     list_allowed,
     normalize_and_validate,
+    resolve_review_language,
 )
 
 
@@ -103,3 +104,46 @@ def test_display_name_resolves_canonical_code_to_english_name(
     # using the SIL English name (LLMs do not reliably recognise the
     # 639-3 three-letter code).
     assert display_name(code) == expected
+
+
+class TestResolveReviewLanguage:
+    """One order of priority, in one place (was three places, three answers)."""
+
+    def test_explicit_wins(self) -> None:
+        r = resolve_review_language(explicit="uk", preferred="en", course="deu")
+        assert (r.code, r.source) == ("ukr", "explicit")
+
+    def test_preferred_when_nothing_explicit(self) -> None:
+        r = resolve_review_language(explicit=None, preferred="en", course="ukr")
+        assert (r.code, r.source) == ("eng", "preferred")
+
+    def test_course_is_the_last_resort(self) -> None:
+        r = resolve_review_language(explicit=None, preferred=None, course="ukr")
+        assert (r.code, r.source) == ("ukr", "course")
+
+    def test_every_source_is_normalized_to_639_3(self) -> None:
+        for value in ("uk", "ukr", "Ukrainian"):
+            assert (
+                resolve_review_language(
+                    explicit=value, preferred=None, course=None
+                ).code
+                == "ukr"
+            )
+
+    def test_an_unusable_value_is_skipped_not_raised(self) -> None:
+        # A stale code in a column must not be able to stop a review that
+        # has two other sources; route input is validated at the door.
+        r = resolve_review_language(explicit="xx", preferred=None, course="ukr")
+        assert (r.code, r.source) == ("ukr", "course")
+
+    def test_language_outside_the_whitelist_is_skipped(self) -> None:
+        r = resolve_review_language(explicit="lat", preferred=None, course="ukr")
+        assert (r.code, r.source) == ("ukr", "course")
+
+    def test_empty_string_is_not_a_source(self) -> None:
+        r = resolve_review_language(explicit="", preferred="", course="ukr")
+        assert (r.code, r.source) == ("ukr", "course")
+
+    def test_nothing_to_resolve(self) -> None:
+        r = resolve_review_language(explicit=None, preferred=None, course=None)
+        assert (r.code, r.source) == (None, "none")

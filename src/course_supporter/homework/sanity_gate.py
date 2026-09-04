@@ -73,8 +73,16 @@ class SanityGateService:
         *,
         submission: HomeworkSubmission,
         submission_text: str,
+        language: str | None,
     ) -> SanityGateOutcome:
-        """Classify the submission and decide whether it is gated."""
+        """Classify the submission and decide whether it is gated.
+
+        ``language`` is resolved once per submission by the caller. It used
+        to be read here as ``submission.response_language`` alone, with no
+        fallback -- and since no interface sends that field, the classifier
+        was asked to judge in no language at all on every real submission
+        while the review two stages later used the course's.
+        """
         task_title, task_description, task_text = await load_task_context(
             self._session, submission.authored_document_id
         )
@@ -83,7 +91,7 @@ class SanityGateService:
             task_description=task_description,
             task_text=task_text,
             submission_text=submission_text,
-            language=submission.response_language,
+            language=language,
         )
         gated = is_gated(classification, self._config.confidence_threshold)
         logger.info(

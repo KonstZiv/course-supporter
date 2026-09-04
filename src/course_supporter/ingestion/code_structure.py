@@ -2,8 +2,10 @@
 
 The tree the code processor persists (``DocumentSummary.structure``) and
 feeds to the ``code_summary`` LLM call has THREE consumers — the DB (full
-per-file persist), the LLM (``structure_block``), and, later, the author
-UI (DD-CM-B). One raw string cannot be right for all three, and №19 was
+per-file persist), the LLM (``structure_block``), and the author UI, which
+reads it through ``GET /documents/{id}/structure`` (the token half of each
+reason is its dictionary key — see :func:`split_structure_reason`).
+One raw string cannot be right for all three, and №19 was
 exactly that failure: the security layer's ``EntryVerdict`` value flowed
 verbatim into the prompt (``code.py`` ``entry.verdict.value``), telling
 the model ".gitignore — forbidden_type". That name is the strict-homework

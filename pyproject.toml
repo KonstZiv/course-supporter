@@ -47,6 +47,11 @@ dependencies = [
     "ImageHash>=4.3",
     # Security: magic-bytes file type detection (KD14)
     "python-magic>=0.4.27",
+    # Security: character-encoding recovery. Already present transitively
+    # via ``requests`` and ``trafilatura``, which is exactly why it is
+    # declared here: a check that decides whether a student's work is
+    # readable must not rest on a dependency any of those could drop.
+    "charset-normalizer>=3.4.4",
     "dashscope>=1.25.18",
     # Direct httpx usage: STT providers (deepgram/elevenlabs) pass
     # ``httpx.Timeout(...)``; LLM provider clients pin SDK timeout
@@ -110,11 +115,14 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/course_supporter/storage/orm.py" = ["RUF012"]
 "tests/**/*.py" = ["S101", "S105", "S106", "S108", "T20", "RUF001"]
-"src/course_supporter/ingestion/stop_words.py" = ["RUF001"]
+# Alphabets and stop words: characters that look like ASCII are the
+# subject matter, not a mistake.
+"src/course_supporter/linguistics.py" = ["RUF001", "RUF002", "RUF003"]
 "src/course_supporter/services/email_text.py" = ["RUF001"]
 "src/course_supporter/auth/recovery_tokens.py" = ["RUF001"]
 "src/course_supporter/security/regex_patterns.py" = ["RUF001", "RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
+"tests/unit/test_linguistics.py" = ["RUF003"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]
 # Operator-gated diagnostic tools — prints are the operator-facing UI.
 "tools/**/*.py" = ["S101", "T20", "RUF001", "ASYNC240"]

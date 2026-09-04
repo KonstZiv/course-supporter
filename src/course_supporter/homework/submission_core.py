@@ -389,11 +389,11 @@ async def create_and_dispatch_submission(
         )
 
         # Remember the language, but only when the student actually asked for
-        # one and only when the answer changed. The column has existed since
-        # Phase 6 with no writer, so today every review after the first falls
-        # back to the course language even for a student who has said twice
-        # which language they read in. One place for both submission routes,
-        # because both arrive here with the student already resolved.
+        # one and only when the answer changed. The column existed from Phase 6
+        # with no writer, so every review after the first fell back to the
+        # course language even for a student who had said twice which language
+        # they read in; this is that writer. One place for both submission
+        # routes, because both arrive here with the student already resolved.
         if response_language and student.preferred_language != response_language:
             await StudentRepository(session).set_preferred_language(
                 student.id, response_language

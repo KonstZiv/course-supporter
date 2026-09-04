@@ -710,8 +710,10 @@ class DocumentSummary(SoftDeleteMixin, Base):
         "cls / size, exclusion reason for typical files. Populated by "
         "code from the extraction manifest — source → representation; "
         "the KD18 manifest artifact stays canonical in its own contour. "
-        "NULL for every non-code source_type. Persist-only for now "
-        "(no FE read surface in this task).",
+        "NULL for every non-code source_type, which makes the column its "
+        "own discriminator: GET /documents/{id}/structure serves the "
+        "excluded / description-only rows to the author and answers 404 "
+        "exactly when this is NULL.",
     )
     llm_call_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("external_service_calls.id", ondelete="SET NULL"),

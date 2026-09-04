@@ -25,7 +25,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import uuid
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -40,6 +40,8 @@ from course_supporter.api.schemas import (
     AuthoredDocumentResponse,
     AuthoredDocumentUpdateRequest,
     ConfirmUploadRequest,
+    DocumentStructureEntry,
+    DocumentStructureResponse,
     FileRolesDecisionRequest,
     PresignedUrlRequest,
     PresignedUrlResponse,
@@ -62,6 +64,7 @@ from course_supporter.enqueue import (
     enqueue_ingestion,
 )
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
+from course_supporter.ingestion.code_structure import split_structure_reason
 from course_supporter.ingestion.video_pipeline import media
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.language import (
@@ -89,6 +92,9 @@ from course_supporter.storage.authored_document_repository import (
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
+from course_supporter.storage.document_summary_repository import (
+    DocumentSummaryRepository,
+)
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import AuthoredDocument, Job
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
@@ -97,6 +103,12 @@ from course_supporter.storage.s3 import S3Client, sanitize_s3_key, upload_file_c
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["documents"])
+
+# One string for every "you cannot see this document" answer — unknown id,
+# foreign tenant, or a surface the document does not have. Named rather than
+# repeated so a future edit cannot make one of them distinguishable, which is
+# how an enumeration oracle starts.
+_DOCUMENT_NOT_FOUND: Final[str] = "Document not found"
 
 # KD18 P2 (Decision 1, 1A): raw-upload size cap for an author base archive
 # (compressed bytes). Shared with the student project-submission route from one
@@ -446,11 +458,11 @@ async def _require_document_for_tenant(
     """
     document = await document_repo.get_by_id(document_id)
     if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=_DOCUMENT_NOT_FOUND)
 
     node = await node_repo.get_by_id(document.course_node_id)
     if node is None or node.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=_DOCUMENT_NOT_FOUND)
     return document
 
 
@@ -1125,6 +1137,81 @@ async def get_project_base_manifest(
             status_code=404, detail="No ready base manifest for this document."
         )
     return manifest_from_jsonb(base.manifest)
+
+
+def _structure_rows(
+    structure: dict[str, Any], cls: str
+) -> list[DocumentStructureEntry]:
+    """Project one class of ``DocumentSummary.structure`` rows for the author.
+
+    Defensive the same way the portal's ``curated_not_opened`` is, and for
+    the same reason: this is free-form JSONB with older writers behind it,
+    and a malformed row must cost the author that one line, never the whole
+    listing.
+    """
+    rows: list[DocumentStructureEntry] = []
+    for raw in structure.get("entries", []):
+        if not isinstance(raw, dict) or raw.get("cls") != cls:
+            continue
+        path, size, reason = raw.get("path"), raw.get("size"), raw.get("reason")
+        if not (
+            isinstance(path, str) and isinstance(size, int) and isinstance(reason, str)
+        ):
+            continue
+        token, detail = split_structure_reason(reason)
+        entries = raw.get("entries")
+        rows.append(
+            DocumentStructureEntry(
+                path=path,
+                size=size,
+                reason=token,
+                detail=detail,
+                entries=entries if isinstance(entries, int) else None,
+            )
+        )
+    return rows
+
+
+@router.get("/documents/{document_id}/structure")
+async def get_document_structure(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+) -> DocumentStructureResponse:
+    """What a code material's processing left out, and why (author-only).
+
+    Closes the post-hoc half of R5 visibility: the upload dialog warns before
+    processing, but processing finishes hours later, and until now nothing
+    told the author afterwards which of their files never reached the model.
+
+    ``PrepDep`` rather than the shared author/check dependency, matching
+    ``GET /base/manifest`` above for the same reason it gave: a full file
+    listing of the author's material is not the checking key's business.
+
+    A separate route rather than a field on the document: ``structure`` lives
+    on ``DocumentSummary``, and the two listing paths above are hot and would
+    carry a column that is NULL for every non-code document.
+
+    404 — the same generic one an unknown document gets — when there is no
+    structure to show: a non-code material (the column is NULL for all of
+    them), or a code material still being processed. An empty 200 would say
+    "read in full", which is a different and wrong answer. A code material
+    that really was read in full answers 200 with two empty lists.
+    """
+    document_repo = AuthoredDocumentRepository(session)
+    node_repo = CourseNodeRepository(session)
+    document = await _require_document_for_tenant(
+        document_repo, node_repo, document_id, tenant.tenant_id
+    )
+    summary = await DocumentSummaryRepository(session).get_by_authored_document_id(
+        document.id
+    )
+    if summary is None or summary.structure is None:
+        raise HTTPException(status_code=404, detail=_DOCUMENT_NOT_FOUND)
+    return DocumentStructureResponse(
+        excluded=_structure_rows(summary.structure, "excluded"),
+        description_only=_structure_rows(summary.structure, "description_only"),
+    )
 
 
 @router.get("/documents/{document_id}")

@@ -100,7 +100,14 @@ async def portal_login(
 
 @router.get("/portal/me", response_model=PortalMeResponse)
 async def portal_me(student: StudentDep, session: SessionDep) -> PortalMeResponse:
-    """Return the authenticated student's identity + recovery-email status."""
+    """Return the student's identity, recovery-email status and language.
+
+    ``preferred_language`` comes off the session context rather than a
+    second read: authenticating already loaded the ``Student`` row. It is
+    here rather than on its own endpoint because the portal fetches this
+    once at boot and the submission form needs the value to open on the
+    student's standing choice.
+    """
     cred_repo = StudentCredentialRepository(session)
     credential = await cred_repo.get_by_student_id(student.student_id)
     return PortalMeResponse(
@@ -113,4 +120,5 @@ async def portal_me(student: StudentDep, session: SessionDep) -> PortalMeRespons
             credential is not None
             and credential.recovery_email_confirmed_at is not None
         ),
+        preferred_language=student.preferred_language,
     )

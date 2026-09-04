@@ -582,6 +582,64 @@ class AuthoredDocumentResponse(BaseModel):
     updated_at: datetime = Field(description="When this entry was last modified.")
 
 
+class DocumentStructureEntry(BaseModel):
+    """One file of a code material that did not reach the model whole.
+
+    ``reason`` is the bare ``CodeStructureReason`` token — the key the
+    interface phrases from. ``detail`` is the half the token cannot carry
+    (which directory, which pattern, which lockfile), and it is usually the
+    part the author actually recognises: ``vendored_dir`` says little,
+    ``vendored_dir`` + ``node_modules`` says everything.
+
+    ``entries`` is how many raw files the row stands for. A denylist
+    directory is collapsed to one row, so ``__MACOSX/`` with five files in
+    it would otherwise read as a single skipped file. ``None`` where the
+    concept does not apply — a description-only row is always one file.
+    """
+
+    path: str = Field(description="Path inside the archive.")
+    size: int = Field(description="Size in bytes, as the archive declared it.")
+    reason: str = Field(
+        description="Bare ``CodeStructureReason`` token (``vendored_dir``, "
+        "``lockfile``, ``charset_violation``, …)."
+    )
+    detail: str | None = Field(
+        default=None,
+        description="What the token cannot say by itself — the matched "
+        "directory, pattern or filename. Null when the path already carries it.",
+    )
+    entries: int | None = Field(
+        default=None,
+        description="Raw files this row stands for (a collapsed denylist "
+        "directory counts them all). Null when the row is one file.",
+    )
+
+
+class DocumentStructureResponse(BaseModel):
+    """What a code material's processing left out, and why (step Г2 §1.3).
+
+    Two lists, because they are two different events and the author acts on
+    them differently: ``excluded`` was not read at all, ``description_only``
+    was named to the model as structure but its contents were not sent.
+
+    Files that WERE read are deliberately absent: this surface answers "what
+    did I lose", and the per-file role markup the author confirmed is already
+    served by ``file_roles`` on the document itself. Roles are absent for the
+    same reason — an excluded row has none (nothing can be restored from it).
+
+    Both lists empty is a real answer: the whole project was read.
+    """
+
+    excluded: list[DocumentStructureEntry] = Field(
+        default_factory=list,
+        description="Files whose contents never reached the model.",
+    )
+    description_only: list[DocumentStructureEntry] = Field(
+        default_factory=list,
+        description="Files named to the model as structure, contents not sent.",
+    )
+
+
 class ProcessingEstimate(BaseModel):
     """Informational ingestion queue-wait hint (DD-3.3c-I-B).
 
@@ -1222,6 +1280,12 @@ class PortalMeResponse(BaseModel):
     display_name: str | None = None
     recovery_email: str | None = None
     recovery_email_confirmed: bool = False
+    preferred_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language the student last asked a "
+        "review in, or null if they never asked. The submission form opens on "
+        "it, so a standing preference is visible instead of only remembered.",
+    )
 
 
 class RecoveryEmailRequest(BaseModel):
@@ -1510,7 +1574,9 @@ class PortalSubmissionListItem(BaseModel):
 
     The list is intentionally light: the heavy ``review_markdown`` is fetched
     only in the detail view. The internal trace
-    (``review_result``/``safety_result``/``sanity_result``) is NEVER included.
+    (``review_result``/``safety_result``/``sanity_result``) is NEVER included
+    — ``not_opened`` and ``recovered_encoding`` are curated projections OF
+    that trace, two facts about how the file was read, not the trace itself.
     """
 
     id: uuid.UUID
@@ -1525,6 +1591,14 @@ class PortalSubmissionListItem(BaseModel):
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,
         description="Files skipped during checking — also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="How the submitted file was read: ``utf-8`` when its "
+        "bytes decoded directly, another encoding name when recovery "
+        "established one and the review was written from that reading, or "
+        "null when the question does not apply (an archive recovers its "
+        "members individually; a document arrives already decoded).",
     )
 
 
@@ -1590,6 +1664,14 @@ class PortalSubmissionDetail(BaseModel):
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,
         description="Files skipped during checking — also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="How the submitted file was read: ``utf-8`` when its "
+        "bytes decoded directly, another encoding name when recovery "
+        "established one and the review was written from that reading, or "
+        "null when the question does not apply (an archive recovers its "
+        "members individually; a document arrives already decoded).",
     )
 
 

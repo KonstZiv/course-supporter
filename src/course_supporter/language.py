@@ -237,8 +237,10 @@ def resolve_review_language(
     Before this existed the same question was answered in three places
     with three different answers: the review graph took the explicit value
     or the course, the sanity gate took the explicit value alone and got
-    ``None`` whenever the student had not asked (which is always, today --
-    no interface sends the field), and the criteria cache took the course.
+    ``None`` whenever the student had not asked, and the criteria cache
+    took the course. The gate's answer was the damaging one, because at the
+    time no interface offered the field, so "the student did not ask" was
+    every submission.
     """
     for value, source in (
         (explicit, "explicit"),

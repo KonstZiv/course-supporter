@@ -31,6 +31,7 @@ from course_supporter.api.deps import (
 )
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
+    curated_recovered_encoding,
     curated_rejection,
     curated_verdict,
     role_visible_to_student,
@@ -314,6 +315,7 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
         original_filename=submission.original_filename,
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
+        recovered_encoding=curated_recovered_encoding(submission),
     )
 
 
@@ -388,6 +390,7 @@ def _to_detail(
         delta=delta,
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
+        recovered_encoding=curated_recovered_encoding(submission),
     )
 
 

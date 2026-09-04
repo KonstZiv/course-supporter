@@ -143,8 +143,9 @@ class DocumentSummaryRepository:
             main_concepts=main_concepts,
             secondary_concepts=secondary_concepts,
             content_char_count=content_char_count,
-            # task-code-materials: project tree for code materials;
-            # None for every other source type (persist-only for now).
+            # task-code-materials: project tree for code materials; None for
+            # every other source type, which is what makes the author read
+            # surface (GET /documents/{id}/structure) able to 404 on it.
             structure=structure,
             status="ready",
         )

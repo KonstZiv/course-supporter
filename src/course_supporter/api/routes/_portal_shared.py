@@ -146,6 +146,31 @@ def curated_not_opened(
     return out
 
 
+def curated_recovered_encoding(submission: HomeworkSubmission) -> str | None:
+    """The encoding the submitted file was actually read as, if that is known.
+
+    Same column and same reason as :func:`curated_not_opened`: Stage 1 knows
+    how the file was read, and the student is the one who needs told. A name
+    other than ``utf-8`` means the bytes were not UTF-8, an encoding was
+    established and verified, and the review was written from that reading —
+    which the student should hear once, so the next file is saved right.
+
+    Three values, three different facts, and the interface has to tell them
+    apart: ``"utf-8"`` (read directly — the ordinary case), another name
+    (recovered), and ``None`` (the question does not apply — an archive
+    recovers its members one by one, and a document arrives already decoded
+    from the extractor).
+
+    Not covered by DD-6-D: that ban is on ``error_message``, a developer
+    string with library vocabulary in it. This is an encoding name.
+    """
+    safety = submission.safety_result
+    if not isinstance(safety, dict):
+        return None
+    value = safety.get("recovered_encoding")
+    return value if isinstance(value, str) and value else None
+
+
 def material_label(*, filename: str | None, source_type: str, order: int) -> str:
     """Display label for an authored document: the filename, else a derived
     ``{source_type} #{order}``.

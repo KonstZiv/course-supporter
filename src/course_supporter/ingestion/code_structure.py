@@ -140,6 +140,32 @@ def structure_reason(reason: CodeStructureReason, detail: str | None = None) -> 
     return f"{reason.value}: {detail}" if detail is not None else reason.value
 
 
+def split_structure_reason(raw: str) -> tuple[str, str | None]:
+    """Inverse of :func:`structure_reason` — token back out of the stored string.
+
+    Lives here rather than at the read surface so the two halves of one
+    format cannot drift: whoever changes the separator has both sides in
+    front of them.
+
+    The token is returned as it was stored, NOT coerced to
+    :class:`CodeStructureReason`. A row written before a token existed, or
+    by a writer that bypassed ``structure_reason``, still names a file the
+    author could not read — dropping it to keep the vocabulary tidy would
+    hide exactly what the read surface exists to show. The membership
+    guarantee is held by a test over the writer instead.
+
+    Splits on the FIRST separator only, so a detail carrying one of its own
+    (a path with a colon) survives intact.
+
+    >>> split_structure_reason("lockfile: package-lock.json")
+    ('lockfile', 'package-lock.json')
+    >>> split_structure_reason("non_code_type")
+    ('non_code_type', None)
+    """
+    token, sep, detail = raw.partition(": ")
+    return (token, detail) if sep else (raw, None)
+
+
 # ── LLM layer: consequence, not mechanism (ratified C + D1) ────────────
 
 # Token -> human consequence clause (lowercase; the renderer capitalises

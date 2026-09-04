@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
     from course_supporter.security.schemas import NotOpenedEntry
     from course_supporter.security.stage1 import Stage1Result
+    from course_supporter.storage.course_node_repository import CourseNodeRepository
+    from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.storage.s3 import S3Client
 
 
@@ -208,8 +210,8 @@ def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
 
 
 async def _inherit_course_language(
-    entry: Any,
-    node_repo: Any,
+    entry: AuthoredDocument,
+    node_repo: CourseNodeRepository,
     *,
     log: Any,
 ) -> None:

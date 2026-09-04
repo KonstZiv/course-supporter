@@ -408,14 +408,12 @@ async def _verification_languages(
     side has always given; what changes is that the author now gets it too,
     instead of silently getting noise.
     """
-    for candidate in (explicit, None):
-        if not candidate:
-            continue
+    if explicit:
         with contextlib.suppress(InvalidLanguageError, LanguageNotAllowedError):
             # Normalized here rather than trusted: the multipart route
             # validates its form value, the confirm route's body field is a
             # plain string, and both end up in this one place.
-            return [normalize_and_validate(candidate)]
+            return [normalize_and_validate(explicit)]
     root = await CourseNodeRepository(session).get_root_for(
         node_id, tenant_id=tenant_id
     )

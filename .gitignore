@@ -140,6 +140,15 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+# Production env files carry live secrets and live in the deploy working
+# tree; compose and the deploy workflow read them by path, never from git.
+# The bare ``.env`` above is an exact-name match, so it covers neither
+# ``.env.prod`` nor the dated backups kept beside it -- leaving both one
+# ``git add -A`` away from a secret in the history (DD-SP-Y). The example
+# stays tracked on purpose: it documents the variable set and holds no
+# values, so it is exempted right after the pattern that would catch it.
+.env.prod*
+!.env.prod.example
 .venv
 env/
 venv/

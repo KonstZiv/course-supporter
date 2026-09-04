@@ -157,8 +157,16 @@ class TestAssembly:
         service = _service(db_session, agent, _FakeCriteria(None))
 
         output = await service.review(
-            submission=submission, submission_text="def f(): ..."
+            submission=submission, submission_text="def f(): ...", language="ukr"
         )
+
+        # The model is told the language by name. Storage is 639-3, so the
+        # raw value here is ``ukr`` -- an opaque token to a model that knows
+        # "Ukrainian".
+        assert agent.calls["node_course"]["language"] == "Ukrainian"
+        assert agent.calls["industry"]["language"] == "Ukrainian"
+        assert agent.calls["reconcile"]["language"] == "Ukrainian"
+        assert agent.calls["synthesize"]["language"] == "Ukrainian"
 
         # Config weights applied: 0.5*80 + 0.3*70 + 0.2*60 = 73; denoise -3 -> 70.
         assert output.review_result.aggregate_score == 73
@@ -191,7 +199,9 @@ class TestAssembly:
         agent = _FakeAgent(delta=50)  # way past the +-10 cap
         service = _service(db_session, agent, _FakeCriteria(None))
 
-        output = await service.review(submission=submission, submission_text="x")
+        output = await service.review(
+            submission=submission, submission_text="x", language="ukr"
+        )
 
         # aggregate 73 + clamp(50, 10) = 83; effective delta stored is +10.
         assert output.score == 83
@@ -218,7 +228,7 @@ class TestContextRouting:
         agent = _FakeAgent()
         service = _service(db_session, agent, _FakeCriteria(None))
 
-        await service.review(submission=submission, submission_text="x")
+        await service.review(submission=submission, submission_text="x", language="ukr")
 
         assert (
             agent.calls["node_course"]["author_mentor_notes"]
@@ -259,7 +269,7 @@ class TestHistory:
         agent = _FakeAgent()
         service = _service(db_session, agent, _FakeCriteria(None))
 
-        await service.review(submission=current, submission_text="x")
+        await service.review(submission=current, submission_text="x", language="ukr")
 
         history = agent.calls["reconcile"]["history"]
         assert len(history) == 1
@@ -293,7 +303,7 @@ class TestHistory:
         agent = _FakeAgent()
         service = _service(db_session, agent, _FakeCriteria(None))
 
-        await service.review(submission=current, submission_text="x")
+        await service.review(submission=current, submission_text="x", language="ukr")
 
         assert agent.calls["reconcile"]["history"] == []
 
@@ -323,7 +333,9 @@ class TestHallucinationGuard:
         )
         service = _service(db_session, agent, _FakeCriteria(None))
 
-        output = await service.review(submission=submission, submission_text="x")
+        output = await service.review(
+            submission=submission, submission_text="x", language="ukr"
+        )
 
         # The hallucinated id has no real prior -> dropped from the stored result.
         assert output.review_result.history_reconciliation.recidivism == []

@@ -39,8 +39,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # Byte-exact fixtures: these files are the bytes a real upload
+      # carried, and the tests assert their sha256. Appending a newline or
+      # trimming a trailing space would make them fixtures of something
+      # nobody ever submitted -- end-of-file-fixer did exactly that on the
+      # first commit attempt.
       - id: trailing-whitespace
+        exclude: '^tests/fixtures/security/encodings/'
       - id: end-of-file-fixer
+        exclude: '^tests/fixtures/security/encodings/'
       - id: check-yaml
         args: [--unsafe]
       - id: check-toml

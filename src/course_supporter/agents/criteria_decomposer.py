@@ -75,8 +75,9 @@ class CriteriaDecomposerAgent:
             task_type: The assignment type (test/short_task/task/project) —
                 steers decomposition granularity, so it is a version key of
                 the cache (see CriteriaCacheService).
-            language: ISO language for the free-text fields; ``None`` lets
-                the model follow the task's own language.
+            language: Human-readable language name for the free-text
+                fields (``"Ukrainian"``, not ``"ukr"``); ``None`` lets the
+                model follow the task's own language.
 
         Returns:
             A non-empty list of ``{"statement", "evidence"}`` dicts ready to

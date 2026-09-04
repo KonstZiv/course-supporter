@@ -32,12 +32,12 @@ async def client() -> AsyncClient:
 
 
 class TestGetAllowedLanguages:
-    async def test_returns_57_items(self, client: AsyncClient) -> None:
+    async def test_returns_58_items(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/config/languages")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 57
-        assert len(body["items"]) == 57
+        assert body["total"] == 58
+        assert len(body["items"]) == 58
 
     async def test_each_item_has_iso_639_3_and_english_name(
         self, client: AsyncClient

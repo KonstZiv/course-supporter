@@ -20,8 +20,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
+from course_supporter.ingestion.base import (
+    CategorisedProcessingError,
+    ProcessingError,
+    UnsupportedFormatError,
+)
 from course_supporter.ingestion.code import CodeProcessor
+from course_supporter.ingestion.code_structure import CodeStructureReason
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import ChunkType, SourceDocument, SourceType
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
@@ -29,12 +34,31 @@ from course_supporter.security.exceptions import ErrorCategory, SecurityRejected
 _PY_BODY = 'print("hello")\n'
 _RB_BODY = "# service\nclass PostService\nend\n"
 
+# A real Python file with Ukrainian comments -- the case the author side
+# used to turn into U+FFFD noise and charge for. Long enough to clear the
+# recovery length threshold, which is the whole reason it reads like a
+# file someone wrote rather than a two-line stub.
+_UK_PY_BODY = (
+    "# Модуль обробки текстових файлів для навчального проєкту.\n"
+    "# Ця функція повертає значення, якщо змінна не порожня, і кидає\n"
+    "# виняток тоді, коли вхідні дані не відповідають очікуваному формату.\n"
+    "\n"
+    "def read_lines(path):\n"
+    '    """Прочитати файл і повернути перелік рядків без порожніх."""\n'
+    '    with open(path, encoding="utf-8") as handle:\n'
+    "        # Пропускаємо рядки, у яких немає жодного символу\n"
+    "        return [line for line in handle if line.strip()]\n"
+)
+# Too short for any encoding to be established from -- the honest refusal.
+_UK_SHORT_BODY = "# коментар\n"
+
 
 def _mock_source(
     source_url: str,
     *,
     filename: str | None = None,
     file_roles: dict[str, Any] | None = None,
+    language: str | None = None,
 ) -> MagicMock:
     source = MagicMock()
     source.source_type = SourceType.CODE
@@ -43,6 +67,9 @@ def _mock_source(
     # №21: process_raw reads source.file_roles; explicit None keeps a bare
     # MagicMock auto-attr out of decision_roles (default roles, no decision).
     source.file_roles = file_roles
+    # Same reason: process_raw reads source.language for encoding recovery,
+    # and a bare MagicMock would be truthy and verify nothing.
+    source.language = language
     return source
 
 
@@ -365,6 +392,82 @@ class TestProcessRaw:
         )
         assert [c.metadata["file_path"] for c in doc.chunks] == ["__init__.py"]
         assert doc.metadata["excluded_entries"] == []
+
+
+class TestCharsetRecovery:
+    """Code files stopped being decoded blind.
+
+    ``body.decode("utf-8", errors="replace")`` used to run on every member
+    with no label, no warning and no way back: a cp1251 file became U+FFFD
+    noise, went into the reference text, reached the summarising model and
+    the author paid for it. Recovery replaces that, and a file it cannot
+    read leaves the material instead of poisoning it.
+    """
+
+    async def test_cp1251_file_is_recovered_to_the_exact_text(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "reader.py"
+        f.write_bytes(_UK_PY_BODY.encode("cp1251"))
+        doc = await CodeProcessor().process_raw(
+            _mock_source(str(f), filename="reader.py", language="ukr")
+        )
+        assert len(doc.chunks) == 1
+        assert doc.chunks[0].text.endswith(_UK_PY_BODY)
+        assert "\ufffd" not in doc.chunks[0].text
+        assert doc.metadata["excluded_entries"] == []
+
+    async def test_unreadable_file_leaves_the_material_intact(
+        self, tmp_path: Path
+    ) -> None:
+        archive = tmp_path / "project.zip"
+        _write_zip(
+            archive,
+            {
+                "src/app.py": _PY_BODY.encode(),
+                "src/notes.py": _UK_SHORT_BODY.encode("cp1251"),
+                "src/reader.py": _UK_PY_BODY.encode("cp1251"),
+            },
+        )
+        doc = await CodeProcessor().process_raw(
+            _mock_source(str(archive), language="ukr")
+        )
+
+        # The rest of the project is assembled; the material is not rejected.
+        assert [c.metadata["file_path"] for c in doc.chunks] == [
+            "src/app.py",
+            "src/reader.py",
+        ]
+        excluded = {e["path"]: e["reason"] for e in doc.metadata["excluded_entries"]}
+        assert excluded == {"src/notes.py": CodeStructureReason.CHARSET_VIOLATION.value}
+
+    async def test_ascii_and_utf8_are_untouched(self, tmp_path: Path) -> None:
+        archive = tmp_path / "project.zip"
+        utf8_body = "# коментар українською\nprint('ok')\n"
+        _write_zip(
+            archive,
+            {"a.py": _PY_BODY.encode(), "b.py": utf8_body.encode()},
+        )
+        doc = await CodeProcessor().process_raw(
+            _mock_source(str(archive), language="ukr")
+        )
+        texts = {c.metadata["file_path"]: c.text for c in doc.chunks}
+        assert texts["a.py"].endswith(_PY_BODY)
+        assert texts["b.py"].endswith(utf8_body)
+        assert doc.metadata["excluded_entries"] == []
+
+    async def test_material_without_a_language_drops_what_it_cannot_verify(
+        self, tmp_path: Path
+    ) -> None:
+        # No language, nothing to verify against: the file is dropped with
+        # its reason rather than read as noise. The refusal is the point --
+        # the author learns, instead of paying for mojibake.
+        f = tmp_path / "reader.py"
+        f.write_bytes(_UK_PY_BODY.encode("cp1251"))
+        with pytest.raises(CategorisedProcessingError):
+            await CodeProcessor().process_raw(
+                _mock_source(str(f), filename="reader.py", language=None)
+            )
 
 
 class TestOffsets:

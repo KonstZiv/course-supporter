@@ -118,6 +118,25 @@ class TestComputeOnMiss:
         assert row.criteria == _CRITERIA
         assert row.source_content_hash == seed_material_entry.content_hash
         assert row.source_task_type == "task"
+
+    async def test_the_decomposer_is_given_a_language_name_not_a_code(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        # The source of the language is unchanged -- criteria are cached per
+        # task and shared, so they follow the course, never one student's
+        # request. Only the form handed to the model changes: a name it
+        # recognises instead of the stored ``ukr``.
+        seed_material_entry.language = "ukr"
+        await _seed_ready_task(db_session, seed_material_entry, content="task body")
+        decomposer = _FakeDecomposer(_CRITERIA)
+        service = CriteriaCacheService(db_session, decomposer)
+
+        await service.get_or_compute(seed_material_entry.id)
+
+        assert decomposer.last is not None
+        assert decomposer.last["language"] == "Ukrainian"
         # The full segment text reached the decomposer.
         assert decomposer.last is not None
         assert decomposer.last["task_text"] == "task body"

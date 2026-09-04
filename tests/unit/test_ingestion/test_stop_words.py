@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from course_supporter.ingestion.stop_words import (
     build_stop_words,
     supported_natural_languages,
     supported_programming_languages,
 )
+from course_supporter.language import InvalidLanguageError, LanguageNotAllowedError
 
 
 class TestBuildStopWords:
@@ -124,9 +127,32 @@ class TestBuildStopWords:
         assert "vector" in cpp
         assert "namespace" in cpp
 
-    def test_unknown_language_empty(self) -> None:
-        sw = build_stop_words(natural_lang="xx", programming_lang="cobol")
-        assert len(sw) == 0
+    def test_unknown_natural_language_is_refused(self) -> None:
+        # Used to return the Python keywords and no error, so a caller
+        # passing the 639-3 code the database stores got a set that looked
+        # usable and matched nothing.
+        with pytest.raises(InvalidLanguageError):
+            build_stop_words(natural_lang="xx")
+
+    def test_language_outside_the_whitelist_is_refused(self) -> None:
+        with pytest.raises(LanguageNotAllowedError):
+            build_stop_words(natural_lang="lat")
+
+    def test_stored_639_3_code_is_accepted(self) -> None:
+        # The form the database actually holds.
+        assert "це" in build_stop_words(natural_lang="ukr")
+        assert "це" in build_stop_words(natural_lang="Ukrainian")
+
+    def test_russian_set_is_present(self) -> None:
+        sw = build_stop_words(natural_lang="rus")
+        assert "это" in sw
+        assert "функция" in sw
+        assert "це" not in sw  # not Ukrainian
+
+    def test_unknown_programming_language_contributes_nothing(self) -> None:
+        sw = build_stop_words(natural_lang="en", programming_lang="cobol")
+        assert "the" in sw
+        assert "def" not in sw
 
     def test_combined_set(self) -> None:
         sw = build_stop_words(natural_lang="en", programming_lang="python")
@@ -137,20 +163,21 @@ class TestSupportedLanguages:
     def test_natural_languages(self) -> None:
         langs = supported_natural_languages()
         for code in [
-            "en",
-            "uk",
-            "de",
-            "sr",
-            "hr",
+            "eng",
+            "ukr",
+            "rus",
+            "deu",
+            "srp",
+            "hrv",
             "cnr",
-            "es",
-            "tr",
-            "ro",
-            "bg",
-            "pl",
-            "lt",
-            "sv",
-            "fr",
+            "spa",
+            "tur",
+            "ron",
+            "bul",
+            "pol",
+            "lit",
+            "swe",
+            "fra",
         ]:
             assert code in langs
 

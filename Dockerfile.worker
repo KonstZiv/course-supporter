@@ -19,6 +19,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Install dependencies (cached layer)
 COPY pyproject.toml uv.lock .python-version ./
 ENV UV_LINK_MODE=copy
+# The environment is built at the path it will RUN from, not at the path it
+# is built in. ``uv`` writes an absolute interpreter path into the shebang of
+# every console script it installs, so an environment created under /build
+# and copied to /app leaves every one of them pointing at /build/.venv/bin/
+# python -- a path that does not exist in the final image. The scripts are on
+# PATH and look fine; running one gives "no such file or directory" naming a
+# file that is right there. ``alembic current`` is the one that gets typed by
+# hand, and it failed exactly this way; the rest of ``bin/`` was in the same
+# state, unnoticed because both CMDs invoke ``python -m``.
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 RUN uv sync --no-dev --frozen --no-install-project
 
 # Copy application code
@@ -59,7 +69,7 @@ WORKDIR /app
 RUN mkdir -p /app/.cache && chown app:app /app/.cache
 
 # Copy virtual environment and application
-COPY --from=builder /build/.venv .venv/
+COPY --from=builder /app/.venv .venv/
 COPY --from=builder /build/src src/
 COPY --from=builder /build/config config/
 COPY --from=builder /build/prompts prompts/

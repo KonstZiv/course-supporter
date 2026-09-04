@@ -390,9 +390,9 @@ class _RecordingSanityService:
         self.seen: list[str] = []
 
     async def evaluate(
-        self, *, submission: Any, submission_text: str
+        self, *, submission: Any, submission_text: str, language: str | None = None
     ) -> SanityGateOutcome:
-        del submission
+        del submission, language
         self.seen.append(submission_text)
         return SanityGateOutcome(
             classification=SanityClassification(
@@ -407,9 +407,9 @@ class _RecordingReviewService:
         self.seen: list[str] = []
 
     async def review(
-        self, *, submission: Any, submission_text: str
+        self, *, submission: Any, submission_text: str, language: str | None = None
     ) -> MentorReviewOutput:
-        del submission
+        del submission, language
         self.seen.append(submission_text)
         return _review_output()
 

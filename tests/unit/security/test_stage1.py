@@ -35,7 +35,6 @@ from course_supporter.security.policies import (
 )
 from course_supporter.security.stage1 import (
     Stage1Result,
-    _decode_text,
     _is_text_extension,
     archive_kind_for_filename,
     run_stage1,
@@ -111,15 +110,18 @@ CLEAN_TEXT_UTF8 = (
     b"handles edge cases including empty input and duplicates.\n"
 )
 
-# Cyrillic body intentionally encoded in Windows-1251 to drive
-# CHARSET_VIOLATION on the homework strict gate. Padded so libmagic
-# has enough bytes to commit to a non-UTF-8 label.
+# Ukrainian body in Windows-1251: the case recovery has to get right on
+# both sides. Ukrainian rather than Russian on purpose -- Russian carries
+# ``ы``/``э``/``ъ``, which a Ukrainian course would rightly call foreign,
+# so a Russian fixture would test a refusal while claiming to test a
+# recovery. Long enough to clear MIN_RECOVERABLE_BYTES.
 CLEAN_TEXT_CP1251 = (
-    "Привет, проверь, пожалуйста, мое домашнее задание. "
-    "Я реализовал алгоритм с использованием словаря для быстрого "
-    "поиска и обработал краевые случаи как требовалось в задании. "
+    "Привіт, перевір, будь ласка, моє домашнє завдання. "
+    "Я реалізував алгоритм з використанням словника для швидкого "
+    "пошуку і обробив краєві випадки, як вимагалося в завданні. "
 ) * 4
 CLEAN_TEXT_CP1251_BYTES = CLEAN_TEXT_CP1251.encode("cp1251")
+UKR = ["ukr"]
 
 
 # ── 1. Size cap ────────────────────────────────────────────────────
@@ -449,7 +451,47 @@ class TestCharsetEnforcement:
         )
         assert result.nfc_text is not None
 
-    def test_homework_cp1251_rejected(self) -> None:
+    def test_homework_cp1251_is_recovered(self) -> None:
+        result = run_stage1(
+            filename="hw.txt",
+            content=CLEAN_TEXT_CP1251_BYTES,
+            context="homework",
+            languages=UKR,
+        )
+        assert result.recovered_encoding == "cp1251"
+        assert result.nfc_text == CLEAN_TEXT_CP1251
+
+    def test_authored_cp1251_is_recovered_to_the_exact_text(self) -> None:
+        # This test used to assert only that the text was non-empty, which
+        # made mojibake a passing result and wrote the silent corruption
+        # into the contract: the authored side decoded by the detector's
+        # label and the Methodist read whatever came out. The assertion is
+        # now the whole point -- the author's words come back verbatim.
+        result = run_stage1(
+            filename="lecture.txt",
+            content=CLEAN_TEXT_CP1251_BYTES,
+            context="authored",
+            languages=UKR,
+        )
+        assert result.recovered_encoding == "cp1251"
+        assert result.nfc_text == CLEAN_TEXT_CP1251
+
+    def test_unverifiable_language_refuses_both_contexts(self) -> None:
+        # No alphabet, no stop words, no verification: the honest answer is
+        # a refusal, not a guess -- on either side.
+        for context in ("homework", "authored"):
+            with pytest.raises(SecurityRejectedError) as exc_info:
+                run_stage1(
+                    filename="hw.txt",
+                    content=CLEAN_TEXT_CP1251_BYTES,
+                    context=context,
+                    languages=["jpn"],
+                )
+            assert exc_info.value.category is ErrorCategory.CHARSET_VIOLATION
+
+    def test_missing_languages_refuses_rather_than_guesses(self) -> None:
+        # The fail-closed default: a caller that forgets ``languages``
+        # gets a refusal, never an unverified decode.
         with pytest.raises(SecurityRejectedError) as exc_info:
             run_stage1(
                 filename="hw.txt",
@@ -458,21 +500,30 @@ class TestCharsetEnforcement:
             )
         assert exc_info.value.category is ErrorCategory.CHARSET_VIOLATION
 
-    def test_authored_cp1251_passes(self) -> None:
-        # AUTHORED_POLICY has charset_strict=False, so a non-UTF-8
-        # body must NOT raise CHARSET_VIOLATION. Whether the libmagic
-        # label is exactly "windows-1251" or a related single-byte
-        # codepage (libmagic often reports "iso-8859-1" for Cyrillic
-        # content with insufficient discriminating bytes) is an
-        # external-detector concern; the orchestrator contract here
-        # is "do not block, return decoded text".
+    def test_detector_label_stays_out_of_the_decision(self) -> None:
+        # libmagic calls this file ``unknown-8bit``; it is recovered anyway,
+        # and the label survives only as a field for the log.
         result = run_stage1(
-            filename="lecture.txt",
+            filename="hw.txt",
             content=CLEAN_TEXT_CP1251_BYTES,
-            context="authored",
+            context="homework",
+            languages=UKR,
         )
-        assert result.nfc_text is not None
-        assert len(result.nfc_text) > 0
+        assert result.detected_charset != result.recovered_encoding
+
+    def test_latin_head_beyond_the_detector_window(self) -> None:
+        # The old gate read the label, saw ``us-ascii`` for 64 KiB of Latin
+        # ahead of one Cyrillic byte, passed, and left an unguarded
+        # UnicodeDecodeError behind it. Now the answer is a category.
+        filler = ("The quick brown fox jumps over the lazy dog. " * 1600).encode()
+        with pytest.raises(SecurityRejectedError) as exc_info:
+            run_stage1(
+                filename="hw.txt",
+                content=filler[: 64 * 1024] + b"\xd0",
+                context="homework",
+                languages=UKR,
+            )
+        assert exc_info.value.category is ErrorCategory.CHARSET_VIOLATION
 
 
 # ── 7. Structured logging ──────────────────────────────────────────
@@ -516,51 +567,6 @@ class TestStructuredLogging:
         assert len(warnings) == 1
         assert warnings[0]["filename"] == "hw.zip"
 
-    def test_charset_decode_fallback_emits_warning(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Non-strict tier-3 fallback must emit a structured
-        # WARNING with filename + detected_charset + error so
-        # production telemetry can detect encoding anomalies in
-        # authored content. Force a fake codec name into the
-        # libmagic-detected charset path so _decode_text raises
-        # LookupError; the orchestrator catches and logs.
-        from course_supporter.security import stage1 as stage1_module
-
-        monkeypatch.setattr(
-            stage1_module,
-            "detect_charset",
-            lambda _content: "totally-fake-encoding-xyz",
-        )
-
-        with capture_logs() as logs:
-            result = run_stage1(
-                filename="lecture.txt",
-                content=CLEAN_TEXT_UTF8,
-                context="authored",  # non-strict
-            )
-
-        fallback_warnings = [
-            log
-            for log in logs
-            if log.get("log_level") == "warning"
-            and log.get("event") == "stage1_charset_decode_fallback"
-        ]
-        assert len(fallback_warnings) == 1
-        record = fallback_warnings[0]
-        assert record["filename"] == "lecture.txt"
-        assert record["detected_charset"] == "totally-fake-encoding-xyz"
-        assert "error" in record and isinstance(record["error"], str)
-
-        # Pipeline still produces a valid Stage1Result -- the
-        # warning is observability, not a rejection signal.
-        assert result.nfc_text is not None
-
-
-# ── 8. ErrorCategory public contract ───────────────────────────────
-
-
-class TestErrorCategoryPublicContract:
     def test_all_error_categories_present(self) -> None:
         # 7 categories Phase 0.6 baseline + 2 Phase 2.1 C2 additions:
         # ARCHIVE_BOMB + SYMLINK_VIOLATION per KD-2.1-I (2-set ratify
@@ -729,42 +735,6 @@ class TestIsTextExtension:
         assert _is_text_extension(ext) is False
 
 
-class TestDecodeText:
-    def test_strict_utf8_succeeds(self) -> None:
-        assert _decode_text(b"hello", "utf-8", strict=True) == "hello"
-
-    def test_strict_invalid_utf8_raises(self) -> None:
-        with pytest.raises(UnicodeDecodeError):
-            _decode_text(b"\xff\xfe\xfd", "utf-8", strict=True)
-
-    def test_non_strict_uses_detected_charset(self) -> None:
-        cp1251 = "Привет".encode("cp1251")
-        assert _decode_text(cp1251, "windows-1251", strict=False) == "Привет"
-
-    def test_non_strict_charset_none_falls_back_to_replace(self) -> None:
-        # Tier-3 path: libmagic could not determine a charset
-        # (charset=None). _decode_text returns UTF-8 with U+FFFD
-        # replacement characters; this path never raises.
-        garbled = b"\xff\xfe\xfd"
-        result = _decode_text(garbled, None, strict=False)
-        assert "�" in result
-
-    def test_non_strict_invalid_codec_raises_lookup_error(self) -> None:
-        # Tier-2 propagation: the orchestrator owns the fallback
-        # decision so it can log the failure. _decode_text now
-        # propagates LookupError for unknown codec names instead
-        # of silently swallowing.
-        with pytest.raises(LookupError):
-            _decode_text(b"some bytes", "totally-fake-encoding", strict=False)
-
-    def test_non_strict_decode_error_propagates(self) -> None:
-        # Tier-2 propagation: invalid bytes for the declared codec
-        # raise UnicodeDecodeError so the caller can log + fall
-        # through to UTF-8-with-replacement.
-        with pytest.raises(UnicodeDecodeError):
-            _decode_text(b"\xff\xfe\xfd", "utf-8", strict=False)
-
-
 # ── Sanity: Stage1Result is iterable-friendly ──────────────────────
 
 
@@ -813,15 +783,38 @@ class TestHomeworkSoftArchive:
         # entries at any depth, so nothing decoded it.
         assert "secret.py" not in read
 
-    def test_non_utf8_entry_is_named_and_the_rest_is_read(self) -> None:
+    def test_unrecoverable_entry_is_named_and_the_rest_is_read(self) -> None:
+        # Too short to establish an encoding for -- so it is set aside with
+        # its reason and the rest of the archive is still reviewed.
         cp1251 = "Розв'язок задачі\n".encode("cp1251")
         z = _make_zip([("good.py", b'print("ok")\n'), ("notes.txt", cp1251)])
-        result = run_stage1(filename="hw.zip", content=z, context="homework")
+        result = run_stage1(
+            filename="hw.zip", content=z, context="homework", languages=UKR
+        )
 
         assert [n.arcname for n in result.not_opened] == ["notes.txt"]
         assert result.not_opened[0].reason is ErrorCategory.CHARSET_VIOLATION
         assert result.archive_entries is not None
         assert [e.arcname for e in result.archive_entries] == ["good.py"]
+
+    def test_recovered_entry_travels_on_as_the_recovered_text(self) -> None:
+        # Members are handed downstream as bytes and decoded there as UTF-8
+        # with replacement. If recovery only validated, those raw cp1251
+        # bytes would decode straight back into the noise it just undid, so
+        # the recovered text replaces them.
+        z = _make_zip(
+            [("good.py", b'print("ok")\n'), ("notes.txt", CLEAN_TEXT_CP1251_BYTES)]
+        )
+        result = run_stage1(
+            filename="hw.zip", content=z, context="homework", languages=UKR
+        )
+
+        assert result.not_opened == ()
+        assert result.archive_entries is not None
+        by_name = {e.arcname: e.content for e in result.archive_entries}
+        assert by_name["notes.txt"].decode("utf-8") == CLEAN_TEXT_CP1251
+        # An already-UTF-8 member is left byte-for-byte alone.
+        assert by_name["good.py"] == b'print("ok")\n'
 
     def test_injection_inside_archive_still_fails_the_submission(self) -> None:
         injection = (

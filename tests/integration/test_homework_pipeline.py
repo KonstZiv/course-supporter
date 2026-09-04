@@ -199,9 +199,9 @@ class _FakeSanityService:
         self._outcome = outcome
 
     async def evaluate(
-        self, *, submission: Any, submission_text: str
+        self, *, submission: Any, submission_text: str, language: str | None = None
     ) -> SanityGateOutcome:
-        del submission, submission_text
+        del submission, submission_text, language
         return self._outcome
 
 
@@ -210,17 +210,19 @@ class _FakeReviewService:
         self._output = output
 
     async def review(
-        self, *, submission: Any, submission_text: str
+        self, *, submission: Any, submission_text: str, language: str | None = None
     ) -> MentorReviewOutput:
-        del submission, submission_text
+        del submission, submission_text, language
         return self._output
 
 
 class _RaisingReviewService:
     """A review service that blows up mid-graph (drives the failure path)."""
 
-    async def review(self, *, submission: Any, submission_text: str) -> Any:
-        del submission, submission_text
+    async def review(
+        self, *, submission: Any, submission_text: str, language: str | None = None
+    ) -> Any:
+        del submission, submission_text, language
         msg = "mentor review graph exploded"
         raise RuntimeError(msg)
 
@@ -242,6 +244,7 @@ def _patch_pipeline(
                     archive_entries=None,
                     nfc_text="def f(): return 1",
                     not_opened=(),
+                    recovered_encoding="utf-8",
                 )
             ),
         )

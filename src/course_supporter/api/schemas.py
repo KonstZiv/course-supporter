@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from course_supporter.language import (
     InvalidLanguageError,
@@ -31,6 +38,25 @@ def _validate_language(raw: str) -> str:
         return normalize_and_validate(raw)
     except (InvalidLanguageError, LanguageNotAllowedError) as exc:
         raise ValueError(str(exc)) from exc
+
+
+def _validate_optional_language(raw: str | None) -> str | None:
+    """Same validation for an optional form field; blank means "not given".
+
+    A submission form sends an empty string when the field is left alone,
+    and an empty string is not a bad language -- it is no language.
+    """
+    if raw is None or not raw.strip():
+        return None
+    return _validate_language(raw)
+
+
+#: An optional language on a form: validated at the door and stored as
+#: 639-3, so a typo is answered with 422 instead of travelling into a
+#: prompt verbatim and letting the model decide what ``xx`` means.
+OptionalLanguageForm = Annotated[
+    str | None, AfterValidator(_validate_optional_language)
+]
 
 
 class RootNodeCreateRequest(BaseModel):

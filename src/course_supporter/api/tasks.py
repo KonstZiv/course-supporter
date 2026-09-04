@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
     from course_supporter.security.schemas import NotOpenedEntry
     from course_supporter.security.stage1 import Stage1Result
+    from course_supporter.storage.course_node_repository import CourseNodeRepository
+    from course_supporter.storage.orm import AuthoredDocument
     from course_supporter.storage.s3 import S3Client
 
 
@@ -207,6 +209,39 @@ def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
     return f"\n\n=== NOT OPENED ({len(entries)}) ===\n{lines}\n"
 
 
+async def _inherit_course_language(
+    entry: AuthoredDocument,
+    node_repo: CourseNodeRepository,
+    *,
+    log: Any,
+) -> None:
+    """Fill a material's language from its course root when it has none.
+
+    Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
+    the root always carries ``default_language``, so this fires before any
+    processing and the entry is persisted with the root's language; STT
+    auto-detect is observational only (no cache-back since 2.4.21).
+
+    Shared by both phases that process a material, because both now need
+    the answer: role proposal and final assembly each read a code file's
+    bytes, and reading them means recovering their encoding, which is
+    verified against this language. Were only one phase to inherit it, the
+    same file could be dropped as unreadable while proposing roles and
+    recovered while assembling -- two phases describing one project
+    differently.
+    """
+    if entry.language is not None:
+        return
+    root = await node_repo.get_root_for(entry.course_node_id)
+    if root is not None and root.default_language:
+        entry.language = root.default_language
+        log.debug(
+            "language_inherited_from_course",
+            language=entry.language,
+            root_id=str(root.id),
+        )
+
+
 async def _ingest_on_terminal(
     ctx: dict[str, Any],
     job_id: str,
@@ -343,20 +378,7 @@ async def arq_ingest_material(
             msg = f"AuthoredDocument {material_id} vanished after liveness check"
             raise ValueError(msg)
 
-        # Resolve effective language: entry override → course default → None.
-        # Under the 2.4.13 invariant (CHECK ``course_nodes_root_language_required``)
-        # the root always has ``default_language``, so inheritance fires before
-        # STT runs and the entry is persisted with the root's language; STT
-        # auto-detect is observational only (no cache-back since 2.4.21).
-        if entry.language is None:
-            root = await node_repo.get_root_for(entry.course_node_id)
-            if root is not None and root.default_language:
-                entry.language = root.default_language
-                log.debug(
-                    "language_inherited_from_course",
-                    language=entry.language,
-                    root_id=str(root.id),
-                )
+        await _inherit_course_language(entry, node_repo, log=log)
 
         try:
             # Job → active is owned by the seam (already written on entry). The
@@ -750,6 +772,9 @@ async def arq_prepare_document(
     from course_supporter.storage.authored_document_repository import (
         AuthoredDocumentRepository,
     )
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
 
     jid = uuid.UUID(job_id)
     mid = uuid.UUID(material_id)
@@ -770,6 +795,12 @@ async def arq_prepare_document(
             # of the row vanishing in between. Raise → the seam writes ``failed``.
             msg = f"AuthoredDocument {material_id} vanished after liveness check"
             raise ValueError(msg)
+
+        # Both phases inherit the course language before reading bytes: the
+        # encoding recovery inside ``process_raw`` verifies against it, and a
+        # phase that skipped the inheritance would judge the same file by a
+        # different standard than the other.
+        await _inherit_course_language(entry, CourseNodeRepository(session), log=log)
 
         # CodeProcessor.process_raw needs a local path; _resolve_s3_url downloads
         # the archive to a temp file and yields a proxy over the entry. The
@@ -877,6 +908,7 @@ async def arq_process_homework(
         deliver_webhook,
         resolve_webhook_url,
     )
+    from course_supporter.language import resolve_review_language
     from course_supporter.models.source import AssignmentType
     from course_supporter.normalizer.classify import denylist_prefix
     from course_supporter.security.exceptions import SecurityRejectedError
@@ -982,6 +1014,40 @@ async def arq_process_homework(
                     ),
                 )
 
+                # One resolution per submission, before Stage 1 -- because
+                # Stage 1 needs it too. Recovery of a non-UTF-8 file is
+                # verified against the language the text is expected to be
+                # in, so the language question has to be answered before the
+                # file is read, not after. The same answer then travels to
+                # the sanity gate and the review graph, which used to work it
+                # out separately and disagree.
+                student = await StudentRepository(session).get_by_id(
+                    submission.student_id
+                )
+                task_doc = await AuthoredDocumentRepository(session).get_by_id(
+                    submission.authored_document_id
+                )
+                review_language = resolve_review_language(
+                    explicit=submission.response_language,
+                    preferred=student.preferred_language if student else None,
+                    course=task_doc.language if task_doc is not None else None,
+                )
+                log.info(
+                    "review_language_resolved",
+                    source=review_language.source,
+                    value=review_language.code,
+                )
+                # Verification languages: the course's, plus the reader's when
+                # it differs. A student reviewing in Russian on a Ukrainian
+                # course may legitimately submit in either, and judging their
+                # letters against only one alphabet would refuse the other.
+                course_language = task_doc.language if task_doc is not None else None
+                verify_languages = [
+                    code
+                    for code in dict.fromkeys([course_language, review_language.code])
+                    if code
+                ]
+
                 # --- KD18 P3: branch on task_type ---
                 # A project submission bypasses the single-file path's
                 # extract_submission_content + run_stage1 (fail-closed on a real
@@ -989,9 +1055,6 @@ async def arq_process_homework(
                 # 1A) and is normalized via the classify normalizer instead,
                 # BEFORE safety. Non-project submissions are byte-unchanged.
                 file_bytes = file_path.read_bytes()
-                task_doc = await AuthoredDocumentRepository(session).get_by_id(
-                    submission.authored_document_id
-                )
                 is_project = (
                     task_doc is not None
                     and task_doc.task_type == AssignmentType.PROJECT.value
@@ -1001,6 +1064,10 @@ async def arq_process_homework(
                 # submission (its own normalizer reports exclusions) and for
                 # any non-archive single file.
                 not_opened: tuple[NotOpenedEntry, ...] = ()
+                # How the file was read. ``None`` for a project submission,
+                # which never goes through Stage 1, and for anything that
+                # decoded as UTF-8 without recovery.
+                stage1_recovered_encoding: str | None = None
 
                 if is_project:
                     project_text = await process_project_submission(
@@ -1032,6 +1099,7 @@ async def arq_process_homework(
                             filename=submission.original_filename or file_path.name,
                             content=file_bytes,
                             context="homework",
+                            languages=verify_languages,
                             archive_skip_matcher=denylist_prefix,
                             document_extractor=_extract_document_text,
                         )
@@ -1045,6 +1113,7 @@ async def arq_process_homework(
                             file_bytes=file_bytes,
                             filename=(submission.original_filename or file_path.name),
                         )
+                        stage1_recovered_encoding = stage1_result.recovered_encoding
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult
                         # (synthetic shape; ``source='stage1'`` discriminates from
@@ -1072,17 +1141,26 @@ async def arq_process_homework(
                     # ``security_warning`` pair (DD-6-S): same question --
                     # what did we actually read out of this upload -- now
                     # answered from the single extractor's result.
+                    #
+                    # One unit for both shapes: bytes of the text that was
+                    # read, summed over the archive's members or taken from
+                    # the single file. The archive arm was the only one wired
+                    # when this line replaced its predecessor, so a
+                    # single-file submission has been logging "0 files, 0
+                    # bytes" ever since -- true of the archive count, and
+                    # simply wrong about what was read. ``files`` stays the
+                    # member count and is 1 for a single file, not 0: one
+                    # file was read.
+                    entries = stage1_result.archive_entries
+                    read_bytes = (
+                        sum(len(e.content) for e in entries)
+                        if entries is not None
+                        else len((stage1_result.nfc_text or "").encode("utf-8"))
+                    )
                     log.info(
                         "homework_content_read",
-                        files=(
-                            0
-                            if stage1_result.archive_entries is None
-                            else len(stage1_result.archive_entries)
-                        ),
-                        total_size=sum(
-                            len(e.content)
-                            for e in (stage1_result.archive_entries or ())
-                        ),
+                        files=len(entries) if entries is not None else 1,
+                        read_text_bytes=read_bytes,
                         not_opened=len(not_opened),
                     )
 
@@ -1101,6 +1179,10 @@ async def arq_process_homework(
                 # what the read path reads: a submission that PASSES must
                 # still be able to tell the student which files were skipped.
                 safety_result.not_opened = list(not_opened)
+                # Same carry as ``not_opened`` directly above, for the same
+                # reason: Stage 1 knows how the file was read, and the read
+                # path is where that answer is needed.
+                safety_result.recovered_encoding = stage1_recovered_encoding
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )
@@ -1137,6 +1219,7 @@ async def arq_process_homework(
                 sanity_outcome = await sanity_service.evaluate(
                     submission=submission,
                     submission_text=submission_text,
+                    language=review_language.code,
                 )
                 await hw_repo.store_sanity_result(
                     sid, sanity_outcome.classification.model_dump(mode="json")
@@ -1185,6 +1268,7 @@ async def arq_process_homework(
                 review_output = await review_service.review(
                     submission=submission,
                     submission_text=submission_text,
+                    language=review_language.code,
                 )
                 await hw_repo.store_review_result(
                     sid,

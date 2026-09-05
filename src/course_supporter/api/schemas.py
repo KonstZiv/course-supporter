@@ -218,6 +218,59 @@ class AllowedLanguagesResponse(BaseModel):
     )
 
 
+class SubmissionPolicyEntry(BaseModel):
+    """What the submission door accepts for one kind of assignment.
+
+    Three facts, one per gate the server actually runs, in the order a
+    submission meets them: the extension allowlist
+    (``validate_homework_file``), the size cap the route resolves from the
+    task kind, and — for a project — the archive-only rule that
+    ``project_preflight`` enforces afterwards.
+
+    ``accept`` is the same list for every kind because the extension check
+    IS task-agnostic on the server; a project narrows it further through
+    ``archive_only`` rather than through a shorter list. Two fields for two
+    gates keeps the client's picture identical to the server's, instead of
+    pre-baking one gate into the other and hiding which door refused.
+    """
+
+    max_bytes: int = Field(
+        description="Upload cap in bytes, exactly as the server checks it "
+        "(no rounding to MB — the door compares bytes)."
+    )
+    accept: list[str] = Field(
+        description="Allowed extensions, dot-prefixed and sorted — the form "
+        "of the HTML ``accept`` attribute."
+    )
+    archive_only: bool = Field(
+        description="Whether a submission must be an archive of the whole "
+        "project; a loose file is refused with ``ARCHIVE_ONLY``."
+    )
+
+
+class SubmissionPolicyResponse(BaseModel):
+    """Response shape for ``GET /api/v1/portal/submission-policy``.
+
+    One entry per value of :class:`AssignmentType` — all four, not the two
+    the server branches on. The server's own rule is binary (project vs
+    everything else), but the portal holds the raw ``task_type`` of the
+    document it is rendering, so a table keyed on the two it happens to
+    branch on would leave a ``test`` or ``short_task`` assignment without a
+    row and push a "not project → task" rule back onto the client. That
+    rule is a copy of server logic on the far side of the repository
+    boundary, which is the whole of ``DD-SP-V``.
+
+    The three non-project kinds therefore carry identical numbers on
+    purpose: the duplication is in the wire format, where it costs nothing,
+    instead of in a client that has to know why.
+    """
+
+    policies: dict[AssignmentType, SubmissionPolicyEntry] = Field(
+        description="Submission policy by assignment kind; every value of "
+        "``AssignmentType`` is present."
+    )
+
+
 class NodeMoveRequest(BaseModel):
     """Request body for moving a node within the tree.
 

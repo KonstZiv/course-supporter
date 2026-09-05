@@ -218,6 +218,59 @@ class AllowedLanguagesResponse(BaseModel):
     )
 
 
+class SubmissionPolicyEntry(BaseModel):
+    """What the submission door accepts for one kind of assignment.
+
+    Three facts, one per gate the server actually runs, in the order a
+    submission meets them: the extension allowlist
+    (``validate_homework_file``), the size cap the route resolves from the
+    task kind, and — for a project — the archive-only rule that
+    ``project_preflight`` enforces afterwards.
+
+    ``accept`` is the same list for every kind because the extension check
+    IS task-agnostic on the server; a project narrows it further through
+    ``archive_only`` rather than through a shorter list. Two fields for two
+    gates keeps the client's picture identical to the server's, instead of
+    pre-baking one gate into the other and hiding which door refused.
+    """
+
+    max_bytes: int = Field(
+        description="Upload cap in bytes, exactly as the server checks it "
+        "(no rounding to MB — the door compares bytes)."
+    )
+    accept: list[str] = Field(
+        description="Allowed extensions, dot-prefixed and sorted — the form "
+        "of the HTML ``accept`` attribute."
+    )
+    archive_only: bool = Field(
+        description="Whether a submission must be an archive of the whole "
+        "project; a loose file is refused with ``ARCHIVE_ONLY``."
+    )
+
+
+class SubmissionPolicyResponse(BaseModel):
+    """Response shape for ``GET /api/v1/portal/submission-policy``.
+
+    One entry per value of :class:`AssignmentType` — all four, not the two
+    the server branches on. The server's own rule is binary (project vs
+    everything else), but the portal holds the raw ``task_type`` of the
+    document it is rendering, so a table keyed on the two it happens to
+    branch on would leave a ``test`` or ``short_task`` assignment without a
+    row and push a "not project → task" rule back onto the client. That
+    rule is a copy of server logic on the far side of the repository
+    boundary, which is the whole of ``DD-SP-V``.
+
+    The three non-project kinds therefore carry identical numbers on
+    purpose: the duplication is in the wire format, where it costs nothing,
+    instead of in a client that has to know why.
+    """
+
+    policies: dict[AssignmentType, SubmissionPolicyEntry] = Field(
+        description="Submission policy by assignment kind; every value of "
+        "``AssignmentType`` is present."
+    )
+
+
 class NodeMoveRequest(BaseModel):
     """Request body for moving a node within the tree.
 
@@ -1728,10 +1781,15 @@ class PortalMediaResponse(BaseModel):
 class PortalCourseListItem(BaseModel):
     """One enrolled course on the portal landing list (Phase 6 T4a c1).
 
-    Deliberately bare — id + title only. No counts, no peeking into the tree:
-    the first screen is cheap, and the material tree is a separate per-course
-    call. Enrollment IS the visibility gate (publish-gate A, KD17): the list is
-    exactly the student's active enrollments.
+    Bare by design — no counts, no peeking into the tree: the first screen is
+    cheap, and the material tree is a separate per-course call. Enrollment IS
+    the visibility gate (publish-gate A, KD17): the list is exactly the
+    student's active enrollments.
+
+    The course language is NOT here even though this is the course card: it is
+    read where it is used, and the submission form that needs it lives on the
+    material tree, so ``PortalMaterialTreeNode.default_language`` carries it
+    (step Д) rather than a second screen holding a value for the first one.
     """
 
     id: uuid.UUID
@@ -1846,13 +1904,20 @@ class PortalMaterialTreeNode(BaseModel):
 
     Narrower than the author-facing ``NodeWithDocumentsResponse``: only
     id / title / order + children + documents (no content_hash, summary_status,
-    language, timestamps). Soft-deleted nodes / documents and non-READY
+    per-node language, timestamps) — with one addition in step Д, the COURSE
+    language on the root, because the submission form that needs it lives on
+    this tree and nowhere else. Soft-deleted nodes / documents and non-READY
     documents are filtered out before projection (publish-gate A + READY-only).
     """
 
     id: uuid.UUID
     title: str = Field(description="Node title.")
     order: int = Field(description="0-based position among siblings.")
+    default_language: str | None = Field(
+        default=None,
+        description="Course language (ISO 639-3) — set on the ROOT of the "
+        "tree, null on every child.",
+    )
     documents: list[PortalMaterialItem] = Field(
         default_factory=list,
         description="READY documents directly on this node (materials + tasks).",

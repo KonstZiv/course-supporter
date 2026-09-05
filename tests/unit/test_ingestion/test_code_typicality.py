@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from course_supporter.ingestion.code_structure import split_structure_reason
 from course_supporter.ingestion.code_typicality import (
     KEPT_SINGLE_MAX_BYTES,
     TypicalityVerdict,
@@ -46,6 +47,13 @@ class TestFileLayer:
             verdict = assess(f"app/{name}", 500)
             assert verdict.disposition == "typical", name
 
+    def test_lockfile_reason_carries_no_detail(self) -> None:
+        # The row already names the file; a detail repeating the basename
+        # states the same fact twice on one line.
+        verdict = assess("app/package-lock.json", 500)
+        assert verdict.reason == "lockfile"
+        assert split_structure_reason(verdict.reason) == ("lockfile", None)
+
     def test_minified_and_maps_are_typical(self) -> None:
         for name in ("app.min.js", "style.min.css", "bundle.js.map"):
             assert assess(f"static/{name}", 500).disposition == "typical", name
@@ -60,6 +68,16 @@ class TestSizeCap:
         assert verdict.disposition == "oversize"
         assert verdict.reason is not None
         assert str(KEPT_SINGLE_MAX_BYTES) in verdict.reason
+
+    def test_oversize_detail_is_numbers_not_a_sentence(self) -> None:
+        # Both numbers, in bytes, actual first — data a reader can render in
+        # its own language. No English clause reaches the stored row.
+        size = KEPT_SINGLE_MAX_BYTES + 1
+        verdict = assess("src/huge_dump.py", size)
+        assert verdict.reason == f"oversize: {size}/{KEPT_SINGLE_MAX_BYTES}"
+        token, detail = split_structure_reason(verdict.reason)
+        assert token == "oversize"
+        assert detail == f"{size}/{KEPT_SINGLE_MAX_BYTES}"
 
     def test_at_cap_is_custom(self) -> None:
         assert assess("src/big.py", KEPT_SINGLE_MAX_BYTES).is_custom
@@ -112,7 +130,8 @@ class TestBuildConfig:
         assert verdict.disposition == "typical"
         assert not verdict.is_custom
         assert verdict.reason is not None
-        assert verdict.reason.startswith("build_config")
+        assert verdict.reason == "build_config"
+        assert split_structure_reason(verdict.reason) == ("build_config", None)
 
     def test_ordinary_code_stays_custom(self) -> None:
         # A user file whose name merely CONTAINS "config" is not a build config;

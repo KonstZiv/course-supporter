@@ -249,9 +249,26 @@ providers:
         cost_per_1k_out: 0.0015
       - id: mistral-small-latest
         # Alias now resolves to Mistral Small 4; rates per mistral.ai/pricing/api,
-        # verified 2026-08-28. Context/output not re-verified: no live routing
-        # references this record (the legacy action chains that used it were
-        # removed by the DD-20-A dismantle). Kept pending a removal decision.
+        # verified 2026-08-28.
+        #
+        # LIVE, and load-bearing: rung 1 of both homework gates —
+        # ``safety_check`` and ``sanity_check`` in config/ladders_mentor.yaml.
+        # Measured on prod 2026-09-04 (step-d/RUN-RECORD.md): every submission
+        # opens with two calls to this record, and when it refuses, both gates
+        # descend to deepseek-v4-flash. The note that stood here until now said
+        # the opposite — that the DD-20-A dismantle had left no live routing
+        # and the record was kept pending removal. That was written from the
+        # action chains alone and missed the ladder; deleting the record would
+        # have taken the first rung of both gates with it.
+        #
+        # The provider console resolves the alias to mistral-small-2603. The
+        # workspace ran into its free-tier ceiling until 2026-09-04, when it
+        # was moved to pay-as-you-go — Tier 1 there is 100 000 tokens/min and
+        # 1.67 requests/s for this model. Those two numbers are a comment and
+        # not fields: the registry schema carries no rate limits, the ladder is
+        # their only consumer, and a field with one reader is a place to forget.
+        # Before: four 429s per gate, ~15 s and a fallback per submission.
+        # After: one call per gate, attempt_count 1, zero 429.
         capabilities: [vision, structured_output]
         max_context: 131072
         max_output_tokens: 8192

@@ -143,6 +143,7 @@ def _node(
     documents: list[MagicMock] | None = None,
     children: list[MagicMock] | None = None,
     node_id: uuid.UUID | None = None,
+    default_language: str | None = "ukr",
 ) -> MagicMock:
     node = MagicMock()
     node.id = node_id or uuid.uuid4()
@@ -153,6 +154,8 @@ def _node(
     node.deleted_at = deleted_at
     node.documents = documents or []
     node.children = children or []
+    # Required on a root by CHECK (task 2.4.13); nullable dead data on a child.
+    node.default_language = default_language
     return node
 
 
@@ -218,6 +221,62 @@ def _gate_ok(
             return_value=base_rows or [],
         ),
     )
+
+
+class TestPortalCourseLanguageOnTheTree:
+    """Step Д: the course language rides on the tree root, and only there.
+
+    The submission form lives on this tree; its "course language" option sent
+    nothing, so the server fell back to the student's stored preference and
+    answered in the language of their LAST review under a label promising the
+    course's. Naming the language is what lets the form send it explicitly.
+    """
+
+    async def test_root_carries_the_course_language(self, client: AsyncClient) -> None:
+        root = _node(default_language="ukr")
+        p1, p2, p3, p4, p5 = _gate_ok(root, [root], [])
+        with p1, p2, p3, p4, p5:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.status_code == 200
+        assert resp.json()["default_language"] == "ukr"
+
+    async def test_value_is_the_roots_own_column(self, client: AsyncClient) -> None:
+        """Not a constant: a course in another language says so."""
+        root = _node(default_language="spa")
+        p1, p2, p3, p4, p5 = _gate_ok(root, [root], [])
+        with p1, p2, p3, p4, p5:
+            resp = await client.get(_materials_url(root.id))
+        assert resp.json()["default_language"] == "spa"
+
+    async def test_children_carry_null_even_when_their_column_is_set(
+        self, client: AsyncClient
+    ) -> None:
+        """A child's own column is dead data — inheritance is a rule, not a value.
+
+        Projecting it per node would hand the reader a mostly-null field and
+        invite reading a child's null as "this section has no language"
+        instead of "ask the root". So the child is null even here, where the
+        row deliberately carries a different code.
+        """
+        child = _node(title="01", order=0, default_language="eng")
+        root = _node(default_language="ukr", children=[child])
+        p1, p2, p3, p4, p5 = _gate_ok(root, [root], [])
+        with p1, p2, p3, p4, p5:
+            resp = await client.get(_materials_url(root.id))
+        body = resp.json()
+        assert body["default_language"] == "ukr"
+        assert body["children"][0]["default_language"] is None
+
+    async def test_course_card_does_not_carry_it(self, client: AsyncClient) -> None:
+        """The landing list stays bare — the value is read where it is used."""
+        course = _mock_course("Solo")
+        with patch.object(
+            StudentEnrollmentRepository,
+            "list_enrolled_courses",
+            return_value=[course],
+        ):
+            resp = await client.get(_COURSES_URL)
+        assert set(resp.json()[0].keys()) == {"id", "title"}
 
 
 class TestPortalMaterialsTree:

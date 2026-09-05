@@ -234,9 +234,13 @@ def describe_for_llm(reason: CodeStructureReason) -> str:
 def _reason_token(reason: str) -> CodeStructureReason:
     """Recover the enum token from a persisted reason string.
 
-    Excluded rows carry a bare token; typicality (description-only) rows
-    carry ``"<token>: <detail>"``. We only ever parse strings that
-    :func:`structure_reason` produced, so the split is deterministic.
+    Excluded rows carry a bare token; a typicality (description-only) row
+    carries ``"<token>: <detail>"`` only when the detail says something the
+    path does not — the vendored directory, the matched ``*.min.js`` shape,
+    the two size numbers. Lockfile and build-config rows are a bare token,
+    because there the match IS the path. We only ever parse strings that
+    :func:`structure_reason` produced, so the split is deterministic either
+    way.
     """
     return CodeStructureReason(reason.split(":", 1)[0].strip())
 

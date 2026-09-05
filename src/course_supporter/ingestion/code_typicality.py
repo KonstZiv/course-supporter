@@ -154,8 +154,13 @@ def assess(path: str, size_bytes: int) -> TypicalityVerdict:
 
     basename = parts[-1].lower() if parts else path.lower()
     if basename in _LOCKFILE_NAMES:
+        # No detail: the token names the convention, and the row already
+        # carries the path the match was made on, so repeating the basename
+        # here writes the same fact twice ("lockfile: package-lock.json" on
+        # the row whose path IS package-lock.json). The detail slot is for
+        # what the path does NOT say.
         return TypicalityVerdict(
-            "typical", structure_reason(CodeStructureReason.LOCKFILE, basename)
+            "typical", structure_reason(CodeStructureReason.LOCKFILE)
         )
     for suffix in _GENERATED_SUFFIXES:
         if basename.endswith(suffix):
@@ -167,18 +172,28 @@ def assess(path: str, size_bytes: int) -> TypicalityVerdict:
     # №21 (decision 8): build-config → description-only (a new BUILD_CONFIG
     # reason). Before the size cap: a config file is config regardless of size.
     if _is_build_config(basename):
+        # Detail-free for the same reason as the lockfile branch above: the
+        # matched name IS the path, and the shape rules (``tsconfig*.json``,
+        # ``<stem>.config.<ext>``) are not something a detail could state
+        # more truthfully than the path itself.
         return TypicalityVerdict(
             "typical",
-            structure_reason(CodeStructureReason.BUILD_CONFIG, basename),
+            structure_reason(CodeStructureReason.BUILD_CONFIG),
         )
 
     if size_bytes > KEPT_SINGLE_MAX_BYTES:
+        # Data, not a sentence: "<actual>/<cap>" in bytes. The previous
+        # English clause was a second phrasing of a fact the reader already
+        # renders in its own language, and it reached a student-facing
+        # surface untranslated. Numbers survive translation; a sentence does
+        # not. The shape carries no ": " of its own, so
+        # ``split_structure_reason`` returns it whole and the read surface
+        # (``_structure_rows``) is untouched.
         return TypicalityVerdict(
             "oversize",
             structure_reason(
                 CodeStructureReason.OVERSIZE,
-                f"file size {size_bytes} B exceeds the "
-                f"{KEPT_SINGLE_MAX_BYTES} B per-file cap",
+                f"{size_bytes}/{KEPT_SINGLE_MAX_BYTES}",
             ),
         )
 

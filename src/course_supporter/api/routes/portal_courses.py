@@ -4,7 +4,8 @@ Routes
 ------
 - ``GET /portal/courses`` — the student's enrolled courses (id + title only).
 - ``GET /portal/courses/{root_id}/materials`` — the course material tree with a
-  per-task submission overlay (status / last / best).
+  per-task submission overlay (status / last / best) and, on the root, the
+  course language the submission form offers (step Д).
 
 Closes the T4a gap: T3 built only ``GET /portal/materials/{id}`` (a URL for a
 KNOWN material id); there was no way for a portal session to enumerate courses
@@ -235,8 +236,18 @@ def _project_node(
     node: CourseNode,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
     bases: dict[uuid.UUID, PortalTaskBase | None],
+    *,
+    course_language: str | None = None,
 ) -> PortalMaterialTreeNode:
     """Recursively project a CourseNode subtree to the curated tree.
+
+    ``course_language`` is supplied by the caller for the ROOT only and lands
+    on ``default_language``; the recursive calls below omit it, so every child
+    carries ``None``. Deliberately NOT read off each node's own column: a
+    child's ``default_language`` is nullable dead data (inheritance is a rule,
+    not a materialised value), so projecting it per node would put a mostly-
+    null field on every row and invite a reader to treat a child's null as
+    "this section has no language" rather than "ask the root".
 
     Soft-deleted, non-READY, and methodological documents are dropped
     (publish-gate A + READY-only: a non-READY material has no presentable media
@@ -269,6 +280,7 @@ def _project_node(
         id=node.id,
         title=node.title,
         order=node.order if node.order is not None else 0,
+        default_language=course_language,
         documents=documents,
         children=children,
     )
@@ -341,5 +353,8 @@ async def get_portal_course_materials(
     }
 
     # get_subtree returns the roots of the loaded set; for a single course root
-    # there is exactly one — the requested root.
-    return _project_node(subtree[0], overlays, bases)
+    # there is exactly one — the requested root. Its language rides along on
+    # that root node: the submission form reads it there to say what its
+    # "course language" option actually offers (step Д).
+    root = subtree[0]
+    return _project_node(root, overlays, bases, course_language=root.default_language)

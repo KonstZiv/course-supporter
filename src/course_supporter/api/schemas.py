@@ -1781,10 +1781,15 @@ class PortalMediaResponse(BaseModel):
 class PortalCourseListItem(BaseModel):
     """One enrolled course on the portal landing list (Phase 6 T4a c1).
 
-    Deliberately bare — id + title only. No counts, no peeking into the tree:
-    the first screen is cheap, and the material tree is a separate per-course
-    call. Enrollment IS the visibility gate (publish-gate A, KD17): the list is
-    exactly the student's active enrollments.
+    Bare by design — no counts, no peeking into the tree: the first screen is
+    cheap, and the material tree is a separate per-course call. Enrollment IS
+    the visibility gate (publish-gate A, KD17): the list is exactly the
+    student's active enrollments.
+
+    The course language is NOT here even though this is the course card: it is
+    read where it is used, and the submission form that needs it lives on the
+    material tree, so ``PortalMaterialTreeNode.default_language`` carries it
+    (step Д) rather than a second screen holding a value for the first one.
     """
 
     id: uuid.UUID
@@ -1899,13 +1904,20 @@ class PortalMaterialTreeNode(BaseModel):
 
     Narrower than the author-facing ``NodeWithDocumentsResponse``: only
     id / title / order + children + documents (no content_hash, summary_status,
-    language, timestamps). Soft-deleted nodes / documents and non-READY
+    per-node language, timestamps) — with one addition in step Д, the COURSE
+    language on the root, because the submission form that needs it lives on
+    this tree and nowhere else. Soft-deleted nodes / documents and non-READY
     documents are filtered out before projection (publish-gate A + READY-only).
     """
 
     id: uuid.UUID
     title: str = Field(description="Node title.")
     order: int = Field(description="0-based position among siblings.")
+    default_language: str | None = Field(
+        default=None,
+        description="Course language (ISO 639-3) — set on the ROOT of the "
+        "tree, null on every child.",
+    )
     documents: list[PortalMaterialItem] = Field(
         default_factory=list,
         description="READY documents directly on this node (materials + tasks).",

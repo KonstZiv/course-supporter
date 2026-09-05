@@ -50,13 +50,22 @@ jobs:
             fi
             echo "In sync: $EXPECTED_BUILDS"
 
-            # Image ids before the deploy, so the gate can tell "deployed new
-            # code" from "there was nothing to deploy". A container that does
-            # not exist yet yields an empty id, which reads as changed.
-            IMAGES_BEFORE=""
+            # CONTAINER ids before the deploy, so the gate can tell "these
+            # containers were replaced" from "nothing was replaced". A
+            # container that does not exist yet yields an empty id, which
+            # reads as replaced.
+            #
+            # Container, not image: compose recreates a container whenever
+            # anything in its definition moves, and env_file is part of that
+            # definition. Run 33892375327 changed only .env.prod, recreated
+            # all three containers, and printed "Nothing to deploy" — the
+            # image ids were identical because no code had changed, which is
+            # true and beside the point. What the reader of this run needs to
+            # know is whether the processes they are about to measure are new.
+            CONTAINERS_BEFORE=""
             for svc in $BUILD_SERVICES; do
-              id=$(docker inspect --format='{{.Image}}' "course-supporter-$svc" 2>/dev/null || true)
-              IMAGES_BEFORE="$IMAGES_BEFORE $svc=$id"
+              id=$(docker inspect --format='{{.Id}}' "course-supporter-$svc" 2>/dev/null || true)
+              CONTAINERS_BEFORE="$CONTAINERS_BEFORE $svc=$id"
             done
 
             echo "=== Build ==="
@@ -128,11 +137,15 @@ jobs:
             fi
 
             # Say which of the two green outcomes this was, so a run that
-            # replaced nothing cannot read as a deploy.
+            # replaced nothing cannot read as a deploy. The question this
+            # answers is "were the containers replaced", which is what a
+            # reader checking whether their change is live actually needs;
+            # which commit is running was already answered by Identity check
+            # above.
             RECREATED=""
             for svc in $BUILD_SERVICES; do
-              before=$(printf '%s\n' $IMAGES_BEFORE | grep "^$svc=" | cut -d= -f2- || true)
-              after=$(docker inspect --format='{{.Image}}' "course-supporter-$svc" 2>/dev/null || true)
+              before=$(printf '%s\n' $CONTAINERS_BEFORE | grep "^$svc=" | cut -d= -f2- || true)
+              after=$(docker inspect --format='{{.Id}}' "course-supporter-$svc" 2>/dev/null || true)
               if [ "$before" != "$after" ]; then
                 RECREATED="$RECREATED $svc"
               fi

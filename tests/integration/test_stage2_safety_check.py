@@ -48,6 +48,7 @@ from course_supporter.llm.error_categories import (
 )
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.registry import load_registry
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.security.exceptions import SafetyValidationError
@@ -55,7 +56,6 @@ from course_supporter.security.schemas import SafetyResult, ViolationCategory
 from course_supporter.security.stage2 import run_stage2_safety_check
 from course_supporter.service_logging import job_scope, tenant_scope
 from course_supporter.storage.orm import ExternalServiceCall, Job
-from tests._helpers.registry import empty_registry
 
 pytestmark = pytest.mark.requires_db
 
@@ -167,11 +167,16 @@ def _build_router(
     ``"provider not configured"`` skips.
     """
     config = load_ladder_config(Path("config"))
+    # The REAL registry, not an empty one: since step E ``safety_check``
+    # declares ``input_budget_ratio``, and the router refuses to guess a window
+    # it cannot read — an empty registry would skip every rung with "input
+    # budget check requires registry model with max_context". The ladder here
+    # is already the real one, so the registry has to match it.
     return StageRouter(
         config,
         providers,  # type: ignore[arg-type]
         session_factory=session_factory,
-        registry=empty_registry(),
+        registry=load_registry(Path("config/external_services.yaml")),
     )
 
 

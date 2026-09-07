@@ -30,11 +30,12 @@ import uuid
 import zipfile
 from contextlib import ExitStack
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 
 from course_supporter.homework.mentor_context import Side, build_mentor_context
+from course_supporter.homework.text_budget import project_context_budget_chars
 from course_supporter.normalizer import (
     _PROJECT_NORMALIZE_LIMITS,
     DefaultTextExtractor,
@@ -46,7 +47,10 @@ from course_supporter.normalizer import (
     manifest_to_jsonb,
     normalize_archive,
 )
-from course_supporter.security.exceptions import SecurityRejectedError
+from course_supporter.security.exceptions import (
+    ErrorCategory,
+    SecurityRejectedError,
+)
 from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
@@ -193,7 +197,7 @@ async def process_project_submission(
                 return None
             return extractor.extract(entry.cls, zf.read(entry.path))
 
-        return build_mentor_context(
+        context = build_mentor_context(
             base_manifest=base_manifest,
             sub_manifest=snapshot.manifest,
             delta=delta,
@@ -202,18 +206,70 @@ async def process_project_submission(
             latest_version=latest_version,
         )
 
+    # Oversize guard (step E). The assembled context is measured against the
+    # budget derived from the FIRST rung of every stage the submission reaches
+    # (homework/text_budget.py). Over it, the submission is refused HERE, before
+    # safety -- the E run showed the alternative: the gate's first rung is called
+    # anyway, refuses, and the ladder descends, so the student pays for a refusal
+    # that was knowable from the character count. The assembly budget above
+    # (MENTOR_CONTEXT_MAX_BYTES) cannot catch this: it is larger than the window
+    # of the first rung for every alphabet.
+    budget_chars = project_context_budget_chars()
+    if len(context) > budget_chars:
+        log.warning(
+            "project_submission.over_budget",
+            context_chars=len(context),
+            budget_chars=budget_chars,
+        )
+        await _persist_rejection(
+            session,
+            hw_repo,
+            sid,
+            f"over_budget: assembled context is {len(context)} characters "
+            f"against a budget of {budget_chars}",
+            category=ErrorCategory.OVER_BUDGET.value,
+            details=f"{_grouped(len(context))} / {_grouped(budget_chars)}",
+        )
+        return None
+
+    return context
+
+
+def _grouped(n: int) -> str:
+    """Thousands-separated number for the curated ``details`` string.
+
+    A plain space, not a comma: the portal renders this into a Ukrainian
+    sentence and a comma would read as a decimal mark there.
+    """
+    return f"{n:,}".replace(",", " ")
+
 
 async def _persist_rejection(
     session: AsyncSession,
     hw_repo: HomeworkRepository,
     sid: uuid.UUID,
     reason: str,
+    *,
+    category: str | None = None,
+    details: str | None = None,
 ) -> None:
     """Fail-closed persistence: safety result + submission rejected + commit.
 
     The Job → complete transition is the execution seam's: the caller returns
     None, the homework body returns, and the seam terminalises the Job.
+
+    ``category`` and ``details`` are the caller-facing pair the portal needs:
+    without a category ``curated_rejection`` returns None for this source and
+    the interface falls back to the bare status phrase (DD-6-Z). The structural
+    rejections above still pass neither -- their reasons carry library
+    vocabulary and have no phrase in the portal dictionary yet, so the debt is
+    closed only for the one category that does.
     """
-    await hw_repo.store_safety_result(sid, {"source": "normalizer", "reason": reason})
+    safety: dict[str, Any] = {"source": "normalizer", "reason": reason}
+    if category is not None:
+        safety["category"] = category
+    if details is not None:
+        safety["details"] = details
+    await hw_repo.store_safety_result(sid, safety)
     await hw_repo.update_status(sid, "rejected", error_message=reason)
     await session.commit()

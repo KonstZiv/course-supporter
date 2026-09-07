@@ -10,7 +10,7 @@ logic is byte-identical to the prior ``portal_submissions._curated_verdict``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from course_supporter.api.schemas import (
     PortalNotOpened,
@@ -66,6 +66,10 @@ def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | 
     )
 
 
+# The single normalizer category the read-path phrases (DD-6-Z, partial).
+_NORMALIZER_CODED: Final[str] = ErrorCategory.OVER_BUDGET.value
+
+
 def curated_rejection(
     submission: HomeworkSubmission,
 ) -> PortalRejection | None:
@@ -84,9 +88,15 @@ def curated_rejection(
     * Stage 2 — ``safety_result`` with ``source='stage2'`` and ``is_safe``
       false is the LLM safety refusal.
 
-    Anything else (a normalizer rejection, ``DD-6-Z``) returns ``None`` and the
-    interface falls back to its status phrase — the same behaviour as today,
-    rather than inventing a code this function cannot honestly derive.
+    * Normalizer — ``safety_result`` with ``source='normalizer'`` carries a
+      category only for the project branch's oversize refusal (step E); that
+      one is phrased, and its ``details`` is the character pair rather than a
+      filename.
+
+    Anything else (the remaining normalizer rejections, ``DD-6-Z``) returns
+    ``None`` and the interface falls back to its status phrase — the same
+    behaviour as today, rather than inventing a code this function cannot
+    honestly derive.
 
     ``details`` carries only the filename. The internal ``error_message`` is
     never read here: it is a developer string, and putting it on the wire is
@@ -109,6 +119,20 @@ def curated_rejection(
         return PortalRejection(
             code=ErrorCategory.STAGE2_REJECTED.value,
             details=submission.original_filename,
+        )
+    if source == "normalizer" and safety.get("category") == _NORMALIZER_CODED:
+        # Partial close of DD-6-Z (step E): the project branch's oversize
+        # refusal is the one normalizer rejection that has both a category the
+        # dictionary already phrases and specifics worth showing, so it gets a
+        # code instead of the bare status phrase. Its ``details`` is the pair of
+        # numbers the refusal is about, not a filename -- the sentence that
+        # wraps them lives in the portal dictionary. The other normalizer
+        # reasons still return None: their text is library vocabulary and DD-6-D
+        # keeps it off the wire.
+        details = safety.get("details")
+        return PortalRejection(
+            code=_NORMALIZER_CODED,
+            details=details if isinstance(details, str) else None,
         )
     return None
 

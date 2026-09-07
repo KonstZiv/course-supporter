@@ -126,6 +126,93 @@ def submission_text_budget_chars() -> int:
     return budget
 
 
+# Every stage the student's submission reaches, in call order. Wider than
+# STAGES_READING_SUBMISSION above: that tuple lists who reads the submission
+# TEXT, this one lists who is called at all on the student's chain, because a
+# stage that reads only the task still costs a paid attempt when the whole
+# context cannot fit its first rung. Verified against config/ladders_mentor.yaml
+# and the E run's register (seven stages, eight rows).
+STUDENT_LADDER_STAGES: tuple[str, ...] = (
+    "safety_check",
+    "sanity_check",
+    "criteria_decomposition",
+    "mentor_layered_evaluation_node_course",
+    "mentor_layered_evaluation_industry",
+    "mentor_denoising",
+    "mentor_synthesis",
+)
+
+
+@lru_cache(maxsize=1)
+def project_context_budget_chars() -> int:
+    """Characters of assembled project context that still reach every FIRST rung.
+
+    The project branch assembles its own context (homework/mentor_context.py)
+    and never passes through the archive/single-file fitting above, so nothing
+    bounded it before step E: a context too large for the gates' first rung was
+    sent anyway, the rung refused, and the ladder descended -- a paid attempt
+    for a refusal that was knowable in advance.
+
+    FIRST rungs, not the tightest rung anywhere: the ratio declared on each
+    stage already lets the router skip a rung whose window is too small, so a
+    context between the first and the last rung is merely more expensive, not
+    impossible. This budget is the point past which even the cheapest opening
+    move is wasted, and past which the submission is refused before any call.
+
+    The ratio is READ from the ladder rather than repeated here -- the same
+    ``input_budget_ratio`` the router applies, so the guard and the skip cannot
+    drift into two ideas of what a prompt costs. Characters per token is the
+    conservative 2.0 of this module, not the router's 3.5 estimator: this
+    conversion runs the other way (see ``_CHARS_PER_TOKEN`` above).
+
+    Raises:
+        RuntimeError: when a stage carries no ratio or its first rung's model
+            has no declared window -- guessing either would mean guessing what
+            the model can hold.
+    """
+    settings = get_settings()
+    ladders = load_ladder_config(settings.ladders_dir)
+    registry = load_registry(settings.external_services_path)
+
+    windows: list[int] = []
+    ratios: set[float] = set()
+    for stage_name in STUDENT_LADDER_STAGES:
+        stage = ladders.stages.get(stage_name)
+        if stage is None or not stage.ladder:
+            continue
+        if stage.input_budget_ratio is None:
+            raise RuntimeError(
+                f"stage {stage_name!r} carries no input_budget_ratio; the "
+                "project-context budget cannot be derived and must not be guessed"
+            )
+        ratios.add(stage.input_budget_ratio)
+        model = registry.models.get(stage.ladder[0].model)
+        if model is None or model.max_context is None:
+            raise RuntimeError(
+                f"first rung of {stage_name!r} declares no max_context; the "
+                "project-context budget cannot be derived and must not be guessed"
+            )
+        windows.append(model.max_context)
+
+    if not windows or len(ratios) != 1:
+        raise RuntimeError(
+            "the student chain must declare one shared input_budget_ratio over "
+            f"at least one stage; got ratios={sorted(ratios)} on {len(windows)} "
+            "stages"
+        )
+
+    tightest = min(windows)
+    ratio = ratios.pop()
+    budget = int(tightest * ratio * _CHARS_PER_TOKEN)
+    logger.info(
+        "project_context_budget_derived",
+        tightest_first_rung_tokens=tightest,
+        ratio=ratio,
+        budget_chars=budget,
+    )
+    return budget
+
+
 def ensure_single_file_fits(text: str, *, filename: str, budget_chars: int) -> None:
     """Refuse a single submission whose text cannot be read whole.
 

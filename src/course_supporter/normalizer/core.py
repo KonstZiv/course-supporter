@@ -81,9 +81,8 @@ def normalize_archive(
             from the upload filename extension. Not autodetected.
         limits: Two-level limits. Level 1 (``raw_max_unzipped_bytes`` /
             ``raw_max_nesting_depth``) guards the raw unpack; level 2
-            (``kept_total_max_bytes``) caps the cleaned snapshot.
-            ``kept_single_max_bytes`` is stored but applied by nothing
-            here (only ``kept_total_max_bytes`` raises).
+            (``kept_total_max_bytes``) caps the cleaned snapshot. There
+            is no per-file limit -- only the aggregate one raises.
         classifier: Strategy mapping a kept entry to an
             :class:`~course_supporter.normalizer.models.EntryClass`.
 

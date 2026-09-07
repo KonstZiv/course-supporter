@@ -262,14 +262,19 @@ class TestDegenerateAndLimits:
         with pytest.raises(NormalizerLimitError):
             normalize_archive(_zip(entries), archive_kind="zip", limits=limits)
 
-    def test_single_file_over_cap_stays_included(self) -> None:
-        # kept_single_max is a P4 threshold, NOT a normalizer filter.
-        limits = NormalizerLimits(kept_single_max_bytes=10)
+    def test_no_per_file_size_filter_exists(self) -> None:
+        # The invariant, not the knob: the normalizer excludes by denylist,
+        # magic and nesting — never by a file's size. A single large member
+        # stays included and the aggregate cap is the only size that raises.
+        # (Step E removed the reserved ``kept_single_max_bytes`` field that
+        # used to be set here; the behaviour it never had is asserted directly.)
+        limits = NormalizerLimits(kept_total_max_bytes=10_000)
         snap = normalize_archive(
-            _zip([("big.txt", b"x" * 100)]), archive_kind="zip", limits=limits
+            _zip([("big.txt", b"x" * 5_000)]), archive_kind="zip", limits=limits
         )
         assert {e.path for e in snap.manifest.included} == {"big.txt"}
-        assert snap.manifest.included[0].size == 100
+        assert snap.manifest.included[0].size == 5_000
+        assert snap.manifest.excluded == ()
 
 
 class TestEdges:

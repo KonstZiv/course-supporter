@@ -45,8 +45,9 @@ from course_supporter.normalizer import Delta, Manifest, ManifestEntry
 # ── Tuning constants (calibration candidates) ──────────────────────────────
 # A CHANGED file at or below this raw (submission-side) size is rendered whole
 # with a marker; a larger one is rendered as a unified diff (stdlib difflib).
-# This is P4's OWN threshold -- deliberately NOT ``kept_single_max_bytes`` (a
-# normalizer knob, unrelated; see normalizer/models.py).
+# This is P4's OWN threshold. The normalizer has no per-file limit to confuse
+# it with: the reserved ``kept_single_max_bytes`` knob that once invited the
+# confusion was removed in step E, unused.
 H_C_WHOLE_MAX_BYTES: Final[int] = 64 * 1024
 
 

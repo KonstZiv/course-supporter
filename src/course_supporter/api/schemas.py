@@ -1661,8 +1661,12 @@ class PortalDeltaReceipt(BaseModel):
     Derived on read (KD-P3-B) from the persisted base + submission manifests —
     the DB stores manifests, not counts, and ``compute_delta`` is BE-only. The
     student sees how their submission diverged from the base and whether the
-    base has since moved on. Null on the parent detail for a non-project
-    submission (no delta concept) — a DISTINCT state from an all-zero delta.
+    base has since moved on.
+
+    Null on the parent detail means there is no base to compare against: the
+    submission is not a project one, or its task carries no base. Both are a
+    DISTINCT state from an all-zero delta, which says a comparison ran and
+    found nothing changed.
 
     The hygiene level (normalizer-excluded new files) is deliberately NOT
     surfaced to the student.

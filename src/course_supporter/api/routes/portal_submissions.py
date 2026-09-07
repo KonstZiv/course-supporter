@@ -324,11 +324,17 @@ async def _delta_receipt(
 ) -> PortalDeltaReceipt | None:
     """The I2 delta receipt — counters + staleness, derived on read (KD18 P5).
 
-    Null for a non-project submission (no snapshot manifest → no delta concept),
-    a DISTINCT state from an all-zero delta. For a project submission the delta
-    is derived (KD-P3-B) from the persisted manifests — the DB stores manifests,
-    not counts, and ``compute_delta`` is BE-only. Counters are the sizes of the
-    delta path tuples; the hygiene level is intentionally not surfaced.
+    Null in the two cases where there is nothing to compare against: a
+    non-project submission (no snapshot manifest, so no delta concept) and a
+    project task with no base attached. The second used to return all-new
+    counters, and the portal drew "Порівняння з базовим проєктом · Змінено 0,
+    нових 12, видалено 0" over a comparison that never happened — the heading
+    is the interface's, but the object that switched it on was ours.
+
+    For a project submission built on a base the delta is derived (KD-P3-B)
+    from the persisted manifests — the DB stores manifests, not counts, and
+    ``compute_delta`` is BE-only. Counters are the sizes of the delta path
+    tuples; the hygiene level is intentionally not surfaced.
     """
     raw_sub = submission.snapshot_manifest
     if raw_sub is None:
@@ -336,8 +342,16 @@ async def _delta_receipt(
         return None
     sub_manifest = manifest_from_jsonb(raw_sub)
 
-    # A project submission with no base attached (or whose base row / manifest is
-    # gone) diffs against nothing → everything is new, no staleness.
+    if submission.base_id is None:
+        # No base was ever attached: there is no comparison to report, and a
+        # receipt of all-new counters is not a smaller version of one — it is a
+        # different claim. Null says the honest thing, and the portal already
+        # hides the block on null (PortalReviewDetail.tsx).
+        return None
+
+    # The base row or its manifest is gone, but this submission WAS built on a
+    # base: the comparison existed, its other side does not any more. All-new
+    # counters are the closest true statement left.
     all_new = PortalDeltaReceipt(
         changed=0,
         new=len(sub_manifest.included),
@@ -346,8 +360,6 @@ async def _delta_receipt(
         latest_version=None,
         is_stale=False,
     )
-    if submission.base_id is None:
-        return all_new
 
     pb_repo = ProjectBaseRepository(session)
     base = await pb_repo.get_by_id(submission.base_id)

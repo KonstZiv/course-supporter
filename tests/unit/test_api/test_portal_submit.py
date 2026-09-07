@@ -632,24 +632,52 @@ class TestPortalSubmissionDelta:
         assert delta["latest_version"] == 2
         assert delta["is_stale"] is False
 
-    async def test_no_base_all_new_null_staleness(self, client: AsyncClient) -> None:
-        """Project submission, base_id None → all-new, null staleness."""
+    async def test_no_base_has_no_receipt_at_all(self, client: AsyncClient) -> None:
+        """Project task with no base → null, not a receipt of all-new counters.
+
+        Until step E this returned counters, and the portal drew a heading about
+        a comparison with a base project over numbers that never came from one:
+        the heading is the interface's, but the object that switched it on was
+        this one. Null is what the interface already handles.
+        """
         sub = self._project_sub(base_id=None, snapshot_manifest={"schema": 1})
         sub_manifest = MagicMock()
-        sub_manifest.included = ("a.py", "b.py", "c.py")  # 3 new
+        sub_manifest.included = ("a.py", "b.py", "c.py")
         with (
             patch.object(HomeworkRepository, "get_owned", return_value=sub),
             patch(f"{self._MOD}.manifest_from_jsonb", return_value=sub_manifest),
         ):
             resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
-        assert resp.json()["delta"] == {
-            "changed": 0,
-            "new": 3,
-            "deleted": 0,
-            "base_version": None,
-            "latest_version": None,
-            "is_stale": False,
-        }
+        assert resp.status_code == 200
+        assert resp.json()["delta"] is None
+
+    async def test_base_attached_still_reports_its_comparison(
+        self, client: AsyncClient
+    ) -> None:
+        """The other state, pinned beside it: a base means a receipt, not null.
+
+        Guards the change above from over-reaching — null must mean "nothing to
+        compare against", never "a project submission".
+        """
+        sub = self._project_sub(base_id=uuid.uuid4(), snapshot_manifest={"schema": 1})
+        base = MagicMock()
+        base.manifest = {"schema": 1}
+        base.version = 1
+        fake_delta = MagicMock()
+        fake_delta.changed = ("a.py",)
+        fake_delta.new = ()
+        fake_delta.deleted = ()
+        with (
+            patch.object(HomeworkRepository, "get_owned", return_value=sub),
+            patch.object(ProjectBaseRepository, "get_by_id", return_value=base),
+            patch.object(ProjectBaseRepository, "get_latest_ready", return_value=None),
+            patch(f"{self._MOD}.manifest_from_jsonb", return_value=MagicMock()),
+            patch(f"{self._MOD}.compute_delta", return_value=fake_delta),
+        ):
+            resp = await client.get(f"/api/v1/portal/submissions/{sub.id}")
+        assert resp.json()["delta"] is not None
+        assert resp.json()["delta"]["changed"] == 1
+        assert resp.json()["delta"]["base_version"] == 1
 
     async def test_base_row_gone_falls_back_to_all_new(
         self, client: AsyncClient

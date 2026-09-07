@@ -264,8 +264,16 @@ def test_no_base_is_all_new() -> None:
         base_version=None,
         latest_version=None,
     )
-    assert "F2: no base attached -- all 2 submission files are new." in out
-    assert "Staleness: no base attached." in out
+    # Step E: with no base the block says so once and stops talking about a
+    # base. The three headings and both metrics used to open the block with
+    # "Base project structure" / "Change summary vs base" over empty bodies.
+    assert "No base project: the whole submission is new." in out
+    assert "Base project structure" not in out
+    assert "Change summary vs base" not in out
+    assert "F2:" not in out
+    assert "Staleness:" not in out
+    # The inventory stays — it is the submission's own list, not a comparison.
+    assert "NEW (2):" in out
     assert "type=CHANGED-FULL" not in out
     assert "type=CHANGED-DIFF" not in out
     assert "type=NEW path=one.py" in out

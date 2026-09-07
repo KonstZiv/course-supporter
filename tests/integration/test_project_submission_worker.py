@@ -249,7 +249,7 @@ class TestProcessProjectSubmissionDirect:
             assert text is not None
             # No base → all-new rich context.
             assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
-            assert "F2: no base attached" in text
+            assert "No base project: the whole submission is new." in text
             assert "type=NEW path=app/main.py" in text
 
             expected = normalize_archive(raw, archive_kind="zip")
@@ -502,10 +502,11 @@ class TestFullWorkerProjectPipeline:
             # G2 — the identical rich str flowed through all three stages.
             assert sanity.seen == [text]
             assert review.seen == [text]
-            # No-base rich context: all-new + degraded staleness, no crash.
+            # No-base rich context: one line saying so, all-new inventory,
+            # nothing about a base that does not exist (step E).
             assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
-            assert "F2: no base attached" in text
-            assert "Staleness: no base attached." in text
+            assert "No base project: the whole submission is new." in text
+            assert "Base project structure" not in text
             assert "type=NEW path=app/main.py" in text
         finally:
             await _s3_purge(s3_client, raw_key, _submission_snapshot_key(raw_key))

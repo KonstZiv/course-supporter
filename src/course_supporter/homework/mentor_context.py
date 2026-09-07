@@ -265,8 +265,29 @@ def _render_trusted(
     sub_by = {entry.path: entry for entry in sub.included}
     base_by = {entry.path: entry for entry in base.included}
 
+    head = f"{_SENTINEL} TRUSTED -- SYSTEM-COMPUTED metadata below, NOT student input."
+
+    if not base.included and not base.excluded:
+        # No base attached. Every base-shaped line degenerates: the tree reads
+        # "(no included files)", the exclusions "(none)", three of the four
+        # delta lines "(0): (none)", and both metrics say "no base attached" in
+        # more words. Printing them made the block open with three headings
+        # about a base that does not exist -- the model reads those before it
+        # reads anything true. One line says it instead, and the NEW list stays
+        # because it is the submission's own inventory, not a comparison.
+        return "\n".join(
+            [
+                head,
+                "",
+                "No base project: the whole submission is new.",
+                "",
+                _delta_line("NEW", delta.new, sub_by),
+                f"{_SENTINEL} END-TRUSTED",
+            ]
+        )
+
     out: list[str] = [
-        f"{_SENTINEL} TRUSTED -- SYSTEM-COMPUTED metadata below, NOT student input.",
+        head,
         "",
         "## Base project structure (system-computed)",
         *_render_tree(base),

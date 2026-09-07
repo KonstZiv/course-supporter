@@ -53,15 +53,16 @@ class NormalizerLimits:
     Level 1 guards the raw archive against zip-bombs before denylist
     pruning. Level 2 caps the cleaned snapshot after denylist pruning (a
     forgotten ``.venv`` collapses to a manifest row rather than tripping
-    the cap). ``kept_single_max_bytes`` is stored but enforced by nothing
-    here (only ``kept_total_max_bytes`` raises); it is a reserved
-    per-file knob for downstream consumers.
+    the cap). Only ``kept_total_max_bytes`` raises; there is no per-file
+    limit here (a reserved ``kept_single_max_bytes`` knob was carried
+    unused from KD18 until step E removed it -- nothing ever read it, and
+    the one per-file threshold in the system, P4's whole-vs-diff cut, has
+    always owned its own constant).
     """
 
     raw_max_unzipped_bytes: int = 150 * 1024 * 1024
     raw_max_nesting_depth: int = 1
     kept_total_max_bytes: int = 50 * 1024 * 1024
-    kept_single_max_bytes: int = 2 * 1024 * 1024
 
 
 # ── Shared project-normalize limits (SECURITY KNOB — review-able) ──────────
@@ -73,11 +74,6 @@ class NormalizerLimits:
 #     project, evolved). An asymmetric cap (a smaller submission limit) would
 #     reject valid submissions the base itself passed; base == submission keeps
 #     the accept/reject envelope identical on both sides.
-#   * One kept_single value — kept identical on both sides for the same
-#     symmetry reason, though the normalizer enforces neither side (only
-#     ``kept_total_max_bytes`` raises). It is a reserved, currently-unused
-#     per-file knob; the P4 delta-context renderer picks whole-vs-diff with
-#     its own dedicated threshold, NOT this value.
 #
 # These limits do NOT drive inclusion/exclusion — ``ExcludedReason`` is
 # exhaustive (denylist_dir / magic_mismatch / nested_archive); there is no
@@ -92,13 +88,10 @@ class NormalizerLimits:
 #       entry, never recursed into (bomb vector stays unreachable).
 #   kept_total_max_bytes  100 MB  — level-2 cap on the CLEANED snapshot, applied
 #       AFTER the denylist collapse (a forgotten .venv does not count).
-#   kept_single_max_bytes   5 MB  — stored, unenforced; a reserved per-file
-#       knob, NOT the P4 whole-vs-diff render threshold (P4 owns that).
 _PROJECT_NORMALIZE_LIMITS: Final[NormalizerLimits] = NormalizerLimits(
     raw_max_unzipped_bytes=200 * 1024 * 1024,
     raw_max_nesting_depth=1,
     kept_total_max_bytes=100 * 1024 * 1024,
-    kept_single_max_bytes=5 * 1024 * 1024,
 )
 
 

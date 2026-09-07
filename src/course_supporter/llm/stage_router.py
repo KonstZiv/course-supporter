@@ -37,7 +37,10 @@ Limitations carried forward to Phase 1+:
   ``SEMANTIC`` and triggers immediate fallback. The ESC row for
   that attempt still records ``success=True`` because the call
   succeeded in transport terms; semantic interpretation is the
-  router's policy decision.
+  router's policy decision. Since step E the row also carries
+  ``error_message='semantic: empty response'`` -- the abandonment
+  is the row's own fact, and a register that cannot say it reads a
+  paid dead end exactly like a normal call.
 """
 
 from __future__ import annotations
@@ -441,7 +444,9 @@ class StageRouter:
         attempt records ``success=True`` (transport-level success)
         with ``error_message`` carrying the validator feedback —
         truthful telemetry for "API call succeeded but content
-        failed router policy".
+        failed router policy". An empty body takes the same shape:
+        ``success=True`` with ``error_message`` naming the SEMANTIC
+        abandonment.
         """
         start = time.perf_counter()
         response: LLMResponse | None = None
@@ -450,6 +455,15 @@ class StageRouter:
             response = await provider.complete(request)
             if response_validator is not None and response.content:
                 response_validator(response.content)
+            if not response.content:
+                # This rung is about to be abandoned by ``_attempt_entry`` as
+                # SEMANTIC. The call itself succeeded, so ``success`` stays
+                # True (that field means transport, and step E's decision was
+                # to keep it meaning that) -- but without a reason on the row
+                # the escalation is invisible: an abandoned, paid attempt reads
+                # in the register exactly like a normal one. Step E met that on
+                # criteria_decomposition: two rows, one stage, no way to tell.
+                error_message = f"{ErrorCategory.SEMANTIC.value}: empty response"
             return response
         except Exception as exc:
             # Guard against exception types whose ``str(exc)`` is empty

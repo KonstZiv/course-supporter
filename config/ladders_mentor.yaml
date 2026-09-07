@@ -32,6 +32,14 @@ stages:
   safety_check:
     prompt_ref: "prompts/safety_check/v1.md"
     requires: [structured_output]
+    # Student-chain oversize guard (step E). Declared on every stage the
+    # student's submission reaches, so an oversize context skips a rung whose
+    # window cannot hold it instead of paying for the refusal: without the
+    # ratio the router does no estimation at all (llm/stage_router.py:234).
+    # Same value as safety_check_authored above -- one idea of what a prompt
+    # costs, not two. The hard refusal that fires before any call at all is
+    # derived from these same first rungs (homework/text_budget.py).
+    input_budget_ratio: 0.5
     ladder:
       - provider: mistral
         model: mistral-small-latest
@@ -90,6 +98,7 @@ stages:
   sanity_check:
     prompt_ref: "prompts/sanity_check/v1.md"
     requires: [structured_output]
+    input_budget_ratio: 0.5
     ladder:
       - provider: mistral
         model: mistral-small-latest
@@ -117,12 +126,15 @@ stages:
   # competent cheap floor. ``requires: [structured_output]`` only —
   # ``long_context`` is deliberately NOT required: the input is a single
   # task document, not a subtree (the methodist_topdown rationale), so
-  # requiring it would falsely exclude legitimate rungs. No
-  # ``input_budget_ratio``: a per-task one-shot does not need the
-  # per-rung budget-skip machinery the per-subtree methodist passes do.
+  # requiring it would falsely exclude legitimate rungs. ``input_budget_ratio``
+  # was absent here until step E on the reasoning that a per-task one-shot does
+  # not need the per-rung budget-skip machinery; the E run showed the stage does
+  # descend a rung on a large task and pays for the attempt, so it now carries
+  # the ratio like the rest of the student chain.
   criteria_decomposition:
     prompt_ref: "prompts/criteria_decomposition/v1.md"
     requires: [structured_output]
+    input_budget_ratio: 0.5
     ladder:
       - provider: deepseek_thinking
         model: deepseek-v4-pro
@@ -148,6 +160,7 @@ stages:
   mentor_layered_evaluation_node_course:
     prompt_ref: "prompts/mentor_layered_evaluation_node_course/v1.md"
     requires: [structured_output]
+    input_budget_ratio: 0.5
     ladder:
       - provider: deepseek_thinking
         model: deepseek-v4-pro
@@ -166,6 +179,7 @@ stages:
   mentor_layered_evaluation_industry:
     prompt_ref: "prompts/mentor_layered_evaluation_industry/v1.md"
     requires: [structured_output]
+    input_budget_ratio: 0.5
     ladder:
       - provider: deepseek_thinking
         model: deepseek-v4-pro
@@ -183,6 +197,7 @@ stages:
   mentor_denoising:
     prompt_ref: "prompts/mentor_denoising/v1.md"
     requires: [structured_output]
+    input_budget_ratio: 0.5
     ladder:
       - provider: dashscope
         model: qwen3.7-max
@@ -201,6 +216,7 @@ stages:
   mentor_synthesis:
     prompt_ref: "prompts/mentor_synthesis/v1.md"
     requires: []
+    input_budget_ratio: 0.5
     ladder:
       - provider: dashscope
         model: qwen3.7-max

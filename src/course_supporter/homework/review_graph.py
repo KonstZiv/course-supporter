@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 from sqlalchemy import select
@@ -73,6 +75,25 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _TERMINAL_REVIEWED = {"completed", "delivered"}
+
+# How far back the Mentor's memory of this student reaches, in TASKS.
+#
+#   None -- every reviewed attempt the student has in the course. The behaviour
+#           this project shipped with, and the reason step E's review opened
+#           with feedback about a 12 MiB binary submitted to a different task.
+#   0    -- attempts on the current task only.
+#   k    -- the current task plus the k tasks the student handed in most
+#           recently before it (tasks ordered by their newest reviewed attempt;
+#           every attempt on a chosen task is taken, not just the newest).
+#
+# The history stays course-wide on purpose: systematic habits show across tasks,
+# not inside one. Depth is what is bounded, because the student pays for it —
+# every entry travels in the denoising prompt of every later submission, so an
+# unbounded memory means an unbounded bill that grows with the course.
+#
+# Not author-configurable and not in settings: this is a calibration constant
+# of the Mentor, and the cycle that recalibrates the Mentor owns it.
+MENTOR_HISTORY_TASK_DEPTH: Final[int | None] = 3
 
 
 @dataclass(frozen=True)
@@ -311,14 +332,17 @@ class MentorReviewService:
     async def _history(self, submission: HomeworkSubmission) -> list[dict[str, Any]]:
         """Compact projection of the student's prior reviewed attempts (D10).
 
-        Course-wide, all attempts (no compression — DD-4-C), excluding the
-        current submission and anything not yet reviewed.
+        Course-wide (systematic habits show across tasks), every attempt on the
+        tasks that survive :data:`MENTOR_HISTORY_TASK_DEPTH`, excluding the
+        current submission and anything not yet reviewed. No compression within
+        a kept task — DD-4-C.
         """
         from course_supporter.storage.homework_repository import HomeworkRepository
 
         rows = await HomeworkRepository(self._session).get_for_student(
             submission.student_id, course_node_id=submission.course_node_id
         )
+        rows = _within_depth(rows, submission, MENTOR_HISTORY_TASK_DEPTH)
         history: list[dict[str, Any]] = []
         for row in rows:
             if row.id == submission.id or row.status not in _TERMINAL_REVIEWED:
@@ -339,6 +363,42 @@ class MentorReviewService:
                 }
             )
         return history
+
+
+def _within_depth(
+    rows: Sequence[HomeworkSubmission],
+    submission: HomeworkSubmission,
+    depth: int | None,
+) -> list[HomeworkSubmission]:
+    """Keep the current task plus the ``depth`` most recently handed-in others.
+
+    Ordering is by the student's own newest REVIEWED attempt per task, not by
+    the course's order: what the Mentor should remember is what this student
+    did last, and a student who returns to an old task has it fresh in mind.
+    Rows on a kept task are all kept; the caller filters status afterwards, so
+    the ordering here reads the same statuses it will.
+
+    ``depth is None`` keeps everything (the pre-step-E behaviour); ``0`` keeps
+    only the current task.
+    """
+    if depth is None:
+        return list(rows)
+
+    newest: dict[uuid.UUID, datetime] = {}
+    for row in rows:
+        if row.status not in _TERMINAL_REVIEWED:
+            continue
+        seen = newest.get(row.authored_document_id)
+        if seen is None or row.created_at > seen:
+            newest[row.authored_document_id] = row.created_at
+
+    others = sorted(
+        (doc_id for doc_id in newest if doc_id != submission.authored_document_id),
+        key=lambda doc_id: newest[doc_id],
+        reverse=True,
+    )
+    kept = {submission.authored_document_id, *others[:depth]}
+    return [row for row in rows if row.authored_document_id in kept]
 
 
 def build_mentor_review_service(

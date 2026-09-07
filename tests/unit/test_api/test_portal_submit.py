@@ -920,6 +920,40 @@ class TestCuratedRejection:
         )
         assert curated_rejection(sub) is None
 
+    def test_normalizer_oversize_yields_its_category_and_numbers(self) -> None:
+        # Partial close of DD-6-Z (step E): the one normalizer category the
+        # dictionary phrases. Its details is the character pair, not a filename.
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="rejected",
+            safety_result={
+                "source": "normalizer",
+                "category": "over_budget",
+                "reason": "over_budget: assembled context is 300000 characters …",
+                "details": "300 000 / 131 072",
+            },
+        )
+        rejection = curated_rejection(sub)
+        assert rejection is not None
+        assert rejection.code == "over_budget"
+        assert rejection.details == "300 000 / 131 072"
+
+    def test_other_normalizer_categories_still_fall_back(self) -> None:
+        # The rest of DD-6-Z stays open on purpose: their reasons are library
+        # vocabulary and have no phrase in the portal dictionary.
+        from course_supporter.api.routes._portal_shared import curated_rejection
+
+        sub = _mock_terminal_submission(
+            status="rejected",
+            safety_result={
+                "source": "normalizer",
+                "category": "archive_bomb",
+                "reason": "NormalizerLimitError: …",
+            },
+        )
+        assert curated_rejection(sub) is None
+
 
 class TestCuratedNotOpened:
     def test_listed_on_a_passing_submission(self) -> None:

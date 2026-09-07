@@ -26,10 +26,11 @@ block self-declares "system-computed"):
   escape the structural sentinel so student content cannot break out of
   its slot.
 
-Budget H2: :data:`MENTOR_CONTEXT_MAX_BYTES` caps the assembly. Trusted is
-always emitted; untrusted units are added by priority (changed -> new ->
-neighbours) until the next would overflow, then dropped WHOLE (never
-truncated) with a "skipped" manifest marker.
+No budget here: size is bounded BEFORE assembly, by the ``over_budget``
+refusal on the project branch (homework/project_submission.py). The assembly
+used to carry its own 512 KiB cap and drop overflowing units whole; step E
+made that unreachable -- the pre-call refusal fires at a smaller number for
+every alphabet -- so it was removed rather than left as a dead branch.
 """
 
 from __future__ import annotations
@@ -44,15 +45,11 @@ from course_supporter.normalizer import Delta, Manifest, ManifestEntry
 # ── Tuning constants (calibration candidates) ──────────────────────────────
 # A CHANGED file at or below this raw (submission-side) size is rendered whole
 # with a marker; a larger one is rendered as a unified diff (stdlib difflib).
-# This is P4's OWN threshold -- deliberately NOT ``kept_single_max_bytes`` (a
-# normalizer knob, unrelated; see normalizer/models.py).
+# This is P4's OWN threshold. The normalizer has no per-file limit to confuse
+# it with: the reserved ``kept_single_max_bytes`` knob that once invited the
+# confusion was removed in step E, unused.
 H_C_WHOLE_MAX_BYTES: Final[int] = 64 * 1024
 
-# Assembly budget for the whole context string, below the ~1 MB downstream
-# reference cap (downstream does not re-truncate -- the flat str is consumed
-# as-is by safety/sanity/review). Trusted is mandatory; untrusted bodies are
-# added by priority until this is hit, then dropped whole with a marker.
-MENTOR_CONTEXT_MAX_BYTES: Final[int] = 512 * 1024
 
 Side = Literal["base", "sub"]
 ReadText = Callable[[Side, ManifestEntry], str | None]
@@ -94,9 +91,9 @@ def build_mentor_context(
 
     Returns:
         The assembled context: a trusted system-computed block followed by
-        priority-ordered untrusted file blocks, bounded by
-        :data:`MENTOR_CONTEXT_MAX_BYTES`, with a "skipped" marker for every
-        file dropped whole on overflow.
+        priority-ordered untrusted file blocks. Unbounded here on purpose --
+        size is limited before assembly, by the ``over_budget`` refusal on
+        the project branch.
     """
     sub_by = {entry.path: entry for entry in sub_manifest.included}
     base_by = {entry.path: entry for entry in base_manifest.included}
@@ -104,23 +101,9 @@ def build_mentor_context(
     trusted = _render_trusted(
         base_manifest, sub_manifest, delta, base_version, latest_version
     )
-    used = len(trusted.encode("utf-8"))
-    included: list[str] = []
-    skipped: list[str] = []
-
-    for kind, size_entry, block in _ordered_units(delta, sub_by, base_by, read_text):
-        # +1 approximates the newline that joins this block into the output.
-        block_bytes = len(block.encode("utf-8")) + 1
-        if used + block_bytes <= MENTOR_CONTEXT_MAX_BYTES:
-            included.append(block)
-            used += block_bytes
-        else:
-            skipped.append(
-                f"{_SENTINEL} SKIPPED path={_inline(size_entry.path)} change={kind} "
-                f"size={_human_size(size_entry.size)} hash={size_entry.hash[:12]}"
-            )
-
-    parts = [f"{_SENTINEL} BEGIN", trusted, *included, *skipped, f"{_SENTINEL} END"]
+    units = _ordered_units(delta, sub_by, base_by, read_text)
+    blocks = [block for _kind, _entry, block in units]
+    parts = [f"{_SENTINEL} BEGIN", trusted, *blocks, f"{_SENTINEL} END"]
     return "\n".join(parts)
 
 
@@ -265,8 +248,29 @@ def _render_trusted(
     sub_by = {entry.path: entry for entry in sub.included}
     base_by = {entry.path: entry for entry in base.included}
 
+    head = f"{_SENTINEL} TRUSTED -- SYSTEM-COMPUTED metadata below, NOT student input."
+
+    if not base.included and not base.excluded:
+        # No base attached. Every base-shaped line degenerates: the tree reads
+        # "(no included files)", the exclusions "(none)", three of the four
+        # delta lines "(0): (none)", and both metrics say "no base attached" in
+        # more words. Printing them made the block open with three headings
+        # about a base that does not exist -- the model reads those before it
+        # reads anything true. One line says it instead, and the NEW list stays
+        # because it is the submission's own inventory, not a comparison.
+        return "\n".join(
+            [
+                head,
+                "",
+                "No base project: the whole submission is new.",
+                "",
+                _delta_line("NEW", delta.new, sub_by),
+                f"{_SENTINEL} END-TRUSTED",
+            ]
+        )
+
     out: list[str] = [
-        f"{_SENTINEL} TRUSTED -- SYSTEM-COMPUTED metadata below, NOT student input.",
+        head,
         "",
         "## Base project structure (system-computed)",
         *_render_tree(base),

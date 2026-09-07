@@ -52,7 +52,6 @@ class TestNormalizerLimitsDefaults:
         assert limits.raw_max_unzipped_bytes == 150 * 1024 * 1024
         assert limits.raw_max_nesting_depth == 1
         assert limits.kept_total_max_bytes == 50 * 1024 * 1024
-        assert limits.kept_single_max_bytes == 2 * 1024 * 1024
 
 
 _FROZEN_SLOTS_CASES: list[tuple[type, dict[str, object]]] = [

@@ -6,8 +6,10 @@ import pytest
 
 from course_supporter.homework.text_budget import (
     STAGES_READING_SUBMISSION,
+    STUDENT_LADDER_STAGES,
     ensure_single_file_fits,
     fit_archive_entries,
+    project_context_budget_chars,
     submission_text_budget_chars,
 )
 from course_supporter.llm.ladder_config import load_ladder_config
@@ -112,3 +114,51 @@ class TestArchiveFitting:
         frame_len = len("--- a.py ---\n")
         assert fit_archive_entries([entry], budget_chars=10 + frame_len).text != ""
         assert fit_archive_entries([entry], budget_chars=10 + frame_len - 1).text == ""
+
+
+class TestProjectContextBudget:
+    """The project branch's own ceiling: the tightest FIRST rung on the chain."""
+
+    def test_equals_the_tightest_first_rung(self) -> None:
+        from pathlib import Path
+
+        ladders = load_ladder_config(Path("config"))
+        registry = load_registry(Path("config/external_services.yaml"))
+        firsts = [
+            model.max_context
+            for name in STUDENT_LADDER_STAGES
+            if (stage := ladders.stages.get(name)) is not None
+            and stage.ladder
+            and (model := registry.models.get(stage.ladder[0].model)) is not None
+            and model.max_context is not None
+        ]
+        assert project_context_budget_chars() == int(min(firsts) * 0.5 * 2.0)
+
+    def test_every_student_stage_declares_the_ratio(self) -> None:
+        # Completeness, not a spot check: a stage added to the chain without a
+        # ratio would silently reopen the hole step E closed — the router does
+        # no estimation at all when the ratio is absent.
+        from pathlib import Path
+
+        ladders = load_ladder_config(Path("config"))
+        missing = [
+            name
+            for name in STUDENT_LADDER_STAGES
+            if ladders.stages[name].input_budget_ratio is None
+        ]
+        assert missing == []
+
+    def test_the_chain_is_every_stage_the_submission_reaches(self) -> None:
+        # Wider than STAGES_READING_SUBMISSION on purpose: criteria_decomposition
+        # reads the task, not the submission, but it is still called on the
+        # student's chain and still pays for a rung that cannot hold the input.
+        assert set(STUDENT_LADDER_STAGES) == {
+            "safety_check",
+            "sanity_check",
+            "criteria_decomposition",
+            "mentor_layered_evaluation_node_course",
+            "mentor_layered_evaluation_industry",
+            "mentor_denoising",
+            "mentor_synthesis",
+        }
+        assert set(STAGES_READING_SUBMISSION) < set(STUDENT_LADDER_STAGES)

@@ -57,6 +57,9 @@ class _FakeS3:
 class _FakeHwRepo:
     def __init__(self) -> None:
         self.stored: list[tuple[str, str]] = []
+        self.safety: dict[str, Any] | None = None
+        self.status: str | None = None
+        self.status_error: str | None = None
 
     async def store_snapshot(
         self,
@@ -67,6 +70,15 @@ class _FakeHwRepo:
         snapshot_manifest: dict[str, Any],
     ) -> None:
         self.stored.append((snapshot_key, snapshot_hash))
+
+    async def store_safety_result(self, sid: uuid.UUID, result: dict[str, Any]) -> None:
+        self.safety = result
+
+    async def update_status(
+        self, sid: uuid.UUID, status: str, *, error_message: str | None = None
+    ) -> None:
+        self.status = status
+        self.status_error = error_message
 
 
 class _FakeSession:
@@ -215,3 +227,80 @@ class TestHelpers:
         reason = _project_failure_reason(exc)
         assert reason.startswith("NormalizerLimitError:")
         assert "kept_total exceeded" in reason
+
+
+# ── step E: the oversize guard fires before any model call ─────────────────
+
+
+async def _run_no_base(
+    monkeypatch: pytest.MonkeyPatch, budget: int
+) -> tuple[str | None, _FakeHwRepo]:
+    """Run the no-base path with the project budget forced to ``budget``."""
+    monkeypatch.setattr(mod, "project_context_budget_chars", lambda: budget)
+    zip_bytes = _zip_bytes({"proj/README.md": b"hello world\n" * 200})
+    hw_repo = _FakeHwRepo()
+    text = await process_project_submission(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        s3=_FakeS3(),  # type: ignore[arg-type]
+        hw_repo=hw_repo,  # type: ignore[arg-type]
+        submission=_FakeSubmission(base_id=None, authored_document_id=uuid.uuid4()),  # type: ignore[arg-type]
+        sid=uuid.uuid4(),
+        jid=uuid.uuid4(),
+        file_bytes=zip_bytes,
+        raw_key="homework/t/s/proj.zip",
+    )
+    return text, hw_repo
+
+
+class TestOversizeGuard:
+    """A context larger than the first rung's window is refused, not sent."""
+
+    async def test_within_budget_returns_the_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        text, hw_repo = await _run_no_base(monkeypatch, 1_000_000)
+        assert text is not None
+        assert hw_repo.status is None
+
+    async def test_over_budget_refuses_before_any_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # None is the contract that stops the pipeline: the caller returns
+        # immediately, so safety — the first paid call — is never reached.
+        text, hw_repo = await _run_no_base(monkeypatch, 10)
+        assert text is None
+        assert hw_repo.status == "rejected"
+        assert hw_repo.safety is not None
+        assert hw_repo.safety["source"] == "normalizer"
+        assert hw_repo.safety["category"] == ErrorCategory.OVER_BUDGET.value
+
+    async def test_exactly_at_the_budget_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Measure first, then re-run with the budget set to exactly that size:
+        # the boundary belongs to the accepting side (``>`` not ``>=``).
+        text, _ = await _run_no_base(monkeypatch, 1_000_000)
+        assert text is not None
+        again, hw_repo = await _run_no_base(monkeypatch, len(text))
+        assert again is not None
+        assert hw_repo.status is None
+
+    async def test_details_carry_both_numbers_grouped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        text, _ = await _run_no_base(monkeypatch, 1_000_000)
+        assert text is not None
+        _, hw_repo = await _run_no_base(monkeypatch, 10)
+        assert hw_repo.safety is not None
+        # "<context> / <budget>", thousands grouped with a space so the portal
+        # can wrap them in a Ukrainian sentence without re-formatting.
+        assert hw_repo.safety["details"] == f"{mod._grouped(len(text))} / 10"
+        assert " " in hw_repo.safety["details"].split(" / ")[0]
+
+
+class TestGroupedNumbers:
+    def test_groups_thousands_with_a_space(self) -> None:
+        assert mod._grouped(131072) == "131 072"
+
+    def test_leaves_small_numbers_alone(self) -> None:
+        assert mod._grouped(999) == "999"

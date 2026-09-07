@@ -396,11 +396,13 @@ class TestStageRouterDB:
 
         # Both ESCs record success=True -- both LLM calls completed in
         # transport terms. The first is just empty-content, which the
-        # router's fallback policy treats as SEMANTIC (no error_message
-        # because no exception was raised inside _call_with_log).
+        # router's fallback policy treats as SEMANTIC. Since step E the row
+        # also NAMES the abandonment: ``success`` still means transport (that
+        # decision stands), so without the reason a paid dead end read exactly
+        # like a normal call in the register.
         assert escs[0].provider == "anthropic"
         assert escs[0].success is True
-        assert escs[0].error_message is None
+        assert escs[0].error_message == "semantic: empty response"
 
         assert escs[1].provider == "gemini"
         assert escs[1].success is True

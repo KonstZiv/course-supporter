@@ -20,9 +20,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Final
 
-# Budget for the stitched task text — mirrors MENTOR_CONTEXT_MAX_BYTES
-# (homework/mentor_context.py): the two strings meet in the same mentor
-# prompts, so they share the same ceiling philosophy.
+# Budget for the stitched task text. It used to mirror a same-sized cap inside
+# the delta-context builder; step E removed that one (the project branch now
+# refuses an oversize submission before assembly, at a smaller number), so this
+# is the only 512 KiB ceiling left. It stays, and on its own reasons: this
+# string is the TASK, it rides into the mentor prompts on every branch — not
+# just the project one — and nothing upstream bounds it.
 MENTOR_TASK_TEXT_MAX_BYTES: Final[int] = 512 * 1024
 
 _SKIP_MARKER: Final[str] = (

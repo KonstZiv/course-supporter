@@ -206,14 +206,15 @@ async def process_project_submission(
             latest_version=latest_version,
         )
 
-    # Oversize guard (step E). The assembled context is measured against the
-    # budget derived from the FIRST rung of every stage the submission reaches
-    # (homework/text_budget.py). Over it, the submission is refused HERE, before
-    # safety -- the E run showed the alternative: the gate's first rung is called
-    # anyway, refuses, and the ladder descends, so the student pays for a refusal
-    # that was knowable from the character count. The assembly budget above
-    # (MENTOR_CONTEXT_MAX_BYTES) cannot catch this: it is larger than the window
-    # of the first rung for every alphabet.
+    # Oversize guard (step E) -- the ONE size limit on this branch. The
+    # assembled context is measured against the budget derived from the FIRST
+    # rung of every stage the submission reaches (homework/text_budget.py).
+    # Over it, the submission is refused HERE, before safety: the E run showed
+    # the alternative, where the gate's first rung is called anyway, refuses,
+    # and the ladder descends, so the student pays for a refusal that was
+    # knowable from the character count. The assembly used to carry a second,
+    # larger cap of its own; it could never fire before this one for any
+    # alphabet, and step E removed it rather than keep a dead branch.
     budget_chars = project_context_budget_chars()
     if len(context) > budget_chars:
         log.warning(

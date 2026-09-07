@@ -12,7 +12,6 @@ from collections.abc import Callable
 
 from course_supporter.homework.mentor_context import (
     H_C_WHOLE_MAX_BYTES,
-    MENTOR_CONTEXT_MAX_BYTES,
     build_mentor_context,
 )
 from course_supporter.normalizer import (
@@ -104,44 +103,7 @@ def test_changed_small_is_whole_large_is_diff() -> None:
     assert "+LINE-TWO-CHANGED" in out  # added line in the diff body
 
 
-# ── budget: overflow drops the file whole + emits a marker, priority holds ──
-
-
-def test_budget_overflow_drops_whole_and_marks() -> None:
-    huge = "X" * (MENTOR_CONTEXT_MAX_BYTES + 10_000)
-    base = _manifest((_entry("a_small.py", digest="a" * 64),))
-    sub = _manifest(
-        (
-            _entry("a_small.py", digest="b" * 64),  # changed (priority 1)
-            _entry("z_huge.py", size=len(huge), digest="e" * 64),  # new (priority 2)
-        )
-    )
-    read = _reader(
-        {
-            ("sub", "a_small.py"): "small changed body",
-            ("sub", "z_huge.py"): huge,
-        }
-    )
-    out = build_mentor_context(
-        base_manifest=base,
-        sub_manifest=sub,
-        delta=compute_delta(base, sub),
-        read_text=read,
-        base_version=1,
-        latest_version=1,
-    )
-    # higher-priority changed file is kept
-    assert "type=CHANGED-FULL path=a_small.py" in out
-    assert "small changed body" in out
-    # the oversized new file is dropped WHOLE (not truncated) + marker present
-    assert "X" * 20_000 not in out
-    assert "type=NEW path=z_huge.py" not in out
-    assert "SKIPPED path=z_huge.py change=new" in out
-
-
-# ── neighbours: whole-word basename hit; substring is not a hit ─────────────
-
-
+# ── H-c: whole (CHANGED-FULL) vs unified diff (CHANGED-DIFF) ────────────────
 def test_neighbour_wholeword_hit_substring_miss() -> None:
     base = _manifest(
         (

@@ -512,14 +512,21 @@ class TestFullWorkerProjectPipeline:
             await _s3_purge(s3_client, raw_key, _submission_snapshot_key(raw_key))
             await _cleanup(session_factory, ids)
 
-    async def test_four_branch_delta_reaches_stages_unchanged(
+    async def test_three_branch_delta_reaches_stages_unchanged(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         s3_client: S3Client,
     ) -> None:
-        """Acceptance closer: ONE delta triggers all four render branches at once
-        — CHANGED-FULL, CHANGED-DIFF, neighbour hit, budget-overflow drop — and
-        the rich context reaches safety/sanity/review UNCHANGED, run completes."""
+        """Acceptance closer: ONE delta triggers all three render branches at once
+        — CHANGED-FULL, CHANGED-DIFF, neighbour hit — and the rich context reaches
+        safety/sanity/review UNCHANGED, run completes.
+
+        A fourth branch (budget-overflow drop) existed until step E, when the
+        assembly budget was removed: the only size limit on this branch is now
+        the pre-call ``over_budget`` refusal, which fires at a smaller number
+        than the old assembly cap for every alphabet. Its coverage lives in
+        tests/unit/test_project_submission.py::TestOversizeGuard.
+        """
         big_lines = _incompressible("row", 2000).decode().split("\n")  # ~150 KB
         big_base = "\n".join(big_lines).encode()
         base_snap = normalize_archive(
@@ -548,17 +555,15 @@ class TestFullWorkerProjectPipeline:
         big_sub_lines = list(big_lines)
         big_sub_lines[10] = "row 000010 MODIFIED content goes here now aaaa"
         big_sub = "\n".join(big_sub_lines).encode()
-        # ~350 KB each, high-entropy → two together exceed the 512 KB budget so
-        # filler_b drops whole; each survives the zip-bomb guard.
-        filler_a = _incompressible("AAAAMARKER", 4300)
-        filler_b = _incompressible("BBBBMARKER", 4300)
+        # High-entropy but small: the whole assembled context has to stay under
+        # the pre-call budget, which is the only ceiling left.
+        filler_a = _incompressible("AAAAMARKER", 400)
         sub_raw = _project_zip(
             {
                 "small.py": b"value = 2  # see config.py for the settings\n",
                 "big.py": big_sub,
                 "config.py": b"CONFIG = True\n",
-                "filler_a.py": filler_a,  # new, large → included
-                "filler_b.py": filler_b,  # new, large → overflow drop
+                "filler_a.py": filler_a,  # new → included whole
             }
         )
         safety, sanity, review = (
@@ -598,12 +603,11 @@ class TestFullWorkerProjectPipeline:
             assert "MODIFIED content goes here now" in text
             # branch 3 — neighbour hit (unchanged base file name-dropped).
             assert "type=NEIGHBOR path=config.py" in text
-            # branch 4 — budget overflow: dropped WHOLE (body absent) + marker.
-            assert "SKIPPED path=filler_b.py" in text
-            assert "BBBBMARKER" not in text
-            # the higher-priority filler_a body IS present (proves priority).
+            # new file body present whole.
             assert "type=NEW path=filler_a.py" in text
             assert "AAAAMARKER" in text
+            # nothing is dropped any more: the builder has no budget to drop at.
+            assert "SKIPPED" not in text
         finally:
             await _s3_purge(
                 s3_client,

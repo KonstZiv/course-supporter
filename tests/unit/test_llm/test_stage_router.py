@@ -518,6 +518,37 @@ class TestESCPersistence:
         assert calls[1]["success"] is True
         assert calls[1]["error_message"] is None
 
+    async def test_empty_content_row_names_the_abandonment(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Step E: a rung abandoned for an empty body used to be indistinguishable
+        # from a normal call in the register — success True, error_message NULL —
+        # so a paid dead end was invisible. ``success`` still means transport
+        # (unchanged by design); the reason now rides on the row.
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+        _capture_sleeps(monkeypatch)
+
+        empty_provider = AsyncMock(spec=LLMProvider)
+        empty_provider.enabled = True
+        empty_provider.complete = AsyncMock(return_value=_ok_response(content=""))
+        router = StageRouter(
+            _config(entries=(("anthropic", "a-x"), ("gemini", "g-x"))),
+            {"anthropic": empty_provider, "gemini": _ok_provider("ok")},
+            session_factory=AsyncMock(),
+            registry=_registry(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert len(calls) == 2
+        assert calls[0]["success"] is True  # transport succeeded — unchanged
+        assert calls[0]["error_message"] == "semantic: empty response"
+        # The rung that actually answered stays clean.
+        assert calls[1]["success"] is True
+        assert calls[1]["error_message"] is None
+
     async def test_no_persist_when_session_factory_absent(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -24,10 +24,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.call_outcome import CallOutcome, SkipReason
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
 )
+from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.llm.ladder_config import (
     LadderConfig,
     LadderEntry,
@@ -331,21 +333,29 @@ class TestStageRouterDB:
         assert exc_info.value.stage_name == "demo_stage"
         assert len(exc_info.value.attempts) == 2
 
-        # Two ESC rows survive the raise -- one per attempt.
+        # Every row survives the raise: per rung, the failed attempt and the
+        # no-call trace of its abandonment (mentor-rebuild 01).
         escs = await _fetch_escs(session_factory, committed_job["job_id"])
-        assert len(escs) == 2
+        assert [(esc.provider, esc.outcome) for esc in escs] == [
+            ("anthropic", CallOutcome.PROVIDER_REFUSAL),
+            ("anthropic", CallOutcome.ABANDONED),
+            ("gemini", CallOutcome.PROVIDER_REFUSAL),
+            ("gemini", CallOutcome.ABANDONED),
+        ]
+        attempts = [esc for esc in escs if esc.outcome != CallOutcome.ABANDONED]
 
-        providers_logged = [esc.provider for esc in escs]
-        assert providers_logged == ["anthropic", "gemini"]
-
-        for esc in escs:
+        for esc in attempts:
             assert esc.success is False
             assert esc.error_message is not None
             assert esc.action == "demo_stage"
             assert esc.strategy == "default"
 
-        assert "first entry failed" in (escs[0].error_message or "")
-        assert "second entry failed" in (escs[1].error_message or "")
+        for trace in escs[1::2]:
+            assert trace.success is None
+            assert trace.error_message is None
+
+        assert "first entry failed" in (attempts[0].error_message or "")
+        assert "second entry failed" in (attempts[1].error_message or "")
 
     async def test_empty_content_treated_as_semantic(
         self,
@@ -392,7 +402,13 @@ class TestStageRouterDB:
         assert result.attempt_count == 2
 
         escs = await _fetch_escs(session_factory, committed_job["job_id"])
-        assert len(escs) == 2
+        # attempt (empty) → trace (abandoned) → attempt (answered)
+        assert [esc.outcome for esc in escs] == [
+            CallOutcome.EMPTY,
+            CallOutcome.ABANDONED,
+            CallOutcome.SUCCESS,
+        ]
+        escs = [escs[0], escs[2]]
 
         # Both ESCs record success=True -- both LLM calls completed in
         # transport terms. The first is just empty-content, which the
@@ -407,3 +423,92 @@ class TestStageRouterDB:
         assert escs[1].provider == "gemini"
         assert escs[1].success is True
         assert escs[1].error_message is None
+
+
+class TestRegisterAfterALadderRun:
+    """Acceptance 1 (mentor-rebuild 01), through the real ``_persist`` and DB.
+
+    One run over a three-rung ladder — a disabled provider, a rung that spends
+    its output ceiling and returns nothing, a rung that answers — leaves four
+    rows: the skip, the empty attempt, the abandonment, the answer. Every row
+    carries the prompt version.
+    """
+
+    async def test_prompt_version_and_both_traces_are_in_the_register(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        session_factory: async_sessionmaker[AsyncSession],
+        committed_job: dict[str, uuid.UUID],
+    ) -> None:
+        _patch_load_prompt(monkeypatch)
+        disabled = _provider_with(side_effects=[])
+        disabled.enabled = False  # type: ignore[misc]
+        ceiling = _provider_with(
+            side_effects=[
+                LLMResponse(
+                    content="",
+                    provider="deepseek_thinking",
+                    model_id="pro",
+                    tokens_in=900,
+                    tokens_out=8192,
+                    finish_reason=FinishReason.OUTPUT_CEILING,
+                )
+            ]
+        )
+        answering = _provider_with(side_effects=[_ok_response("criteria")])
+        router = StageRouter(
+            _config(
+                "criteria_decomposition",
+                entries=(
+                    ("mistral", "small"),
+                    ("deepseek_thinking", "pro"),
+                    ("dashscope", "max"),
+                ),
+            ),
+            {"mistral": disabled, "deepseek_thinking": ceiling, "dashscope": answering},
+            session_factory=session_factory,
+            registry=empty_registry(),
+        )
+
+        with (
+            tenant_scope(committed_job["tenant_id"]),
+            job_scope(committed_job["job_id"]),
+        ):
+            result = await router.execute_for_stage("criteria_decomposition")
+
+        assert result.provider_used == "dashscope"
+        escs = await _fetch_escs(session_factory, committed_job["job_id"])
+        assert [
+            (esc.provider, esc.outcome, esc.skip_reason, esc.success) for esc in escs
+        ] == [
+            ("mistral", "skipped", SkipReason.PROVIDER_DISABLED, None),
+            ("deepseek_thinking", "empty_at_output_ceiling", None, True),
+            ("deepseek_thinking", "abandoned", None, None),
+            ("dashscope", "success", None, True),
+        ]
+        assert escs[1].finish_reason == FinishReason.OUTPUT_CEILING
+        expected_prompt_hash = StagePrompt(
+            system="sys", user="user prompt body"
+        ).content_hash()
+        for esc in escs:
+            assert esc.prompt_ref == "prompts/example/v1.md"
+            assert esc.prompt_hash == expected_prompt_hash
+        # Attempts carry their input hash; traces record no call and none.
+        assert [esc.input_hash is not None for esc in escs] == [
+            False,
+            True,
+            False,
+            True,
+        ]
+
+        # DD-SP-AC: the abandoned rung is found by field, not by message text.
+        async with session_factory() as session:
+            abandoned = (
+                await session.execute(
+                    select(ExternalServiceCall.provider).where(
+                        ExternalServiceCall.job_id == committed_job["job_id"],
+                        ExternalServiceCall.outcome == CallOutcome.ABANDONED,
+                    )
+                )
+            ).scalars()
+            assert list(abandoned) == ["deepseek_thinking"]

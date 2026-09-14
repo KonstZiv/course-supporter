@@ -80,6 +80,12 @@ class StageConfig(BaseModel):
             lives at the callsite (Phase 3.2.3a methodist agent).
             Numeric policy value (e.g. 0.5 from KD10) is owned by the
             caller's stage YAML, NOT hard-coded in the router.
+        record_output: Write each attempt's response body to the call
+            register (``external_service_calls.output_text``). Off by
+            default: ingestion stages carry output ceilings in the tens of
+            thousands of tokens, and the register is queried by cost and
+            outcome, not by body. A stage turns it on when its output is the
+            thing reproducibility has to compare (mentor-rebuild task 01).
     """
 
     model_config = _FORBID
@@ -88,6 +94,7 @@ class StageConfig(BaseModel):
     requires: list[Capability] = Field(default_factory=list)
     ladder: list[LadderEntry] = Field(min_length=1)
     input_budget_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
+    record_output: bool = False
 
 
 class LadderFile(BaseModel):

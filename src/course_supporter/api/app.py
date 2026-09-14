@@ -107,6 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         providers=stage_router_providers,
         registry=registry,
         session_factory=async_session,
+        record_full_input=settings.call_register_full_input,
     )
 
     # ARQ Redis pool for job enqueue. expires_extra_ms overrides ARQ's 24h

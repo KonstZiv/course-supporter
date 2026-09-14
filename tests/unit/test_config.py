@@ -97,6 +97,32 @@ class TestSettings:
                 _env_file=None,
             )
 
+    def test_full_input_register_switch_refuses_to_boot_in_prod(self) -> None:
+        """Production + CALL_REGISTER_FULL_INPUT raised → fail fast (student data)."""
+        with pytest.raises(ValidationError, match="call_register_full_input"):
+            Settings(
+                environment="production",  # type: ignore[arg-type]
+                portal_session_secret="a-strong-prod-secret",  # type: ignore[arg-type]
+                smtp_host="smtp.example.com",
+                smtp_from="noreply@example.com",
+                call_register_full_input=True,
+                _env_file=None,
+            )
+
+    @pytest.mark.parametrize("environment", ["development", "testing", "staging"])
+    def test_full_input_register_switch_allowed_outside_prod(
+        self, environment: str
+    ) -> None:
+        s = Settings(
+            environment=environment,  # type: ignore[arg-type]
+            call_register_full_input=True,
+            _env_file=None,
+        )
+        assert s.call_register_full_input is True
+
+    def test_full_input_register_switch_is_lowered_by_default(self) -> None:
+        assert Settings(_env_file=None).call_register_full_input is False
+
     def test_smtp_override_ok_in_prod(self) -> None:
         """Production + a configured SMTP host + from loads fine."""
         s = Settings(

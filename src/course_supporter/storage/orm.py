@@ -1191,8 +1191,8 @@ class ExternalServiceCall(Base):
         "per-review metrics row).",
     )
     # Not String(50): the longest prompt_ref in the ladders is already 51
-    # ("prompts/mentor_layered_evaluation_node_course/v1.md"). The column has
-    # never overflowed only because nothing writes it yet (DD-CQ-C).
+    # ("prompts/mentor_layered_evaluation_node_course/v1.md"). StageRouter
+    # writes it on every attempt and trace row, next to prompt_hash.
     prompt_ref: Mapped[str | None] = mapped_column(Text)
     prompt_hash: Mapped[str | None] = mapped_column(
         String(64),

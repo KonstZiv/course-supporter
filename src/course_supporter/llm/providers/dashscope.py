@@ -97,9 +97,16 @@ _OVERFLOW_MESSAGE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# ``finish_reason`` vocabulary on both endpoints. "null" is the service's
-# "not finished yet" placeholder — the SDK's own stream merge treats it as no
-# reason (dashscope/utils/message_utils.py), so it normalises to UNKNOWN.
+# ``finish_reason`` vocabulary on both endpoints.
+#
+# "null" is the service's "not finished yet" placeholder (the SDK's own stream
+# merge treats it as no reason, dashscope/utils/message_utils.py). That is a
+# DIFFERENT state from "no reason reported" — a response still in progress —
+# and it is deliberately merged into UNKNOWN here, because nothing reaches this
+# code in progress: every call is a single non-streaming request, so a final
+# response saying "null" has told us nothing about why it ended. The day a
+# streaming path is added, per-chunk "null" becomes normal and must NOT land in
+# the register as UNKNOWN — split it into its own state at that point.
 _CEILING_FINISH_REASONS = frozenset({"length"})
 _STOP_FINISH_REASONS = frozenset({"stop"})
 _UNREPORTED_FINISH_REASONS = frozenset({"null"})

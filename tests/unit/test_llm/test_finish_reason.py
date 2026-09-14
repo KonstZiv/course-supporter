@@ -9,6 +9,7 @@ where the vendor puts the reason (impl-rules#13).
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,12 +30,19 @@ from google.genai import types as genai_types
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
+from course_supporter.call_outcome import CallOutcome
+from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
+from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
+from course_supporter.llm.prompt_loader_md import StagePrompt
 from course_supporter.llm.providers.anthropic import AnthropicProvider
+from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.providers.dashscope import DashScopeProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 from course_supporter.llm.schemas import LLMRequest
+from course_supporter.llm.stage_router import StageRouter
+from tests._helpers.registry import empty_registry
 
 _REQUEST = LLMRequest(prompt="hi", model="m", max_tokens=8192)
 
@@ -293,3 +301,100 @@ class TestAnthropicFinishReason:
         response = await provider.complete(_REQUEST)
 
         assert response.finish_reason is expected
+
+
+# ── The reason reaches the register, per connector module ───────────────
+
+
+def _ceiling_openai(_monkeypatch: pytest.MonkeyPatch) -> tuple[str, LLMProvider]:
+    provider = OpenAICompatProvider(api_keys=("k",), default_model="m")
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_chat_completion("length", content=None)
+    )
+    provider._client_cycle = itertools.cycle([client])
+    return "openai", provider
+
+
+def _ceiling_dashscope(monkeypatch: pytest.MonkeyPatch) -> tuple[str, LLMProvider]:
+    from course_supporter.llm.providers import dashscope as ds_module
+
+    monkeypatch.setattr(
+        ds_module.AioGeneration,
+        "call",
+        AsyncMock(return_value=_dashscope_text_response(in_choice="length")),
+    )
+    return "dashscope", DashScopeProvider(
+        api_keys=("k",), default_model="m", base_url=None
+    )
+
+
+def _ceiling_gemini(_monkeypatch: pytest.MonkeyPatch) -> tuple[str, LLMProvider]:
+    provider = GeminiProvider(api_keys=("k",), default_model="m")
+    client = MagicMock()
+    client.aio.models.generate_content = AsyncMock(
+        return_value=_gemini_response(genai_types.FinishReason.MAX_TOKENS)
+    )
+    provider._client_cycle = itertools.cycle([client])
+    return "gemini", provider
+
+
+def _ceiling_anthropic(_monkeypatch: pytest.MonkeyPatch) -> tuple[str, LLMProvider]:
+    provider = AnthropicProvider(api_keys=("k",), default_model="m")
+    client = MagicMock()
+    client.messages.create = AsyncMock(return_value=_anthropic_message("max_tokens"))
+    provider._client_cycle = itertools.cycle([client])
+    return "anthropic", provider
+
+
+class TestFinishReasonReachesTheRegister:
+    """Connector → LLMResponse → StageRouter → register row, per connector module.
+
+    Real connector code over the vendor SDK's own response types; only the
+    network client and ``_persist`` are replaced. Each vendor's raw ceiling
+    value must arrive in the row normalised, with the empty body classified
+    as ``empty_at_output_ceiling``.
+    """
+
+    @pytest.mark.parametrize(
+        "build",
+        [_ceiling_openai, _ceiling_dashscope, _ceiling_gemini, _ceiling_anthropic],
+        ids=["openai_compat", "dashscope", "gemini", "anthropic"],
+    )
+    async def test_ceiling_arrives_normalised(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build: Callable[[pytest.MonkeyPatch], tuple[str, LLMProvider]],
+    ) -> None:
+        monkeypatch.setattr(
+            "course_supporter.llm.stage_router.load_prompt",
+            lambda prompt_ref, *, base_path=None: StagePrompt(system="s", user="u"),
+        )
+        rows: list[dict[str, Any]] = []
+
+        async def _fake_persist(_session_factory: Any, **kwargs: Any) -> None:
+            rows.append(kwargs)
+
+        monkeypatch.setattr("course_supporter.llm.stage_router._persist", _fake_persist)
+        name, provider = build(monkeypatch)
+        router = StageRouter(
+            LadderConfig(
+                stages={
+                    "demo": StageConfig(
+                        prompt_ref="prompts/example/v1.md",
+                        ladder=[LadderEntry(provider=name, model="m")],
+                    )
+                }
+            ),
+            {name: provider},
+            registry=empty_registry(),
+            session_factory=AsyncMock(),
+        )
+
+        with pytest.raises(LadderExhaustedError):
+            await router.execute_for_stage("demo")
+
+        attempt = rows[0]
+        assert attempt["provider"] == name
+        assert attempt["finish_reason"] is FinishReason.OUTPUT_CEILING
+        assert attempt["outcome"] is CallOutcome.EMPTY_AT_OUTPUT_CEILING

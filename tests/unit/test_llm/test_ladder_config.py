@@ -675,6 +675,12 @@ class TestProductionLaddersValidate:
         # No exception = invariant holds for every annotated stage.
         validate_ladders_against_registry(config, registry)
 
+    def test_no_production_stage_records_output(self) -> None:
+        """mentor-rebuild 01 ships the switch, not a user of it: the first stage
+        to record its output is a new-path stage of a later task."""
+        config = load_ladder_config(Path("config"))
+        assert [name for name, s in config.stages.items() if s.record_output] == []
+
     def test_annotated_stages_carry_expected_requires(self) -> None:
         config = load_ladder_config(Path("config"))
         # Spot-check the per-stage requires map from the TASK-23 spec.

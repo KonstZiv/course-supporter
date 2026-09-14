@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     worker_heavy_window_tz: str = "UTC"
     worker_immediate_override: bool = True
 
+    # --- Call register ---
+    # Write the full rendered input of every LLM attempt to
+    # ``external_service_calls.input_text``. The input carries the student's
+    # submission, so this is a development-only switch: production refuses to
+    # boot with it raised (``_validate_full_input_not_in_prod``). The input
+    # hash is written regardless.
+    call_register_full_input: bool = False
+
     # --- Webhook delivery ---
     webhook_timeout_seconds: int = 30
     webhook_max_retries: int = 3
@@ -271,6 +279,25 @@ class Settings(BaseSettings):
                 "SMTP_FROM) — the local-dev defaults (localhost / "
                 "no-reply@localhost) would make password-recovery email "
                 "undeliverable."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_full_input_not_in_prod(self) -> Self:
+        """Refuse to boot prod with the full-input register switch raised.
+
+        The full rendered input of a Mentor call contains the student's
+        submission. Keeping it out of the production register is a data rule,
+        and a rule a deploy variable can quietly break is a convention, not a
+        rule — so the switch is a boot failure in production, like the other
+        production guards above (mentor-rebuild task 01).
+        """
+        if self.environment == Environment.PRODUCTION and self.call_register_full_input:
+            msg = (
+                "call_register_full_input must stay false in production (unset "
+                "CALL_REGISTER_FULL_INPUT) — the full input of a review call "
+                "carries the student's submission."
             )
             raise ValueError(msg)
         return self

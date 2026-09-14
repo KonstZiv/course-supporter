@@ -306,3 +306,49 @@ class TestUnknownRoleWarning:
         # Two distinct unknown roles -> two warnings even across two loads.
         roles = sorted(w["unknown_role"] for w in warnings)
         assert roles == ["examples", "notes"]
+
+
+class TestContentHash:
+    """``StagePrompt.content_hash`` — the prompt version the register stores."""
+
+    def test_same_sections_same_hash(self) -> None:
+        a = StagePrompt(system="s", user="u {{ x }}")
+        assert (
+            a.content_hash() == StagePrompt(system="s", user="u {{ x }}").content_hash()
+        )
+
+    @pytest.mark.parametrize(
+        "changed",
+        [
+            StagePrompt(system="s2", user="u {{ x }}"),
+            StagePrompt(system="s", user="u {{ y }}"),
+            StagePrompt(system="s", user="u {{ x }}", assistant="a"),
+            StagePrompt(system="", user="u {{ x }}"),
+            StagePrompt(system=None, user="u {{ x }}"),
+        ],
+        ids=["system", "user", "assistant", "empty-vs-text", "absent"],
+    )
+    def test_any_model_facing_change_changes_the_hash(
+        self, changed: StagePrompt
+    ) -> None:
+        assert (
+            changed.content_hash()
+            != StagePrompt(system="s", user="u {{ x }}").content_hash()
+        )
+
+    def test_editorial_section_does_not_change_the_hash(self, tmp_path: Path) -> None:
+        plain = tmp_path / "plain.md"
+        plain.write_text("## System\ns\n\n## User\nu\n", encoding="utf-8")
+        edited = tmp_path / "edited.md"
+        edited.write_text(
+            "## System\ns\n\n## User\nu\n\n## Examples\nfor humans only\n",
+            encoding="utf-8",
+        )
+        assert (
+            load_prompt("plain.md", base_path=tmp_path).content_hash()
+            == load_prompt("edited.md", base_path=tmp_path).content_hash()
+        )
+
+    def test_hash_is_of_the_template_not_the_rendered_text(self) -> None:
+        template = StagePrompt(user="Hello {{ name }}")
+        assert template.render(name="A").content_hash() != template.content_hash()

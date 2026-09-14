@@ -43,6 +43,8 @@ legacy router — undated, tracked as DD-3.2.3-pre-A.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -105,6 +107,26 @@ class StagePrompt:
             user=_render(self.user, context),
             assistant=_render(self.assistant, context),
         )
+
+    def content_hash(self) -> str:
+        """SHA-256 hex of the three model-facing sections.
+
+        Call it on the TEMPLATE, as :func:`load_prompt` returns it, before
+        :meth:`render`: the result then identifies the prompt version, which
+        is what the call register stores next to ``prompt_ref``. A file path
+        is not a version — prompt files are edited in place without a rename.
+
+        Editorial sections the loader drops (e.g. ``## Examples``) never reach
+        the model, so they do not change the hash; ``None`` (section absent)
+        and ``""`` (section present but empty) hash differently.
+        """
+        canonical = json.dumps(
+            {"system": self.system, "user": self.user, "assistant": self.assistant},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _render(text: str | None, context: dict[str, Any]) -> str | None:

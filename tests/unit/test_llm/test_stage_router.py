@@ -10,6 +10,7 @@ import httpx
 import openai
 import pytest
 
+from course_supporter.call_outcome import CallOutcome
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -505,7 +506,8 @@ class TestESCPersistence:
 
         await router.execute_for_stage("demo")
 
-        assert len(calls) == 2
+        # attempt (failed) → trace (rung abandoned) → attempt (success)
+        assert len(calls) == 3
         # First (failed) attempt
         assert calls[0]["action"] == "demo"
         assert calls[0]["strategy"] == "default"
@@ -513,10 +515,15 @@ class TestESCPersistence:
         assert calls[0]["model_id"] == "a-x"
         assert calls[0]["success"] is False
         assert "garbled response" in (calls[0]["error_message"] or "")
+        # The router gave up on the rung: a no-call trace row (mentor-rebuild 01)
+        assert calls[1]["provider"] == "anthropic"
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
+        assert calls[1]["success"] is None
+        assert calls[1].get("error_message") is None
         # Second (successful) attempt
-        assert calls[1]["provider"] == "gemini"
-        assert calls[1]["success"] is True
-        assert calls[1]["error_message"] is None
+        assert calls[2]["provider"] == "gemini"
+        assert calls[2]["success"] is True
+        assert calls[2]["error_message"] is None
 
     async def test_empty_content_row_names_the_abandonment(
         self,
@@ -542,12 +549,15 @@ class TestESCPersistence:
 
         await router.execute_for_stage("demo")
 
-        assert len(calls) == 2
+        # attempt (empty) → trace (rung abandoned) → attempt (answered)
+        assert len(calls) == 3
         assert calls[0]["success"] is True  # transport succeeded — unchanged
         assert calls[0]["error_message"] == "semantic: empty response"
+        assert calls[0]["outcome"] is CallOutcome.EMPTY
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
         # The rung that actually answered stays clean.
-        assert calls[1]["success"] is True
-        assert calls[1]["error_message"] is None
+        assert calls[2]["success"] is True
+        assert calls[2]["error_message"] is None
 
     async def test_no_persist_when_session_factory_absent(
         self,
@@ -1120,9 +1130,12 @@ class TestRegistryAwareCost:
         with pytest.raises(LadderExhaustedError):
             await router.execute_for_stage("demo")
 
-        assert len(calls) == 1
+        # attempt (failed) + trace (rung abandoned); neither is billable
+        assert len(calls) == 2
         assert calls[0]["success"] is False
         assert calls[0]["cost_usd"] is None
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
+        assert calls[1].get("cost_usd") is None
 
     async def test_cost_zero_for_unpriced_model(
         self,

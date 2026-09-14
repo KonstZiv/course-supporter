@@ -190,6 +190,7 @@ async def startup(ctx: WorkerCtx) -> None:
         providers=stage_router_providers,
         registry=registry,
         session_factory=session_factory,
+        record_full_input=s.call_register_full_input,
     )
 
     s3 = S3Client(

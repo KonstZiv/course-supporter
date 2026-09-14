@@ -42,6 +42,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.call_outcome import CallOutcome
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -441,13 +442,17 @@ class TestStage2EmptyContentFallthrough:
         assert deepseek.complete.await_count == 1
         assert gemini.complete.await_count == 0
 
-        # ESC rows: 2 success rows (transport-success, KD16 contract
-        # — empty content is "success" at billing layer, "fallthrough"
-        # at routing layer).
+        # The empty attempt keeps success=True (transport succeeded — billing
+        # layer) while its outcome says "empty" (routing layer falls through);
+        # the rung the router gave up on leaves a no-call trace in between.
         escs = await _fetch_escs(session_factory, committed_job["job_id"])
-        assert len(escs) == 2
-        assert all(esc.success is True for esc in escs)
-        assert [esc.provider for esc in escs] == ["mistral", "deepseek"]
+        # attempt (empty) → trace (mistral abandoned) → attempt (answered)
+        assert [(esc.provider, esc.outcome) for esc in escs] == [
+            ("mistral", CallOutcome.EMPTY),
+            ("mistral", CallOutcome.ABANDONED),
+            ("deepseek", CallOutcome.SUCCESS),
+        ]
+        assert [esc.success for esc in escs] == [True, None, True]
 
 
 class TestStage2LadderExhaustion:
@@ -484,13 +489,19 @@ class TestStage2LadderExhaustion:
         assert exc_info.value.stage_name == "safety_check"
         assert len(exc_info.value.attempts) == 3
 
-        # Three ESC rows survive the raise (one per provider).
+        # Six rows survive the raise: per provider, the failed attempt and the
+        # no-call trace of its abandonment (mentor-rebuild 01).
         escs = await _fetch_escs(session_factory, committed_job["job_id"])
-        assert len(escs) == 3
-        for esc in escs:
+        assert len(escs) == 6
+        attempts = [esc for esc in escs if esc.outcome != CallOutcome.ABANDONED]
+        assert [esc.provider for esc in attempts] == ["mistral", "deepseek", "gemini"]
+        for esc in attempts:
             assert esc.success is False
             assert esc.action == "safety_check"
             assert esc.strategy == "default"
+        for trace in escs:
+            if trace.outcome == CallOutcome.ABANDONED:
+                assert trace.success is None
 
 
 class TestStage2ESCActionAndStrategy:

@@ -252,6 +252,49 @@ class TestPersist:
             )
         assert mock_esc.call_args.kwargs["unit_out_reasoning"] == 1160
 
+    async def test_persist_forwards_register_fields(self) -> None:
+        """Every mentor-rebuild-01 column reaches the row unchanged."""
+        from course_supporter.call_outcome import CallOutcome, SkipReason
+        from course_supporter.llm.finish_reason import FinishReason
+        from course_supporter.service_logging import _persist
+
+        session = AsyncMock()
+        factory = AsyncMock()
+        factory.__aenter__ = AsyncMock(return_value=session)
+        factory.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=factory)
+        fields = {
+            "outcome": CallOutcome.SKIPPED,
+            "finish_reason": FinishReason.OUTPUT_CEILING,
+            "skip_reason": SkipReason.INPUT_BUDGET_EXCEEDED,
+            "prompt_ref": "prompts/x/v1.md",
+            "prompt_hash": "p" * 64,
+            "input_hash": "i" * 64,
+            "input_text": "{}",
+            "output_text": "out",
+            "authenticity": 0.5,
+            "completeness": 0.25,
+        }
+
+        set_job_from_arq(uuid.uuid4())
+        with patch("course_supporter.storage.orm.ExternalServiceCall") as mock_esc:
+            await _persist(
+                mock_factory,
+                action="demo",
+                strategy="default",
+                provider=None,
+                model_id=None,
+                success=None,
+                **fields,
+            )
+        kwargs = mock_esc.call_args.kwargs
+        assert {key: kwargs[key] for key in fields} == fields
+        assert (kwargs["provider"], kwargs["model_id"], kwargs["success"]) == (
+            None,
+            None,
+            None,
+        )
+
     async def test_persist_swallows_db_error(self) -> None:
         from sqlalchemy.exc import OperationalError
 
@@ -335,3 +378,39 @@ class TestPersistGuardsMissingJobId:
         assert call.kwargs["action"] == "course_structuring"
         assert call.kwargs["provider"] == "gemini"
         assert call.kwargs["model_id"] == "gemini-2.5-flash"
+
+
+class TestSTTLogCallbackOutcome:
+    """A speech-to-text row knows transport only: success or transport error."""
+
+    @pytest.mark.parametrize(
+        ("result", "error_message", "expected"),
+        [
+            ("result", None, "success"),
+            ("result", "provider 503", "transport_error"),
+            (None, "all providers failed", "transport_error"),
+        ],
+    )
+    async def test_outcome_follows_transport(
+        self, result: str | None, error_message: str | None, expected: str
+    ) -> None:
+        from course_supporter.service_logging import create_stt_log_callback
+
+        stt_result = (
+            MagicMock(
+                action="transcribe",
+                strategy="default",
+                provider="deepgram",
+                model_id="nova-3",
+                audio_duration_sec=12.0,
+                latency_ms=5,
+                cost_usd=0.001,
+            )
+            if result
+            else None
+        )
+        with patch(
+            "course_supporter.service_logging._persist", new_callable=AsyncMock
+        ) as persist:
+            await create_stt_log_callback(MagicMock())(stt_result, error_message)
+        assert persist.await_args.kwargs["outcome"] == expected

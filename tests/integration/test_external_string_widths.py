@@ -37,8 +37,9 @@ pytestmark = pytest.mark.requires_db
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 # The longest prompt reference in config/ladders_mentor.yaml — 51 characters,
-# already past the old VARCHAR(50). Nothing writes prompt_ref yet (DD-CQ-C),
-# which is the only reason this never surfaced in production.
+# already past the old VARCHAR(50). Nothing wrote prompt_ref until mentor-rebuild
+# task 01, which is the only reason this never surfaced in production; the
+# router now writes it on every attempt row.
 LONGEST_PROMPT_REF = "prompts/mentor_layered_evaluation_node_course/v1.md"
 
 

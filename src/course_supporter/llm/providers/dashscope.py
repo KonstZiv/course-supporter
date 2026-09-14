@@ -69,6 +69,7 @@ from dashscope.common.error import (
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
@@ -95,6 +96,20 @@ _OVERFLOW_MESSAGE_PATTERN = re.compile(
     r"max(?:imum)? (?:input |context )?tokens? exceed",
     re.IGNORECASE,
 )
+
+# ``finish_reason`` vocabulary on both endpoints.
+#
+# "null" is the service's "not finished yet" placeholder (the SDK's own stream
+# merge treats it as no reason, dashscope/utils/message_utils.py). That is a
+# DIFFERENT state from "no reason reported" — a response still in progress —
+# and it is deliberately merged into UNKNOWN here, because nothing reaches this
+# code in progress: every call is a single non-streaming request, so a final
+# response saying "null" has told us nothing about why it ended. The day a
+# streaming path is added, per-chunk "null" becomes normal and must NOT land in
+# the register as UNKNOWN — split it into its own state at that point.
+_CEILING_FINISH_REASONS = frozenset({"length"})
+_STOP_FINISH_REASONS = frozenset({"stop"})
+_UNREPORTED_FINISH_REASONS = frozenset({"null"})
 
 # Image MIME signatures for inline base64 data URI scheme.
 _IMAGE_MIME_SIGNATURES: tuple[tuple[bytes, str], ...] = (
@@ -412,6 +427,29 @@ class DashScopeProvider(LLMProvider):
         return ""
 
     @staticmethod
+    def _extract_finish_reason(response: Any) -> FinishReason:
+        """Normalised finish reason from either DashScope output shape.
+
+        ``result_format="text"`` puts it on ``output.finish_reason``; the
+        message format (and the multimodal endpoint) on
+        ``output.choices[0].finish_reason``. The flat field wins when set,
+        mirroring the text extractors' precedence.
+        """
+        output = response.output
+        raw: object = None
+        if output:
+            raw = output.get("finish_reason")
+            choices = output.get("choices")
+            if not raw and choices:
+                raw = choices[0].get("finish_reason")
+        return normalize_finish_reason(
+            raw,
+            ceiling=_CEILING_FINISH_REASONS,
+            stop=_STOP_FINISH_REASONS,
+            unreported=_UNREPORTED_FINISH_REASONS,
+        )
+
+    @staticmethod
     def _has_image_bytes(request: LLMRequest) -> bool:
         """Return True iff ``request.contents`` carries image bytes.
 
@@ -506,6 +544,7 @@ class DashScopeProvider(LLMProvider):
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             tokens_reasoning=tokens_reasoning,
+            finish_reason=self._extract_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )
 

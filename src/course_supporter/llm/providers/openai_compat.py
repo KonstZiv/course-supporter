@@ -22,6 +22,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
@@ -35,6 +36,19 @@ _OPENAI_OVERFLOW_PATTERN = re.compile(
     r"context length|too long|maximum context|tokens exceed",
     re.IGNORECASE,
 )
+
+# Chat Completions ``choice.finish_reason`` vocabulary, shared by OpenAI,
+# DeepSeek and Mistral. DeepSeek with thinking on reports "length" when the
+# reasoning consumed the whole ``max_tokens`` and ``content`` came back empty.
+_CEILING_FINISH_REASONS = frozenset({"length"})
+_STOP_FINISH_REASONS = frozenset({"stop"})
+
+
+def _normalize_choice_finish(raw: object) -> FinishReason:
+    return normalize_finish_reason(
+        raw, ceiling=_CEILING_FINISH_REASONS, stop=_STOP_FINISH_REASONS
+    )
+
 
 # Explicit SDK timeout. Read budget covers reasoning-tier providers
 # (DeepSeek thinking-on observed 149-707s in TASK-2.4.17 live runs);
@@ -227,6 +241,7 @@ class OpenAICompatProvider(LLMProvider):
             model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
+            finish_reason=_normalize_choice_finish(choice.finish_reason),
             latency_ms=timer.elapsed_ms,
         )
 
@@ -281,6 +296,11 @@ class OpenAICompatProvider(LLMProvider):
             model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
+            finish_reason=(
+                _normalize_choice_finish(completion.choices[0].finish_reason)
+                if completion.choices
+                else FinishReason.UNKNOWN
+            ),
             latency_ms=timer.elapsed_ms,
         )
         return result, llm_response

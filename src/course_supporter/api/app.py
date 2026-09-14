@@ -98,8 +98,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # (option a, two-build); providers are stateless HTTP wrappers and a
     # second construction is cheap.
     ladder_config = load_ladder_config(settings.ladders_dir)
-    # Fail-fast on rung-typo / capability-mismatch before the FastAPI
-    # app starts serving (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1).
+    # Fail-fast on a misconfigured ladder before the FastAPI
+    # app starts serving: unknown model, missing capability or context window,
+    # untranslatable reasoning form, or a rung without a named price
+    # (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1; P6; mentor-rebuild 01).
     validate_ladders_against_registry(ladder_config, registry)
     stage_router_providers = create_providers(settings)
     app.state.stage_router = StageRouter(
@@ -107,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         providers=stage_router_providers,
         registry=registry,
         session_factory=async_session,
+        record_full_input=settings.call_register_full_input,
     )
 
     # ARQ Redis pool for job enqueue. expires_extra_ms overrides ARQ's 24h

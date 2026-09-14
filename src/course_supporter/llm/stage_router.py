@@ -23,6 +23,20 @@ row via :func:`service_logging._persist` so cost reporting can
 correlate fallback chains. ``strategy="default"`` per KD16; the
 ESC ``strategy`` column survives only for audit.
 
+What the register records (mentor-rebuild task 01). The ladder's
+behaviour is unchanged by any of it -- these are writes, not decisions:
+
+* Attempt rows carry ``outcome`` (:class:`CallOutcome`), the connector's
+  normalised ``finish_reason``, ``prompt_ref`` with the template's
+  ``prompt_hash``, and the attempt's ``input_hash``. ``output_text`` only
+  on stages with ``record_output``; ``input_text`` only when the router is
+  built with ``record_full_input`` (a setting production refuses).
+* Trace rows record a rung the router did not call or gave up on, with
+  ``success`` NULL: ``outcome='skipped'`` plus ``skip_reason`` before a
+  call, and ``outcome='abandoned'`` after the rung's last attempt. The
+  abandoned row carries no reason of its own -- the attempt row before it
+  does -- so a failure is never counted twice.
+
 Limitations carried forward to Phase 1+:
 
 * The legacy :class:`LLMRequest` shape collapses prompts to a
@@ -54,10 +68,16 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from course_supporter.call_outcome import CallOutcome, SkipReason
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
     StructuralRetryError,
+)
+from course_supporter.llm.finish_reason import FinishReason
+from course_supporter.llm.input_hash import (
+    canonical_attempt_input,
+    hash_attempt_input,
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
@@ -97,6 +117,58 @@ class StageResult:
     attempt_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class _StageRecord:
+    """What every register row of one stage execution shares."""
+
+    stage_name: str
+    prompt_ref: str
+    prompt_hash: str
+    record_output: bool
+
+
+def _attempt_outcome(
+    provider: LLMProvider,
+    response: LLMResponse | None,
+    raised: Exception | None,
+) -> CallOutcome:
+    """Classify one attempt for the register. Mirrors, never drives, the ladder.
+
+    The mapping follows the branches ``_attempt_entry`` takes on the same
+    facts, so the register says what the router saw:
+
+    * a :class:`StructuralRetryError`, or a response the validator raised
+      on -> ``INVALID_CONTENT`` (the router's structural-retry branch);
+    * no response + infrastructure error -> ``TRANSPORT_ERROR`` (retried);
+    * no response + input overflow -> ``INPUT_OVERFLOW``;
+    * no response + anything else -> ``PROVIDER_REFUSAL`` (not retried);
+    * an empty response -> ``EMPTY_AT_OUTPUT_CEILING`` when the provider
+      reported the ceiling, ``EMPTY`` otherwise;
+    * otherwise ``SUCCESS``.
+    """
+    if isinstance(raised, StructuralRetryError):
+        return CallOutcome.INVALID_CONTENT
+    if response is None:
+        if raised is None:
+            # Interrupted before any response (e.g. task cancellation escapes
+            # ``except Exception``): not a refusal and not an overflow — the
+            # call simply never came back, which is what transport failure is.
+            return CallOutcome.TRANSPORT_ERROR
+        category = provider.classify_error(raised)
+        if category is ErrorCategory.INFRASTRUCTURE:
+            return CallOutcome.TRANSPORT_ERROR
+        if category is ErrorCategory.INPUT_OVERFLOW:
+            return CallOutcome.INPUT_OVERFLOW
+        return CallOutcome.PROVIDER_REFUSAL
+    if raised is not None:
+        return CallOutcome.INVALID_CONTENT
+    if not response.content:
+        if response.finish_reason is FinishReason.OUTPUT_CEILING:
+            return CallOutcome.EMPTY_AT_OUTPUT_CEILING
+        return CallOutcome.EMPTY
+    return CallOutcome.SUCCESS
+
+
 class StageRouter:
     """KD16 router. Resolves a stage name to a fallback ladder.
 
@@ -121,6 +193,7 @@ class StageRouter:
         prompt_base_path: Path | None = None,
         max_retries_infrastructure: int = 3,
         max_retries_structural: int = 1,
+        record_full_input: bool = False,
     ) -> None:
         self._ladder_config = ladder_config
         self._providers = providers
@@ -134,6 +207,9 @@ class StageRouter:
         self._prompt_base_path = prompt_base_path
         self._max_retries_infra = max_retries_infrastructure
         self._max_retries_structural = max_retries_structural
+        # Wired from ``Settings.call_register_full_input``, which production
+        # refuses to boot with; the router itself stays settings-free.
+        self._record_full_input = record_full_input
 
     async def execute_for_stage(
         self,
@@ -197,10 +273,19 @@ class StageRouter:
             prompt_ref=stage.prompt_ref,
         )
 
-        prompt = load_prompt(
+        template = load_prompt(
             stage.prompt_ref,
             base_path=self._prompt_base_path,
-        ).render(**render_context)
+        )
+        record = _StageRecord(
+            stage_name=stage_name,
+            prompt_ref=stage.prompt_ref,
+            # Hashed before rendering: the template is the prompt version; the
+            # rendered text is per-call input and lives in input_hash.
+            prompt_hash=template.content_hash(),
+            record_output=stage.record_output,
+        )
+        prompt = template.render(**render_context)
 
         if prompt.assistant:
             logger.info(
@@ -218,9 +303,18 @@ class StageRouter:
                 attempts.append(
                     (entry.provider, entry.model, "provider not configured")
                 )
+                await self._record_trace(
+                    record,
+                    entry,
+                    CallOutcome.SKIPPED,
+                    SkipReason.PROVIDER_NOT_CONFIGURED,
+                )
                 continue
             if not provider.enabled:
                 attempts.append((entry.provider, entry.model, "provider disabled"))
+                await self._record_trace(
+                    record, entry, CallOutcome.SKIPPED, SkipReason.PROVIDER_DISABLED
+                )
                 continue
 
             # Phase 3.2.3-pre — opt-in input-budget check (KD10 «Token budget
@@ -245,6 +339,10 @@ class StageRouter:
                             "with max_context (config-time validator skipped?)",
                         )
                     )
+                    # No skip reason is invented for this branch: it is
+                    # reachable only when the startup ladder check did not
+                    # run, and none of the recorded reasons describes that.
+                    await self._record_trace(record, entry, CallOutcome.SKIPPED)
                     continue
                 estimated_input = estimate_tokens(prompt.user or "", prompt.system)
                 budget = int(stage.input_budget_ratio * registry_model.max_context)
@@ -258,13 +356,19 @@ class StageRouter:
                             f"{registry_model.max_context:,} = {budget:,}",
                         )
                     )
+                    await self._record_trace(
+                        record,
+                        entry,
+                        CallOutcome.SKIPPED,
+                        SkipReason.INPUT_BUDGET_EXCEEDED,
+                    )
                     continue
 
             request = self._build_request(
                 prompt, entry, stage_name, contents=contents, expects_json=expects_json
             )
             response, used_count, reason = await self._attempt_entry(
-                provider, entry, request, stage_name, response_validator
+                provider, entry, request, record, response_validator
             )
             total_attempt_count += used_count
 
@@ -277,6 +381,7 @@ class StageRouter:
                 )
 
             attempts.append((entry.provider, entry.model, reason))
+            await self._record_trace(record, entry, CallOutcome.ABANDONED)
 
         raise LadderExhaustedError(stage_name, attempts)
 
@@ -331,7 +436,7 @@ class StageRouter:
         provider: LLMProvider,
         entry: LadderEntry,
         request: LLMRequest,
-        stage_name: str,
+        record: _StageRecord,
         response_validator: Callable[[str], None] | None,
     ) -> tuple[LLMResponse | None, int, str]:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
@@ -347,7 +452,7 @@ class StageRouter:
             attempts_used += 1
             try:
                 response = await self._call_with_log(
-                    provider, entry, request, stage_name, response_validator
+                    provider, entry, request, record, response_validator
                 )
             except StructuralRetryError as exc:
                 (
@@ -355,7 +460,7 @@ class StageRouter:
                     retry_count,
                     retry_reason,
                 ) = await self._structural_retry(
-                    provider, entry, request, exc, stage_name, response_validator
+                    provider, entry, request, exc, record, response_validator
                 )
                 attempts_used += retry_count
                 if retry_response is not None:
@@ -399,7 +504,7 @@ class StageRouter:
         entry: LadderEntry,
         original_request: LLMRequest,
         exc: StructuralRetryError,
-        stage_name: str,
+        record: _StageRecord,
         response_validator: Callable[[str], None] | None,
     ) -> tuple[LLMResponse | None, int, str]:
         """Single retry attempt with feedback appended to the user prompt."""
@@ -414,7 +519,7 @@ class StageRouter:
         )
         try:
             response = await self._call_with_log(
-                provider, entry, retry_request, stage_name, response_validator
+                provider, entry, retry_request, record, response_validator
             )
         except Exception as retry_exc:
             return None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}"
@@ -431,7 +536,7 @@ class StageRouter:
         provider: LLMProvider,
         entry: LadderEntry,
         request: LLMRequest,
-        stage_name: str,
+        record: _StageRecord,
         response_validator: Callable[[str], None] | None,
     ) -> LLMResponse:
         """One LLM call. Persists ESC for the attempt in ``finally``.
@@ -446,11 +551,13 @@ class StageRouter:
         truthful telemetry for "API call succeeded but content
         failed router policy". An empty body takes the same shape:
         ``success=True`` with ``error_message`` naming the SEMANTIC
-        abandonment.
+        abandonment. ``outcome`` tells these cases apart without reading
+        the text (:func:`_attempt_outcome`).
         """
         start = time.perf_counter()
         response: LLMResponse | None = None
         error_message: str | None = None
+        raised: Exception | None = None
         try:
             response = await provider.complete(request)
             if response_validator is not None and response.content:
@@ -466,6 +573,7 @@ class StageRouter:
                 error_message = f"{ErrorCategory.SEMANTIC.value}: empty response"
             return response
         except Exception as exc:
+            raised = exc
             # Guard against exception types whose ``str(exc)`` is empty
             # (no args). Without this, ESC row degrades to "success=False,
             # error_message=NULL" — zero diagnostic surface (TASK-2.4.18).
@@ -485,9 +593,10 @@ class StageRouter:
                 # do not set ``response.cost_usd``; pre-2.4.22 every ESC row
                 # carried NULL). Skip the lookup on failed calls (response
                 # None) and zero-token success (NULL is semantically right
-                # for "nothing billable"). Model not in registry → NULL
-                # (graceful — caller's responsibility to keep registry in
-                # sync).
+                # for "nothing billable"). Model not in registry, or with no
+                # named price → NULL; the startup ladder check refuses both
+                # for any configured rung, so this is the unvalidated-config
+                # fallback, not a path production takes.
                 computed_cost: float | None = None
                 if response is not None and (response.tokens_in or response.tokens_out):
                     cost_model = self._registry.models.get(entry.model)
@@ -499,7 +608,7 @@ class StageRouter:
                 try:
                     await _persist(
                         self._session_factory,
-                        action=stage_name,
+                        action=record.stage_name,
                         strategy="default",
                         provider=entry.provider,
                         model_id=entry.model,
@@ -515,6 +624,53 @@ class StageRouter:
                         cost_usd=computed_cost,
                         success=response is not None,
                         error_message=error_message,
+                        outcome=_attempt_outcome(provider, response, raised),
+                        finish_reason=response.finish_reason if response else None,
+                        prompt_ref=record.prompt_ref,
+                        prompt_hash=record.prompt_hash,
+                        input_hash=hash_attempt_input(request, provider=entry.provider),
+                        input_text=(
+                            canonical_attempt_input(request, provider=entry.provider)
+                            if self._record_full_input
+                            else None
+                        ),
+                        output_text=(
+                            response.content
+                            if record.record_output and response is not None
+                            else None
+                        ),
                     )
                 except Exception:
                     logger.exception("stage_router_esc_persist_failed")
+
+    async def _record_trace(
+        self,
+        record: _StageRecord,
+        entry: LadderEntry,
+        outcome: CallOutcome,
+        skip_reason: SkipReason | None = None,
+    ) -> None:
+        """Write a no-call register row for a skipped or abandoned rung.
+
+        ``success`` is NULL (no transport happened) and ``error_message``
+        stays empty, so the row stays out of the canonical failure count
+        ``NOT success OR error_message IS NOT NULL``. Telemetry: a failure
+        here is logged and never interrupts the ladder.
+        """
+        if self._session_factory is None:
+            return
+        try:
+            await _persist(
+                self._session_factory,
+                action=record.stage_name,
+                strategy="default",
+                provider=entry.provider,
+                model_id=entry.model,
+                success=None,
+                outcome=outcome,
+                skip_reason=skip_reason,
+                prompt_ref=record.prompt_ref,
+                prompt_hash=record.prompt_hash,
+            )
+        except Exception:
+            logger.exception("stage_router_esc_persist_failed")

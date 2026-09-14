@@ -25,6 +25,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from course_supporter.call_outcome import CallOutcome, SkipReason
+from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.storage.cascade import (
     ScrubCallable,
     scrub_authored_document,
@@ -1143,11 +1145,29 @@ class Job(SoftDeleteMixin, Base):
 # ──────────────────────────────────────────────
 
 
+def _nullable_in(column: str, values: type[StrEnum]) -> str:
+    """``CHECK`` body admitting NULL or one of an enum's values.
+
+    Built from the enum so the ORM cannot drift from the Python vocabulary;
+    the migration spells the same list out literally (a migration must not
+    change when the code later does), and the DB test writes every member.
+    """
+    listed = ", ".join(f"'{member.value}'" for member in values)
+    return f"{column} IS NULL OR {column} IN ({listed})"
+
+
 class ExternalServiceCall(Base):
     __tablename__ = "external_service_calls"
-    __table_args__ = {
-        "comment": ("Audit log of all external API calls (LLM, transcription, etc.)"),
-    }
+    __table_args__ = (
+        CheckConstraint(_nullable_in("outcome", CallOutcome), name="ck_esc_outcome"),
+        CheckConstraint(
+            _nullable_in("finish_reason", FinishReason), name="ck_esc_finish_reason"
+        ),
+        CheckConstraint(
+            _nullable_in("skip_reason", SkipReason), name="ck_esc_skip_reason"
+        ),
+        {"comment": "Audit log of all external API calls (LLM, transcription, etc.)"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     job_id: Mapped[uuid.UUID] = mapped_column(
@@ -1160,12 +1180,43 @@ class ExternalServiceCall(Base):
     )
     action: Mapped[str] = mapped_column(String(100), default="")
     strategy: Mapped[str] = mapped_column(String(50), default="default")
-    provider: Mapped[str] = mapped_column(String(50))
-    model_id: Mapped[str] = mapped_column(String(100))
+    provider: Mapped[str | None] = mapped_column(
+        String(50),
+        comment="Provider that was called. NULL = no call was made (the "
+        "per-review metrics row).",
+    )
+    model_id: Mapped[str | None] = mapped_column(
+        String(100),
+        comment="Model that was called. NULL = no call was made (the "
+        "per-review metrics row).",
+    )
     # Not String(50): the longest prompt_ref in the ladders is already 51
-    # ("prompts/mentor_layered_evaluation_node_course/v1.md"). The column has
-    # never overflowed only because nothing writes it yet (DD-CQ-C).
+    # ("prompts/mentor_layered_evaluation_node_course/v1.md"). StageRouter
+    # writes it on every attempt and trace row, next to prompt_hash.
     prompt_ref: Mapped[str | None] = mapped_column(Text)
+    prompt_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="SHA-256 of the prompt template's model-facing sections at "
+        "render time. prompt_ref names the file; the file is edited in place, "
+        "so only this hash says which version was sent.",
+    )
+    input_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="SHA-256 of the canonical input of this one attempt: rendered "
+        "prompts, attachment digests and the output-affecting parameters. Same "
+        "input, same hash — the reproducibility key.",
+    )
+    input_text: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Full rendered input. Written only when the full-input setting "
+        "is raised, which production refuses to boot with: it carries the "
+        "student's submission.",
+    )
+    output_text: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Response body as returned. Written only on stages that enable "
+        "output recording in their ladder config.",
+    )
     unit_type: Mapped[str | None] = mapped_column(String(20))
     unit_in: Mapped[int | None] = mapped_column(Integer)
     unit_out: Mapped[int | None] = mapped_column(Integer)
@@ -1180,8 +1231,41 @@ class ExternalServiceCall(Base):
     )
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Float)
-    success: Mapped[bool] = mapped_column(default=True)
+    # No ORM default: a Python-side default fires on an explicit None too, so
+    # ``default=True`` turned every no-call row into a "successful call" — the
+    # exact lie the nullable column exists to remove. Writers state the value.
+    success: Mapped[bool | None] = mapped_column(
+        comment="Transport result only: did the call return a response. NULL = "
+        "no call was made (ladder trace and metrics rows). Whether the response "
+        "was usable is outcome.",
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="What happened to this row (CallOutcome): the result of a call, "
+        "or a skipped / abandoned ladder rung. NULL on rows written before the "
+        "column existed and on the per-review metrics row.",
+    )
+    finish_reason: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="Why generation stopped, normalised by the connector "
+        "(FinishReason): output_ceiling / stop / other / unknown.",
+    )
+    skip_reason: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="Why a ladder rung was skipped without a call (SkipReason). Set "
+        "only on outcome = 'skipped'.",
+    )
+    authenticity: Mapped[float | None] = mapped_column(
+        Float,
+        comment="Per-review metric: share of claims supported by a reference. "
+        "NULL on call rows and when the review has no claims.",
+    )
+    completeness: Mapped[float | None] = mapped_column(
+        Float,
+        comment="Per-review metric: share of claims covered by a verdict. NULL "
+        "on call rows and when the review has no claims.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

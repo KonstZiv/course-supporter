@@ -80,6 +80,12 @@ class StageConfig(BaseModel):
             lives at the callsite (Phase 3.2.3a methodist agent).
             Numeric policy value (e.g. 0.5 from KD10) is owned by the
             caller's stage YAML, NOT hard-coded in the router.
+        record_output: Write each attempt's response body to the call
+            register (``external_service_calls.output_text``). Off by
+            default: ingestion stages carry output ceilings in the tens of
+            thousands of tokens, and the register is queried by cost and
+            outcome, not by body. A stage turns it on when its output is the
+            thing reproducibility has to compare (mentor-rebuild task 01).
     """
 
     model_config = _FORBID
@@ -88,6 +94,7 @@ class StageConfig(BaseModel):
     requires: list[Capability] = Field(default_factory=list)
     ladder: list[LadderEntry] = Field(min_length=1)
     input_budget_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
+    record_output: bool = False
 
 
 class LadderFile(BaseModel):
@@ -175,7 +182,7 @@ def validate_ladders_against_registry(
 ) -> None:
     """Cross-check every ladder rung against the model registry (TASK-2.4.23).
 
-    Four invariants enforced fail-fast at startup:
+    Five invariants enforced fail-fast at startup:
 
     * **K — membership:** every ``rung.model`` must exist in
       ``registry.models``. A typo / rename / drift between
@@ -201,6 +208,11 @@ def validate_ladders_against_registry(
       SILENTLY IGNORED on the wire (STEP-0 probe); refusing it at boot
       turns a deploy-time typo into a startup error rather than a
       pay-for-reasoning-we-can't-see production hit.
+    * **Named price (mentor-rebuild task 01):** every rung's model must name
+      both token prices in the registry. An explicit ``0.0`` is a named price
+      (free tier, local model); an absent one is not. A rung without a price
+      would write ``cost_usd = NULL`` for every call it makes — the register
+      would stop saying what was paid for, and nothing would say so.
 
     Errors are aggregated and raised as a single ``ValueError`` so a
     multi-typo config surfaces every problem at once. Mirrors the
@@ -211,8 +223,8 @@ def validate_ladders_against_registry(
         ValueError: if any rung references an unknown model, lacks a
             capability declared in ``stage.requires``, (when the stage
             declares ``input_budget_ratio``) lacks ``max_context`` in the
-            registry, OR carries a ``reasoning`` form its provider's
-            connector cannot translate.
+            registry, carries a ``reasoning`` form its provider's
+            connector cannot translate, OR has no named token price.
     """
     errors: list[str] = []
 
@@ -262,6 +274,14 @@ def validate_ladders_against_registry(
                     f"has no max_context in the registry "
                     f"(required by input_budget_ratio="
                     f"{stage.input_budget_ratio})"
+                )
+
+            if model.cost_per_1k is None:
+                errors.append(
+                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
+                    f"has no named price in the registry "
+                    f"(cost_per_1k_in and cost_per_1k_out are both required; "
+                    f"0.0 is a valid price)"
                 )
 
     if errors:

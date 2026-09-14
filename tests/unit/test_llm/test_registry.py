@@ -87,6 +87,12 @@ class TestModelConfig:
         )
         assert m.estimate_cost(0, 0) == 0.0
 
+    def test_unpriced_model_estimates_no_cost(self) -> None:
+        """No named price → cost unknown (``None``), never a fabricated zero."""
+        m = ModelConfig(provider="test")
+        assert m.cost_per_1k is None
+        assert m.estimate_cost(1000, 500) is None
+
     def test_cost_per_minute_default_none(self) -> None:
         m = ModelConfig(provider="test")
         assert m.cost_per_minute is None
@@ -120,8 +126,30 @@ class TestRegistryValidation:
     def test_cost_flattened(self, valid_config: dict) -> None:
         cfg = ModelRegistryConfig.model_validate(valid_config)
         m = cfg.models["model-a"]
+        assert m.cost_per_1k is not None
         assert m.cost_per_1k.input == pytest.approx(0.001)
         assert m.cost_per_1k.output == pytest.approx(0.002)
+
+    @pytest.mark.parametrize(
+        ("prices", "named"),
+        [
+            ({}, False),
+            ({"cost_per_1k_in": 0.001}, False),
+            ({"cost_per_1k_out": 0.002}, False),
+            ({"cost_per_1k_in": 0.0, "cost_per_1k_out": 0.0}, True),
+        ],
+        ids=["absent", "input-only", "output-only", "explicit-zero"],
+    )
+    def test_price_is_named_only_when_both_sides_are(
+        self, prices: dict[str, float], named: bool
+    ) -> None:
+        cfg = ModelRegistryConfig.model_validate(
+            {
+                "providers": {"p": {"type": "llm", "models": [{"id": "m", **prices}]}},
+                "actions": {},
+            }
+        )
+        assert (cfg.models["m"].cost_per_1k is not None) is named
 
     def test_cost_per_minute_parsed(self, valid_config: dict) -> None:
         """STT models with cost_per_minute get it propagated to ModelConfig."""

@@ -10,6 +10,7 @@ import httpx
 import openai
 import pytest
 
+from course_supporter.call_outcome import CallOutcome
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -505,7 +506,8 @@ class TestESCPersistence:
 
         await router.execute_for_stage("demo")
 
-        assert len(calls) == 2
+        # attempt (failed) → trace (rung abandoned) → attempt (success)
+        assert len(calls) == 3
         # First (failed) attempt
         assert calls[0]["action"] == "demo"
         assert calls[0]["strategy"] == "default"
@@ -513,10 +515,15 @@ class TestESCPersistence:
         assert calls[0]["model_id"] == "a-x"
         assert calls[0]["success"] is False
         assert "garbled response" in (calls[0]["error_message"] or "")
+        # The router gave up on the rung: a no-call trace row (mentor-rebuild 01)
+        assert calls[1]["provider"] == "anthropic"
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
+        assert calls[1]["success"] is None
+        assert calls[1].get("error_message") is None
         # Second (successful) attempt
-        assert calls[1]["provider"] == "gemini"
-        assert calls[1]["success"] is True
-        assert calls[1]["error_message"] is None
+        assert calls[2]["provider"] == "gemini"
+        assert calls[2]["success"] is True
+        assert calls[2]["error_message"] is None
 
     async def test_empty_content_row_names_the_abandonment(
         self,
@@ -542,12 +549,15 @@ class TestESCPersistence:
 
         await router.execute_for_stage("demo")
 
-        assert len(calls) == 2
+        # attempt (empty) → trace (rung abandoned) → attempt (answered)
+        assert len(calls) == 3
         assert calls[0]["success"] is True  # transport succeeded — unchanged
         assert calls[0]["error_message"] == "semantic: empty response"
+        assert calls[0]["outcome"] is CallOutcome.EMPTY
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
         # The rung that actually answered stays clean.
-        assert calls[1]["success"] is True
-        assert calls[1]["error_message"] is None
+        assert calls[2]["success"] is True
+        assert calls[2]["error_message"] is None
 
     async def test_no_persist_when_session_factory_absent(
         self,
@@ -1120,19 +1130,23 @@ class TestRegistryAwareCost:
         with pytest.raises(LadderExhaustedError):
             await router.execute_for_stage("demo")
 
-        assert len(calls) == 1
+        # attempt (failed) + trace (rung abandoned); neither is billable
+        assert len(calls) == 2
         assert calls[0]["success"] is False
         assert calls[0]["cost_usd"] is None
+        assert calls[1]["outcome"] is CallOutcome.ABANDONED
+        assert calls[1].get("cost_usd") is None
 
-    async def test_cost_zero_for_unpriced_model(
+    async def test_cost_zero_for_zero_priced_model(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Model in registry with 0.0 pricing → cost_usd=0.0 (not NULL).
+        """Model in registry with an explicit 0.0 price → cost_usd=0.0 (not NULL).
 
-        Mirrors the prior cost-computation behaviour; semantically the model
-        is either free or pricing is unset in YAML — caller's responsibility
-        to keep registry accurate (DD-2.4-F audit script territory).
+        An explicit zero is a named price (free tier, local model). An absent
+        price is no price at all: it yields cost_usd=NULL and the startup
+        ladder check refuses such a rung (mentor-rebuild 01), so a configured
+        ladder never reaches the router with one.
         """
         _mock_load_prompt(monkeypatch)
         calls = _capture_persist_calls(monkeypatch)

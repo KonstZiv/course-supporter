@@ -8,8 +8,9 @@ Purpose:
     answers, one column each.
 
 Interface:
-    :class:`CallOutcome` — the row's result; written on every new call row and
-    on every ladder trace row. ``NULL`` on historical rows (never back-filled:
+    :class:`CallOutcome` — the row's result; written on every new row from the
+    ladder router (attempts and traces), webhook delivery and speech-to-text.
+    ``NULL`` on historical rows (never back-filled:
     a guess from ``success`` + ``error_message`` would be indistinguishable
     from a recorded fact) and on the per-review metrics row, which is neither
     a call nor a trace.
@@ -37,7 +38,8 @@ class CallOutcome(StrEnum):
     * ``SUCCESS`` — a non-empty response that the stage accepted.
     * ``TRANSPORT_ERROR`` — the call raised an infrastructure error (timeout,
       429, 5xx, network); the router retries these on the same rung. Also the
-      failure value for model-less rows (webhook delivery, speech-to-text).
+      failure value for rows with no response body to judge (webhook
+      delivery, speech-to-text).
     * ``PROVIDER_REFUSAL`` — the provider rejected the call in a way that is
       not retried (auth, bad request, content filter). Points at the prompt or
       the safety settings.

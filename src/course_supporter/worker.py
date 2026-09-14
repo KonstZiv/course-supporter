@@ -181,8 +181,10 @@ async def startup(ctx: WorkerCtx) -> None:
     # invoking ``run_stage2_safety_check``) can read the same ladder
     # registry as HTTP-side consumers.
     ladder_config = load_ladder_config(s.ladders_dir)
-    # Fail-fast on rung-typo / capability-mismatch before the worker
-    # starts accepting jobs (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1).
+    # Fail-fast on a misconfigured ladder before the worker
+    # starts accepting jobs: unknown model, missing capability or context window,
+    # untranslatable reasoning form, or a rung without a named price
+    # (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1; P6; mentor-rebuild 01).
     validate_ladders_against_registry(ladder_config, registry)
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(

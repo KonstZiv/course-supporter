@@ -263,7 +263,8 @@ async def record_review_metrics(
     (``review_metrics.ReviewMetricsCalculator``) cannot change where or how
     they are stored. The row records no call — ``provider``, ``model_id``,
     ``success``, ``outcome`` and ``cost_usd`` are all NULL — and is found by
-    ``action = 'review_metrics'`` with the metric columns set. It inherits
+    ``action = 'review_metrics'`` (its metric columns are NULL too when the
+    review made no claims). It inherits
     :func:`_persist`'s contract: written only inside a job context, DB errors
     swallowed.
     """
@@ -359,7 +360,8 @@ def create_stt_log_callback(
             cost_usd=result.cost_usd,
             success=error_message is None,
             error_message=error_message,
-            # A model-less row knows only transport: it answered or it did not.
+            # A transcription has no response body to judge: only transport
+            # success or failure apply.
             outcome=(
                 CallOutcome.SUCCESS
                 if error_message is None

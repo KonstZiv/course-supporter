@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from course_supporter.call_outcome import CallOutcome
 from course_supporter.homework.webhook import (
     build_failed_payload,
     build_mismatch_payload,
@@ -260,6 +261,7 @@ class TestDeliverWebhook:
         mock_session.add.assert_called_once()
         esc = mock_session.add.call_args[0][0]
         assert esc.success is True
+        assert esc.outcome == CallOutcome.SUCCESS
         assert esc.action == "webhook_reviewed"
 
     @patch(
@@ -285,6 +287,7 @@ class TestDeliverWebhook:
         mock_session.add.assert_called_once()
         esc = mock_session.add.call_args[0][0]
         assert esc.success is False
+        assert esc.outcome == CallOutcome.TRANSPORT_ERROR
 
     @patch(
         "course_supporter.homework.webhook.validate_webhook_url", new_callable=AsyncMock

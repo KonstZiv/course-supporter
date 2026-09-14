@@ -26,9 +26,13 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
+from course_supporter.call_outcome import CallOutcome
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from course_supporter.call_outcome import SkipReason
+    from course_supporter.llm.finish_reason import FinishReason
     from course_supporter.llm.schemas import LLMResponse
     from course_supporter.stt.schemas import STTResult
 
@@ -157,20 +161,34 @@ async def _persist(
     *,
     action: str,
     strategy: str,
-    provider: str,
-    model_id: str,
+    provider: str | None,
+    model_id: str | None,
     unit_type: str | None = None,
     unit_in: int | None = None,
     unit_out: int | None = None,
     unit_out_reasoning: int | None = None,
     latency_ms: int | None = None,
     cost_usd: float | None = None,
-    success: bool = True,
+    success: bool | None = True,
     error_message: str | None = None,
+    outcome: CallOutcome | None = None,
+    finish_reason: FinishReason | None = None,
+    skip_reason: SkipReason | None = None,
+    prompt_ref: str | None = None,
+    prompt_hash: str | None = None,
+    input_hash: str | None = None,
+    input_text: str | None = None,
+    output_text: str | None = None,
+    authenticity: float | None = None,
+    completeness: float | None = None,
 ) -> None:
     """Write a single ExternalServiceCall row.
 
     DB errors are swallowed — call flow is never interrupted.
+
+    ``provider``, ``model_id`` and ``success`` are ``None`` only on rows that
+    record no call — a ladder trace (``outcome`` skipped / abandoned) or the
+    per-review metrics row. Column meanings: ``storage.orm.ExternalServiceCall``.
 
     Two-layer guard for ``job_id`` (KD5 — only mandatory FK):
     1. Read ``job_id`` from contextvar (set at ARQ task entry).
@@ -204,6 +222,16 @@ async def _persist(
         cost_usd=cost_usd,
         success=success,
         error_message=error_message,
+        outcome=outcome,
+        finish_reason=finish_reason,
+        skip_reason=skip_reason,
+        prompt_ref=prompt_ref,
+        prompt_hash=prompt_hash,
+        input_hash=input_hash,
+        input_text=input_text,
+        output_text=output_text,
+        authenticity=authenticity,
+        completeness=completeness,
     )
     try:
         async with session_factory() as session:
@@ -282,6 +310,7 @@ def create_stt_log_callback(
                     model_id="unknown",
                     success=False,
                     error_message=error_message,
+                    outcome=CallOutcome.TRANSPORT_ERROR,
                 )
             return
         await _persist(
@@ -299,6 +328,12 @@ def create_stt_log_callback(
             cost_usd=result.cost_usd,
             success=error_message is None,
             error_message=error_message,
+            # A model-less row knows only transport: it answered or it did not.
+            outcome=(
+                CallOutcome.SUCCESS
+                if error_message is None
+                else CallOutcome.TRANSPORT_ERROR
+            ),
         )
 
     return _log

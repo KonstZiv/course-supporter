@@ -19,6 +19,7 @@ import httpx
 import structlog
 
 from course_supporter.api.url_validation import validate_webhook_url
+from course_supporter.call_outcome import CallOutcome
 from course_supporter.config import get_settings
 from course_supporter.models.webhook import (
     ReviewSummary,
@@ -264,5 +265,7 @@ def _record_attempt(
             latency_ms=latency_ms,
             success=success,
             error_message=error,
+            # A delivery has no model: only transport success or failure apply.
+            outcome=CallOutcome.SUCCESS if success else CallOutcome.TRANSPORT_ERROR,
         )
     )

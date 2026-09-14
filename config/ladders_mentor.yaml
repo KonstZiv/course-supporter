@@ -136,9 +136,28 @@ stages:
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
+      # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 1,
+      # ratified 2026-09-14). deepseek_thinking keeps thinking ON, and on this
+      # provider the reasoning is counted inside max_output_tokens. At 8192 the
+      # reasoning ate the whole ceiling: on 2026-09-07 the rung returned
+      # 8192 output tokens and an EMPTY body, the ladder descended to qwen3.7-max
+      # and the decomposition was paid twice. Prod register before the fix, all
+      # on inputs under 2.5k tokens: 7696 (success), 6345 (success), 8192
+      # (ceiling hit, empty). The largest successful output is 7696, so 32768
+      # leaves a fourfold margin; 16384 was rejected because the step-E case was
+      # cut at 8192 by an unknown amount, so doubling might not be enough.
+      # The upper bound is time, not the model (registry: 65536): observed
+      # generation is ~60-69 tokens/s, so a full 32768 is ~9 min against the
+      # 900 s HTTP read timeout (providers/openai_compat.py) — ~40% headroom.
+      # 65536 would be ~18 min: a certain timeout, which the router retries as
+      # an infrastructure error, each attempt paid — a worse failure than the
+      # one fixed here. Worst-case cost ~$0.065 off-peak (~$0.13 peak), once per
+      # task version, not per submission. The provider is deliberately NOT
+      # switched to thinking-off ``deepseek``: that would change model behaviour
+      # without calibration. Rungs 2 and 3 are unchanged.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
-        max_output_tokens: 8192
+        max_output_tokens: 32768
       - provider: dashscope
         model: qwen3.7-max
         max_output_tokens: 8192

@@ -362,6 +362,23 @@ class TestRealConfigs:
         assert primary.reasoning == {"exclude": True}
         assert primary.max_output_tokens == 8192
 
+    def test_criteria_decomposition_primary_rung_carries_hotfix_1_ceiling(
+        self,
+    ) -> None:
+        # Hotfix 1 (2026-09-14): at 8192 the thinking-on rung spent its whole
+        # output ceiling on reasoning, returned an empty body and the stage was
+        # paid twice. 32768 is the ratified value — fourfold margin over the
+        # largest measured success, and bounded by the 900 s HTTP read timeout
+        # (see ladders_mentor.yaml). The provider stays thinking-on and the
+        # fallback rungs keep 8192: a swap or a silent revert breaks this test.
+        config = load_ladder_config(Path("config"))
+        ladder = config.get_stage("criteria_decomposition").ladder
+
+        assert ladder[0].provider == "deepseek_thinking"
+        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].max_output_tokens == 32768
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+
     def test_pass_2a_fallback_rung_carries_max_output_tokens_4096_override(
         self,
     ) -> None:

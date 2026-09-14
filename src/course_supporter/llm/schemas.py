@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from course_supporter.llm.finish_reason import FinishReason
+
 
 class LLMRequest(BaseModel):
     """Input for LLM call."""
@@ -44,6 +46,9 @@ class LLMResponse(BaseModel):
     # connector extracts this today (STEP-0 P5/P6); other providers leave it
     # ``None``.
     tokens_reasoning: int | None = None
+    # Normalised by the connector from the vendor's own field (every connector
+    # reads it). ``UNKNOWN`` only when the provider reported nothing.
+    finish_reason: FinishReason = FinishReason.UNKNOWN
     latency_ms: int = 0
     cost_usd: float | None = None
     action: str = ""

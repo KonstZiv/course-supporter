@@ -11,6 +11,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
@@ -22,6 +23,31 @@ _GEMINI_OVERFLOW_PATTERN = re.compile(
     r"too long|token (?:limit|count) exceed|context (?:length|window) exceed",
     re.IGNORECASE,
 )
+
+# ``Candidate.finish_reason`` vocabulary (SDK enum, str-valued). SAFETY,
+# RECITATION, BLOCKLIST and the rest fall through to OTHER.
+_CEILING_FINISH_REASONS = frozenset({types.FinishReason.MAX_TOKENS})
+_STOP_FINISH_REASONS = frozenset({types.FinishReason.STOP})
+_UNREPORTED_FINISH_REASONS = frozenset({types.FinishReason.FINISH_REASON_UNSPECIFIED})
+
+
+def _response_finish_reason(response: types.GenerateContentResponse) -> FinishReason:
+    """Finish reason of the first candidate; UNKNOWN when there is none.
+
+    A prompt blocked before generation comes back with no candidates at all
+    (the reason lives in ``prompt_feedback``, not on a candidate) — there is
+    no generation to have finished, so nothing is reported.
+    """
+    candidates = response.candidates
+    if not candidates:
+        return FinishReason.UNKNOWN
+    return normalize_finish_reason(
+        candidates[0].finish_reason,
+        ceiling=_CEILING_FINISH_REASONS,
+        stop=_STOP_FINISH_REASONS,
+        unreported=_UNREPORTED_FINISH_REASONS,
+    )
+
 
 # Image MIME signatures (magic bytes). Only the formats Gemini accepts
 # and that we actually produce are listed: VD frame_sampler emits JPEG
@@ -196,6 +222,7 @@ class GeminiProvider(LLMProvider):
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
             tokens_out=usage.candidates_token_count if usage else None,
+            finish_reason=_response_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )
 
@@ -231,6 +258,7 @@ class GeminiProvider(LLMProvider):
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
             tokens_out=usage.candidates_token_count if usage else None,
+            finish_reason=_response_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )
 

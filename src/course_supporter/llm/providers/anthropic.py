@@ -10,6 +10,7 @@ import anthropic
 from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.llm.finish_reason import normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
@@ -22,6 +23,11 @@ _ANTHROPIC_OVERFLOW_PATTERN = re.compile(
     r"prompt is too long|tokens? (?:exceed|>)|context window",
     re.IGNORECASE,
 )
+
+# ``Message.stop_reason`` vocabulary. "tool_use", "pause_turn" and "refusal"
+# fall through to OTHER.
+_CEILING_STOP_REASONS = frozenset({"max_tokens"})
+_STOP_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
 
 
 class AnthropicProvider(LLMProvider):
@@ -102,6 +108,11 @@ class AnthropicProvider(LLMProvider):
             model_id=model,
             tokens_in=response.usage.input_tokens,
             tokens_out=response.usage.output_tokens,
+            finish_reason=normalize_finish_reason(
+                response.stop_reason,
+                ceiling=_CEILING_STOP_REASONS,
+                stop=_STOP_STOP_REASONS,
+            ),
             latency_ms=timer.elapsed_ms,
         )
 

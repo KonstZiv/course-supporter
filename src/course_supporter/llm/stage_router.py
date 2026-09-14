@@ -485,9 +485,10 @@ class StageRouter:
                 # do not set ``response.cost_usd``; pre-2.4.22 every ESC row
                 # carried NULL). Skip the lookup on failed calls (response
                 # None) and zero-token success (NULL is semantically right
-                # for "nothing billable"). Model not in registry → NULL
-                # (graceful — caller's responsibility to keep registry in
-                # sync).
+                # for "nothing billable"). Model not in registry, or with no
+                # named price → NULL; the startup ladder check refuses both
+                # for any configured rung, so this is the unvalidated-config
+                # fallback, not a path production takes.
                 computed_cost: float | None = None
                 if response is not None and (response.tokens_in or response.tokens_out):
                     cost_model = self._registry.models.get(entry.model)

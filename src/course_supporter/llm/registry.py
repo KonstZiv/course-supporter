@@ -24,15 +24,22 @@ class Capability(StrEnum):
 
 
 class ProviderModelConfig(BaseModel):
-    """Single model within a provider definition."""
+    """Single model within a provider definition.
+
+    ``cost_per_1k_in`` / ``cost_per_1k_out`` default to ``None`` = "price not
+    named", deliberately not ``0.0``: an explicit zero is a real price (free
+    tier, local model), and a default of zero made a forgotten price read as
+    one. The startup ladder check refuses a rung whose model has no named
+    price (``ladder_config.validate_ladders_against_registry``).
+    """
 
     id: str
     capabilities: list[Capability] = []
     max_context: int | None = None
     max_output_tokens: int | None = None
     unit_type: str = "tokens"
-    cost_per_1k_in: float = 0.0
-    cost_per_1k_out: float = 0.0
+    cost_per_1k_in: float | None = None
+    cost_per_1k_out: float | None = None
     cost_per_minute: float | None = None
     local: bool = False
 
@@ -75,6 +82,9 @@ class ModelConfig(BaseModel):
     Built from provider + model data during registry validation.
     Provides .model_id, .provider, .unit_type, and .estimate_cost();
     consumed by StageRouter (cost + limits) and STTRouter (chain).
+
+    ``cost_per_1k`` is ``None`` unless BOTH token prices are named: half a
+    price cannot cost a call, so it is treated as no price at all.
     """
 
     model_id: str = ""
@@ -83,12 +93,18 @@ class ModelConfig(BaseModel):
     max_context: int | None = None
     max_output_tokens: int | None = None
     unit_type: str = "tokens"
-    cost_per_1k: CostPer1K = CostPer1K(input=0.0, output=0.0)
+    cost_per_1k: CostPer1K | None = None
     cost_per_minute: float | None = None
     local: bool = False
 
-    def estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
-        """Calculate cost in USD for given token/unit counts."""
+    def estimate_cost(self, tokens_in: int, tokens_out: int) -> float | None:
+        """Calculate cost in USD for given token counts.
+
+        Returns ``None`` when the model has no named token price — "cost
+        unknown", which cost reporting excludes, never a fabricated zero.
+        """
+        if self.cost_per_1k is None:
+            return None
         return (
             tokens_in * self.cost_per_1k.input / 1000
             + tokens_out * self.cost_per_1k.output / 1000
@@ -133,9 +149,11 @@ class ModelRegistryConfig(BaseModel):
                     max_context=pm.max_context,
                     max_output_tokens=pm.max_output_tokens,
                     unit_type=pm.unit_type,
-                    cost_per_1k=CostPer1K(
-                        input=pm.cost_per_1k_in,
-                        output=pm.cost_per_1k_out,
+                    cost_per_1k=(
+                        CostPer1K(input=pm.cost_per_1k_in, output=pm.cost_per_1k_out)
+                        if pm.cost_per_1k_in is not None
+                        and pm.cost_per_1k_out is not None
+                        else None
                     ),
                     cost_per_minute=pm.cost_per_minute,
                     local=pm.local,

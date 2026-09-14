@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import pytest
 from arq.connections import RedisSettings
 from arq.jobs import JobStatus
 from structlog.testing import capture_logs
@@ -167,6 +168,32 @@ class TestWorkerLifecycle:
         ):
             await startup(ctx)
         assert ctx["session_factory"] is mock_factory
+
+    async def test_startup_refuses_a_rung_without_a_named_price(self) -> None:
+        """A ladder rung whose model names no price stops the worker booting.
+
+        The real registry with the Methodist primary's price removed — the
+        startup ladder check must raise before the router is built, so the
+        worker never reaches the point of accepting jobs.
+        """
+        from course_supporter.llm.registry import load_registry
+
+        registry = load_registry(get_settings().external_services_path)
+        registry.models["deepseek-v4-pro"].cost_per_1k = None
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch(
+                "course_supporter.llm.registry.load_registry",
+                return_value=registry,
+            ),
+            pytest.raises(ValueError, match="'deepseek-v4-pro' has no named price"),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
 
     async def test_shutdown_disposes_engine(self) -> None:
         mock_engine = MagicMock()

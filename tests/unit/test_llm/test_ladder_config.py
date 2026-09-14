@@ -447,10 +447,14 @@ def _two_model_registry() -> ModelRegistryConfig:
                             Capability.VISION,
                             Capability.STRUCTURED_OUTPUT,
                         ],
+                        cost_per_1k_in=0.0,
+                        cost_per_1k_out=0.0,
                     ),
                     ProviderModelConfig(
                         id="text-model",
                         capabilities=[Capability.STRUCTURED_OUTPUT],
+                        cost_per_1k_in=0.0,
+                        cost_per_1k_out=0.0,
                     ),
                 ],
             )
@@ -686,6 +690,71 @@ class TestProductionLaddersValidate:
         assert config.get_stage("audio_pass_2c_denoise").requires == []
 
 
+# ── mentor-rebuild 01: a rung without a named price does not boot ────
+
+
+def _priced_registry(**prices: float | None) -> ModelRegistryConfig:
+    """One-model registry (``m``) with the given price fields, others unset."""
+    return ModelRegistryConfig(
+        providers={
+            "anthropic": ProviderConfig(
+                type="llm",
+                models=[ProviderModelConfig(id="m", **prices)],
+            )
+        },
+        actions={},
+    )
+
+
+def _one_rung_config() -> LadderConfig:
+    return LadderConfig(
+        stages={
+            "demo": StageConfig(
+                prompt_ref="prompts/x.md",
+                ladder=[LadderEntry(provider="anthropic", model="m")],
+            )
+        }
+    )
+
+
+class TestNamedPriceValidation:
+    """Fifth startup invariant: every rung's model names both token prices."""
+
+    def test_rung_without_price_raises(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            validate_ladders_against_registry(_one_rung_config(), _priced_registry())
+        msg = str(exc_info.value)
+        assert "Stage 'demo' rung 0 model 'm'" in msg
+        assert "no named price" in msg
+
+    def test_explicit_zero_is_a_named_price(self) -> None:
+        registry = _priced_registry(cost_per_1k_in=0.0, cost_per_1k_out=0.0)
+        validate_ladders_against_registry(_one_rung_config(), registry)
+
+    @pytest.mark.parametrize(
+        "prices",
+        [{"cost_per_1k_in": 0.001}, {"cost_per_1k_out": 0.002}],
+        ids=["input-only", "output-only"],
+    )
+    def test_half_a_price_is_no_price(self, prices: dict[str, float]) -> None:
+        with pytest.raises(ValueError, match="no named price"):
+            validate_ladders_against_registry(
+                _one_rung_config(), _priced_registry(**prices)
+            )
+
+    def test_every_production_rung_names_its_price(self) -> None:
+        """The live config passes: the lock would not topple the real ladders."""
+        config = load_ladder_config(Path("config"))
+        registry = load_registry(Path("config/external_services.yaml"))
+        unpriced = [
+            (stage_name, i, entry.model)
+            for stage_name, stage in config.stages.items()
+            for i, entry in enumerate(stage.ladder)
+            if registry.models[entry.model].cost_per_1k is None
+        ]
+        assert unpriced == []
+
+
 # ── Phase 3.2.3-pre: input_budget_ratio field + config-time validator ──
 
 
@@ -711,11 +780,15 @@ def _registry_with_max_context(
                             Capability.STRUCTURED_OUTPUT,
                         ],
                         max_context=vl_max_context,
+                        cost_per_1k_in=0.0,
+                        cost_per_1k_out=0.0,
                     ),
                     ProviderModelConfig(
                         id="text-model",
                         capabilities=[Capability.STRUCTURED_OUTPUT],
                         max_context=text_max_context,
+                        cost_per_1k_in=0.0,
+                        cost_per_1k_out=0.0,
                     ),
                 ],
             )

@@ -27,6 +27,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from course_supporter.call_outcome import CallOutcome
+from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from course_supporter.call_outcome import SkipReason
     from course_supporter.llm.finish_reason import FinishReason
     from course_supporter.llm.schemas import LLMResponse
+    from course_supporter.review_metrics import ReviewMetrics
     from course_supporter.stt.schemas import STTResult
 
 logger = structlog.get_logger()
@@ -246,6 +248,35 @@ async def _persist(
             error=str(exc),
             exc_info=True,
         )
+
+
+# ── Review metrics row ──
+
+
+async def record_review_metrics(
+    session_factory: async_sessionmaker[AsyncSession],
+    metrics: ReviewMetrics,
+) -> None:
+    """Write the per-review metrics row to the call register.
+
+    Takes finished numbers, never a calculator: swapping the metrics formula
+    (``review_metrics.ReviewMetricsCalculator``) cannot change where or how
+    they are stored. The row records no call — ``provider``, ``model_id``,
+    ``success``, ``outcome`` and ``cost_usd`` are all NULL — and is found by
+    ``action = 'review_metrics'`` with the metric columns set. It inherits
+    :func:`_persist`'s contract: written only inside a job context, DB errors
+    swallowed.
+    """
+    await _persist(
+        session_factory,
+        action=REVIEW_METRICS_ACTION,
+        strategy="default",
+        provider=None,
+        model_id=None,
+        success=None,
+        authenticity=metrics.authenticity,
+        completeness=metrics.completeness,
+    )
 
 
 # ── LLM callback ──

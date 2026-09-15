@@ -1262,7 +1262,7 @@ class ExternalServiceCall(Base):
         String(32),
         comment="What happened to this row (CallOutcome): the result of a call, "
         "or a skipped / abandoned ladder rung. NULL on rows written before the "
-        "column existed and on the per-review metrics row.",
+        "column existed and on the per-review metrics and funds-port rows.",
     )
     finish_reason: Mapped[str | None] = mapped_column(
         String(16),

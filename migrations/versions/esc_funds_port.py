@@ -21,8 +21,8 @@ live in the call register, on a row of their own that records no model call
 
 On that row ``provider``, ``model_id``, ``success`` and ``cost_usd`` stay NULL,
 so cost sums (``cost_usd IS NOT NULL``) and the failure count skip it. The
-comments of ``provider``, ``model_id`` and ``success`` name it next to the rows
-without a call that task 01 introduced.
+comments of ``provider``, ``model_id``, ``success`` and ``outcome`` name it next
+to the rows without a call that task 01 introduced.
 
 NO back-fill: every row written before this migration recorded no port answer,
 and the new columns stay NULL on it.
@@ -82,6 +82,15 @@ _NO_CALL_COMMENTS = {
         "Transport result only: did the call return a response. NULL = no call "
         "was made (ladder trace, per-review metrics and funds-port rows). "
         "Whether the response was usable is outcome.",
+    ),
+    "outcome": (
+        sa.String(length=32),
+        "What happened to this row (CallOutcome): the result of a call, or a "
+        "skipped / abandoned ladder rung. NULL on rows written before the column "
+        "existed and on the per-review metrics row.",
+        "What happened to this row (CallOutcome): the result of a call, or a "
+        "skipped / abandoned ladder rung. NULL on rows written before the column "
+        "existed and on the per-review metrics and funds-port rows.",
     ),
 }
 

@@ -32,6 +32,12 @@ Input and output:
     stage, nor the provider, nor the model.
 
 Replacing the implementation:
+    The current implementation is :class:`AlwaysEnoughFundsPort`: it reserves
+    nothing, allows every submission and records the estimate with its answer
+    on the funds-port row of the call register
+    (:func:`~course_supporter.service_logging.record_funds_decision`). A
+    replacement that should keep those numbers calls the same writer.
+
     Anything with these three ``async`` methods satisfies :class:`FundsPort` —
     a structural ``Protocol``, no base class to inherit — and is passed where
     the current implementation is passed; no call site changes. A billing
@@ -55,10 +61,16 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.homework.path_config import PathKey
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+FUNDS_PORT_ACTION: Final = "funds_port"
+"""``ExternalServiceCall.action`` of the funds-port row."""
 
 
 class FundsRefusalReason(StrEnum):
@@ -166,3 +178,47 @@ class FundsPort(Protocol):
     ) -> None:
         """At the end: how the submission ended, so the rest can be settled."""
         ...
+
+
+class AlwaysEnoughFundsPort:
+    """The first implementation: no money exists yet, so every submission may spend.
+
+    ``check_and_reserve`` holds nothing and always allows; what it keeps is the
+    numbers — the path's estimate and the answer, on a funds-port row of the
+    call register — so that estimates can be calibrated against actual costs
+    before billing exists. ``account_stage_cost`` and ``release_remainder`` do
+    nothing: no hold was placed to settle or release, and each stage's actual
+    price is already in the register as the rows of its own calls.
+
+    The write inherits the register's contract — skipped outside a job context
+    and on a database error — and the answer is returned either way.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def check_and_reserve(
+        self, context: SubmissionContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """Allow, and record the estimate with the answer."""
+        # Deferred: service_logging imports this module for FUNDS_PORT_ACTION.
+        from course_supporter.service_logging import record_funds_decision
+
+        answer = FundsAnswer.allowed()
+        await record_funds_decision(
+            self._session_factory,
+            path_key=context.path_key,
+            ceiling_estimate_usd=ceiling_estimate_usd,
+            answer=answer,
+        )
+        return answer
+
+    async def account_stage_cost(
+        self, context: SubmissionContext, stage_cost_usd: float
+    ) -> None:
+        """Nothing was held, so nothing is settled."""
+
+    async def release_remainder(
+        self, context: SubmissionContext, outcome: SubmissionOutcome
+    ) -> None:
+        """Nothing was held, so nothing is released or refunded."""

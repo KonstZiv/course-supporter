@@ -9,11 +9,13 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.funds_port import (
+    AlwaysEnoughFundsPort,
     FundsAnswer,
     FundsPort,
     FundsRefusalReason,
@@ -151,3 +153,23 @@ class TestReplaceableImplementation:
             "account_stage_cost": ["self", "context", "stage_cost_usd"],
             "release_remainder": ["self", "context", "outcome"],
         }
+
+
+class TestAlwaysEnoughFundsPort:
+    async def test_the_answer_does_not_wait_on_the_register(self) -> None:
+        """Outside a job context the register skips the row; the caller still
+        hears "allowed" — the record is a side effect, never the answer."""
+        from course_supporter.service_logging import _current_job_id
+
+        session_factory = MagicMock()
+        token = _current_job_id.set(None)
+        try:
+            answer = await AlwaysEnoughFundsPort(session_factory).check_and_reserve(
+                _context(), 0.1
+            )
+        finally:
+            _current_job_id.reset(token)
+
+        # Premise: no write was attempted.
+        session_factory.assert_not_called()
+        assert answer == FundsAnswer.allowed()

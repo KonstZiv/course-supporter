@@ -27,12 +27,15 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from course_supporter.call_outcome import CallOutcome
+from course_supporter.funds_port import FUNDS_PORT_ACTION
 from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from course_supporter.call_outcome import SkipReason
+    from course_supporter.call_outcome import FundsDecision, SkipReason
+    from course_supporter.funds_port import FundsAnswer, FundsRefusalReason
+    from course_supporter.homework.path_config import PathKey
     from course_supporter.llm.finish_reason import FinishReason
     from course_supporter.llm.schemas import LLMResponse
     from course_supporter.review_metrics import ReviewMetrics
@@ -183,14 +186,20 @@ async def _persist(
     output_text: str | None = None,
     authenticity: float | None = None,
     completeness: float | None = None,
+    ceiling_estimate_usd: float | None = None,
+    funds_decision: FundsDecision | None = None,
+    funds_refusal_reason: FundsRefusalReason | None = None,
+    path_key: str | None = None,
 ) -> None:
     """Write a single ExternalServiceCall row.
 
     DB errors are swallowed — call flow is never interrupted.
 
-    ``provider``, ``model_id`` and ``success`` are ``None`` only on rows that
-    record no call — a ladder trace (``outcome`` skipped / abandoned) or the
-    per-review metrics row. Column meanings: ``storage.orm.ExternalServiceCall``.
+    ``success`` is ``None`` only on rows that record no call: a ladder trace
+    (``outcome`` skipped / abandoned), the per-review metrics row and the
+    funds-port row. The last two leave ``provider`` and ``model_id`` ``None``
+    too; a trace names the rung it skipped or abandoned. Column meanings:
+    ``storage.orm.ExternalServiceCall``.
 
     Two-layer guard for ``job_id`` (KD5 — only mandatory FK):
     1. Read ``job_id`` from contextvar (set at ARQ task entry).
@@ -234,6 +243,10 @@ async def _persist(
         output_text=output_text,
         authenticity=authenticity,
         completeness=completeness,
+        ceiling_estimate_usd=ceiling_estimate_usd,
+        funds_decision=funds_decision,
+        funds_refusal_reason=funds_refusal_reason,
+        path_key=path_key,
     )
     try:
         async with session_factory() as session:
@@ -277,6 +290,43 @@ async def record_review_metrics(
         success=None,
         authenticity=metrics.authenticity,
         completeness=metrics.completeness,
+    )
+
+
+# ── Funds-port row ──
+
+
+async def record_funds_decision(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    path_key: PathKey,
+    ceiling_estimate_usd: float,
+    answer: FundsAnswer,
+) -> None:
+    """Write the funds-port row: a path's ceiling estimate and the port's answer.
+
+    Takes the finished answer, never a port: whichever implementation decided,
+    the numbers are stored the same way. The path key is stored as its text
+    (``task/first``). The row records no call — ``provider``, ``model_id``,
+    ``success``, ``cost_usd`` and ``outcome`` are all NULL — and is found by
+    ``action = 'funds_port'``. A refusal's reason goes to
+    ``funds_refusal_reason`` and never to ``error_message``: a refusal is an
+    answer, not a failed call, and the canonical failure count
+    (``NOT success OR error_message IS NOT NULL``) must not count it. It
+    inherits :func:`_persist`'s contract: written only inside a job context,
+    DB errors swallowed.
+    """
+    await _persist(
+        session_factory,
+        action=FUNDS_PORT_ACTION,
+        strategy="default",
+        provider=None,
+        model_id=None,
+        success=None,
+        ceiling_estimate_usd=ceiling_estimate_usd,
+        funds_decision=answer.decision,
+        funds_refusal_reason=answer.refusal_reason,
+        path_key=str(path_key),
     )
 
 

@@ -1,0 +1,168 @@
+"""The funds port: where a submission asks about money (mentor-rebuild task 02).
+
+Purpose:
+    A submission's stages call paid models before anyone has paid for them.
+    The port is the single place where the new path tells the money side what
+    is happening to a submission — before its first paid call, after each
+    stage, at the end — and hears back whether it may go on. The path speaks in
+    its own terms: a ceiling estimate, a stage's actual price, how the
+    submission ended. What those mean for an account — a hold, a debit, margin
+    telemetry, a refund — is decided by the implementation, not by the port or
+    its callers (KD19; ``03-BINDING.md``, amendment 2 and its note). Billing,
+    when it comes, is one new implementation, not an edit of the path.
+
+    Nothing calls the port yet: its live calls arrive with the new path's
+    skeleton (task 03).
+
+Input and output:
+    Each operation takes a :class:`SubmissionContext` — tenant, student,
+    submission and path key in one immutable value — and one thing more:
+
+    * :meth:`FundsPort.check_and_reserve` — before the submission's first paid
+      call, with the path's ceiling estimate. Returns a :class:`FundsAnswer`:
+      allowed, or refused with a :class:`FundsRefusalReason`.
+    * :meth:`FundsPort.account_stage_cost` — after a stage completes, with the
+      stage's actual price from the call register. Returns nothing.
+    * :meth:`FundsPort.release_remainder` — at the end, with the
+      :class:`SubmissionOutcome`: completed or failed. Returns nothing.
+
+    Amounts are dollars as ``float``, the type of ``cost_usd`` in the register.
+    A refusal is a returned value, never an exception, and the caller receives
+    it exactly as the implementation built it. The port is told neither the
+    stage, nor the provider, nor the model.
+
+Replacing the implementation:
+    Anything with these three ``async`` methods satisfies :class:`FundsPort` —
+    a structural ``Protocol``, no base class to inherit — and is passed where
+    the current implementation is passed; no call site changes. A billing
+    adapter, for example, checks the payer's balance and places a hold in
+    ``check_and_reserve``, refusing with ``INSUFFICIENT_FUNDS`` when it falls
+    short; debits, or only records, the stage price in ``account_stage_cost``;
+    and returns the unused hold, or refunds a failed submission, in
+    ``release_remainder``. It finds the payer — the author's account at the
+    tenant — through ``tenant_id``, and ``submission_id`` is its key for acting
+    once per submission.
+
+    A new field of the context reaches every implementation without changing
+    an operation's signature. A new refusal reason is a new
+    :class:`FundsRefusalReason` member and a reaction to it in the caller.
+
+    Worked cases, executed: :mod:`tests.unit.test_funds_port`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
+
+from course_supporter.call_outcome import FundsDecision
+from course_supporter.homework.path_config import PathKey
+
+
+class FundsRefusalReason(StrEnum):
+    """Why the port refused a submission — a closed vocabulary.
+
+    The caller reacts to the code (the new path turns it into a submission
+    state, task 03), so an implementation maps its own reasons onto these
+    members instead of passing free text. The register keeps the value as text
+    (``funds_refusal_reason``, no CHECK), so a new member needs no migration.
+
+    * ``INSUFFICIENT_FUNDS`` — the payer cannot cover the path's ceiling
+      estimate (the binding's funds decision; KD19: a short balance blocks the
+      start).
+    """
+
+    INSUFFICIENT_FUNDS = "insufficient_funds"
+
+
+class SubmissionOutcome(StrEnum):
+    """How a submission ended, as the port hears it at the end.
+
+    Completed or failed, nothing finer: a failed submission is what a billing
+    adapter refunds (KD19), and which stage failed, and why, stays with the
+    path.
+    """
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SubmissionContext:
+    """Whose submission the port is being told about.
+
+    Keyword-only: three of the fields are UUIDs, and a positional call could
+    swap them without a type error.
+
+    Attributes:
+        tenant_id: The tenant; the payer is found through it.
+        student_id: The student who submitted.
+        submission_id: The submission (``HomeworkSubmission.id``).
+        path_key: The path the submission takes.
+    """
+
+    tenant_id: uuid.UUID
+    student_id: uuid.UUID
+    submission_id: uuid.UUID
+    path_key: PathKey
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FundsAnswer:
+    """The answer before the first paid call: allowed, or refused with a reason.
+
+    Build it with :meth:`allowed` or :meth:`refused`. A refusal always carries a
+    reason and an allowance never does — the rule the register holds as
+    ``ck_esc_funds_refusal_reason`` — so an answer that breaks it cannot be
+    constructed.
+    """
+
+    decision: FundsDecision
+    refusal_reason: FundsRefusalReason | None = None
+
+    def __post_init__(self) -> None:
+        if (self.decision == FundsDecision.REFUSED) != (
+            self.refusal_reason is not None
+        ):
+            raise ValueError(
+                "A funds answer carries a refusal reason exactly when it is a "
+                f"refusal: decision={self.decision!s}, "
+                f"refusal_reason={self.refusal_reason!s}"
+            )
+
+    @classmethod
+    def allowed(cls) -> FundsAnswer:
+        """The submission may spend up to its estimate."""
+        return cls(decision=FundsDecision.ALLOWED)
+
+    @classmethod
+    def refused(cls, reason: FundsRefusalReason) -> FundsAnswer:
+        """The submission may not start spending, for ``reason``."""
+        return cls(decision=FundsDecision.REFUSED, refusal_reason=reason)
+
+
+class FundsPort(Protocol):
+    """The replaceable port; the module docstring states the contract."""
+
+    async def check_and_reserve(
+        self, context: SubmissionContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """Before the first paid call: may the submission spend up to the estimate?
+
+        A refusal is returned, never raised.
+        """
+        ...
+
+    async def account_stage_cost(
+        self, context: SubmissionContext, stage_cost_usd: float
+    ) -> None:
+        """After a stage completes: the stage's actual price, in dollars."""
+        ...
+
+    async def release_remainder(
+        self, context: SubmissionContext, outcome: SubmissionOutcome
+    ) -> None:
+        """At the end: how the submission ended, so the rest can be settled."""
+        ...

@@ -12,17 +12,22 @@ Interface:
     ladder router (attempts and traces), webhook delivery and speech-to-text.
     ``NULL`` on historical rows (never back-filled:
     a guess from ``success`` + ``error_message`` would be indistinguishable
-    from a recorded fact) and on the per-review metrics row, which is neither
-    a call nor a trace.
+    from a recorded fact) and on the rows that are neither a call nor a trace:
+    the per-review metrics row and the funds-port row.
     :class:`SkipReason` — why a rung was skipped without a call; set only on
     ``CallOutcome.SKIPPED`` rows.
+    :class:`FundsDecision` — the funds port's answer, set only on the funds-port
+    row (mentor-rebuild task 02) and ``NULL`` on every other row.
 
 Extending:
     A new value is a new enum member AND a migration widening the matching
     ``CHECK`` constraint on ``external_service_calls`` — the database refuses
     a value it has not been told about, so the two cannot drift silently
     (``tests/integration/test_external_service_call_db.py`` writes every
-    member). Task 02 adds ``SkipReason`` "rate limited" exactly this way.
+    member). ``SkipReason`` has no "rate limited" value on purpose: rate limits
+    of a rung were taken out of mentor-rebuild task 02, and that value arrives
+    together with its field and with the limiter that enforces it — a counter
+    shared across processes — in the task that builds the limiter (DD-SP-AL).
 """
 
 from __future__ import annotations
@@ -81,3 +86,14 @@ class SkipReason(StrEnum):
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     PROVIDER_DISABLED = "provider_disabled"
     INPUT_BUDGET_EXCEEDED = "input_budget_exceeded"
+
+
+class FundsDecision(StrEnum):
+    """What the funds port answered before the first paid call of a submission.
+
+    A refusal always carries a reason code (``funds_refusal_reason``), and an
+    allowance never does; the database holds both halves of that rule.
+    """
+
+    ALLOWED = "allowed"
+    REFUSED = "refused"

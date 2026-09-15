@@ -1,18 +1,22 @@
 """Tests for FastAPI bootstrap: health, CORS, error handling."""
 
+import re
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import contextmanager
-from typing import NamedTuple
+from pathlib import Path
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
+from course_supporter.config import settings
 from course_supporter.storage.database import get_session
 
 STUB_TENANT = TenantContext(
@@ -237,6 +241,38 @@ class TestErrorHandling:
         assert response.body == b'{"detail":"Internal server error"}'
 
 
+def _without_safety_ladder(raw: dict[str, Any]) -> str:
+    """A shape fault: ``load_path_config`` rejects it."""
+    del raw["stages"]["safety"]["ladder"]
+    return "stages.safety.ladder"
+
+
+def _safety_rung_pinned_above_its_ceiling(raw: dict[str, Any]) -> str:
+    """A valid shape that only ``validate_path_config`` rejects."""
+    ceiling = raw["stages"]["safety"]["ceilings"]["output_tokens"]
+    raw["stages"]["safety"]["ladder"][0]["max_output_tokens"] = ceiling * 2
+    return (
+        f"Stage 'safety' rung 0 pins max_output_tokens={ceiling * 2} above the "
+        f"stage output ceiling {ceiling}"
+    )
+
+
+def _holey_paths_file(
+    tmp_path: Path, make_hole: Callable[[dict[str, Any]], str]
+) -> tuple[Path, str]:
+    """A copy of the real submission-path file with one hole in it.
+
+    Returns the copy and the text the startup error must carry.
+    """
+    raw = yaml.safe_load(
+        settings.submission_paths_config_path.read_text(encoding="utf-8")
+    )
+    expected = make_hole(raw)
+    path = tmp_path / "submission_paths.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return path, expected
+
+
 class TestLifespan:
     @pytest.mark.asyncio
     async def test_lifespan_disposes_engine(self) -> None:
@@ -260,6 +296,45 @@ class TestLifespan:
             async with lifespan(app):
                 pass
             mock_engine.dispose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "make_hole",
+        [_without_safety_ladder, _safety_rung_pinned_above_its_ceiling],
+        ids=["no-ladder", "pin-above-output-ceiling"],
+    )
+    async def test_lifespan_refuses_a_submission_path_with_a_hole(
+        self, tmp_path: Path, make_hole: Callable[[dict[str, Any]], str]
+    ) -> None:
+        """A hole in the submission-path file stops the app booting.
+
+        One hole per step of the startup check (mentor-rebuild 02): a missing
+        ladder fails the shape (``load_path_config``); a pin above the stage's
+        output ceiling passes the shape and fails only ``validate_path_config``.
+        Everything after the check is mocked as in
+        ``test_lifespan_disposes_engine``, so without the check the lifespan
+        would start and this test would fail.
+        """
+        broken, expected = _holey_paths_file(tmp_path, make_hole)
+        mock_arq = AsyncMock()
+        with (
+            patch("course_supporter.api.app.engine") as mock_engine,
+            patch("course_supporter.api.app.S3Client") as mock_s3_cls,
+            patch(
+                "course_supporter.api.app.create_pool",
+                new_callable=AsyncMock,
+                return_value=mock_arq,
+            ),
+            patch.object(settings, "submission_paths_config_path", broken),
+        ):
+            mock_engine.dispose = AsyncMock()
+            mock_s3_cls.return_value = AsyncMock()
+
+            from course_supporter.api.app import lifespan
+
+            with pytest.raises(ValueError, match=re.escape(expected)):
+                async with lifespan(app):
+                    pass
 
     @pytest.mark.asyncio
     async def test_lifespan_pool_overrides_expires_extra_ms(self) -> None:

@@ -190,8 +190,8 @@ class ExternalServiceCallRepository:
       end-of-day).
     * ``WHERE cost_usd IS NOT NULL`` — NULL means *unknown cost* (failed
       LLM call before billing computed, or a register row that records no
-      call: a skipped / abandoned ladder rung, the per-review metrics row),
-      not zero. Excluded from sums.
+      call: a skipped / abandoned ladder rung, the per-review metrics row,
+      the funds-port row), not zero. Excluded from sums.
     * ``ORDER BY SUM(cost_usd) DESC`` on every breakdown — cost-priority
       first, predictable for UI.
     * Pagination (``LIMIT/OFFSET``) only on aggregated breakdowns;

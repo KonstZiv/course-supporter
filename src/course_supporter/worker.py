@@ -146,6 +146,10 @@ async def startup(ctx: WorkerCtx) -> None:
         create_async_engine,
     )
 
+    from course_supporter.homework.path_config import (
+        load_path_config,
+        validate_path_config,
+    )
     from course_supporter.llm.factory import create_providers
     from course_supporter.llm.ladder_config import (
         load_ladder_config,
@@ -186,6 +190,11 @@ async def startup(ctx: WorkerCtx) -> None:
     # untranslatable reasoning form, or a rung without a named price
     # (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1; P6; mentor-rebuild 01).
     validate_ladders_against_registry(ladder_config, registry)
+    # The rebuilt Mentor's submission paths are checked beside the ladders: a
+    # hole or an inadmissible rung stops the worker before it takes a job
+    # instead of waiting for the first submission routed through them
+    # (mentor-rebuild 02).
+    validate_path_config(load_path_config(s.submission_paths_config_path), registry)
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(
         ladder_config=ladder_config,

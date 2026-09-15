@@ -1,11 +1,15 @@
 """Tests for ARQ worker configuration."""
 
+import re
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from arq.connections import RedisSettings
 from arq.jobs import JobStatus
 from structlog.testing import capture_logs
@@ -191,6 +195,41 @@ class TestWorkerLifecycle:
                 return_value=registry,
             ),
             pytest.raises(ValueError, match="'deepseek-v4-pro' has no named price"),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
+
+    @pytest.mark.parametrize(
+        "field_path",
+        [("ladder",), ("ceilings", "money_usd"), ("deterministic",)],
+        ids=["no-ladder", "no-ceiling", "no-deterministic-flag"],
+    )
+    async def test_startup_refuses_a_submission_path_with_a_hole(
+        self, tmp_path: Path, field_path: tuple[str, ...]
+    ) -> None:
+        """A stage with a hole in the submission-path file stops the worker booting.
+
+        A copy of the real file with one field of the ``safety`` stage removed:
+        the startup check must raise before the router is built.
+        """
+        raw = yaml.safe_load(
+            get_settings().submission_paths_config_path.read_text(encoding="utf-8")
+        )
+        holder: dict[str, Any] = raw["stages"]["safety"]
+        for key in field_path[:-1]:
+            holder = holder[key]
+        del holder[field_path[-1]]
+        location = ".".join(("stages", "safety", *field_path))
+        broken = tmp_path / "submission_paths.yaml"
+        broken.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch.object(get_settings(), "submission_paths_config_path", broken),
+            pytest.raises(ValueError, match=re.escape(location)),
         ):
             await startup(ctx)
         assert "stage_router" not in ctx

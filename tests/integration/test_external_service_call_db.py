@@ -18,9 +18,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.call_outcome import CallOutcome, SkipReason
+from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
 from course_supporter.config import get_settings
+from course_supporter.homework.path_config import PathKey, SubmissionState
 from course_supporter.llm.finish_reason import FinishReason
+from course_supporter.models.source import AssignmentType
 from course_supporter.service_logging import _persist, job_scope
 from course_supporter.storage.orm import (
     ExternalServiceCall,
@@ -271,8 +273,9 @@ async def committed_register_job(
 class TestCanonicalFailureMeasure:
     """``NOT success OR error_message IS NOT NULL`` counts failed calls only.
 
-    Rows that record no call — the per-review metrics row and the ladder
-    traces of a skipped or abandoned rung — carry ``success = NULL`` and no
+    Rows that record no call — the per-review metrics row, the ladder traces
+    of a skipped or abandoned rung, and the funds-port row (its own check is in
+    ``test_funds_port_db.py``) — carry ``success = NULL`` and no
     ``error_message``, so the expression evaluates to NULL for them and the
     ``WHERE`` leaves them out. That is the intended behaviour, not an
     accident: the controls below prove the same query does count the failed
@@ -412,3 +415,169 @@ class TestCanonicalFailureMeasure:
                 )
             ).scalar_one()
         assert abandoned == 2
+
+
+# ── mentor-rebuild 02: migration ``esc_funds_port`` ───────────────────
+
+_FUNDS_COLUMNS = (
+    "ceiling_estimate_usd",
+    "funds_decision",
+    "funds_refusal_reason",
+    "path_key",
+)
+
+
+class TestFundsPortSchemaShape:
+    """The register gained the funds port's columns, all of them nullable."""
+
+    def test_new_columns_exist_and_are_nullable(self, sync_engine: Engine) -> None:
+        cols = {
+            c["name"]: c
+            for c in inspect(sync_engine).get_columns("external_service_calls")
+        }
+        for name in _FUNDS_COLUMNS:
+            assert name in cols, name
+            assert cols[name]["nullable"] is True, name
+
+    def test_estimate_has_the_type_of_the_actual_cost(
+        self, sync_engine: Engine
+    ) -> None:
+        cols = {
+            c["name"]: c
+            for c in inspect(sync_engine).get_columns("external_service_calls")
+        }
+        assert repr(cols["ceiling_estimate_usd"]["type"]) == repr(
+            cols["cost_usd"]["type"]
+        )
+
+    def test_funds_check_constraints_exist(self, sync_engine: Engine) -> None:
+        names = {
+            c["name"]
+            for c in inspect(sync_engine).get_check_constraints(
+                "external_service_calls"
+            )
+        }
+        assert {"ck_esc_funds_decision", "ck_esc_funds_refusal_reason"} <= names
+
+
+class TestFundsPortValues:
+    """What the database admits in the funds port's columns.
+
+    These rows are written by hand, past the writer
+    (``service_logging.record_funds_decision``), so that the rules the database
+    holds on its own stay pinned whatever the writer does.
+    """
+
+    @pytest.mark.parametrize("decision", list(FundsDecision))
+    async def test_every_decision_is_accepted(
+        self, db_session: AsyncSession, decision: FundsDecision
+    ) -> None:
+        # Each member in its legal shape: only a refusal names a reason.
+        reason = "a_reason_code" if decision is FundsDecision.REFUSED else None
+        esc = ExternalServiceCall(
+            job_id=await _job_id(db_session),
+            funds_decision=decision.value,
+            funds_refusal_reason=reason,
+        )
+        db_session.add(esc)
+        await db_session.flush()
+
+    async def test_unlisted_decision_is_refused(self, db_session: AsyncSession) -> None:
+        esc = ExternalServiceCall(
+            job_id=await _job_id(db_session), funds_decision="not_a_value"
+        )
+        db_session.add(esc)
+        with pytest.raises(IntegrityError, match="ck_esc_funds_decision"):
+            await db_session.flush()
+
+    @pytest.mark.parametrize(
+        ("decision", "reason"),
+        [
+            pytest.param(
+                FundsDecision.ALLOWED.value, "a_reason_code", id="allowed-with-reason"
+            ),
+            pytest.param(FundsDecision.REFUSED.value, None, id="refused-no-reason"),
+            # The case a CHECK that can evaluate to NULL would let through.
+            pytest.param(None, "a_reason_code", id="reason-without-decision"),
+        ],
+    )
+    async def test_a_reason_goes_with_a_refusal_only(
+        self, db_session: AsyncSession, decision: str | None, reason: str | None
+    ) -> None:
+        esc = ExternalServiceCall(
+            job_id=await _job_id(db_session),
+            funds_decision=decision,
+            funds_refusal_reason=reason,
+        )
+        db_session.add(esc)
+        with pytest.raises(IntegrityError, match="ck_esc_funds_refusal_reason"):
+            await db_session.flush()
+
+    async def test_funds_port_row_records_no_call(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The NULLs land as written — they keep the row out of cost sums and
+        out of the failure count (KD5, rows without a model call)."""
+        esc = ExternalServiceCall(
+            job_id=await _job_id(db_session),
+            provider=None,
+            model_id=None,
+            success=None,
+            cost_usd=None,
+            ceiling_estimate_usd=0.1,
+            funds_decision=FundsDecision.ALLOWED.value,
+            path_key=str(PathKey(AssignmentType.TASK, SubmissionState.FIRST)),
+        )
+        db_session.add(esc)
+        await db_session.flush()
+
+        row = (
+            await db_session.execute(
+                text(
+                    "SELECT provider, model_id, success, cost_usd, error_message, "
+                    "ceiling_estimate_usd, funds_decision, funds_refusal_reason, "
+                    "path_key FROM external_service_calls WHERE id = :id"
+                ),
+                {"id": esc.id},
+            )
+        ).one()
+        assert row.provider is None
+        assert row.model_id is None
+        assert row.success is None
+        assert row.cost_usd is None
+        assert row.error_message is None
+        assert row.ceiling_estimate_usd == 0.1
+        assert row.funds_decision == "allowed"
+        assert row.funds_refusal_reason is None
+        assert row.path_key == "task/first"
+
+    async def test_every_path_key_is_stored_as_written(
+        self, db_session: AsyncSession
+    ) -> None:
+        """``path_key`` has no CHECK: its vocabulary lives in the path config,
+        which the storage layer does not import. Every key the code can form
+        must still fit the column and read back unchanged."""
+        job_id = await _job_id(db_session)
+        keys = [
+            str(PathKey(task_type, state))
+            for task_type in AssignmentType
+            for state in SubmissionState
+        ]
+        db_session.add_all(
+            ExternalServiceCall(
+                job_id=job_id,
+                ceiling_estimate_usd=0.0,
+                funds_decision=FundsDecision.ALLOWED.value,
+                path_key=key,
+            )
+            for key in keys
+        )
+        await db_session.flush()
+
+        stored = (
+            await db_session.execute(
+                text("SELECT path_key FROM external_service_calls WHERE job_id = :job"),
+                {"job": job_id},
+            )
+        ).scalars()
+        assert sorted(stored) == sorted(keys)

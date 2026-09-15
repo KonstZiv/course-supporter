@@ -468,6 +468,7 @@ class Settings(BaseSettings):
     ladders_dir: Path = Path("config")
     mentor_review_config_path: Path = Path("config/mentor_review.yaml")
     sanity_config_path: Path = Path("config/sanity.yaml")
+    submission_paths_config_path: Path = Path("config/submission_paths.yaml")
 
     # --- Convenience properties ---
     @property

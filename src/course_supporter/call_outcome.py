@@ -12,8 +12,8 @@ Interface:
     ladder router (attempts and traces), webhook delivery and speech-to-text.
     ``NULL`` on historical rows (never back-filled:
     a guess from ``success`` + ``error_message`` would be indistinguishable
-    from a recorded fact) and on the per-review metrics row, which is neither
-    a call nor a trace.
+    from a recorded fact) and on the rows that are neither a call nor a trace:
+    the per-review metrics row and the funds-port row.
     :class:`SkipReason` — why a rung was skipped without a call; set only on
     ``CallOutcome.SKIPPED`` rows.
     :class:`FundsDecision` — the funds port's answer, set only on the funds-port

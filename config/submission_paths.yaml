@@ -1,0 +1,96 @@
+# Submission paths of the rebuilt Mentor (mentor-rebuild task 02).
+#
+# A path is the list of stages one submission goes through, chosen by the pair
+# "assignment type x submission state". Every stage is defined once under
+# `stages` and a path lists stage names; a stage that needs different ceilings
+# on another path gets another name. Shape and checks: homework/path_config.py.
+# Nothing reads this file to route a submission yet: choosing the path is
+# task 03, and every type below is still served by today's Mentor.
+#
+# Submission states: first | repeat_without_replies | repeat_with_replies.
+# `repeat_with_replies` is described but unreachable until student replies
+# exist as records (task 12); until then both repeat states list the same
+# stages — a prepared place, not a duplicate.
+
+stages:
+  # Model safety check of the student's submission. Starting content is a copy
+  # of the `safety_check` ladder in ladders_mentor.yaml (DD-SP-AM: the two copies
+  # are calibrated separately while today's Mentor lives).
+  safety:
+    deterministic: true
+    ceilings:
+      tool_steps: 0
+      # Output is a short structured verdict, so 8192 is ample; the third rung
+      # takes this stage ceiling instead of the registry's 65536.
+      output_tokens: 8192
+      # не калібровано: rung gemini/gemini-2.5-flash, 65536 input + 8192 output
+      # tokens = $0.0401 (the dearest single attempt), rounded up. The input is
+      # the submission text budget: 131072 characters at 2 characters a token.
+      money_usd: 0.05
+    ladder:
+      - provider: mistral
+        model: mistral-small-latest
+        reasoning: null
+        max_output_tokens: null
+      - provider: deepseek
+        model: deepseek-v4-flash
+        reasoning: null
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-flash
+        reasoning: null
+        max_output_tokens: null
+
+  # "Does this look like an attempt at the task?" — run on a first submission
+  # only. Starting content is a copy of the `sanity_check` ladder in
+  # ladders_mentor.yaml (DD-SP-AM).
+  attempt_classifier:
+    deterministic: true
+    ceilings:
+      tool_steps: 0
+      output_tokens: 8192
+      # не калібровано: rung gemini/gemini-2.5-flash, 65536 input + 8192 output
+      # tokens = $0.0401 (the dearest single attempt), rounded up. The input is
+      # the submission text budget: 131072 characters at 2 characters a token.
+      money_usd: 0.05
+    ladder:
+      - provider: mistral
+        model: mistral-small-latest
+        reasoning: null
+        max_output_tokens: null
+      - provider: deepseek
+        model: deepseek-v4-flash
+        reasoning: null
+        max_output_tokens: 8192
+      - provider: gemini
+        model: gemini-2.5-flash
+        reasoning: null
+        max_output_tokens: null
+
+task_types:
+  # A test makes no model call on any path.
+  test:
+    served_by: todays_mentor
+    paths:
+      first: []
+      repeat_without_replies: []
+      repeat_with_replies: []
+
+  # Declared with its switch; no path is described yet.
+  short_task:
+    served_by: todays_mentor
+    paths: {}
+
+  task:
+    served_by: todays_mentor
+    paths:
+      first: [safety, attempt_classifier]
+      repeat_without_replies: [safety]
+      repeat_with_replies: [safety]
+
+  project:
+    served_by: todays_mentor
+    paths:
+      first: [safety, attempt_classifier]
+      repeat_without_replies: [safety]
+      repeat_with_replies: [safety]

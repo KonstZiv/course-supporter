@@ -16,6 +16,8 @@ Interface:
     a call nor a trace.
     :class:`SkipReason` — why a rung was skipped without a call; set only on
     ``CallOutcome.SKIPPED`` rows.
+    :class:`FundsDecision` — the funds port's answer, set only on the funds-port
+    row (mentor-rebuild task 02) and ``NULL`` on every other row.
 
 Extending:
     A new value is a new enum member AND a migration widening the matching
@@ -81,3 +83,14 @@ class SkipReason(StrEnum):
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     PROVIDER_DISABLED = "provider_disabled"
     INPUT_BUDGET_EXCEEDED = "input_budget_exceeded"
+
+
+class FundsDecision(StrEnum):
+    """What the funds port answered before the first paid call of a submission.
+
+    A refusal always carries a reason code (``funds_refusal_reason``), and an
+    allowance never does; the database holds both halves of that rule.
+    """
+
+    ALLOWED = "allowed"
+    REFUSED = "refused"

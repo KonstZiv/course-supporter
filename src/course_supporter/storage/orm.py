@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from course_supporter.call_outcome import CallOutcome, SkipReason
+from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
 from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.storage.cascade import (
     ScrubCallable,
@@ -1156,6 +1156,13 @@ def _nullable_in(column: str, values: type[StrEnum]) -> str:
     return f"{column} IS NULL OR {column} IN ({listed})"
 
 
+_FUNDS_ROW_COMMENT = (
+    " Funds-port row only (mentor-rebuild task 02; KD5, rows without a model "
+    "call): provider, model_id, success and cost_usd stay NULL on it, and cost "
+    "sums skip it."
+)
+
+
 class ExternalServiceCall(Base):
     __tablename__ = "external_service_calls"
     __table_args__ = (
@@ -1165,6 +1172,17 @@ class ExternalServiceCall(Base):
         ),
         CheckConstraint(
             _nullable_in("skip_reason", SkipReason), name="ck_esc_skip_reason"
+        ),
+        CheckConstraint(
+            _nullable_in("funds_decision", FundsDecision),
+            name="ck_esc_funds_decision",
+        ),
+        # A refusal carries its reason code and nothing else does. Both sides are
+        # never NULL, so the CHECK cannot pass by evaluating to NULL.
+        CheckConstraint(
+            f"(funds_decision IS NOT DISTINCT FROM '{FundsDecision.REFUSED.value}') "
+            "= (funds_refusal_reason IS NOT NULL)",
+            name="ck_esc_funds_refusal_reason",
         ),
         {"comment": "Audit log of all external API calls (LLM, transcription, etc.)"},
     )
@@ -1183,12 +1201,12 @@ class ExternalServiceCall(Base):
     provider: Mapped[str | None] = mapped_column(
         String(50),
         comment="Provider that was called. NULL = no call was made (the "
-        "per-review metrics row).",
+        "per-review metrics and funds-port rows).",
     )
     model_id: Mapped[str | None] = mapped_column(
         String(100),
         comment="Model that was called. NULL = no call was made (the "
-        "per-review metrics row).",
+        "per-review metrics and funds-port rows).",
     )
     # Not String(50): the longest prompt_ref in the ladders is already 51
     # ("prompts/mentor_layered_evaluation_node_course/v1.md"). StageRouter
@@ -1236,8 +1254,8 @@ class ExternalServiceCall(Base):
     # exact lie the nullable column exists to remove. Writers state the value.
     success: Mapped[bool | None] = mapped_column(
         comment="Transport result only: did the call return a response. NULL = "
-        "no call was made (ladder trace and metrics rows). Whether the response "
-        "was usable is outcome.",
+        "no call was made (ladder trace, per-review metrics and funds-port rows). "
+        "Whether the response was usable is outcome.",
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[str | None] = mapped_column(
@@ -1265,6 +1283,31 @@ class ExternalServiceCall(Base):
         Float,
         comment="Per-review metric: share of claims covered by a verdict. NULL "
         "on call rows and when the review has no claims.",
+    )
+    # Float, as cost_usd: the estimate and the actual cost of the path's calls
+    # add up without conversion.
+    ceiling_estimate_usd: Mapped[float | None] = mapped_column(
+        Float,
+        comment="The path's ceiling estimate in dollars: the sum of its "
+        "stages' money ceilings, the same type as cost_usd." + _FUNDS_ROW_COMMENT,
+    )
+    funds_decision: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="The funds port's answer before the first paid call "
+        "(FundsDecision): allowed / refused." + _FUNDS_ROW_COMMENT,
+    )
+    funds_refusal_reason: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Reason code of a refusal; set exactly when funds_decision = "
+        "'refused'." + _FUNDS_ROW_COMMENT,
+    )
+    # No CHECK on the value: the key vocabulary lives in homework/path_config.py,
+    # which the storage layer does not import; the writer takes a PathKey.
+    path_key: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="The submission path the estimate belongs to, as "
+        "'<task type>/<submission state>' (PathKey text, e.g. 'task/first')."
+        + _FUNDS_ROW_COMMENT,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

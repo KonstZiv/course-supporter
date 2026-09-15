@@ -13,13 +13,15 @@ That legacy model remains in place but unused on any production path as of
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from course_supporter.llm.registry import Capability, ModelRegistryConfig
+from course_supporter.llm.registry import Capability, ModelConfig, ModelRegistryConfig
+from course_supporter.llm.rung_registry_check import rung_registry_errors
 
 # Strict input-config models: typo in a YAML key fails validation
 # instead of silently shadowing a real field.
@@ -214,6 +216,13 @@ def validate_ladders_against_registry(
       would write ``cost_usd = NULL`` for every call it makes — the register
       would stop saying what was paid for, and nothing would say so.
 
+    Membership, reasoning translatability and the named price are the rung's
+    own admissibility rule, shared with the submission-path configuration, so
+    they live in
+    :func:`course_supporter.llm.rung_registry_check.rung_registry_errors`.
+    Capability and input budget depend on the stage and stay here; they run
+    between membership and price, the order these messages have always had.
+
     Errors are aggregated and raised as a single ``ValueError`` so a
     multi-typo config surfaces every problem at once. Mirrors the
     pattern in :meth:`ModelRegistryConfig.validate_and_flatten` for
@@ -228,63 +237,49 @@ def validate_ladders_against_registry(
     """
     errors: list[str] = []
 
-    # Deferred import keeps ``ladder_config`` free of the provider SDK graph at
-    # module load and avoids an import cycle; by validation time (app / worker
-    # startup) the providers are already imported. ``PROVIDER_REGISTRY`` maps a
-    # provider name → its class, so the reasoning check stays provider-agnostic
-    # and the dialect knowledge lives only in the provider modules (P6).
-    from course_supporter.llm.providers import PROVIDER_REGISTRY
-
     for stage_name, stage in cfg.stages.items():
         for i, entry in enumerate(stage.ladder):
-            # P6 — reasoning-form translatability. A rung whose ``reasoning``
-            # form its provider's connector cannot translate must fail the boot
-            # rather than no-op silently on the wire. Runs independently of the
-            # membership check below so a rung with two faults reports both.
-            if entry.reasoning is not None:
-                provider_cls = PROVIDER_REGISTRY.get(entry.provider)
-                if provider_cls is None or not provider_cls.supports_reasoning(
-                    entry.reasoning
-                ):
-                    errors.append(
-                        f"Stage '{stage_name}' rung {i} provider "
-                        f"'{entry.provider}' model '{entry.model}' declares a "
-                        f"reasoning form its connector cannot translate: "
-                        f"{entry.reasoning!r}"
-                    )
-
-            if entry.model not in registry.models:
-                errors.append(
-                    f"Stage '{stage_name}' rung {i} "
-                    f"references unknown model: '{entry.model}'"
+            errors.extend(
+                rung_registry_errors(
+                    stage_name,
+                    i,
+                    entry,
+                    registry,
+                    model_checks=partial(
+                        _stage_model_errors, stage_name, i, entry, stage
+                    ),
                 )
-                continue
-
-            model = registry.models[entry.model]
-            missing = set(stage.requires) - set(model.capabilities)
-            if missing:
-                errors.append(
-                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
-                    f"lacks required capabilities: {sorted(missing)}"
-                )
-
-            if stage.input_budget_ratio is not None and model.max_context is None:
-                errors.append(
-                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
-                    f"has no max_context in the registry "
-                    f"(required by input_budget_ratio="
-                    f"{stage.input_budget_ratio})"
-                )
-
-            if model.cost_per_1k is None:
-                errors.append(
-                    f"Stage '{stage_name}' rung {i} model '{entry.model}' "
-                    f"has no named price in the registry "
-                    f"(cost_per_1k_in and cost_per_1k_out are both required; "
-                    f"0.0 is a valid price)"
-                )
+            )
 
     if errors:
         raise ValueError(
             "Ladder validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
         )
+
+
+def _stage_model_errors(
+    stage_name: str,
+    index: int,
+    entry: LadderEntry,
+    stage: StageConfig,
+    model: ModelConfig,
+) -> list[str]:
+    """The stage's own checks against one rung's resolved model (Q-axis1, budget)."""
+    errors: list[str] = []
+
+    missing = set(stage.requires) - set(model.capabilities)
+    if missing:
+        errors.append(
+            f"Stage '{stage_name}' rung {index} model '{entry.model}' "
+            f"lacks required capabilities: {sorted(missing)}"
+        )
+
+    if stage.input_budget_ratio is not None and model.max_context is None:
+        errors.append(
+            f"Stage '{stage_name}' rung {index} model '{entry.model}' "
+            f"has no max_context in the registry "
+            f"(required by input_budget_ratio="
+            f"{stage.input_budget_ratio})"
+        )
+
+    return errors

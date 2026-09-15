@@ -19,8 +19,9 @@ Interface:
       different ceilings on another path is another name, not an override.
     * ``task_types`` — every :class:`~course_supporter.models.source.AssignmentType`
       with ``served_by`` and ``paths``: either all three :class:`SubmissionState`
-      values, each mapped to a list of stage names (possibly empty — a ``test``
-      path makes no model call), or ``{}`` for a type no path describes yet.
+      values, each mapped to a list of stage names (possibly empty, and always
+      empty for ``test`` — a test makes no model call), or ``{}`` for a type no
+      path describes yet.
 
     No field has a default: a description that is missing fails loudly instead
     of standing in for a guessed value.
@@ -28,10 +29,11 @@ Interface:
     :func:`load_path_config` reads the file and checks its shape; every shape
     fault is reported at once. :func:`validate_path_config` checks what the
     shape cannot — stage names resolve, a type has all three states or none, a
-    type switched to the new path has paths, pins stay under their stage's
-    output ceiling, rungs are admissible against the model registry — and
-    reports every such fault at once. Both raise ``ValueError`` and are meant
-    for startup: a hole should stop the boot, not a live submission.
+    type switched to the new path has paths, a ``test`` path lists no stage,
+    pins stay under their stage's output ceiling, rungs are admissible against
+    the model registry — and reports every such fault at once. Both raise
+    ``ValueError`` and are meant for startup: a hole should stop the boot, not
+    a live submission.
     :func:`path_ceiling_estimate` sums a path's money ceilings.
 
     Worked cases, executed: :mod:`tests.unit.test_homework.test_path_config`.
@@ -192,6 +194,7 @@ def validate_path_config(config: PathConfig, registry: ModelRegistryConfig) -> N
     * a declared type describes all three submission states or none — a
       partial set would hide behind the switch until the day it is flipped;
     * a type switched to the new path describes its paths;
+    * a ``test`` path lists no stage — a test makes no model call;
     * every stage name in a path is defined, and appears once in that path.
 
     Raises:
@@ -238,6 +241,13 @@ def validate_path_config(config: PathConfig, registry: ModelRegistryConfig) -> N
 
         for state, stage_names in declared.paths.items():
             key = PathKey(task_type, state)
+            # A test is checked by code against its answer key: a stage written
+            # here would make every test submission pay, and would still boot.
+            if task_type is AssignmentType.TEST and stage_names:
+                errors.append(
+                    f"Path '{key}' lists stages {stage_names}, but a test path "
+                    f"makes no model call"
+                )
             seen: set[str] = set()
             for stage_name in stage_names:
                 if stage_name not in config.stages:

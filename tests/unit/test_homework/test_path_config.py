@@ -258,6 +258,21 @@ class TestValidation:
             _validation_error(tmp_path, data)
         )
 
+    def test_test_path_with_a_stage_fails(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["test"]["paths"]["repeat_with_replies"] = ["safety"]
+        assert (
+            "Path 'test/repeat_with_replies' lists stages ['safety'], but a test "
+            "path makes no model call"
+        ) in _validation_error(tmp_path, data)
+
+    def test_test_paths_without_stages_pass(self, tmp_path: Path) -> None:
+        config = load_path_config(_write(tmp_path, _config()))
+        test_paths = config.task_types[AssignmentType.TEST].paths
+
+        assert test_paths and all(stages == [] for stages in test_paths.values())
+        validate_path_config(config, _registry())
+
     def test_stage_listed_twice_in_a_path_fails(self, tmp_path: Path) -> None:
         data = _config()
         data["task_types"]["task"]["paths"]["first"] = ["safety", "safety"]

@@ -78,8 +78,10 @@ class FundsRefusalReason(StrEnum):
 
     The caller reacts to the code (the new path turns it into a submission
     state, task 03), so an implementation maps its own reasons onto these
-    members instead of passing free text. The register keeps the value as text
-    (``funds_refusal_reason``, no CHECK), so a new member needs no migration.
+    members instead of passing free text. The register keeps the code as text
+    in ``funds_refusal_reason``; its CHECK (``ck_esc_funds_refusal_reason``)
+    ties the reason to the decision, not to this vocabulary, so a new member
+    needs no migration.
 
     * ``INSUFFICIENT_FUNDS`` — the payer cannot cover the path's ceiling
       estimate (the binding's funds decision; KD19: a short balance blocks the

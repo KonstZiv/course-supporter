@@ -273,8 +273,9 @@ async def committed_register_job(
 class TestCanonicalFailureMeasure:
     """``NOT success OR error_message IS NOT NULL`` counts failed calls only.
 
-    Rows that record no call — the per-review metrics row and the ladder
-    traces of a skipped or abandoned rung — carry ``success = NULL`` and no
+    Rows that record no call — the per-review metrics row, the ladder traces
+    of a skipped or abandoned rung, and the funds-port row (its own check is in
+    ``test_funds_port_db.py``) — carry ``success = NULL`` and no
     ``error_message``, so the expression evaluates to NULL for them and the
     ``WHERE`` leaves them out. That is the intended behaviour, not an
     accident: the controls below prove the same query does count the failed
@@ -462,8 +463,9 @@ class TestFundsPortSchemaShape:
 class TestFundsPortValues:
     """What the database admits in the funds port's columns.
 
-    No code writes the funds-port row yet; these rows are written by hand to pin
-    the rules its writer will meet.
+    These rows are written by hand, past the writer
+    (``service_logging.record_funds_decision``), so that the rules the database
+    holds on its own stay pinned whatever the writer does.
     """
 
     @pytest.mark.parametrize("decision", list(FundsDecision))

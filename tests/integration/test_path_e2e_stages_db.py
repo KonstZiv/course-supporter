@@ -198,13 +198,21 @@ def _stage(money_usd: float = 0.05) -> dict[str, Any]:
         "input_budget_ratio": None,
         "record_output": False,
         "ceilings": {"tool_steps": 0, "money_usd": money_usd, "output_tokens": 8192},
+        # Two rungs, because "a trace per rung" is only a claim on a ladder
+        # that has more than one.
         "ladder": [
             {
                 "provider": "mistral",
                 "model": "m",
                 "reasoning": None,
                 "max_output_tokens": None,
-            }
+            },
+            {
+                "provider": "gemini",
+                "model": "g",
+                "reasoning": None,
+                "max_output_tokens": None,
+            },
         ],
     }
 
@@ -326,7 +334,7 @@ _SOURCE = "def solve(n):\n    return n * 2\n"
 
 def _ctx(
     session_factory: async_sessionmaker[AsyncSession],
-    router: _RouterDouble,
+    router: Any,
     answers: Path,
     *,
     job_try: int = 1,
@@ -357,7 +365,7 @@ def _answers(tmp_path: Path) -> Path:
 
 async def _run(
     session_factory: async_sessionmaker[AsyncSession],
-    router: _RouterDouble,
+    router: Any,
     port: _PortDouble,
     seed: dict[str, uuid.UUID],
     answers: Path,
@@ -705,3 +713,189 @@ class TestARefusedPortHoldsTheRevision:
         # database allows a revision only one in flight at a time.
         job = await _job(session_factory, seed["job_id"])
         assert job.status == "complete"
+
+
+def _priced_registry(per_1k: float) -> Any:
+    """A registry that prices both rungs, so a ceiling can be below an attempt."""
+    from course_supporter.llm.registry import ModelRegistryConfig
+
+    def _model(model_id: str) -> dict[str, Any]:
+        return {
+            "id": model_id,
+            "cost_per_1k_in": per_1k,
+            "cost_per_1k_out": per_1k,
+            "max_output_tokens": 1000,
+            "max_context": 100_000,
+        }
+
+    return ModelRegistryConfig.model_validate(
+        {
+            "providers": {
+                "mistral": {"type": "llm", "models": [_model("m")]},
+                "gemini": {"type": "llm", "models": [_model("g")]},
+            },
+            "actions": {},
+        }
+    )
+
+
+def _real_router(
+    session_factory: async_sessionmaker[AsyncSession], provider: Any
+) -> Any:
+    """The shipped router, with the model layer doubled one level lower.
+
+    Criterion 9 asks for a trace per rung in the register, and only the real
+    router writes one — so here the double is the PROVIDER, not the router.
+    """
+    from course_supporter.llm.ladder_config import LadderConfig
+    from course_supporter.llm.stage_router import StageRouter
+
+    return StageRouter(
+        LadderConfig(stages={}),
+        {"mistral": provider, "gemini": provider},
+        registry=_priced_registry(1.0),
+        session_factory=session_factory,
+    )
+
+
+def _provider_double(content: str) -> Any:
+    """A provider that answers if it is ever called — and must not be."""
+    from course_supporter.llm.error_categories import ErrorCategory
+    from course_supporter.llm.providers.base import LLMProvider
+    from course_supporter.llm.schemas import LLMResponse
+
+    p = AsyncMock(spec=LLMProvider)
+    p.enabled = True
+    p.complete = AsyncMock(
+        return_value=LLMResponse(
+            content=content,
+            provider="mistral",
+            model_id="m",
+            tokens_in=10,
+            tokens_out=20,
+            latency_ms=42,
+            cost_usd=0.001,
+        )
+    )
+    p.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+    return p
+
+
+class TestTheMoneyCeilingSkipsBeforeItSpends:
+    """Criterion 9, through the body rather than on the router alone."""
+
+    async def test_no_rung_is_called_and_the_revision_is_frozen(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        from course_supporter.api.routes._portal_shared import curated_presentation
+        from course_supporter.call_outcome import CallOutcome, SkipReason
+
+        provider = _provider_double(_CONTENT["safety"])
+        port = _PortDouble()
+
+        await _run(
+            session_factory,
+            _real_router(session_factory, provider),
+            port,
+            seed,
+            _answers(tmp_path),
+            config=_config(stages=["safety"], money_usd=0.000_001),
+        )
+
+        provider.complete.assert_not_awaited()
+
+        async with session_factory() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(ExternalServiceCall)
+                        .where(
+                            ExternalServiceCall.job_id == seed["job_id"],
+                            ExternalServiceCall.action == "safety",
+                        )
+                        .order_by(ExternalServiceCall.created_at.asc())
+                    )
+                ).scalars()
+            )
+        # One trace per rung of the ladder, each naming the money ceiling.
+        assert [r.outcome for r in rows] == [CallOutcome.SKIPPED, CallOutcome.SKIPPED]
+        assert [r.skip_reason for r in rows] == [
+            SkipReason.MONEY_CEILING_EXCEEDED,
+            SkipReason.MONEY_CEILING_EXCEEDED,
+        ]
+        assert [r.cost_usd for r in rows] == [None, None]
+
+        checkpoint = await _checkpoint(session_factory, seed["job_id"])
+        assert checkpoint.frozen_reason is FreezeReason.STAGE_MONEY_CEILING
+        assert checkpoint.frozen_stage == "safety"
+        assert checkpoint.stages == {"safety": StageState.PENDING}
+        assert checkpoint.retries == 0
+
+        # A ceiling is not a retry and not an ending: the submission is still
+        # being checked, and the port was never told it ended.
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "received"
+        assert curated_presentation(submission).state == "in_progress"
+        assert port.released == []
+        assert port.accounted == []
+
+    async def test_raising_the_ceiling_lets_the_startup_pass_run_the_stage(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        from course_supporter.homework.path_continuation import (
+            sweep_frozen_revisions,
+        )
+
+        answers = _answers(tmp_path)
+        provider = _provider_double(_CONTENT["safety"])
+        port = _PortDouble()
+        await _run(
+            session_factory,
+            _real_router(session_factory, provider),
+            port,
+            seed,
+            answers,
+            config=_config(stages=["safety"], money_usd=0.000_001),
+        )
+        provider.complete.assert_not_awaited()
+
+        arq = MagicMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-sweep"))
+        await sweep_frozen_revisions(session_factory, arq)
+
+        async with session_factory() as session:
+            jobs = list(
+                (
+                    await session.execute(
+                        select(Job)
+                        .where(Job.subject_id == seed["submission_id"])
+                        .order_by(Job.queued_at.asc())
+                    )
+                ).scalars()
+            )
+        assert len(jobs) == 2, "the pass makes a NEW job; a hold ended the old one"
+        continuation = jobs[-1]
+
+        # The edit that lifts the hold is the ceiling in the configuration.
+        await _run(
+            session_factory,
+            _real_router(session_factory, provider),
+            port,
+            seed,
+            answers,
+            job_id=continuation.id,
+            config=_config(stages=["safety"], money_usd=10.0),
+        )
+
+        provider.complete.assert_awaited_once()
+        checkpoint = await _checkpoint(session_factory, continuation.id)
+        assert checkpoint.stages == {"safety": StageState.DONE}
+        assert checkpoint.frozen_reason is None
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"

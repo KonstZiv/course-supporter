@@ -16,6 +16,7 @@ from course_supporter.llm.error_categories import (
     LadderExhaustedError,
     StructuralRetryError,
 )
+from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.llm.ladder_config import (
     LadderConfig,
     LadderEntry,
@@ -745,6 +746,155 @@ class TestExecuteStageByDescription:
         await router.execute_stage(stage, "safety", stage_name="from-the-template")
 
         assert rendered == [{"stage_name": "from-the-template"}]
+
+
+class TestStopOnOutputCeiling:
+    """The path-stage switch (mentor-rebuild task 03, KD16 note).
+
+    A rung that had room to answer and spent it all on nothing is not worth
+    descending from: the next rung gets the same question and the same input,
+    so the fallback buys a second empty answer at a second price. The switch
+    lives on ``execute_stage`` only and is off by default, so the by-name entry
+    — and with it every stage in ``ladders_*.yaml`` — keeps the KD16 table's
+    "empty response → immediate fallback".
+    """
+
+    @staticmethod
+    def _empty_at_ceiling_provider() -> LLMProvider:
+        p = AsyncMock(spec=LLMProvider)
+        p.enabled = True
+        p.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                provider="anthropic",
+                model_id="claude-x",
+                tokens_in=10,
+                tokens_out=8192,
+                finish_reason=FinishReason.OUTPUT_CEILING,
+            )
+        )
+        p.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+        return p  # type: ignore[return-value]
+
+    async def test_switch_on_does_not_call_the_next_rung(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        first = self._empty_at_ceiling_provider()
+        second = _ok_provider("from the second rung")
+        stage = StageConfig(
+            prompt_ref="prompts/example/v1.md",
+            ladder=_ladder(("anthropic", "claude-x"), ("gemini", "gemini-x")),
+        )
+        router = StageRouter(
+            _config(),
+            {"anthropic": first, "gemini": second},
+            registry=_registry(),
+        )
+
+        with pytest.raises(LadderExhaustedError) as caught:
+            await router.execute_stage(stage, "safety", stop_on_output_ceiling=True)
+
+        first.complete.assert_awaited_once()
+        second.complete.assert_not_awaited()
+        # The body of the new path reads this to tell "freeze until the ceiling
+        # is raised in configuration" apart from "every rung failed, retry".
+        assert caught.value.stopped_at_output_ceiling is True
+
+    async def test_ordinary_exhaustion_is_not_marked_as_a_ceiling_stop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Every rung failed for its own reasons — that one is worth retrying."""
+        _mock_load_prompt(monkeypatch)
+        first = _failing_provider(side_effects=[_semantic_exception()])
+        second = _failing_provider(side_effects=[_semantic_exception()])
+        stage = StageConfig(
+            prompt_ref="prompts/example/v1.md",
+            ladder=_ladder(("anthropic", "claude-x"), ("gemini", "gemini-x")),
+        )
+        router = StageRouter(
+            _config(),
+            {"anthropic": first, "gemini": second},
+            registry=_registry(),
+        )
+
+        with pytest.raises(LadderExhaustedError) as caught:
+            await router.execute_stage(stage, "safety", stop_on_output_ceiling=True)
+
+        second.complete.assert_awaited_once()
+        assert caught.value.stopped_at_output_ceiling is False
+
+    async def test_switch_off_descends_on_the_same_stage(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Same stage, same providers, switch off — the old behaviour."""
+        _mock_load_prompt(monkeypatch)
+        first = self._empty_at_ceiling_provider()
+        second = _ok_provider("from the second rung")
+        stage = StageConfig(
+            prompt_ref="prompts/example/v1.md",
+            ladder=_ladder(("anthropic", "claude-x"), ("gemini", "gemini-x")),
+        )
+        router = StageRouter(
+            _config(),
+            {"anthropic": first, "gemini": second},
+            registry=_registry(),
+        )
+
+        result = await router.execute_stage(stage, "safety")
+
+        assert result.content == "from the second rung"
+        second.complete.assert_awaited_once()
+
+    async def test_switch_on_still_descends_on_an_ordinary_empty_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty WITHOUT the ceiling signal is a different fact.
+
+        The rung answered nothing for its own reasons and the ceiling was never
+        reached, so the next rung may well answer — the switch must not turn
+        every empty response into a stop.
+        """
+        _mock_load_prompt(monkeypatch)
+        first = AsyncMock(spec=LLMProvider)
+        first.enabled = True
+        first.complete = AsyncMock(return_value=_ok_response(content=""))
+        first.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+        second = _ok_provider("from the second rung")
+        stage = StageConfig(
+            prompt_ref="prompts/example/v1.md",
+            ladder=_ladder(("anthropic", "claude-x"), ("gemini", "gemini-x")),
+        )
+        router = StageRouter(
+            _config(),
+            {"anthropic": first, "gemini": second},
+            registry=_registry(),
+        )
+
+        result = await router.execute_stage(
+            stage, "safety", stop_on_output_ceiling=True
+        )
+
+        assert result.content == "from the second rung"
+        second.complete.assert_awaited_once()
+
+    async def test_by_name_entry_has_no_switch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``execute_for_stage`` cannot be asked to stop — it is not a knob there.
+
+        The guarantee the twenty-one existing call sites rest on is structural,
+        not a default they could be talked out of.
+        """
+        import inspect
+
+        params = inspect.signature(StageRouter.execute_for_stage).parameters
+        assert "stop_on_output_ceiling" not in params
 
 
 class _RecordingPrompt:

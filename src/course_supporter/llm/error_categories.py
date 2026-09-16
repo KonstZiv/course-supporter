@@ -51,23 +51,43 @@ class StructuralRetryError(Exception):
 
 
 class LadderExhaustedError(Exception):
-    """Raised when every ladder entry for a stage has been attempted and failed.
+    """Raised when a stage's ladder ended without a result.
+
+    Two different endings, and a caller that has to react needs to tell them
+    apart: every rung was tried and every one failed, or the walk was stopped
+    early because a rung spent its whole output ceiling on nothing
+    (``stop_on_output_ceiling``, mentor-rebuild task 03). The first is worth
+    retrying — a provider may be having a bad minute; the second is not, because
+    the next attempt would meet the same ceiling with the same input, and what
+    has to change is the configuration. Reading that difference out of the last
+    attempt's ``reason`` text would make a decision rest on a message.
 
     Attributes:
         stage_name: Stage name as declared in ``ladders_*.yaml``.
         attempts: ``(provider, model, reason)`` triples in the order
             they were attempted.
+        stopped_at_output_ceiling: The walk stopped early, with rungs left
+            untried, because the last attempt came back empty at the output
+            ceiling. ``False`` on every ordinary exhaustion.
     """
 
     def __init__(
         self,
         stage_name: str,
         attempts: list[tuple[str, str, str]],
+        *,
+        stopped_at_output_ceiling: bool = False,
     ) -> None:
         self.stage_name = stage_name
         self.attempts = attempts
+        self.stopped_at_output_ceiling = stopped_at_output_ceiling
         details = "; ".join(f"{p}/{m}: {r}" for p, m, r in attempts)
-        super().__init__(f"Ladder exhausted for stage '{stage_name}': {details}")
+        ending = (
+            "stopped at the output ceiling"
+            if stopped_at_output_ceiling
+            else "exhausted"
+        )
+        super().__init__(f"Ladder {ending} for stage '{stage_name}': {details}")
 
 
 class InvalidPromptError(Exception):

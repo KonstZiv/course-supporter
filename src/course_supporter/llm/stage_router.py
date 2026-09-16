@@ -127,6 +127,32 @@ class _StageRecord:
     record_output: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _Attempt:
+    """What one ladder entry produced, for the ladder loop to act on.
+
+    A named structure rather than a widening tuple: ``empty_at_ceiling`` is the
+    third thing a failed attempt can say beyond "it failed" and "why", and a
+    fourth positional element would be the kind of thing a later reader gets
+    wrong silently.
+
+    Attributes:
+        response: The successful response, or ``None`` when the entry failed.
+        attempts_used: Calls made on this entry, including retries.
+        reason: Why the entry was abandoned; ``""`` on success.
+        empty_at_ceiling: The provider returned nothing AND reported that the
+            output ceiling was spent (``FinishReason.OUTPUT_CEILING``). The
+            ladder loop uses it to decide whether descending is worth paying
+            for; the register learns the same fact independently, through
+            :func:`_attempt_outcome`.
+    """
+
+    response: LLMResponse | None
+    attempts_used: int
+    reason: str
+    empty_at_ceiling: bool = False
+
+
 def _attempt_outcome(
     provider: LLMProvider,
     response: LLMResponse | None,
@@ -278,6 +304,7 @@ class StageRouter:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        stop_on_output_ceiling: bool = False,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a stage description the caller holds.
@@ -306,6 +333,16 @@ class StageRouter:
             response_validator: As on :meth:`execute_for_stage`.
             contents: As on :meth:`execute_for_stage`.
             expects_json: As on :meth:`execute_for_stage`.
+            stop_on_output_ceiling: Stop instead of descending when a rung
+                returns nothing AND reports the output ceiling as spent. The
+                next rung would be asked the same question with the same input,
+                so descending pays a second time for a second empty answer;
+                the ladder ends in ``LadderExhaustedError`` and the caller
+                decides what an unfinished stage means. ``False`` -- the
+                default, and what :meth:`execute_for_stage` always passes --
+                keeps the KD16 table's behaviour: an empty response falls back
+                immediately. Used by the rebuilt Mentor's path stages
+                (mentor-rebuild task 03).
             **render_context: Variables for the prompt template.
 
         Returns:
@@ -351,6 +388,7 @@ class StageRouter:
 
         attempts: list[tuple[str, str, str]] = []
         total_attempt_count = 0
+        stopped_at_ceiling = False
 
         for entry in stage.ladder:
             provider = self._providers.get(entry.provider)
@@ -422,23 +460,36 @@ class StageRouter:
             request = self._build_request(
                 prompt, entry, stage_name, contents=contents, expects_json=expects_json
             )
-            response, used_count, reason = await self._attempt_entry(
+            attempt = await self._attempt_entry(
                 provider, entry, request, record, response_validator
             )
-            total_attempt_count += used_count
+            total_attempt_count += attempt.attempts_used
 
-            if response is not None:
+            if attempt.response is not None:
                 return StageResult(
-                    content=response.content,
+                    content=attempt.response.content,
                     provider_used=entry.provider,
                     model_used=entry.model,
                     attempt_count=total_attempt_count,
                 )
 
-            attempts.append((entry.provider, entry.model, reason))
+            attempts.append((entry.provider, entry.model, attempt.reason))
             await self._record_trace(record, entry, CallOutcome.ABANDONED)
 
-        raise LadderExhaustedError(stage_name, attempts)
+            if stop_on_output_ceiling and attempt.empty_at_ceiling:
+                # The rung had room to answer and spent it all on nothing. The
+                # next rung would be asked the same question with the same
+                # input, so descending buys a second empty answer at a second
+                # price. Stop here and let the caller decide what an unfinished
+                # stage means (mentor-rebuild task 03; KD16 note on path
+                # stages). Off by default: every by-name caller keeps
+                # descending exactly as before.
+                stopped_at_ceiling = True
+                break
+
+        raise LadderExhaustedError(
+            stage_name, attempts, stopped_at_output_ceiling=stopped_at_ceiling
+        )
 
     # ── Private helpers ─────────────────────────────────────────
 
@@ -493,13 +544,12 @@ class StageRouter:
         request: LLMRequest,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
-    ) -> tuple[LLMResponse | None, int, str]:
+    ) -> _Attempt:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
 
-        Returns ``(response, attempts_used, reason)``. On success
-        ``response`` is non-None and ``reason`` is ``""``; otherwise
-        ``response`` is ``None`` and ``reason`` describes why the
-        entry was abandoned.
+        Returns an :class:`_Attempt`. On success its ``response`` is non-None
+        and ``reason`` is ``""``; otherwise ``response`` is ``None`` and
+        ``reason`` describes why the entry was abandoned.
         """
         attempts_used = 0
 
@@ -510,22 +560,23 @@ class StageRouter:
                     provider, entry, request, record, response_validator
                 )
             except StructuralRetryError as exc:
-                (
-                    retry_response,
-                    retry_count,
-                    retry_reason,
-                ) = await self._structural_retry(
+                retry = await self._structural_retry(
                     provider, entry, request, exc, record, response_validator
                 )
-                attempts_used += retry_count
-                if retry_response is not None:
-                    return retry_response, attempts_used, ""
-                return None, attempts_used, retry_reason
+                attempts_used += retry.attempts_used
+                if retry.response is not None:
+                    return _Attempt(retry.response, attempts_used, "")
+                return _Attempt(
+                    None,
+                    attempts_used,
+                    retry.reason,
+                    empty_at_ceiling=retry.empty_at_ceiling,
+                )
             except Exception as exc:
                 category = provider.classify_error(exc)
                 if category is ErrorCategory.INFRASTRUCTURE:
                     if attempt_idx >= self._max_retries_infra:
-                        return (
+                        return _Attempt(
                             None,
                             attempts_used,
                             f"INFRASTRUCTURE: "
@@ -536,22 +587,25 @@ class StageRouter:
                     await asyncio.sleep(delay)
                     continue
                 if category is ErrorCategory.INPUT_OVERFLOW:
-                    return None, attempts_used, f"INPUT_OVERFLOW: {exc}"
+                    return _Attempt(None, attempts_used, f"INPUT_OVERFLOW: {exc}")
                 # SEMANTIC, or STRUCTURAL classified by classifier without
                 # being raised as StructuralRetryError -- nothing to retry
                 # against in 0.5, so treat as immediate fallback.
-                return None, attempts_used, f"{category.name}: {exc}"
+                return _Attempt(None, attempts_used, f"{category.name}: {exc}")
             else:
                 if not response.content:
-                    return (
+                    return _Attempt(
                         None,
                         attempts_used,
                         "SEMANTIC: empty response",
+                        empty_at_ceiling=(
+                            response.finish_reason is FinishReason.OUTPUT_CEILING
+                        ),
                     )
-                return response, attempts_used, ""
+                return _Attempt(response, attempts_used, "")
 
         # Defensive: the loop always returns in the body above.
-        return None, attempts_used, "INFRASTRUCTURE: retry loop exhausted"
+        return _Attempt(None, attempts_used, "INFRASTRUCTURE: retry loop exhausted")
 
     async def _structural_retry(
         self,
@@ -561,7 +615,7 @@ class StageRouter:
         exc: StructuralRetryError,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
-    ) -> tuple[LLMResponse | None, int, str]:
+    ) -> _Attempt:
         """Single retry attempt with feedback appended to the user prompt."""
         retry_request = original_request.model_copy(
             update={
@@ -577,14 +631,17 @@ class StageRouter:
                 provider, entry, retry_request, record, response_validator
             )
         except Exception as retry_exc:
-            return None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}"
+            return _Attempt(None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}")
         if not response.content:
-            return (
+            return _Attempt(
                 None,
                 1,
                 "SEMANTIC: empty response after structural retry",
+                empty_at_ceiling=(
+                    response.finish_reason is FinishReason.OUTPUT_CEILING
+                ),
             )
-        return response, 1, ""
+        return _Attempt(response, 1, "")
 
     async def _call_with_log(
         self,

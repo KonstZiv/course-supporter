@@ -81,11 +81,18 @@ class SkipReason(StrEnum):
 
     The register answers "why skipped", not "by how much": the budget
     numbers stay in ``LadderExhaustedError`` and the logs.
+
+    ``MONEY_CEILING_EXCEEDED`` is the money side of the same idea as
+    ``INPUT_BUDGET_EXCEEDED``: one counts tokens the rung's window cannot hold,
+    the other counts dollars the stage's ceiling cannot pay. It is reached only
+    from a submission path's stage (mentor-rebuild task 03), which is the only
+    place a money ceiling exists.
     """
 
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     PROVIDER_DISABLED = "provider_disabled"
     INPUT_BUDGET_EXCEEDED = "input_budget_exceeded"
+    MONEY_CEILING_EXCEEDED = "money_ceiling_exceeded"
 
 
 class FundsDecision(StrEnum):

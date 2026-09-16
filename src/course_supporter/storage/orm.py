@@ -1329,9 +1329,16 @@ class HomeworkStatus(StrEnum):
     sprint-mentor T7 reconciled this to the canon vocabulary: the in-progress
     ``safety_check`` became the ``safety_ok`` milestone, and ``sanity_ok`` /
     ``mismatch`` were added for the sanity gate.
+
+    ``awaiting_funds`` is not a milestone on that line: it is a hold. The funds
+    port refused before the rebuilt Mentor's path made its first paid call
+    (mentor-rebuild task 03, KD19 "a short balance blocks the start"), so
+    nothing was spent and nothing was decided. A top-up re-activates the
+    submission through ``received``, the way ``failed`` does.
     """
 
     RECEIVED = "received"
+    AWAITING_FUNDS = "awaiting_funds"
     SAFETY_OK = "safety_ok"
     SANITY_OK = "sanity_ok"
     REVIEWING = "reviewing"
@@ -1478,7 +1485,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         index=True,
         comment="Lifecycle milestone (KD15 §1298): received → safety_ok → "
         "sanity_ok → reviewing → completed → delivered; terminals "
-        "rejected (safety) | mismatch (sanity) | failed (error).",
+        "rejected (safety) | mismatch (sanity) | failed (error). "
+        "awaiting_funds (mentor-rebuild task 03) is a hold, not a milestone: "
+        "the funds port refused before the new path's first paid call, so "
+        "nothing was spent; a top-up re-activates it through received.",
     )
 
     # Results (JSONB)

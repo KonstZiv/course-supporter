@@ -29,8 +29,16 @@ logger = structlog.get_logger()
 #   - ``failed``     — processing error (re-activate via ``failed → received``).
 # Safety runs while the status is still ``received`` (it sets ``safety_ok`` only
 # on pass), so ``received`` can go to ``safety_ok`` / ``rejected`` / ``failed``.
+# ``awaiting_funds`` (mentor-rebuild task 03) hangs off ``received`` and leads
+# back to it: the funds port is asked after the free doors and before the first
+# paid call, when the submission has reached no milestone yet, and a top-up
+# re-activates it the way ``failed → received`` re-activates a failure. Its
+# ``failed`` edge is not decorative — a frozen submission can still be broken by
+# something else, and the state machine's rule is that every non-terminal state
+# can fail.
 HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
-    "received": {"safety_ok", "rejected", "failed"},
+    "received": {"safety_ok", "rejected", "failed", "awaiting_funds"},
+    "awaiting_funds": {"received", "failed"},
     "safety_ok": {"sanity_ok", "mismatch", "failed"},
     "sanity_ok": {"reviewing", "failed"},
     "reviewing": {"completed", "failed"},

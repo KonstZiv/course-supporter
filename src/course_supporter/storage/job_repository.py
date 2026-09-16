@@ -602,6 +602,34 @@ class JobRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_latest_for_subject(
+        self, subject_type: str, subject_id: uuid.UUID
+    ) -> Job | None:
+        """The most recent live job for one subject, or ``None``.
+
+        A revision that is continued gets a NEW job each time (the execution
+        seam owns one lifecycle per job and a finished job never runs again), so
+        "what has this revision already done" is a question about its latest
+        job, not about the one whose id the caller happens to hold.
+
+        Ordered by ``queued_at`` and then by id — ids are time-ordered (uuid7),
+        so the tiebreak between two jobs queued in the same instant is still
+        chronological rather than arbitrary. Soft-deleted jobs are skipped, as
+        everywhere else on this repository's read paths.
+        """
+        stmt = (
+            select(Job)
+            .where(
+                Job.subject_type == subject_type,
+                Job.subject_id == subject_id,
+                Job.deleted_at.is_(None),
+            )
+            .order_by(Job.queued_at.desc(), Job.id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_in_flight_jobs(self) -> list[Job]:
         """Return all live Jobs in flight (``queued`` OR ``active``).
 

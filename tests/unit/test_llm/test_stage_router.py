@@ -658,6 +658,109 @@ class TestStageNameUnknown:
             await router.execute_for_stage("nope")
 
 
+class TestExecuteStageByDescription:
+    """The by-description entry (mentor-rebuild task 03, KD16).
+
+    ``execute_stage`` is the ladder walk itself; ``execute_for_stage`` resolves
+    a name against ``ladders_*.yaml`` and delegates to it. The point of the
+    split is a caller whose stage does NOT live in the ladder files — the
+    rebuilt Mentor's submission paths — so the tests below run a stage the
+    router's own config has never heard of.
+    """
+
+    async def test_runs_a_stage_absent_from_the_ladder_files(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider("hello from a path stage")
+        # Router config knows "demo" only; the stage executed below is built
+        # by the caller and is deliberately not in it.
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
+        stage = StageConfig(
+            prompt_ref="prompts/safety_check/v1.md",
+            ladder=_ladder(("anthropic", "claude-x")),
+        )
+
+        result = await router.execute_stage(stage, "safety")
+
+        assert result.content == "hello from a path stage"
+        assert result.provider_used == "anthropic"
+        assert result.attempt_count == 1
+        # The name the caller passed is what the call is tagged with, not the
+        # ladder-file name — the register row is keyed on it.
+        request = provider.complete.await_args.args[0]
+        assert request.action == "safety"
+
+    async def test_by_name_entry_delegates_to_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``execute_for_stage`` resolves the name, then hands over unchanged."""
+        _mock_load_prompt(monkeypatch)
+        provider = _ok_provider()
+        config = _config()
+        router = StageRouter(config, {"anthropic": provider}, registry=_registry())
+        seen: list[tuple[StageConfig, str, dict[str, Any]]] = []
+        real = router.execute_stage
+
+        async def _spy(
+            stage: StageConfig, stage_name: str, **kwargs: Any
+        ) -> StageResult:
+            seen.append((stage, stage_name, kwargs))
+            return await real(stage, stage_name, **kwargs)
+
+        monkeypatch.setattr(router, "execute_stage", _spy)
+
+        await router.execute_for_stage("demo", expects_json=True, topic="x")
+
+        (stage, stage_name, kwargs) = seen[0]
+        assert stage is config.get_stage("demo")
+        assert stage_name == "demo"
+        assert kwargs["expects_json"] is True
+        assert kwargs["topic"] == "x"
+
+    async def test_a_template_variable_named_stage_name_reaches_the_prompt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``stage_name`` is positional, so it cannot eat a render variable.
+
+        Were it keyword-only, a prompt whose template has a ``stage_name``
+        placeholder would raise ``TypeError`` on a duplicate argument instead
+        of rendering.
+        """
+        rendered: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "course_supporter.llm.stage_router.load_prompt",
+            lambda prompt_ref, *, base_path=None: _RecordingPrompt(rendered),
+        )
+        provider = _ok_provider()
+        router = StageRouter(_config(), {"anthropic": provider}, registry=_registry())
+        stage = StageConfig(
+            prompt_ref="prompts/example/v1.md",
+            ladder=_ladder(("anthropic", "claude-x")),
+        )
+
+        await router.execute_stage(stage, "safety", stage_name="from-the-template")
+
+        assert rendered == [{"stage_name": "from-the-template"}]
+
+
+class _RecordingPrompt:
+    """Prompt stand-in that records the render context it was given."""
+
+    def __init__(self, sink: list[dict[str, Any]]) -> None:
+        self._sink = sink
+
+    def content_hash(self) -> str:
+        return "hash"
+
+    def render(self, **context: Any) -> StagePrompt:
+        self._sink.append(context)
+        return StagePrompt(system="sys-template", user="user-template")
+
+
 class TestPersistFailureDoesNotMask:
     """Commit (g) review fix: an exception inside ``_persist`` must
     not mask the original LLM exception that triggered the

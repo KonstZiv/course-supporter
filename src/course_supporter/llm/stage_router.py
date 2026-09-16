@@ -79,7 +79,7 @@ from course_supporter.llm.input_hash import (
     canonical_attempt_input,
     hash_attempt_input,
 )
-from course_supporter.llm.ladder_config import LadderConfig, LadderEntry
+from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
 from course_supporter.llm.registry import ModelRegistryConfig
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
@@ -260,7 +260,62 @@ class StageRouter:
             LadderExhaustedError: if every ladder entry failed.
         """
         stage = self._ladder_config.get_stage(stage_name)
+        return await self.execute_stage(
+            stage,
+            stage_name,
+            response_validator=response_validator,
+            contents=contents,
+            expects_json=expects_json,
+            **render_context,
+        )
 
+    async def execute_stage(
+        self,
+        stage: StageConfig,
+        stage_name: str,
+        /,
+        *,
+        response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
+        expects_json: bool = False,
+        **render_context: Any,
+    ) -> StageResult:
+        """Execute the LLM call ladder for a stage description the caller holds.
+
+        The ladder walk itself, with the stage handed in rather than looked up
+        by name. :meth:`execute_for_stage` is the by-name entry and resolves the
+        name against ``ladders_*.yaml`` before delegating here, so a caller that
+        builds a :class:`StageConfig` from somewhere else — the rebuilt Mentor's
+        submission paths (KD16, ``config/submission_paths.yaml``) — runs through
+        exactly the same router without its stage having to live in the ladder
+        files.
+
+        ``stage_name`` is what the register rows are tagged with (
+        ``ExternalServiceCall.action``) and what the observability line reports.
+        Both it and ``stage`` are positional-ONLY: a prompt whose template has a
+        ``stage`` or ``stage_name`` placeholder must still be able to pass it
+        through ``**render_context``, and a plain positional parameter would
+        collide with it by name. (The by-name entry above predates this and
+        keeps ``stage_name`` as an ordinary parameter — changing it there would
+        be a signature change for twenty-one call sites.)
+
+        Args:
+            stage: The stage definition to execute — prompt reference, ladder,
+                capability requirements, input-budget ratio, output recording.
+            stage_name: The name this execution is recorded under.
+            response_validator: As on :meth:`execute_for_stage`.
+            contents: As on :meth:`execute_for_stage`.
+            expects_json: As on :meth:`execute_for_stage`.
+            **render_context: Variables for the prompt template.
+
+        Returns:
+            :class:`StageResult` with the winning provider's content.
+
+        Raises:
+            FileNotFoundError: if the stage's prompt file is missing.
+            jinja2.UndefinedError: if a template variable is missing.
+            LadderExhaustedError: if every ladder entry failed.
+        """
         # KD-1.2-H Variant A — observability log line at the start of
         # every stage execution. Correlates with caller-side logs (e.g.
         # ``homework_safety_check_executing``) via structlog's bound

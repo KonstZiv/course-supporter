@@ -11,8 +11,9 @@ Interface:
     An executor is ``async (StageContext) -> StageOutcome``. It receives the
     stage's own description from ``config/submission_paths.yaml`` — ladder,
     ceilings, prompt, limits — and returns either "carry on" or "the path ends
-    here, in this state, for this reason". It never writes to the database and
-    never decides what happens next; the body does both.
+    here, in this state, for this reason". It writes its own verdict and nothing
+    else: the submission's state and the run's checkpoint are the body's, and
+    what happens next is the body's decision, never the executor's.
 
     :func:`register_stage_executor` adds one under a name,
     :func:`get_stage_executor` resolves one, and
@@ -65,9 +66,11 @@ ATTEMPT_CLASSIFIER = "attempt_classifier"
 class StageContext:
     """Everything an executor is given, and nothing it is not.
 
-    No job id and no repository: an executor decides, it does not record. What
-    it decided is written by the body, in one place, so the checkpoint and the
-    submission's state cannot be written from two.
+    No job id: an executor records its OWN verdict — the safety result, the
+    classifier's verdict — because that trace belongs to the stage that produced
+    it and to nothing else. What it must NOT touch is the submission's state or
+    the run's checkpoint: those say where the whole path stands, and the body
+    writes them in one place so they cannot be written from two.
     """
 
     session: AsyncSession

@@ -234,6 +234,17 @@ async def _run_path(
                 session, hw_repo, submission_id, job_id, checkpoint, answer, log=log
             )
             return
+        if submission.status == "awaiting_funds":
+            # A hold is a state the revision has to LEAVE before it can reach
+            # any other. `awaiting_funds` leads only to `received` or `failed`,
+            # so a continuation that walked straight on would run every stage,
+            # pay for every stage, and then be refused its own result at the
+            # finish — the submission stranded on the hold for good, because the
+            # startup pass deliberately never touches one. The edge back to
+            # `received` exists for exactly this moment: take it first, before
+            # anything is written or spent.
+            await hw_repo.update_status(submission_id, "received")
+            await session.commit()
         await save_checkpoint(session, job_id, checkpoint, current_stage=None)
 
         # ── The stages of the path, one after another ──
@@ -549,7 +560,11 @@ async def _hold_for_funds(
     *,
     log: Any,
 ) -> None:
-    """The port refused: hold the revision, having spent nothing."""
+    """The port refused: hold the revision, having spent nothing.
+
+    The hold is lifted by the continuation, not from here: a new job asks the
+    port again and the body writes ``received`` before it runs anything.
+    """
     from course_supporter.homework.path_checkpoint import FreezeReason
 
     held = checkpoint.frozen(

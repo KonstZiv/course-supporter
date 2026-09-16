@@ -126,6 +126,11 @@ async def resume_after_top_up(
     event before the thing that raises it exists, and the seam between them is
     one function rather than a change to the body.
 
+    What lifts the hold is NOT this function: it makes the job, and the body of
+    the path takes the revision out of ``awaiting_funds`` once the port has
+    allowed it — before a stage runs, because every other status a run writes is
+    unreachable from a hold.
+
     ``False`` when the revision is not held for funds at all, or already has a
     job in flight.
     """

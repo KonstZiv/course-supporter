@@ -12,11 +12,13 @@ from __future__ import annotations
 import pytest
 
 from course_supporter.homework.path_checkpoint import (
+    FREEZE_REASON_FOR_LADDER_STOP,
     FreezeReason,
     PathCheckpoint,
     StageState,
 )
 from course_supporter.homework.path_config import PathKey, SubmissionState
+from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
 
 _KEY = PathKey(AssignmentType.TASK, SubmissionState.FIRST)
@@ -125,3 +127,27 @@ class TestFirstUnfinished:
         cp = PathCheckpoint.started(_KEY, ["a", "b"])
 
         assert cp.first_unfinished(["b", "a"]) == "b"
+
+
+class TestFreezeReasonForLadderStop:
+    """Every way a ladder can end has a decided meaning for the student."""
+
+    def test_the_mapping_is_total(self) -> None:
+        assert set(FREEZE_REASON_FOR_LADDER_STOP) == set(LadderStop)
+
+    @pytest.mark.parametrize(
+        ("stop", "reason"),
+        [
+            (LadderStop.EXHAUSTED, FreezeReason.PROVIDER_UNAVAILABLE),
+            (LadderStop.OUTPUT_CEILING, FreezeReason.OUTPUT_CEILING),
+            (LadderStop.MONEY_CEILING, FreezeReason.STAGE_MONEY_CEILING),
+        ],
+    )
+    def test_each_ending_keeps_its_own_meaning(
+        self, stop: LadderStop, reason: FreezeReason
+    ) -> None:
+        """Named one by one: only the first of the three is worth retrying."""
+        assert FREEZE_REASON_FOR_LADDER_STOP[stop] is reason
+
+    def test_the_three_endings_do_not_collapse(self) -> None:
+        assert len(set(FREEZE_REASON_FOR_LADDER_STOP.values())) == 3

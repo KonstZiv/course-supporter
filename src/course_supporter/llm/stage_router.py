@@ -72,6 +72,7 @@ from course_supporter.call_outcome import CallOutcome, SkipReason
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
+    LadderStop,
     StructuralRetryError,
 )
 from course_supporter.llm.finish_reason import FinishReason
@@ -195,6 +196,53 @@ def _attempt_outcome(
     return CallOutcome.SUCCESS
 
 
+@dataclass(frozen=True, slots=True)
+class StageExecution:
+    """How a caller wants a stage executed, when it is not a ladder stage.
+
+    One value instead of four parameters, so a function that today calls the
+    router by name grows exactly ONE optional argument to serve the rebuilt
+    Mentor's path as well — and its existing callers see no change at all.
+
+    ``None`` in that argument keeps a function on its own ladder stage; a
+    :class:`StageExecution` sends the same work through
+    :meth:`StageRouter.execute_stage` with the path's stage description, its
+    name, and its two limits.
+
+    Attributes:
+        stage: The stage definition to execute.
+        stage_name: The name the call is recorded under.
+        stop_on_output_ceiling: See :meth:`StageRouter.execute_stage`.
+        money_ceiling_usd: See :meth:`StageRouter.execute_stage`.
+    """
+
+    stage: StageConfig
+    stage_name: str
+    stop_on_output_ceiling: bool = False
+    money_ceiling_usd: float | None = None
+
+    async def run(
+        self,
+        router: StageRouter,
+        *,
+        response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
+        expects_json: bool = False,
+        **render_context: Any,
+    ) -> StageResult:
+        """Execute this stage on ``router``, passing the caller's own arguments."""
+        return await router.execute_stage(
+            self.stage,
+            self.stage_name,
+            response_validator=response_validator,
+            contents=contents,
+            expects_json=expects_json,
+            stop_on_output_ceiling=self.stop_on_output_ceiling,
+            money_ceiling_usd=self.money_ceiling_usd,
+            **render_context,
+        )
+
+
 class StageRouter:
     """KD16 router. Resolves a stage name to a fallback ladder.
 
@@ -305,6 +353,7 @@ class StageRouter:
         contents: list[bytes] | None = None,
         expects_json: bool = False,
         stop_on_output_ceiling: bool = False,
+        money_ceiling_usd: float | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a stage description the caller holds.
@@ -343,6 +392,22 @@ class StageRouter:
                 keeps the KD16 table's behaviour: an empty response falls back
                 immediately. Used by the rebuilt Mentor's path stages
                 (mentor-rebuild task 03).
+            money_ceiling_usd: What the stage may spend, in dollars. A rung
+                whose single attempt is estimated to cost more than what is left
+                of it is skipped WITHOUT a call, with a skip trace naming the
+                money ceiling — the money twin of the input-budget rule beside
+                it, and applied in the same place for the same reason: a rung
+                that cannot be paid for should not be discovered by paying. When
+                every rung is skipped this way the ladder ends as
+                ``LadderStop.MONEY_CEILING`` and NOTHING was called. ``None`` —
+                the default, and what :meth:`execute_for_stage` always passes —
+                means the stage has no money ceiling and no rung is judged
+                against one, exactly as before this task.
+
+                What is "left" is reduced by the ESTIMATE of each attempt the
+                walk makes, not by what it turned out to cost: admission and
+                spend are then judged by one yardstick, and a failed call — the
+                very case that leads to a second rung — reports no cost at all.
             **render_context: Variables for the prompt template.
 
         Returns:
@@ -388,7 +453,8 @@ class StageRouter:
 
         attempts: list[tuple[str, str, str]] = []
         total_attempt_count = 0
-        stopped_at_ceiling = False
+        stop = LadderStop.EXHAUSTED
+        money_left = money_ceiling_usd
 
         for entry in stage.ladder:
             provider = self._providers.get(entry.provider)
@@ -457,6 +523,32 @@ class StageRouter:
                     )
                     continue
 
+            # Money ceiling of the stage — the twin of the input-budget rule
+            # above, and deliberately after it: a rung that cannot hold the
+            # input is inadmissible whatever it costs, and saying so first keeps
+            # the skip reasons from competing for the same rung.
+            attempt_cost: float | None = None
+            if money_left is not None:
+                attempt_cost = self._attempt_cost_estimate(stage, entry, prompt)
+                if attempt_cost is not None and attempt_cost > money_left:
+                    attempts.append(
+                        (
+                            entry.provider,
+                            entry.model,
+                            f"money ceiling exceeded: one attempt is about "
+                            f"${attempt_cost:.4f}, ${money_left:.4f} left of "
+                            f"the stage ceiling",
+                        )
+                    )
+                    await self._record_trace(
+                        record,
+                        entry,
+                        CallOutcome.SKIPPED,
+                        SkipReason.MONEY_CEILING_EXCEEDED,
+                    )
+                    stop = LadderStop.MONEY_CEILING
+                    continue
+
             request = self._build_request(
                 prompt, entry, stage_name, contents=contents, expects_json=expects_json
             )
@@ -464,6 +556,11 @@ class StageRouter:
                 provider, entry, request, record, response_validator
             )
             total_attempt_count += attempt.attempts_used
+            if money_left is not None and attempt_cost is not None:
+                money_left -= attempt_cost
+            # A rung was actually called, so "nothing was affordable" is no
+            # longer what happened, whatever an earlier rung was skipped for.
+            stop = LadderStop.EXHAUSTED
 
             if attempt.response is not None:
                 return StageResult(
@@ -484,14 +581,40 @@ class StageRouter:
                 # stage means (mentor-rebuild task 03; KD16 note on path
                 # stages). Off by default: every by-name caller keeps
                 # descending exactly as before.
-                stopped_at_ceiling = True
+                stop = LadderStop.OUTPUT_CEILING
                 break
 
-        raise LadderExhaustedError(
-            stage_name, attempts, stopped_at_output_ceiling=stopped_at_ceiling
-        )
+        raise LadderExhaustedError(stage_name, attempts, stop=stop)
 
     # ── Private helpers ─────────────────────────────────────────
+
+    def _attempt_cost_estimate(
+        self, stage: StageConfig, entry: LadderEntry, prompt: StagePrompt
+    ) -> float | None:
+        """What one attempt on this rung would cost, in dollars, or ``None``.
+
+        ``None`` means "cannot be judged" — the model is not in the registry or
+        names no price — and the caller then lets the rung stand. The startup
+        checks refuse both for any configured rung (a rung without a named price
+        is inadmissible, mentor-rebuild task 01), so this is the
+        unvalidated-config fallback rather than a path production takes; letting
+        an unjudgeable rung through keeps the money rule from silently becoming
+        a "skip everything" rule when the registry is incomplete.
+
+        The output side is what the rung is allowed to produce, not what it
+        will: the pin if the rung has one, else the stage's ceiling from the
+        registry. That is the same number :meth:`_build_request` puts on the
+        wire as ``max_tokens``, so the estimate prices the request that would
+        actually be sent.
+        """
+        model = self._registry.models.get(entry.model)
+        if model is None:
+            return None
+        tokens_in = estimate_tokens(prompt.user or "", prompt.system)
+        tokens_out = entry.max_output_tokens or model.max_output_tokens
+        if tokens_out is None:
+            return None
+        return model.estimate_cost(tokens_in, tokens_out)
 
     def _build_request(
         self,

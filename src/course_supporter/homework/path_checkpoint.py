@@ -48,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
 
 from course_supporter.homework.path_config import PathKey, SubmissionState
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
+from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.job_repository import JobRepository
 
@@ -105,6 +106,31 @@ class FreezeReason(StrEnum):
 
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     """Every rung failed for reasons that may pass — worth retrying."""
+
+
+FREEZE_REASON_FOR_LADDER_STOP: Final[dict[LadderStop, FreezeReason]] = {
+    LadderStop.EXHAUSTED: FreezeReason.PROVIDER_UNAVAILABLE,
+    LadderStop.OUTPUT_CEILING: FreezeReason.OUTPUT_CEILING,
+    LadderStop.MONEY_CEILING: FreezeReason.STAGE_MONEY_CEILING,
+}
+"""How a ladder's ending becomes the reason a revision is held.
+
+Total by construction and guarded below: a new way for a ladder to end without
+a decision about what it means for the student would otherwise be discovered by
+a ``KeyError`` in the middle of someone's submission.
+
+The three are not interchangeable: only ``EXHAUSTED`` is worth another attempt,
+which is why the body reads this mapping rather than the exception's message.
+"""
+
+_unmapped = set(LadderStop) - set(FREEZE_REASON_FOR_LADDER_STOP)
+if _unmapped:  # pragma: no cover — test-locked
+    msg = (
+        f"LadderStop members without a freeze reason: "
+        f"{sorted(s.value for s in _unmapped)}. Decide what each new ending "
+        f"means for the student before the path can meet it."
+    )
+    raise RuntimeError(msg)
 
 
 class PathCheckpoint(BaseModel):

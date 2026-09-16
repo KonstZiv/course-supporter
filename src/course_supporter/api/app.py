@@ -51,6 +51,7 @@ from course_supporter.homework.path_config import (
     get_path_config,
     validate_path_config,
 )
+from course_supporter.homework.path_stages import validate_stage_executors
 from course_supporter.llm.factory import create_providers
 from course_supporter.llm.ladder_config import (
     load_ladder_config,
@@ -110,11 +111,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # The rebuilt Mentor's submission paths are checked beside the ladders: a
     # hole or an inadmissible rung stops the boot instead of waiting for the
     # first submission routed through them (mentor-rebuild 02).
+    path_config = get_path_config(settings.submission_paths_config_path)
     validate_path_config(
-        get_path_config(settings.submission_paths_config_path),
+        path_config,
         registry,
         ladder_stage_names=ladder_config.stages.keys(),
     )
+    validate_stage_executors(path_config.stages)
     stage_router_providers = create_providers(settings)
     app.state.stage_router = StageRouter(
         ladder_config=ladder_config,

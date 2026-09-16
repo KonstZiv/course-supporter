@@ -9,6 +9,7 @@ types that drive that classification.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 
 class ErrorCategory(StrEnum):
@@ -50,44 +51,65 @@ class StructuralRetryError(Exception):
         super().__init__(feedback)
 
 
+class LadderStop(StrEnum):
+    """Why a stage's ladder ended without a result — exactly one of three.
+
+    A caller that has to react needs to tell them apart, and one closed
+    vocabulary says so better than a set of flags: the ladder ends once, for one
+    reason, and two flags could be true at the same time while nothing in the
+    world could be.
+
+    Reading the difference out of the last attempt's ``reason`` text would make
+    a decision rest on a message.
+    """
+
+    EXHAUSTED = "exhausted"
+    """Every rung was tried and every one failed. Worth retrying — a provider
+    may be having a bad minute, and the next attempt meets a different one."""
+
+    OUTPUT_CEILING = "output_ceiling"
+    """A rung answered nothing with its output ceiling spent, and the walk
+    stopped rather than buy a second empty answer (mentor-rebuild task 03).
+    Not worth retrying: the next attempt meets the same ceiling with the same
+    input. What has to change is the configuration."""
+
+    MONEY_CEILING = "money_ceiling"
+    """No rung could make a single attempt within what was left of the stage's
+    money ceiling, so NOTHING was called. Not worth retrying for the same
+    reason, and cheaper: nothing was spent finding out."""
+
+
 class LadderExhaustedError(Exception):
     """Raised when a stage's ladder ended without a result.
-
-    Two different endings, and a caller that has to react needs to tell them
-    apart: every rung was tried and every one failed, or the walk was stopped
-    early because a rung spent its whole output ceiling on nothing
-    (``stop_on_output_ceiling``, mentor-rebuild task 03). The first is worth
-    retrying — a provider may be having a bad minute; the second is not, because
-    the next attempt would meet the same ceiling with the same input, and what
-    has to change is the configuration. Reading that difference out of the last
-    attempt's ``reason`` text would make a decision rest on a message.
 
     Attributes:
         stage_name: Stage name as declared in ``ladders_*.yaml``.
         attempts: ``(provider, model, reason)`` triples in the order
             they were attempted.
-        stopped_at_output_ceiling: The walk stopped early, with rungs left
-            untried, because the last attempt came back empty at the output
-            ceiling. ``False`` on every ordinary exhaustion.
+        stop: Which of the three endings this was (:class:`LadderStop`).
+            ``EXHAUSTED`` unless a caller asked for one of the early stops.
     """
+
+    _ENDING: ClassVar[dict[LadderStop, str]] = {
+        LadderStop.EXHAUSTED: "exhausted",
+        LadderStop.OUTPUT_CEILING: "stopped at the output ceiling",
+        LadderStop.MONEY_CEILING: "stopped at the money ceiling",
+    }
 
     def __init__(
         self,
         stage_name: str,
         attempts: list[tuple[str, str, str]],
         *,
-        stopped_at_output_ceiling: bool = False,
+        stop: LadderStop = LadderStop.EXHAUSTED,
     ) -> None:
         self.stage_name = stage_name
         self.attempts = attempts
-        self.stopped_at_output_ceiling = stopped_at_output_ceiling
+        self.stop = stop
         details = "; ".join(f"{p}/{m}: {r}" for p, m, r in attempts)
-        ending = (
-            "stopped at the output ceiling"
-            if stopped_at_output_ceiling
-            else "exhausted"
+        super().__init__(
+            f"Ladder {self._ENDING[stop]} for stage '{stage_name}': {details}"
         )
-        super().__init__(f"Ladder {ending} for stage '{stage_name}': {details}")
 
 
 class InvalidPromptError(Exception):

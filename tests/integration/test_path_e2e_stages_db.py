@@ -668,3 +668,40 @@ class TestASpentRetryBudgetEndsTheSubmission:
         assert [outcome for _, outcome in port.released] == [SubmissionOutcome.FAILED]
         assert router.count("safety") == 1
         assert router.count("attempt_classifier") == 3
+
+
+class TestARefusedPortHoldsTheRevision:
+    """Criterion 7: the only shipped port always allows, so this one refuses."""
+
+    async def test_held_before_a_single_call_and_the_job_ends_normally(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        port = _PortDouble(refuse_first_n=1)
+
+        await _run(session_factory, router, port, seed, _answers(tmp_path))
+
+        # Not one stage was asked to run: the refusal comes before anything is
+        # paid for, which is the whole point of asking first.
+        assert router.calls == []
+        assert port.accounted == []
+        assert port.released == []
+        assert len(port.reserved) == 1
+
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "awaiting_funds"
+        checkpoint = await _checkpoint(session_factory, seed["job_id"])
+        assert checkpoint.frozen_reason is FreezeReason.AWAITING_FUNDS
+        assert checkpoint.frozen_stage == "safety"
+        assert checkpoint.stages == {
+            "safety": StageState.PENDING,
+            "attempt_classifier": StageState.PENDING,
+        }
+
+        # The job in the queue finished — a hold ends its job, because the
+        # database allows a revision only one in flight at a time.
+        job = await _job(session_factory, seed["job_id"])
+        assert job.status == "complete"

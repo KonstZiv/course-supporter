@@ -302,11 +302,10 @@ class TestTodaysMentorIsNotDisturbed:
                 return_value=_config(test_on_new_path=False),
             ),
             patch("course_supporter.homework.path_runner._run_path", new=runner),
-            patch(
-                "course_supporter.api.tasks.run_stage2_safety_check",
-                new=todays_safety,
-                create=True,
-            ),
+            # ONE patch, at the only place the name lives: ``api/tasks`` imports
+            # it inside the function body, so there is no module attribute there
+            # to patch — a second patch on that path would create an attribute
+            # nobody reads and quietly weaken the proof below.
             patch(
                 "course_supporter.security.stage2.run_stage2_safety_check",
                 new=todays_safety,

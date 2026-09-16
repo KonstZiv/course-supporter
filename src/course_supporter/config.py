@@ -122,6 +122,17 @@ class Settings(BaseSettings):
     worker_max_jobs: int = 1
     worker_job_timeout: int = 21600
     worker_max_tries: int = 3
+    # How many times the rebuilt Mentor's path re-queues a submission whose
+    # stage ran out of rungs for reasons that may pass (mentor-rebuild task 03).
+    # Its own number, not ``worker_max_tries``: that budget is shared with every
+    # job in the system and with the seam's missing-job policy, so a path that
+    # wants a limit of its own has to keep its own count — in the run's
+    # checkpoint, where a continuation can read it.
+    submission_path_max_retries: int = 2
+    # Seconds before a re-queued submission is picked up again. Long enough for
+    # a provider's bad minute to pass, short enough that a student is not left
+    # watching a spinner.
+    submission_path_retry_defer_s: int = 60
     worker_heavy_window_start: time = time(2, 0)
     worker_heavy_window_end: time = time(6, 30)
     worker_heavy_window_enabled: bool = False

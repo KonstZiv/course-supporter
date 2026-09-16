@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes._portal_shared import (
+    curated_presentation,
     curated_verdict,
     material_label,
     role_visible_to_student,
@@ -150,6 +151,9 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
         )
     return PortalSubmissionOverlay(
         submission_status=_overlay_status(latest.status),
+        # The same answer the attempts list gives for this very attempt: one
+        # source, so the tree and the list cannot phrase it differently.
+        presentation=curated_presentation(latest),
         last=last,
         best=best,
     )

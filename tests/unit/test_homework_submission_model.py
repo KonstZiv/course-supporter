@@ -338,6 +338,28 @@ class TestHomeworkStatusEnum:
         """failed can transition back to received (retry)."""
         assert "received" in HOMEWORK_TRANSITIONS["failed"]
 
+    def test_awaiting_funds_hangs_off_received_and_leads_back(self) -> None:
+        """The hold's three edges (mentor-rebuild task 03).
+
+        The totality tests above would still pass if any single one of these
+        were missing, so they are named here: the port is asked after the free
+        doors and before the first paid call, when the submission has reached no
+        milestone yet, and a top-up re-activates it the way a failure is
+        re-activated.
+        """
+        assert "awaiting_funds" in HOMEWORK_TRANSITIONS["received"]
+        assert HOMEWORK_TRANSITIONS["awaiting_funds"] == {"received", "failed"}
+
+    def test_awaiting_funds_is_not_reachable_from_a_milestone(self) -> None:
+        """Only the pre-payment point can put a submission on hold.
+
+        A submission that has passed safety has already been paid for, so a
+        refusal there would be a refund question, not a hold — and the port's
+        later two operations return nothing to refuse with.
+        """
+        for source in ("safety_ok", "sanity_ok", "reviewing", "completed"):
+            assert "awaiting_funds" not in HOMEWORK_TRANSITIONS[source]
+
     def test_any_active_state_can_fail(self) -> None:
         """All non-terminal states can transition to failed."""
         excluded = {

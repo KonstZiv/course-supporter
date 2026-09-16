@@ -63,6 +63,9 @@ async def _reconcile_orphaned_in_flight_jobs(
     * ``not_found`` / ``complete`` on every queue (or no ``arq_job_id``) → ARQ has
       no live handle → transition the Job to ``failed`` so the single-worker queue
       is unblocked and the stranded job becomes visible instead of a spinner.
+      ONE exception (mentor-rebuild task 03): a homework job carrying a
+      submission-path checkpoint is re-dispatched instead, because it can be
+      continued from where it stopped rather than started again.
 
     **Per-queue liveness (arq/jobs.py::Job.status):** ``complete`` /
     ``in_progress`` are global keys, but ``queued`` / ``deferred`` come from a
@@ -80,6 +83,7 @@ async def _reconcile_orphaned_in_flight_jobs(
     from arq.jobs import Job as ArqJob
     from arq.jobs import JobStatus
 
+    from course_supporter.homework.path_continuation import resume_orphaned_path_job
     from course_supporter.storage.job_repository import JobRepository
 
     log = structlog.get_logger()
@@ -108,6 +112,14 @@ async def _reconcile_orphaned_in_flight_jobs(
             if job.queued_at is not None and now - job.queued_at < grace:
                 continue  # mid-enqueue window — NULL arq_job_id is transient
             if job.arq_job_id is not None and await _arq_is_live(job.arq_job_id):
+                continue
+            # An orphaned submission-path job is put back in the queue instead
+            # of failed: it has work behind it and a record of where it stopped,
+            # so failing it would throw away what a student already paid for
+            # (mentor-rebuild task 03). Everything else — every job of today's
+            # Mentor, of the ingest, of any other pipeline — carries no
+            # checkpoint and keeps the behaviour below, unchanged.
+            if await resume_orphaned_path_job(job, redis, session):
                 continue
             # No arq_job_id, or ARQ reports not_found / complete on every queue →
             # orphaned. The message names the prior status so an operator can tell
@@ -147,9 +159,10 @@ async def startup(ctx: WorkerCtx) -> None:
     )
 
     from course_supporter.homework.path_config import (
-        load_path_config,
+        get_path_config,
         validate_path_config,
     )
+    from course_supporter.homework.path_stages import validate_stage_executors
     from course_supporter.llm.factory import create_providers
     from course_supporter.llm.ladder_config import (
         load_ladder_config,
@@ -194,7 +207,15 @@ async def startup(ctx: WorkerCtx) -> None:
     # hole or an inadmissible rung stops the worker before it takes a job
     # instead of waiting for the first submission routed through them
     # (mentor-rebuild 02).
-    validate_path_config(load_path_config(s.submission_paths_config_path), registry)
+    path_config = get_path_config(s.submission_paths_config_path)
+    validate_path_config(
+        path_config,
+        registry,
+        ladder_stage_names=ladder_config.stages.keys(),
+    )
+    # A described stage nobody can run is the same kind of hole as a missing
+    # field, and stops the worker for the same reason (mentor-rebuild task 03).
+    validate_stage_executors(path_config.stages)
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(
         ladder_config=ladder_config,
@@ -231,6 +252,18 @@ async def startup(ctx: WorkerCtx) -> None:
             await _reconcile_orphaned_in_flight_jobs(session_factory, redis)
         except Exception:
             log.exception("orphaned_in_flight_jobs_reconcile_failed")
+        # A second, separate pass: an orphan is a job nobody is running, this is
+        # a REVISION nobody is running — held by a limit an edit of the path
+        # configuration may just have raised (mentor-rebuild task 03). Guarded
+        # like the sweep above: neither may stop the worker from starting.
+        try:
+            from course_supporter.homework.path_continuation import (
+                sweep_frozen_revisions,
+            )
+
+            await sweep_frozen_revisions(session_factory, redis)
+        except Exception:
+            log.exception("frozen_revisions_sweep_failed")
 
     log.info("worker_started", redis_url=s.redis_url, max_jobs=s.worker_max_jobs)
 

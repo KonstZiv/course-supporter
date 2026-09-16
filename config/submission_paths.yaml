@@ -18,6 +18,14 @@ stages:
   # are calibrated separately while today's Mentor lives).
   safety:
     deterministic: true
+    # Router-facing fields, copied from `safety_check` in ladders_mentor.yaml
+    # together with the ladder (DD-SP-AM: two calibrated copies while today's
+    # Mentor lives). The name differs on purpose — a path stage may not reuse a
+    # ladder stage's name, because the call register keys a call's cost on it.
+    prompt_ref: "prompts/safety_check/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    record_output: false
     ceilings:
       tool_steps: 0
       # Output is a short structured verdict, so 8192 is ample; the third rung
@@ -46,6 +54,11 @@ stages:
   # ladders_mentor.yaml (DD-SP-AM).
   attempt_classifier:
     deterministic: true
+    # Copied from `sanity_check` in ladders_mentor.yaml, as above.
+    prompt_ref: "prompts/sanity_check/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    record_output: false
     ceilings:
       tool_steps: 0
       output_tokens: 8192

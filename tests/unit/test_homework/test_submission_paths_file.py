@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from course_supporter.config import get_settings
 from course_supporter.homework.path_config import (
     PathConfig,
     PathKey,
@@ -16,6 +17,7 @@ from course_supporter.homework.path_config import (
     path_ceiling_estimate,
     validate_path_config,
 )
+from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.models.source import AssignmentType
 
@@ -45,7 +47,28 @@ class TestCheckedInPaths:
     def test_file_passes_the_startup_checks(
         self, config: PathConfig, registry: ModelRegistryConfig
     ) -> None:
-        validate_path_config(config, registry)
+        # Exactly what the app and the worker run at boot: the shipped ladders
+        # supply the names a path stage may not reuse, and the prompt files are
+        # resolved from the repository root, as in production.
+        validate_path_config(
+            config,
+            registry,
+            ladder_stage_names=load_ladder_config(
+                get_settings().ladders_dir
+            ).stages.keys(),
+        )
+
+    def test_no_stage_name_repeats_a_ladder_stage(self, config: PathConfig) -> None:
+        """Shared names would make the register sum two stages' costs as one."""
+        ladder_names = set(load_ladder_config(get_settings().ladders_dir).stages)
+
+        assert set(config.stages) & ladder_names == set()
+
+    def test_every_stage_names_a_prompt_that_exists(self, config: PathConfig) -> None:
+        for name, stage in config.stages.items():
+            assert Path(stage.prompt_ref).is_file(), (
+                f"stage {name!r} names a prompt that is not there: {stage.prompt_ref}"
+            )
 
     def test_every_type_is_served_by_todays_mentor(self, config: PathConfig) -> None:
         assert {t: d.served_by for t, d in config.task_types.items()} == {

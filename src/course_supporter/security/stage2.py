@@ -61,7 +61,7 @@ from course_supporter.security.schemas import SafetyResult
 from course_supporter.service_logging import get_current_job_id
 
 if TYPE_CHECKING:
-    from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.llm.stage_router import StageExecution, StageRouter
     from course_supporter.security.schemas import CourseContext
 
 logger = structlog.get_logger(__name__)
@@ -80,6 +80,7 @@ async def run_stage2_safety_check(
     router: StageRouter,
     course_context: CourseContext | None = None,
     content_kind: Literal["homework", "authored"] = "homework",
+    execution: StageExecution | None = None,
 ) -> SafetyResult:
     """Execute the ``safety_check`` stage and parse the verdict.
 
@@ -161,14 +162,23 @@ async def run_stage2_safety_check(
     # branding / external links are NOT violations; off_topic high-bar);
     # homework keeps the default classifier. Verdict shape + parsing are
     # identical across both — only the prompt body differs (Phase 2.3 hotfix).
+    # ``execution`` (mentor-rebuild task 03) is the one additive argument that
+    # lets the rebuilt Mentor's path run this very check on ITS own stage
+    # description — own ladder, own ceilings, own name in the register — without
+    # a second copy of the prompt-building and parsing below. Absent, the
+    # function does exactly what it did before: its own ladder stage, by name.
     stage_name = (
         "safety_check_authored" if content_kind == "authored" else "safety_check"
     )
-    result = await router.execute_for_stage(
-        stage_name,
-        expects_json=True,
-        **render_context,
-    )
+    if execution is not None:
+        stage_name = execution.stage_name
+        result = await execution.run(router, expects_json=True, **render_context)
+    else:
+        result = await router.execute_for_stage(
+            stage_name,
+            expects_json=True,
+            **render_context,
+        )
 
     try:
         parsed = SafetyResult.model_validate_json(result.content)

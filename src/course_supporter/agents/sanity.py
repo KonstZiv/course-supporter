@@ -14,7 +14,7 @@ file), so a submission cannot redefine the gate.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from pydantic import ValidationError
@@ -23,7 +23,7 @@ from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.sanity import SanityClassification
 
 if TYPE_CHECKING:
-    from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.llm.stage_router import StageExecution, StageRouter
 
 logger = structlog.get_logger(__name__)
 
@@ -53,6 +53,7 @@ class SanityAgent:
         task_text: str,
         submission_text: str,
         language: str | None,
+        execution: StageExecution | None = None,
     ) -> SanityClassification:
         """Judge whether the submission looks like an attempt at the task."""
         parsed: dict[str, SanityClassification] = {}
@@ -69,14 +70,28 @@ class SanityAgent:
                 )
             parsed["result"] = result
 
-        await self._stage_router.execute_for_stage(
-            STAGE_SANITY,
-            response_validator=_validator,
-            expects_json=True,
-            task_title=task_title,
-            task_description=task_description,
-            task_text=task_text,
-            submission_text=submission_text,
-            language=language,
-        )
+        # ``execution`` (mentor-rebuild task 03): the rebuilt Mentor's path runs
+        # this classifier on its own stage description, with the same prompt
+        # variables and the same validator. Absent — today's ladder stage.
+        render: dict[str, Any] = {
+            "task_title": task_title,
+            "task_description": task_description,
+            "task_text": task_text,
+            "submission_text": submission_text,
+            "language": language,
+        }
+        if execution is not None:
+            await execution.run(
+                self._stage_router,
+                response_validator=_validator,
+                expects_json=True,
+                **render,
+            )
+        else:
+            await self._stage_router.execute_for_stage(
+                STAGE_SANITY,
+                response_validator=_validator,
+                expects_json=True,
+                **render,
+            )
         return parsed["result"]

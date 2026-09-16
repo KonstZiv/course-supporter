@@ -172,6 +172,11 @@ def _sub(
     sub.score = score
     sub.review_result = review_result
     sub.created_at = datetime.now(UTC)
+    # The overlay now also carries what to SAY about the latest attempt
+    # (mentor-rebuild task 03), and that reads the curated reason — which needs
+    # real values, not the auto-attributes a bare MagicMock hands out.
+    sub.original_filename = "attempt.py"
+    sub.safety_result = None
     return sub
 
 
@@ -319,7 +324,14 @@ class TestPortalMaterialsTree:
             resp = await client.get(_materials_url(root.id))
         assert resp.status_code == 200
         overlay = resp.json()["documents"][0]["overlay"]
-        assert overlay == {"submission_status": "none", "last": None, "best": None}
+        assert overlay == {
+            "submission_status": "none",
+            # No attempts, so there is nothing to say about one either
+            # (mentor-rebuild task 03).
+            "presentation": None,
+            "last": None,
+            "best": None,
+        }
 
     async def test_best_is_max_reviewed_score(self, client: AsyncClient) -> None:
         """best = max(score) among reviewed; latest pending drives status."""
@@ -375,6 +387,46 @@ class TestPortalMaterialsTree:
         assert overlay["submission_status"] == "error"
         assert overlay["last"] == {"score": None, "verdict": None}
         assert overlay["best"] is None
+
+    @pytest.mark.parametrize(
+        ("status", "state", "reason_code"),
+        [
+            ("rejected", "not_opened", None),
+            ("failed", "not_opened", "processing_failed"),
+            ("mismatch", "not_an_attempt", "mismatch"),
+            ("awaiting_funds", "awaiting_funds", "awaiting_funds"),
+            ("reviewing", "in_progress", None),
+            ("delivered", "reviewed", None),
+        ],
+    )
+    async def test_the_tree_carries_the_servers_own_presentation(
+        self,
+        client: AsyncClient,
+        status: str,
+        state: str,
+        reason_code: str | None,
+    ) -> None:
+        """One source, three responses (mentor-rebuild task 03).
+
+        The tree used to know only the coarse bucket, which is why "not an
+        attempt" reached the student as "error". It now carries the same answer
+        the attempts list carries for that very attempt — beside the old bucket,
+        which is untouched (``DD-SP-AS``).
+        """
+        task = _doc(task_type="task")
+        root = _node(documents=[task])
+        attempt = _sub(authored_document_id=task.id, status=status)
+        get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [attempt])
+        with get_by_id, enrolled, subtree, subs, bases:
+            resp = await client.get(_materials_url(root.id))
+
+        overlay = resp.json()["documents"][0]["overlay"]
+        assert overlay["presentation"] == {
+            "state": state,
+            "reason_code": reason_code,
+        }
+        # The old bucket is still there and still says what it always said.
+        assert "submission_status" in overlay
 
 
 class TestPortalMaterialsRoleFilter:

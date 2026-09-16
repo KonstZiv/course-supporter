@@ -201,8 +201,27 @@ class TestWorkerLifecycle:
 
     @pytest.mark.parametrize(
         "field_path",
-        [("ladder",), ("ceilings", "money_usd"), ("deterministic",)],
-        ids=["no-ladder", "no-ceiling", "no-deterministic-flag"],
+        [
+            ("ladder",),
+            ("ceilings", "money_usd"),
+            ("deterministic",),
+            # The four the router needs to execute the stage (task 03). None of
+            # them has a default, so a stage that forgets one stops the boot
+            # instead of borrowing a value nobody chose.
+            ("prompt_ref",),
+            ("requires",),
+            ("input_budget_ratio",),
+            ("record_output",),
+        ],
+        ids=[
+            "no-ladder",
+            "no-ceiling",
+            "no-deterministic-flag",
+            "no-prompt-ref",
+            "no-requires",
+            "no-input-budget-ratio",
+            "no-record-output",
+        ],
     )
     async def test_startup_refuses_a_submission_path_with_a_hole(
         self, tmp_path: Path, field_path: tuple[str, ...]
@@ -321,6 +340,64 @@ class TestReconcileOrphanedActiveJobs:
         assert failed_ids == {not_found.id, complete.id}
         assert repo.update_status.await_count == 2
         session.commit.assert_awaited_once()
+
+    async def test_a_path_job_with_a_checkpoint_is_requeued_not_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Criterion 10: an orphan with work behind it is run again from there.
+
+        The branch is wired INTO the sweep, so the sweep is what this asks:
+        a homework job carrying a submission-path checkpoint leaves the sweep
+        re-dispatched, and never transitions to ``failed``.
+        """
+        from course_supporter.homework.path_checkpoint import PathCheckpoint
+        from course_supporter.homework.path_config import PathKey, SubmissionState
+        from course_supporter.models.source import AssignmentType
+
+        orphan = _fake_active_job("a")
+        orphan.job_type = "homework_processing"
+        orphan.subject_id = uuid.uuid4()
+        orphan.stage_progress = PathCheckpoint.started(
+            PathKey(AssignmentType.TASK, SubmissionState.FIRST), ["safety"]
+        ).to_jsonb()
+        _session, factory, repo, arq_job = _reconcile_harness(
+            [orphan], {"a": JobStatus.not_found}
+        )
+        dispatched = AsyncMock()
+        monkeypatch.setattr(
+            "course_supporter.homework.path_continuation.dispatch_homework",
+            dispatched,
+        )
+
+        with patch(self._JOB_REPO, return_value=repo), patch(self._ARQ_JOB, arq_job):
+            await _reconcile_orphaned_in_flight_jobs(factory, MagicMock())
+
+        dispatched.assert_awaited_once()
+        repo.update_status.assert_not_awaited()
+
+    async def test_an_orphan_without_a_checkpoint_still_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every job of today's Mentor, and of every other pipeline."""
+        orphan = _fake_active_job("a")
+        orphan.job_type = "homework_processing"
+        orphan.subject_id = uuid.uuid4()
+        orphan.stage_progress = None
+        _session, factory, repo, arq_job = _reconcile_harness(
+            [orphan], {"a": JobStatus.not_found}
+        )
+        dispatched = AsyncMock()
+        monkeypatch.setattr(
+            "course_supporter.homework.path_continuation.dispatch_homework",
+            dispatched,
+        )
+
+        with patch(self._JOB_REPO, return_value=repo), patch(self._ARQ_JOB, arq_job):
+            await _reconcile_orphaned_in_flight_jobs(factory, MagicMock())
+
+        dispatched.assert_not_awaited()
+        repo.update_status.assert_awaited_once()
+        assert repo.update_status.await_args.args[1] == "failed"
 
     async def test_missing_arq_job_id_is_reconciled_without_arq_call(self) -> None:
         """A None arq_job_id is treated as orphaned (no ARQ lookup)."""

@@ -105,6 +105,13 @@ def _artificial_file(tmp_path: Path) -> Path:
     def stage(money_usd: float) -> dict[str, Any]:
         return {
             "deterministic": False,
+            # The router-facing fields (task 03). The prompt is a real one —
+            # startup checks that every stage names a prompt it can read, and
+            # this fixture goes through the same startup check.
+            "prompt_ref": "prompts/safety_check/v1.md",
+            "requires": [],
+            "input_budget_ratio": None,
+            "record_output": False,
             "ceilings": {
                 "tool_steps": 0,
                 "money_usd": money_usd,

@@ -29,8 +29,33 @@ logger = structlog.get_logger()
 #   - ``failed``     — processing error (re-activate via ``failed → received``).
 # Safety runs while the status is still ``received`` (it sets ``safety_ok`` only
 # on pass), so ``received`` can go to ``safety_ok`` / ``rejected`` / ``failed``.
+# ``awaiting_funds`` (mentor-rebuild task 03) hangs off ``received`` and leads
+# back to it: the funds port is asked after the free doors and before the first
+# paid call, when the submission has reached no milestone yet, and a top-up
+# re-activates it the way ``failed → received`` re-activates a failure. Its
+# ``failed`` edge is not decorative — a frozen submission can still be broken by
+# something else, and the state machine's rule is that every non-terminal state
+# can fail.
+# The new path (mentor-rebuild task 03) adds two edges OUT of ``received`` and
+# changes none. It walks a stage list it deliberately cannot read — the body
+# knows names, not meanings (architectural invariant 2) — so it never writes the
+# ``safety_ok`` / ``sanity_ok`` milestones, which say WHICH gate was passed. A
+# stage that ends the submission therefore ends it from ``received``, and a path
+# that runs out of stages reaches review from ``received``. Nothing is lost on
+# the surface: all four in-flight statuses are one state to the student ("being
+# checked"), and the finer progress lives in the run's checkpoint.
 HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
-    "received": {"safety_ok", "rejected", "failed"},
+    "received": {
+        "safety_ok",
+        "rejected",
+        "failed",
+        "awaiting_funds",
+        # New path only: a stage decided the submission is off-task …
+        "mismatch",
+        # … or every stage passed and the review may be written.
+        "reviewing",
+    },
+    "awaiting_funds": {"received", "failed"},
     "safety_ok": {"sanity_ok", "mismatch", "failed"},
     "sanity_ok": {"reviewing", "failed"},
     "reviewing": {"completed", "failed"},
@@ -155,6 +180,57 @@ class HomeworkRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def has_reviewed_revision(
+        self,
+        *,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> bool:
+        """Has this student already had a review for this task?
+
+        The question the rebuilt Mentor asks to tell a repeat submission from a
+        first one (mentor-rebuild task 03). "Already had a review" means a
+        revision that reached ``completed`` or ``delivered`` — the same two
+        statuses :meth:`find_duplicate` calls a terminal result, for the same
+        reason: those are the states in which a review was actually written.
+
+        The task anchor is ``authored_document_id`` and nothing else. A new
+        version of the task's text does NOT make the next submission a first one
+        again: the student has seen a review of their work on this task, and
+        that is what the path branches on.
+
+        Everything that did not reach a review — ``rejected``, ``mismatch``,
+        ``failed``, ``awaiting_funds``, anything still in flight — leaves the
+        next submission a first one, so a student whose work was refused at the
+        door meets the classifier again.
+
+        A soft-deleted revision does NOT count. The path would otherwise skip
+        the classifier on the strength of a review that is no longer there, and
+        every other liveness question in the system — the execution seam's
+        skip-if-dead, the curated read-path queries — reads ``deleted_at IS
+        NULL`` the same way (KD3).
+
+        Shape and cost follow :meth:`find_duplicate` minus its hash predicate
+        and plus that filter, and it runs at the same point of the submission,
+        so this adds one indexed lookup to a path that already pays for one.
+        (:meth:`find_duplicate` itself has no soft-delete filter. Whether a
+        deleted submission should keep blocking an identical re-upload is a
+        question about deduplication, not about this one, and it is not changed
+        here.)
+        """
+        stmt = (
+            select(HomeworkSubmission.id)
+            .where(
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                HomeworkSubmission.status.in_({"completed", "delivered"}),
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
 
     async def get_by_id(self, submission_id: uuid.UUID) -> HomeworkSubmission | None:
         """Get a submission by primary key."""

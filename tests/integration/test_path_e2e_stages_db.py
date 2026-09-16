@@ -100,7 +100,7 @@ class _RouterDouble:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         *,
-        script: dict[str, Any] | None = None,
+        script: dict[str, Callable[[], Exception]] | None = None,
         once: bool = False,
         watch: uuid.UUID | None = None,
         content: dict[str, str] | None = None,
@@ -111,7 +111,7 @@ class _RouterDouble:
         # observable while the body is still inside the run.
         self.seen: list[tuple[str, dict[str, Any] | None, str | None]] = []
         self._session_factory = session_factory
-        self._script = dict(script or {})
+        self._script: dict[str, Callable[[], Exception]] = dict(script or {})
         self._once = once
         self._watch = watch
         self._content = {**_CONTENT, **(content or {})}

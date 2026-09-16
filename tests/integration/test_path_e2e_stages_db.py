@@ -22,7 +22,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -50,6 +50,7 @@ from course_supporter.homework.path_config import (
     SubmissionState,
 )
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
+from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.service_logging import _persist
 from course_supporter.storage.orm import (
@@ -120,12 +121,12 @@ class _RouterDouble:
 
     async def execute_stage(
         self,
-        stage: Any,
+        stage: StageConfig,
         stage_name: str,
         /,
         *,
-        response_validator: Any = None,
-        contents: Any = None,
+        response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
         expects_json: bool = False,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,

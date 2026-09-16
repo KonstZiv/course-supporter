@@ -269,6 +269,24 @@ class TestValidation:
             prompt_base_path=tmp_path,
         )
 
+    def test_new_path_type_with_a_partial_description_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Criterion 2: a type on the new path must describe all three states.
+
+        A partial description would sit behind the switch until the day it is
+        flipped, and then a submission in the undescribed state would find no
+        path at the one moment nobody is watching. The boot refuses it instead.
+        """
+        data = _config()
+        data["task_types"]["task"]["served_by"] = "new_path"
+        del data["task_types"]["task"]["paths"]["repeat_with_replies"]
+
+        assert (
+            "Task type 'task' describes some submission states but not "
+            "['repeat_with_replies']"
+        ) in _validation_error(tmp_path, data)
+
     def test_described_path_is_checked_whatever_the_switch(
         self, tmp_path: Path
     ) -> None:

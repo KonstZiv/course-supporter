@@ -164,6 +164,57 @@ class HomeworkRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def has_reviewed_revision(
+        self,
+        *,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+    ) -> bool:
+        """Has this student already had a review for this task?
+
+        The question the rebuilt Mentor asks to tell a repeat submission from a
+        first one (mentor-rebuild task 03). "Already had a review" means a
+        revision that reached ``completed`` or ``delivered`` — the same two
+        statuses :meth:`find_duplicate` calls a terminal result, for the same
+        reason: those are the states in which a review was actually written.
+
+        The task anchor is ``authored_document_id`` and nothing else. A new
+        version of the task's text does NOT make the next submission a first one
+        again: the student has seen a review of their work on this task, and
+        that is what the path branches on.
+
+        Everything that did not reach a review — ``rejected``, ``mismatch``,
+        ``failed``, ``awaiting_funds``, anything still in flight — leaves the
+        next submission a first one, so a student whose work was refused at the
+        door meets the classifier again.
+
+        A soft-deleted revision does NOT count. The path would otherwise skip
+        the classifier on the strength of a review that is no longer there, and
+        every other liveness question in the system — the execution seam's
+        skip-if-dead, the curated read-path queries — reads ``deleted_at IS
+        NULL`` the same way (KD3).
+
+        Shape and cost follow :meth:`find_duplicate` minus its hash predicate
+        and plus that filter, and it runs at the same point of the submission,
+        so this adds one indexed lookup to a path that already pays for one.
+        (:meth:`find_duplicate` itself has no soft-delete filter. Whether a
+        deleted submission should keep blocking an identical re-upload is a
+        question about deduplication, not about this one, and it is not changed
+        here.)
+        """
+        stmt = (
+            select(HomeworkSubmission.id)
+            .where(
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                HomeworkSubmission.status.in_({"completed", "delivered"}),
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
     async def get_by_id(self, submission_id: uuid.UUID) -> HomeworkSubmission | None:
         """Get a submission by primary key."""
         return await self._session.get(HomeworkSubmission, submission_id)

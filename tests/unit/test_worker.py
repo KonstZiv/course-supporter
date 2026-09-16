@@ -201,8 +201,27 @@ class TestWorkerLifecycle:
 
     @pytest.mark.parametrize(
         "field_path",
-        [("ladder",), ("ceilings", "money_usd"), ("deterministic",)],
-        ids=["no-ladder", "no-ceiling", "no-deterministic-flag"],
+        [
+            ("ladder",),
+            ("ceilings", "money_usd"),
+            ("deterministic",),
+            # The four the router needs to execute the stage (task 03). None of
+            # them has a default, so a stage that forgets one stops the boot
+            # instead of borrowing a value nobody chose.
+            ("prompt_ref",),
+            ("requires",),
+            ("input_budget_ratio",),
+            ("record_output",),
+        ],
+        ids=[
+            "no-ladder",
+            "no-ceiling",
+            "no-deterministic-flag",
+            "no-prompt-ref",
+            "no-requires",
+            "no-input-budget-ratio",
+            "no-record-output",
+        ],
     )
     async def test_startup_refuses_a_submission_path_with_a_hole(
         self, tmp_path: Path, field_path: tuple[str, ...]

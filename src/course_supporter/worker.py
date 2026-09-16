@@ -147,7 +147,7 @@ async def startup(ctx: WorkerCtx) -> None:
     )
 
     from course_supporter.homework.path_config import (
-        load_path_config,
+        get_path_config,
         validate_path_config,
     )
     from course_supporter.llm.factory import create_providers
@@ -194,7 +194,11 @@ async def startup(ctx: WorkerCtx) -> None:
     # hole or an inadmissible rung stops the worker before it takes a job
     # instead of waiting for the first submission routed through them
     # (mentor-rebuild 02).
-    validate_path_config(load_path_config(s.submission_paths_config_path), registry)
+    validate_path_config(
+        get_path_config(s.submission_paths_config_path),
+        registry,
+        ladder_stage_names=ladder_config.stages.keys(),
+    )
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(
         ladder_config=ladder_config,

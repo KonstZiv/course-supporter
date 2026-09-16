@@ -1622,6 +1622,38 @@ class PortalRejection(BaseModel):
     )
 
 
+class PortalPresentation(BaseModel):
+    """What to SAY about an attempt: one of five states, and why (task 03).
+
+    The server's single answer, so the tree, the attempts list and the detail
+    view cannot disagree about the same attempt — and so the interface stops
+    keeping a second copy of the rule (``DD-SP-AS`` records the old copies).
+
+    Five states, because that is how many different things a student can be
+    told: it was not opened, it did not look like an attempt, it is waiting for
+    the account to be funded, it is being checked, it has been reviewed. The ten
+    stored lifecycle milestones map onto them; which milestone it was is an
+    internal fact and stays one (language-rules).
+
+    ``reason_code`` is a service key, not a sentence: the surface picks its own
+    words for it, and the same code may be phrased differently to a student and
+    to an author. ``None`` where the state says everything there is to say.
+    """
+
+    state: Literal[
+        "not_opened",
+        "not_an_attempt",
+        "awaiting_funds",
+        "in_progress",
+        "reviewed",
+    ] = Field(description="What to tell the student about this attempt.")
+    reason_code: str | None = Field(
+        default=None,
+        description="Service key the surface phrases; null when the state is "
+        "the whole answer.",
+    )
+
+
 class PortalSubmissionListItem(BaseModel):
     """One attempt in the read-path list (Phase 6 T2). NO review_markdown.
 
@@ -1634,6 +1666,11 @@ class PortalSubmissionListItem(BaseModel):
 
     id: uuid.UUID
     status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    presentation: PortalPresentation = Field(
+        description="What to say about this attempt (mentor-rebuild task 03). "
+        "Beside ``status``, never instead of it — the milestone stays on the "
+        "wire for whoever already reads it (``DD-SP-AS``)."
+    )
     score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
     verdict: PortalVerdict | None = Field(default=None)
     created_at: datetime
@@ -1703,6 +1740,10 @@ class PortalSubmissionDetail(BaseModel):
 
     id: uuid.UUID
     status: str = Field(description="Lifecycle milestone (also the progress signal).")
+    presentation: PortalPresentation = Field(
+        description="What to say about this attempt (mentor-rebuild task 03), "
+        "beside ``status`` and never instead of it."
+    )
     score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
     verdict: PortalVerdict | None = Field(default=None)
     review_markdown: str | None = Field(
@@ -1828,6 +1869,13 @@ class PortalSubmissionOverlay(BaseModel):
         "error: rejected / mismatch / failed). The tree carries only this coarse "
         "``error`` bucket — the precise terminal is the read-path detail's "
         "concern.",
+    )
+    presentation: PortalPresentation | None = Field(
+        default=None,
+        description="What to say about the LATEST attempt (mentor-rebuild task "
+        "03) — the same answer the attempts list carries for it. Beside "
+        "``submission_status``, never instead of it (``DD-SP-AS``). Null when "
+        "there are no attempts.",
     )
     last: PortalAttemptResult | None = Field(
         default=None,

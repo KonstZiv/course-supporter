@@ -388,6 +388,10 @@ class TestPortalReadList:
         assert set(item) == {
             "id",
             "status",
+            # What to say about this attempt: five states and a reason code,
+            # computed on the server (mentor-rebuild task 03). Added BESIDE
+            # ``status`` and ``rejection``, which are untouched.
+            "presentation",
             "score",
             "verdict",
             "created_at",
@@ -488,6 +492,8 @@ class TestPortalReadDetail:
         assert set(data) == {
             "id",
             "status",
+            # Added beside status, never instead of it (task 03).
+            "presentation",
             "score",
             "verdict",
             "review_markdown",

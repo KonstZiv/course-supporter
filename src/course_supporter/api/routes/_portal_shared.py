@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING, Final
 
 from course_supporter.api.schemas import (
     PortalNotOpened,
+    PortalPresentation,
     PortalRejection,
     PortalVerdict,
 )
 from course_supporter.models.source import MaterialRole
 from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.storage.orm import HomeworkStatus
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
@@ -68,6 +70,77 @@ def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | 
 
 # The single normalizer category the read-path phrases (DD-6-Z, partial).
 _NORMALIZER_CODED: Final[str] = ErrorCategory.OVER_BUDGET.value
+
+
+_PRESENTATION_STATE: Final[dict[str, str]] = {
+    # Nothing was opened: the doors refused it, or the run broke.
+    HomeworkStatus.REJECTED.value: "not_opened",
+    HomeworkStatus.FAILED.value: "not_opened",
+    # It was read, and it did not look like an answer to this task.
+    HomeworkStatus.MISMATCH.value: "not_an_attempt",
+    # Nothing was spent, and nothing will be until the account is funded.
+    HomeworkStatus.AWAITING_FUNDS.value: "awaiting_funds",
+    # Being checked. WHICH gate it has passed is internal.
+    HomeworkStatus.RECEIVED.value: "in_progress",
+    HomeworkStatus.SAFETY_OK.value: "in_progress",
+    HomeworkStatus.SANITY_OK.value: "in_progress",
+    HomeworkStatus.REVIEWING.value: "in_progress",
+    # A review exists, whether or not it reached the caller.
+    HomeworkStatus.COMPLETED.value: "reviewed",
+    HomeworkStatus.DELIVERED.value: "reviewed",
+}
+"""Every stored milestone, mapped to the one thing the student is told.
+
+Total by construction and guarded below: a milestone without a decision about
+what to say would otherwise be discovered as a ``KeyError`` on someone's
+attempt, or — worse — quietly default to the wrong sentence.
+"""
+
+_unmapped_statuses = {s.value for s in HomeworkStatus} - set(_PRESENTATION_STATE)
+if _unmapped_statuses:  # pragma: no cover — test-locked
+    msg = (
+        f"HomeworkStatus values without a presentation state: "
+        f"{sorted(_unmapped_statuses)}. Decide what the student is told before "
+        f"the status can be written."
+    )
+    raise RuntimeError(msg)
+
+FAILED_REASON_CODE: Final = "processing_failed"
+"""The code for a run that broke — the surface pairs it with "send it again"."""
+
+AWAITING_FUNDS_REASON_CODE: Final = "awaiting_funds"
+"""The code for a revision held before its first paid call."""
+
+
+def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
+    """The one answer to "what do we say about this attempt?" (task 03).
+
+    Computed here, once, and carried by all three portal responses, so the tree
+    and the lists cannot phrase the same attempt differently — and so the rule
+    stops living in two repositories at once (``DD-SP-AS``).
+
+    The reason code comes from whoever knows it:
+
+    * ``rejected`` — from :func:`curated_rejection`, unchanged: the doors and
+      the safety check already answer "why" in a vocabulary the surface has
+      articles for;
+    * ``mismatch`` — the same ``mismatch`` code it has carried since the doors
+      pass, so the article keyed on it keeps working;
+    * ``failed`` — a new code, because a run that broke told the student
+      nothing before: the surface pairs it with "send it again";
+    * ``awaiting_funds`` — a new code for a state that did not exist;
+    * everything in flight, and everything reviewed — no code: the state is the
+      whole answer.
+    """
+    state = _PRESENTATION_STATE[submission.status]
+    if submission.status == HomeworkStatus.FAILED.value:
+        return PortalPresentation(state=state, reason_code=FAILED_REASON_CODE)
+    if submission.status == HomeworkStatus.AWAITING_FUNDS.value:
+        return PortalPresentation(state=state, reason_code=AWAITING_FUNDS_REASON_CODE)
+    rejection = curated_rejection(submission)
+    return PortalPresentation(
+        state=state, reason_code=rejection.code if rejection else None
+    )
 
 
 def curated_rejection(

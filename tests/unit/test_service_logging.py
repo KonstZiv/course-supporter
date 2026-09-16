@@ -414,3 +414,90 @@ class TestSTTLogCallbackOutcome:
         ) as persist:
             await create_stt_log_callback(MagicMock())(stt_result, error_message)
         assert persist.await_args.kwargs["outcome"] == expected
+
+
+class TestDroppedRowsLeaveATrace:
+    """DD-SP-AN: a short cost sum must not look like a cheap run.
+
+    A register row is dropped in two places, both deliberately silent so far —
+    outside a job context, and when the write itself fails. Neither is fixed
+    here (that is the debt); what is added is a way for whoever reads a sum to
+    tell "it was cheap" from "it was not all written down".
+    """
+
+    async def test_a_write_outside_a_job_context_is_counted_and_named(self) -> None:
+        from course_supporter.service_logging import (
+            _persist,
+            reset_skipped_write_counts,
+            skipped_write_counts,
+        )
+
+        reset_skipped_write_counts()
+        with patch(
+            "course_supporter.service_logging.get_current_job_id", return_value=None
+        ):
+            await _persist(
+                AsyncMock(),
+                action="safety",
+                strategy="default",
+                provider=None,
+                model_id=None,
+            )
+
+        assert skipped_write_counts()["no_job_context"] == 1
+
+    async def test_a_failed_write_is_counted_under_its_own_reason(self) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from course_supporter.service_logging import (
+            _persist,
+            reset_skipped_write_counts,
+            skipped_write_counts,
+        )
+
+        reset_skipped_write_counts()
+        factory = MagicMock(side_effect=SQLAlchemyError("no"))
+        with patch(
+            "course_supporter.service_logging.get_current_job_id",
+            return_value=uuid.uuid4(),
+        ):
+            await _persist(
+                factory,
+                action="safety",
+                strategy="default",
+                provider=None,
+                model_id=None,
+            )
+
+        counts = skipped_write_counts()
+        assert counts["database_error"] == 1
+        # The two are counted apart: they mean different things to a reader.
+        assert "no_job_context" not in counts
+
+    async def test_the_count_accumulates(self) -> None:
+        from course_supporter.service_logging import (
+            _persist,
+            reset_skipped_write_counts,
+            skipped_write_counts,
+        )
+
+        reset_skipped_write_counts()
+        with patch(
+            "course_supporter.service_logging.get_current_job_id", return_value=None
+        ):
+            await _persist(
+                AsyncMock(),
+                action="a",
+                strategy="default",
+                provider=None,
+                model_id=None,
+            )
+            await _persist(
+                AsyncMock(),
+                action="b",
+                strategy="default",
+                provider=None,
+                model_id=None,
+            )
+
+        assert skipped_write_counts()["no_job_context"] == 2

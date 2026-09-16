@@ -18,6 +18,7 @@ StageRouter, STTRouter, and VD pipeline components.
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -161,6 +162,45 @@ def get_progress_writer() -> ProgressWriter | None:
 # ── Persist to DB ──
 
 
+_skipped_writes: Counter[str] = Counter()
+"""How many register rows were dropped, by why (``DD-SP-AN``).
+
+A sum of costs read out of the register can be short without anything saying
+so: a row is silently dropped when the call happens outside a job context, and
+when the database write itself fails. Emptiness then looks exactly like a cheap
+run — the same shape of lie as a test that is green for the wrong reason.
+
+This is the visible trace: a process-wide count per reason, beside a log line
+that names the same reason. It does not make the sum right — that is the debt
+itself — but it lets a reader of the sum tell "it was cheap" from "it was not
+all written down". Read it with :func:`skipped_write_counts`.
+"""
+
+
+def _count_skipped_write(reason: str) -> int:
+    """Count one dropped register row and return the running total for its kind.
+
+    Counted here, REPORTED by the caller on the line it already writes: one
+    event deserves one log line, and a second line beside it would be noise a
+    reader has to learn to ignore.
+    """
+    _skipped_writes[reason] += 1
+    return _skipped_writes[reason]
+
+
+def skipped_write_counts() -> dict[str, int]:
+    """A snapshot of the dropped-row counts, by reason (``DD-SP-AN``).
+
+    For whoever reads a cost sum and needs to know whether it is complete.
+    """
+    return dict(_skipped_writes)
+
+
+def reset_skipped_write_counts() -> None:
+    """Clear the counts. For tests; nothing in production resets them."""
+    _skipped_writes.clear()
+
+
 async def _persist(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -216,6 +256,10 @@ async def _persist(
             action=action,
             provider=provider,
             model_id=model_id,
+            # DD-SP-AN: a cost sum read out of the register can be short
+            # without anything saying so. This is what says so.
+            skip_reason="no_job_context",
+            skipped_so_far=_count_skipped_write("no_job_context"),
         )
         return
 
@@ -259,6 +303,9 @@ async def _persist(
             model=model_id,
             action=action,
             error=str(exc),
+            # DD-SP-AN, the other way a row is dropped.
+            skip_reason="database_error",
+            skipped_so_far=_count_skipped_write("database_error"),
             exc_info=True,
         )
 

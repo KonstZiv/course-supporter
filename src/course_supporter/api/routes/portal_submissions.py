@@ -31,6 +31,7 @@ from course_supporter.api.deps import (
 )
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
+    curated_presentation,
     curated_recovered_encoding,
     curated_rejection,
     curated_verdict,
@@ -309,6 +310,7 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
     return PortalSubmissionListItem(
         id=submission.id,
         status=submission.status,
+        presentation=curated_presentation(submission),
         score=submission.score,
         verdict=curated_verdict(submission.review_result),
         created_at=submission.created_at,
@@ -394,6 +396,7 @@ def _to_detail(
     return PortalSubmissionDetail(
         id=submission.id,
         status=submission.status,
+        presentation=curated_presentation(submission),
         score=submission.score,
         verdict=curated_verdict(submission.review_result),
         review_markdown=submission.review_markdown,

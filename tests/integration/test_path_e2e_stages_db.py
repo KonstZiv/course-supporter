@@ -82,6 +82,10 @@ _CONTENT = {
     ),
 }
 
+# Over the gate's confidence floor (config/sanity.yaml: 0.85), so this one ends
+# the path instead of carrying on.
+_OFF_TASK = '{"verdict": "mismatch", "confidence": 0.95, "reason": "another task"}'
+
 
 class _RouterDouble:
     """Stands in for the model layer: counts, answers, and leaves a register row.
@@ -98,6 +102,7 @@ class _RouterDouble:
         script: dict[str, Any] | None = None,
         once: bool = False,
         watch: uuid.UUID | None = None,
+        content: dict[str, str] | None = None,
     ) -> None:
         self.calls: list[str] = []
         # What the job's own columns said at the moment each stage was asked to
@@ -108,6 +113,7 @@ class _RouterDouble:
         self._script = dict(script or {})
         self._once = once
         self._watch = watch
+        self._content = {**_CONTENT, **(content or {})}
 
     def count(self, stage_name: str) -> int:
         return self.calls.count(stage_name)
@@ -153,7 +159,7 @@ class _RouterDouble:
             unit_type="tokens",
             cost_usd=_PRICE[stage_name],
         )
-        content = _CONTENT[stage_name]
+        content = self._content[stage_name]
         if response_validator is not None:
             response_validator(content)
         return StageResult(
@@ -713,6 +719,110 @@ class TestARefusedPortHoldsTheRevision:
         # database allows a revision only one in flight at a time.
         job = await _job(session_factory, seed["job_id"])
         assert job.status == "complete"
+
+    async def test_a_top_up_starts_a_new_job_that_asks_again_and_starts_over(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        from course_supporter.homework.path_continuation import resume_after_top_up
+
+        answers = _answers(tmp_path)
+        router = _RouterDouble(session_factory)
+        port = _PortDouble(refuse_first_n=1)
+        await _run(session_factory, router, port, seed, answers)
+        assert router.calls == []
+
+        arq = MagicMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-топ"))
+        async with session_factory() as session:
+            started = await resume_after_top_up(
+                arq=arq, session=session, submission_id=seed["submission_id"]
+            )
+        assert started is True
+
+        async with session_factory() as session:
+            jobs = list(
+                (
+                    await session.execute(
+                        select(Job)
+                        .where(Job.subject_id == seed["submission_id"])
+                        .order_by(Job.queued_at.asc())
+                    )
+                ).scalars()
+            )
+        assert len(jobs) == 2
+        continuation = jobs[-1]
+        assert continuation.id != seed["job_id"]
+
+        await _run(session_factory, router, port, seed, answers, job_id=continuation.id)
+
+        # The first operation of the port ran again on the new job, and the
+        # stages started from the beginning: nothing was done before the hold.
+        assert len(port.reserved) == 2
+        assert router.calls == _STAGES
+        checkpoint = await _checkpoint(session_factory, continuation.id)
+        assert checkpoint.stages == {
+            "safety": StageState.DONE,
+            "attempt_classifier": StageState.DONE,
+        }
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"
+
+    async def test_a_top_up_that_ends_the_path_early_is_allowed_to_end_it(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        """The other way a continuation writes a status: a stage ends the path.
+
+        `awaiting_funds -> mismatch` is as illegal as `-> reviewing`, so the
+        hold has to be gone by the time a stage answers, not only by the time
+        the path finishes.
+        """
+        from course_supporter.api.routes._portal_shared import curated_presentation
+        from course_supporter.homework.path_continuation import resume_after_top_up
+
+        answers = _answers(tmp_path)
+        router = _RouterDouble(
+            session_factory, content={"attempt_classifier": _OFF_TASK}
+        )
+        port = _PortDouble(refuse_first_n=1)
+        await _run(session_factory, router, port, seed, answers)
+        assert router.calls == []
+
+        arq = MagicMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-2"))
+        async with session_factory() as session:
+            assert await resume_after_top_up(
+                arq=arq, session=session, submission_id=seed["submission_id"]
+            )
+        async with session_factory() as session:
+            continuation = list(
+                (
+                    await session.execute(
+                        select(Job)
+                        .where(Job.subject_id == seed["submission_id"])
+                        .order_by(Job.queued_at.asc())
+                    )
+                ).scalars()
+            )[-1]
+
+        await _run(session_factory, router, port, seed, answers, job_id=continuation.id)
+
+        assert router.calls == _STAGES
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "mismatch"
+        presentation = curated_presentation(submission)
+        assert presentation.state == "not_an_attempt"
+        assert presentation.reason_code == "mismatch"
+        # The stage that answered ends the submission, so the port hears that
+        # it ended — completed, not failed: the path did its work.
+        assert [outcome for _, outcome in port.released] == [
+            SubmissionOutcome.COMPLETED
+        ]
 
 
 def _priced_registry(per_1k: float) -> Any:

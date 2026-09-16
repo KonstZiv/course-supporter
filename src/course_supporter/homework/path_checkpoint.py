@@ -272,13 +272,16 @@ async def load_checkpoint(
 ) -> PathCheckpoint | None:
     """Read the checkpoint of a revision from its most recent job.
 
-    ``None`` when the revision has no job, its latest job never wrote one (every
+    Reads the latest job that actually RECORDED one, skipping past the job a
+    continuation is running in — which has written nothing yet.
+
+    ``None`` when the revision has no job, no job of it ever wrote one (every
     submission on today's Mentor), or what is there is not a checkpoint of this
     shape — an unreadable record is treated as no record, so a run starts over
     rather than resuming from something nobody can read.
     """
     job = await JobRepository(session).get_latest_for_subject(
-        _SUBJECT_TYPE, submission_id
+        _SUBJECT_TYPE, submission_id, require_stage_progress=True
     )
     if job is None or not isinstance(job.stage_progress, dict):
         return None

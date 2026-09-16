@@ -38,7 +38,9 @@ from course_supporter.funds_port import (
     SubmissionOutcome,
 )
 from course_supporter.homework.path_checkpoint import (
+    FREEZE_REASON_FOR_LADDER_STOP,
     PathCheckpoint,
+    load_checkpoint,
     save_checkpoint,
 )
 from course_supporter.homework.path_config import (
@@ -52,6 +54,7 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
     get_stage_executor,
 )
+from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.homework_repository import HomeworkRepository
 
@@ -105,16 +108,25 @@ async def run_new_path_if_switched(
         submission = await HomeworkRepository(session).get_by_id(submission_id)
         if submission is None:
             return False
-        task_doc = await _task_document(session, submission)
-        if task_doc is None:
-            return False
-        choice = await choose_path(
-            session,
-            task_type=AssignmentType(task_doc.task_type),
-            student_id=submission.student_id,
-            authored_document_id=submission.authored_document_id,
-            config=config,
-        )
+        # A revision that has already walked part of a path continues on the
+        # one it was given, never on one chosen again: the state it was chosen
+        # from may have changed since (its own first review, for one), and a
+        # continuation that re-chose could hand the student a different path
+        # halfway through their submission.
+        resumed = await load_checkpoint(session, submission_id)
+        if resumed is not None:
+            choice = _choice_from(resumed, config)
+        else:
+            task_doc = await _task_document(session, submission)
+            if task_doc is None:
+                return False
+            choice = await choose_path(
+                session,
+                task_type=AssignmentType(task_doc.task_type),
+                student_id=submission.student_id,
+                authored_document_id=submission.authored_document_id,
+                config=config,
+            )
         if choice is None:
             return False
 
@@ -130,8 +142,31 @@ async def run_new_path_if_switched(
             choice=choice,
             config=config,
             port=port,
+            resumed=resumed,
         )
     return True
+
+
+def _choice_from(checkpoint: PathCheckpoint, config: PathConfig) -> PathChoice | None:
+    """The path a checkpoint says this revision is on, as it is described today.
+
+    The KEY comes from the record; the STAGE LIST comes from the configuration
+    as it stands now, because lifting a freeze is exactly an edit of that file.
+    :meth:`PathCheckpoint.first_unfinished` reconciles the two.
+
+    ``None`` when the type has since been switched back to today's Mentor, or
+    its paths were removed: a revision cannot be continued down a path that no
+    longer exists, and the caller then leaves it to today's body.
+    """
+    from course_supporter.homework.path_selection import PathChoice
+
+    declared = config.task_types.get(checkpoint.task_type)
+    if declared is None or checkpoint.submission_state not in declared.paths:
+        return None
+    return PathChoice(
+        key=checkpoint.path_key,
+        stages=tuple(declared.paths[checkpoint.submission_state]),
+    )
 
 
 async def _task_document(session: AsyncSession, submission: HomeworkSubmission) -> Any:
@@ -153,6 +188,7 @@ async def _run_path(
     choice: PathChoice,
     config: PathConfig,
     port: FundsPort,
+    resumed: PathCheckpoint | None = None,
 ) -> None:
     """The linear body, in the order of the skeleton (03-BINDING decision 1)."""
     router: StageRouter = ctx["stage_router"]
@@ -188,7 +224,11 @@ async def _run_path(
         answer = await port.check_and_reserve(
             context, path_ceiling_estimate(config, choice.key)
         )
-        checkpoint = PathCheckpoint.started(choice.key, choice.stages)
+        checkpoint = (
+            resumed
+            if resumed is not None
+            else PathCheckpoint.started(choice.key, choice.stages)
+        )
         if answer.decision.value == "refused":
             await _hold_for_funds(
                 session, hw_repo, submission_id, job_id, checkpoint, answer, log=log
@@ -197,17 +237,37 @@ async def _run_path(
         await save_checkpoint(session, job_id, checkpoint, current_stage=None)
 
         # ── The stages of the path, one after another ──
+        start_from = checkpoint.first_unfinished(list(choice.stages))
         for stage_name in choice.stages:
-            outcome = await _run_stage(
-                session,
-                router,
-                submission=submission,
-                submission_text=submission_text,
-                language=language,
-                choice=choice,
-                config=config,
-                stage_name=stage_name,
-            )
+            if start_from is not None and stage_name != start_from:
+                continue
+            start_from = None
+            try:
+                outcome = await _run_stage(
+                    session,
+                    router,
+                    submission=submission,
+                    submission_text=submission_text,
+                    language=language,
+                    choice=choice,
+                    config=config,
+                    stage_name=stage_name,
+                )
+            except LadderExhaustedError as exhausted:
+                await _stage_produced_nothing(
+                    session,
+                    hw_repo,
+                    port,
+                    context,
+                    submission_id=submission_id,
+                    job_id=job_id,
+                    checkpoint=checkpoint,
+                    stage_name=stage_name,
+                    stop=exhausted.stop,
+                    job_try=int(ctx.get("job_try", 1)),
+                    log=log,
+                )
+                return
             checkpoint = checkpoint.with_stage_done(stage_name)
             await save_checkpoint(session, job_id, checkpoint, current_stage=stage_name)
             await port.account_stage_cost(
@@ -391,6 +451,92 @@ async def _stage_cost(
     # coalesce guarantees a number, but the column is nullable and the
     # type checker reads the column, not the SQL around it.
     return float(total or 0.0)
+
+
+async def _stage_produced_nothing(
+    session: AsyncSession,
+    hw_repo: HomeworkRepository,
+    port: FundsPort,
+    context: SubmissionContext,
+    *,
+    submission_id: uuid.UUID,
+    job_id: uuid.UUID,
+    checkpoint: PathCheckpoint,
+    stage_name: str,
+    stop: LadderStop,
+    job_try: int,
+    log: Any,
+) -> None:
+    """A stage ended without a result. What that means depends on WHY.
+
+    Three endings, three reactions, and the difference is read from the
+    ladder's own answer rather than from its message (:class:`LadderStop`):
+
+    * the two ceilings — output and money — are held, not retried: the next
+      attempt would meet the same limit with the same input, and what has to
+      change is the configuration. The revision stays in ``received``, which the
+      student reads as "being checked", and the run's checkpoint says where and
+      why. The funds port is NOT told: the submission has not ended.
+    * an ordinary exhaustion may pass, so the body re-queues itself — up to its
+      own limit, counted in the checkpoint — by raising ``arq.Retry``, which the
+      execution seam deliberately lets through as control flow rather than as a
+      failure.
+    * a retry budget spent is the end: ``failed`` with the reason code, which
+      the surface reads as "not opened — send it again", and the port hears that
+      the submission ended in failure.
+
+    TWO budgets have to be spent for that last one, and the body watches both.
+    Its own, counted in the checkpoint, is the one it chose. The queue's
+    (``worker_max_tries``) is the one it lives in, and the body must never be
+    the reason it runs out: on the FINAL queue attempt the seam turns a re-queue
+    into a terminal ``failed`` on the JOB and re-raises — and a revision left
+    ``received`` behind a failed job is reachable by none of the three
+    continuations (the orphan sweep sees only jobs in flight; the frozen-revision
+    pass sees only the two ceilings). So the body ends the submission ITSELF
+    while it still can.
+
+    Checking ``job_try`` rather than only comparing the two settings at startup
+    is deliberate: the queue's attempts are also spent by things the path does
+    not control — the seam's own missing-job policy, for one — so a limit that
+    looks safe in the configuration can still be the last attempt in practice.
+    """
+    from arq import Retry
+
+    from course_supporter.config import get_settings
+
+    reason = FREEZE_REASON_FOR_LADDER_STOP[stop]
+    held = checkpoint.frozen(stage_name, reason)
+
+    if stop is not LadderStop.EXHAUSTED:
+        await save_checkpoint(session, job_id, held, current_stage=stage_name)
+        log.info("path_frozen", stage=stage_name, reason=reason.value)
+        return
+
+    settings = get_settings()
+    last_queue_attempt = job_try >= settings.worker_max_tries
+    if checkpoint.retries < settings.submission_path_max_retries and not (
+        last_queue_attempt
+    ):
+        await save_checkpoint(session, job_id, held.retried(), current_stage=stage_name)
+        log.info(
+            "path_retrying",
+            stage=stage_name,
+            retries=held.retries + 1,
+            limit=settings.submission_path_max_retries,
+        )
+        raise Retry(defer=settings.submission_path_retry_defer_s)
+
+    await save_checkpoint(session, job_id, held, current_stage=stage_name)
+    await hw_repo.update_status(submission_id, "failed", error_message=reason.value)
+    await session.commit()
+    await port.release_remainder(context, SubmissionOutcome.FAILED)
+    log.info(
+        "path_gave_up",
+        stage=stage_name,
+        retries=checkpoint.retries,
+        # Which budget ran out — the path's own, or the queue it lives in.
+        last_queue_attempt=last_queue_attempt,
+    )
 
 
 async def _hold_for_funds(

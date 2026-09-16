@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -275,3 +276,46 @@ class TestTodaysCallersAreUnchanged:
         router.execute_for_stage.assert_awaited_once()
         assert router.execute_for_stage.await_args.args[0] == STAGE_SANITY
         router.execute_stage.assert_not_awaited()
+
+
+class TestTheBranchCostsNothingOnTodaysMentor:
+    """What the homework body pays for this task when nothing is switched.
+
+    In production after task 03 every type is on today's Mentor, and the branch
+    must then be one scan of a dict already in memory: no session, no query, no
+    file. A test that only checked the ANSWER would pass even if the branch
+    opened a session first — so this one checks that it never asked for one.
+    """
+
+    async def test_no_session_is_opened_when_no_type_is_switched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.homework import path_runner
+        from course_supporter.homework.path_config import PathConfig
+
+        config = PathConfig.model_validate(
+            {
+                "stages": {},
+                "task_types": {
+                    t.value: {
+                        "served_by": "todays_mentor",
+                        "paths": {},
+                    }
+                    for t in AssignmentType
+                },
+            }
+        )
+        monkeypatch.setattr(path_runner, "get_path_config", lambda: config)
+        opened = 0
+
+        def _factory() -> object:
+            nonlocal opened
+            opened += 1
+            raise AssertionError("the branch opened a session")
+
+        answered = await path_runner.run_new_path_if_switched(
+            {"session_factory": _factory}, uuid4(), uuid4()
+        )
+
+        assert answered is False
+        assert opened == 0

@@ -36,8 +36,25 @@ logger = structlog.get_logger()
 # ``failed`` edge is not decorative — a frozen submission can still be broken by
 # something else, and the state machine's rule is that every non-terminal state
 # can fail.
+# The new path (mentor-rebuild task 03) adds two edges OUT of ``received`` and
+# changes none. It walks a stage list it deliberately cannot read — the body
+# knows names, not meanings (architectural invariant 2) — so it never writes the
+# ``safety_ok`` / ``sanity_ok`` milestones, which say WHICH gate was passed. A
+# stage that ends the submission therefore ends it from ``received``, and a path
+# that runs out of stages reaches review from ``received``. Nothing is lost on
+# the surface: all four in-flight statuses are one state to the student ("being
+# checked"), and the finer progress lives in the run's checkpoint.
 HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
-    "received": {"safety_ok", "rejected", "failed", "awaiting_funds"},
+    "received": {
+        "safety_ok",
+        "rejected",
+        "failed",
+        "awaiting_funds",
+        # New path only: a stage decided the submission is off-task …
+        "mismatch",
+        # … or every stage passed and the review may be written.
+        "reviewing",
+    },
     "awaiting_funds": {"received", "failed"},
     "safety_ok": {"sanity_ok", "mismatch", "failed"},
     "sanity_ok": {"reviewing", "failed"},

@@ -863,6 +863,18 @@ async def arq_process_homework(
     set_job_from_arq(jid)
     log.info("homework_processing_started")
 
+    # --- mentor-rebuild task 03: the branch, and nothing above it ------------
+    # Answers False without reading anything when the submission's type is
+    # served by today's Mentor — which is every type in production after this
+    # task — and today's body below runs exactly as it did before. When it
+    # answers True it has handled the submission itself, end to end.
+    from course_supporter.homework.path_runner import run_new_path_if_switched
+
+    if await run_new_path_if_switched(ctx, jid, sid):
+        log.info("homework_processing_done_on_new_path")
+        return
+    # --- today's Mentor, unchanged from here ---------------------------------
+
     async with session_factory() as session:
         hw_repo = HomeworkRepository(session)
         node_repo = CourseNodeRepository(session)

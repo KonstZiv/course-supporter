@@ -11,7 +11,10 @@ Interface:
     :func:`load_phrasebook` — every language file of a directory, cached.
     :func:`load_language_file` — one file, for the translation script.
     :func:`validate_phrasebook` — the startup check: the language set matches
-    the allowed list both ways, and every language carries every key.
+    the allowed list both ways, every language carries every key, and every
+    translation carries the source's placeholders.
+    :func:`placeholder_faults` — that last check on its own, for the
+    translation script to run before it writes a language's file.
 
 Replacing the store: the loader is the only place that knows the files are
 YAML in a directory. A different store (a table, a bundle) replaces
@@ -26,7 +29,11 @@ from course_supporter.phrasebook.loader import (
     load_phrasebook,
     phrases_for,
 )
-from course_supporter.phrasebook.validation import validate_phrasebook
+from course_supporter.phrasebook.validation import (
+    placeholder_faults,
+    placeholders,
+    validate_phrasebook,
+)
 
 __all__ = [
     "FALLBACK_LANGUAGE",
@@ -35,5 +42,7 @@ __all__ = [
     "load_language_file",
     "load_phrasebook",
     "phrases_for",
+    "placeholder_faults",
+    "placeholders",
     "validate_phrasebook",
 ]

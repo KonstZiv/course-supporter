@@ -15,9 +15,11 @@ import pytest
 
 from course_supporter.phrasebook import (
     SOURCE_LANGUAGE,
+    Phrase,
     load_language_file,
     load_phrasebook,
     phrases_for,
+    placeholder_faults,
     validate_phrasebook,
 )
 
@@ -223,3 +225,70 @@ class TestShippedSource:
         assert found <= self.PLACEHOLDERS, (
             f"unknown placeholders: {found - self.PLACEHOLDERS}"
         )
+
+
+class TestPlaceholderCheck:
+    """A machine translation may rename, move or drop a placeholder.
+
+    It is the one fault a translated file trips on its own: nobody on this side
+    reads Arabic or Tamil, so the check is the only thing between a mangled
+    ``{number}`` and a student reading "слайд" with no number after it.
+    """
+
+    SOURCE = "position.slide: слайд {number}\nsection.fixed: Виправлено\n"
+
+    def test_a_translation_that_carries_them_through_passes(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, self.SOURCE)
+        _write(
+            tmp_path, "eng", "position.slide: slide {number}\nsection.fixed: Fixed\n"
+        )
+
+        validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+    @pytest.mark.parametrize(
+        ("translated", "reason"),
+        [
+            ("position.slide: slide {slide}\n", "renamed"),
+            ("position.slide: slide\n", "dropped"),
+            ("position.slide: slide {number} {name}\n", "invented"),
+            ("position.slide: slide { number }\n", "spaced-out"),
+        ],
+        ids=["renamed", "dropped", "invented", "spaced-out"],
+    )
+    def test_a_mangled_placeholder_stops_the_boot(
+        self, tmp_path: Path, translated: str, reason: str
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, self.SOURCE)
+        _write(tmp_path, "eng", translated + "section.fixed: Fixed\n")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+        assert "position.slide" in str(exc_info.value), reason
+        assert "placeholders" in str(exc_info.value)
+
+    def test_the_script_asks_the_same_question_before_it_writes(self) -> None:
+        # The script holds the translation in memory, not on disk: this is the
+        # same check, called on the pair, so a mangled language never lands.
+        source = {"position.slide": Phrase("слайд {number}", reviewed=False)}
+        good = {"position.slide": Phrase("slide {number}", reviewed=False)}
+        bad = {"position.slide": Phrase("slide {slide}", reviewed=False)}
+
+        assert placeholder_faults(source, good, code="eng") == []
+        assert placeholder_faults(source, bad, code="eng") == [
+            "Language 'eng', phrase 'position.slide': placeholders "
+            "['slide'] instead of ['number']"
+        ]
+
+    def test_a_key_the_translation_lacks_is_not_reported_twice(self) -> None:
+        # Missing keys are the completeness check's business; naming them here
+        # too would bury the placeholder difference this check exists for.
+        source = {
+            "position.slide": Phrase("слайд {number}", reviewed=False),
+            "section.fixed": Phrase("Виправлено", reviewed=False),
+        }
+        partial = {"section.fixed": Phrase("Fixed", reviewed=False)}
+
+        assert placeholder_faults(source, partial, code="eng") == []

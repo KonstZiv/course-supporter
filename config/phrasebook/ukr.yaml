@@ -1,0 +1,61 @@
+# ============================================================
+# Phrase templates — the source (mentor-rebuild task 04).
+# ============================================================
+#
+# Ukrainian is the source every other language is translated from: the
+# translation script reads this file and writes one file per language beside
+# it. Editing a phrase here means running the script again in the same commit —
+# the discipline a schema change carries with its migration (§2.13 of
+# ``03-BINDING.md``).
+#
+# Every key here is one the review structure of version 1 renders today. A
+# phrase a later stage will need is added by that task: each key costs sixty
+# translations.
+#
+# NO PHRASE COUNTS ANYTHING. A counted phrase ("3 remarks") needs plural
+# categories, and they differ per language — Ukrainian has three, Arabic five,
+# Japanese none — which one key holding one phrase cannot express (ratified
+# 2026-09-17). Should the structure ever need a number inside a sentence, that
+# is a change of this format, not another key.
+#
+# ``{time}``, ``{number}`` and ``{name}`` are filled by the assembler; a
+# translation carries them through unchanged.
+
+# --- The verdict (structure section 1: passed or not, and why) ---
+verdict.passed: Зараховано
+verdict.failed: Не зараховано
+
+# --- Section headings (structure sections 2-9, in that order) ---
+section.fixed: Виправлено
+section.new_remarks: Нові зауваження
+section.open: Лишилося відкритим
+section.broken: Зламалося
+section.mentor_voice: Від Ментора
+section.replies: Відповіді на ваші репліки
+section.verification: Як перевірено
+section.progress: Ваш прогрес
+
+# --- One remark, in the contrast form of 2.13 (sections 3, 4 and 5) ---
+remark.what: Що не так
+remark.why: Чому це важливо
+remark.todo: Що зробити
+remark.read: Де почитати
+
+# --- What was checked by running it, and what by reading (section 8) ---
+verification.by_run: Перевірено запуском
+verification.by_reading: Перевірено читанням
+
+# --- The student's own replies, and the answer to each (section 7) ---
+reply.kind.question: Ваше питання
+reply.kind.objection: Ваше заперечення
+reply.kind.comment: Ваш коментар
+reply.answer: Відповідь
+
+# --- Where to read: the place inside the material (remark.read) ---
+position.video: відео, {time}
+position.slide: слайд {number}
+position.paragraph: абзац {number}
+position.file: файл {name}
+
+# --- The document itself: the markdown the webhook and the bridge page carry ---
+review.title: Рецензія

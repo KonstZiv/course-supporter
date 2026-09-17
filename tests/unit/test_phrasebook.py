@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -190,3 +191,35 @@ class TestStartupCheck:
         assert "'fas' is allowed but has no phrase file" in message
         assert "'pol' is not an allowed language" in message
         assert "'eng' is missing the phrase 'section.open'" in message
+
+
+class TestShippedSource:
+    """The file every translation derives from (mentor-rebuild task 04)."""
+
+    SOURCE_FILE = Path("config/phrasebook") / f"{SOURCE_LANGUAGE}.yaml"
+    PLACEHOLDERS: ClassVar[set[str]] = {"time", "number", "name"}
+
+    def test_it_reads_as_plain_phrases(self) -> None:
+        phrases = load_language_file(self.SOURCE_FILE)
+
+        assert phrases
+        for key, phrase in phrases.items():
+            assert phrase.text.strip(), f"'{key}' has no text"
+            # The source is not a translation: a review mark here would mean
+            # someone had started treating it as one.
+            assert phrase.reviewed is False, f"'{key}' carries a review mark"
+
+    def test_it_uses_only_the_placeholders_the_assembler_fills(self) -> None:
+        # A translator — or the script — carrying a placeholder through under a
+        # different name would leave the assembler with nothing to fill.
+        phrases = load_language_file(self.SOURCE_FILE)
+
+        found = {
+            name
+            for phrase in phrases.values()
+            for name in re.findall(r"\{([^}]*)\}", phrase.text)
+        }
+
+        assert found <= self.PLACEHOLDERS, (
+            f"unknown placeholders: {found - self.PLACEHOLDERS}"
+        )

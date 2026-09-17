@@ -1,5 +1,7 @@
 """Tests for LLM providers."""
 
+from typing import Any
+
 import pytest
 from pydantic import BaseModel
 
@@ -286,3 +288,95 @@ class TestLLMResponseModel:
         )
         assert r.action == "video_analysis"
         assert r.strategy == "quality"
+
+
+def _gemini_answering_with(usage: Any) -> Any:
+    """A Gemini provider whose one call comes back carrying this usage."""
+    import itertools
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from course_supporter.llm.providers.gemini import GeminiProvider
+
+    with patch("course_supporter.llm.providers.gemini.genai.Client"):
+        provider = GeminiProvider(api_keys=("k",), default_model="gemini-2.5-pro")
+
+    response = MagicMock()
+    response.text = "Poprawiono"
+    response.candidates = []
+    response.usage_metadata = usage
+    client = MagicMock()
+    client.aio.models.generate_content = AsyncMock(return_value=response)
+    provider._client_cycle = itertools.cycle([client])
+    return provider
+
+
+class TestGeminiBillableOutput:
+    """What the register gets to price for a Gemini call (hotfix 3).
+
+    The connector is the only place that can see the split: Gemini counts the
+    answer and the thinking apart, both are billed as output, and the router's
+    pricing formula is provider-agnostic by design.
+    """
+
+    async def test_reasoning_is_added_to_the_output_and_recorded(self) -> None:
+        from google.genai import types as genai_types
+
+        # The shape measured on 2026-09-17: three answer tokens, 627 thought.
+        usage = genai_types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=19,
+            candidates_token_count=3,
+            thoughts_token_count=627,
+        )
+
+        response = await _gemini_answering_with(usage).complete(LLMRequest(prompt="x"))
+
+        assert response.tokens_out == 630
+        assert response.tokens_reasoning == 627
+
+    async def test_a_response_without_reasoning_is_unchanged(self) -> None:
+        from google.genai import types as genai_types
+
+        usage = genai_types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=10, candidates_token_count=20
+        )
+
+        response = await _gemini_answering_with(usage).complete(LLMRequest(prompt="x"))
+
+        assert response.tokens_out == 20
+        assert response.tokens_reasoning is None
+
+    async def test_a_ceiling_spent_on_thinking_still_costs(self) -> None:
+        """The case the fix exists for: no answer, the whole ceiling thought.
+
+        Before this the row priced the input alone, so the most expensive call
+        in a ladder read as the cheapest — and the wasted-payment detector
+        reads that same field.
+        """
+        from google.genai import types as genai_types
+
+        from tests._helpers.registry import registry_with
+
+        usage = genai_types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=17363,
+            candidates_token_count=None,
+            thoughts_token_count=8192,
+        )
+
+        response = await _gemini_answering_with(usage).complete(LLMRequest(prompt="x"))
+
+        assert response.tokens_out == 8192
+        assert response.tokens_reasoning == 8192
+
+        # Priced the way the router prices it — the same formula, untouched.
+        model = registry_with(
+            model_id="gemini-2.5-pro",
+            provider="gemini",
+            cost_per_1k_in=0.00125,
+            cost_per_1k_out=0.010,
+        ).models["gemini-2.5-pro"]
+
+        assert model.estimate_cost(
+            response.tokens_in or 0, response.tokens_out or 0
+        ) == pytest.approx(0.10362375, abs=1e-8)
+        # What the same call priced before the fix: the input alone.
+        assert model.estimate_cost(17363, 0) == pytest.approx(0.02170375, abs=1e-8)

@@ -54,7 +54,12 @@ async def test_gemini_honors_expects_json() -> None:
 
     resp = MagicMock()
     resp.text = _FENCED
-    resp.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=5)
+    # ``thoughts_token_count`` is named explicitly: a bare MagicMock would hand
+    # the connector another mock where the SDK hands it ``None``, and the
+    # billable-output sum (hotfix 3) reads that field.
+    resp.usage_metadata = MagicMock(
+        prompt_token_count=10, candidates_token_count=5, thoughts_token_count=None
+    )
     mock_client = MagicMock()
     mock_client.aio.models.generate_content = AsyncMock(return_value=resp)
     prov._client_cycle = itertools.cycle([mock_client])

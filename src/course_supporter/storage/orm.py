@@ -1241,10 +1241,17 @@ class ExternalServiceCall(Base):
     unit_out_reasoning: Mapped[int | None] = mapped_column(
         Integer,
         comment=(
-            "Reasoning tokens billed as a subset of unit_out (STEP-0 P5/P6 "
+            "Reasoning tokens inside the billed unit_out (STEP-0 P5/P6 "
             "accounting visibility). NULL = provider did not report; 0 = "
-            "reported zero. DashScope reads usage.reasoning_tokens; other "
-            "providers leave it NULL."
+            "reported zero. Two provider shapes sit behind the one column. "
+            "DashScope and the OpenAI-compatible connectors are billed "
+            "reasoning that is already counted inside their output tokens — "
+            "DashScope reads the number from the nested "
+            "usage.output_tokens_details.reasoning_tokens (there is no flat "
+            "key), the OpenAI-compatible ones expose no separate number and "
+            "leave this NULL. Gemini reports reasoning apart from the answer, "
+            "so its connector adds it into unit_out and records it here "
+            "(hotfix 3). Anthropic leaves it NULL."
         ),
     )
     latency_ms: Mapped[int | None] = mapped_column(Integer)

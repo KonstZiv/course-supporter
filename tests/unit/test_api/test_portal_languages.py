@@ -63,7 +63,7 @@ class TestPortalLanguages:
         resp = await student_client.get(_PORTAL_URL)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == len(body["items"]) == 58
+        assert body["total"] == len(body["items"]) == 60
         codes = {item["code"] for item in body["items"]}
         assert {"ukr", "eng", "rus"} <= codes
 

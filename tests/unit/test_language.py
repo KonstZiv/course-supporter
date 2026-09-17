@@ -27,6 +27,14 @@ from course_supporter.language import (
         ("eng", "eng"),
         ("English", "eng"),
         ("yue", "yue"),  # Cantonese — no 639-1; only 639-3 form exists
+        # Added for the review phrasebook (task 04): both resolve from
+        # all three input shapes the resolver accepts.
+        ("ar", "ara"),
+        ("ara", "ara"),
+        ("Arabic", "ara"),
+        ("he", "heb"),
+        ("heb", "heb"),
+        ("Hebrew", "heb"),
     ],
 )
 def test_normalize_happy_path(raw: str, expected: str) -> None:
@@ -44,7 +52,7 @@ def test_normalize_valid_iso_but_not_in_whitelist() -> None:
     with pytest.raises(LanguageNotAllowedError) as exc_info:
         normalize_and_validate("lat")
     assert exc_info.value.code == "lat"
-    assert exc_info.value.allowed_count == 58
+    assert exc_info.value.allowed_count == 60
 
 
 def test_chinese_macrolanguage_zh_is_rejected() -> None:
@@ -56,13 +64,13 @@ def test_chinese_macrolanguage_zh_is_rejected() -> None:
     assert exc_info.value.code == "zho"
 
 
-def test_list_allowed_returns_58_entries_with_english_names() -> None:
+def test_list_allowed_returns_60_entries_with_english_names() -> None:
     entries = list_allowed()
-    assert len(entries) == 58
+    assert len(entries) == 60
 
     codes = [e.code for e in entries]
     # Every code must be unique 3-letter lowercase.
-    assert len(set(codes)) == 58
+    assert len(set(codes)) == 60
     for code in codes:
         assert len(code) == 3
         assert code == code.lower()

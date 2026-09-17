@@ -1,0 +1,42 @@
+# Phrasebook translation ladder (mentor-rebuild task 04).
+#
+# Not on any submission path and not in any pipeline: this stage exists for a
+# script the implementer runs by hand when the source phrases change. Its calls
+# leave no register row — the script builds the router without a session
+# factory, because the register writes only inside a job and there is no job
+# type for a script run (hotfix 3 probe, decision 3 of the canon). The cost of a
+# run is read from the provider's Usage page instead.
+#
+# Its own file so the stage name cannot be mistaken for the presentation
+# ladders, which are about slides, not about the review's presentation.
+#
+# ONE RUNG, NO DESCENT (ratified 2026-09-17 after the probe calls): the
+# Anthropic account has no funds, and a second provider would make the Usage
+# difference — the only measurement of what a run costs — a two-page affair.
+# A provider failure is a failed run that is started again; the script writes
+# one file per language, so the second run finishes what the first did not.
+#
+# The output ceiling and the cost ceiling of a run are tied by one
+# multiplication, and moving either moves the other:
+#
+#     60 calls x 8192 tokens x $0.010 per 1k = $4.92 of output
+#     + ~1.5k input tokens per call x $0.00125 per 1k = ~$0.11 of input
+#     ~= $5.0 worst case, against the ratified $6 ceiling
+#
+# 8192 is not tight by accident. Thinking is billed inside this ceiling and
+# cannot be switched off for gemini-2.5-pro — the base connector translates no
+# reasoning form, so a ladder cannot ask for less (probe 2026-09-17: 627
+# thinking tokens for a three-token answer). A tighter ceiling would reproduce
+# the fault of hotfixes 1 and 2: the ceiling spent on thinking, an empty body
+# returned, and the call paid for.
+
+stages:
+  dictionary_translation:
+    prompt_ref: "prompts/dictionary_translation/v1.md"
+    # The model must be able to hold a declared output shape: the script asks
+    # for one JSON object carrying exactly the keys it sent.
+    requires: [structured_output]
+    ladder:
+      - provider: gemini
+        model: gemini-2.5-pro
+        max_output_tokens: 8192

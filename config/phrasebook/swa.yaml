@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Imepitishwa
+verdict.failed: Haikupitishwa
+section.fixed: Imerekebishwa
+section.new_remarks: Maoni mapya
+section.open: Haijatatuliwa
+section.broken: Imeharibika
+section.mentor_voice: Kutoka kwa Mshauri
+section.replies: Majibu kwa maoni yako
+section.verification: Jinsi ilivyokaguliwa
+section.progress: Maendeleo yako
+remark.what: Nini tatizo
+remark.why: Kwa nini ni muhimu
+remark.todo: Nini cha kufanya
+remark.read: Wapi pa kusoma
+verification.by_run: Imekaguliwa kwa kuendeshwa
+verification.by_reading: Imekaguliwa kwa kusoma
+reply.kind.question: Swali lako
+reply.kind.objection: Pingamizi lako
+reply.kind.comment: Maoni yako
+reply.answer: Jibu
+position.video: video, {time}
+position.slide: slaidi {number}
+position.paragraph: aya {number}
+position.file: faili {name}
+review.title: Mapitio

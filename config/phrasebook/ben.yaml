@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: গৃহীত
+verdict.failed: অগৃহীত
+section.fixed: সংশোধিত
+section.new_remarks: নতুন মন্তব্য
+section.open: এখনও অমীমাংসিত
+section.broken: ভেঙে গেছে
+section.mentor_voice: মেন্টরের পক্ষ থেকে
+section.replies: আপনার মন্তব্যের উত্তর
+section.verification: যাচাই পদ্ধতি
+section.progress: আপনার অগ্রগতি
+remark.what: কী ভুল হয়েছে
+remark.why: কেন এটি গুরুত্বপূর্ণ
+remark.todo: কী করতে হবে
+remark.read: কোথায় পড়বেন
+verification.by_run: চালিয়ে যাচাইকৃত
+verification.by_reading: পড়ে যাচাইকৃত
+reply.kind.question: আপনার প্রশ্ন
+reply.kind.objection: আপনার আপত্তি
+reply.kind.comment: আপনার মন্তব্য
+reply.answer: উত্তর
+position.video: ভিডিও, {time}
+position.slide: স্লাইড {number}
+position.paragraph: অনুচ্ছেদ {number}
+position.file: ফাইল {name}
+review.title: পর্যালোচনা

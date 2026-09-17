@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Zaliczone
+verdict.failed: Niezaliczone
+section.fixed: Poprawiono
+section.new_remarks: Nowe uwagi
+section.open: Pozostało otwarte
+section.broken: Przestało działać
+section.mentor_voice: Od Mentora
+section.replies: Odpowiedzi na Państwa komentarze
+section.verification: Jak sprawdzono
+section.progress: Państwa postępy
+remark.what: Co jest nie tak
+remark.why: Dlaczego to jest ważne
+remark.todo: Co zrobić
+remark.read: Gdzie poczytać
+verification.by_run: Sprawdzono przez uruchomienie
+verification.by_reading: Sprawdzono przez przeczytanie
+reply.kind.question: Państwa pytanie
+reply.kind.objection: Państwa sprzeciw
+reply.kind.comment: Państwa komentarz
+reply.answer: Odpowiedź
+position.video: wideo, {time}
+position.slide: slajd {number}
+position.paragraph: akapit {number}
+position.file: plik {name}
+review.title: Recenzja

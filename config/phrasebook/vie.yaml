@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Đã đạt
+verdict.failed: Chưa đạt
+section.fixed: Đã sửa
+section.new_remarks: Nhận xét mới
+section.open: Vẫn còn
+section.broken: Bị lỗi
+section.mentor_voice: Từ Mentor
+section.replies: Phản hồi bình luận của bạn
+section.verification: Cách kiểm tra
+section.progress: Tiến độ của bạn
+remark.what: Vấn đề
+remark.why: Tại sao lại quan trọng
+remark.todo: Cần làm gì
+remark.read: Đọc thêm ở đâu
+verification.by_run: Kiểm tra bằng cách chạy thử
+verification.by_reading: Kiểm tra bằng cách đọc mã
+reply.kind.question: Câu hỏi của bạn
+reply.kind.objection: Phản đối của bạn
+reply.kind.comment: Bình luận của bạn
+reply.answer: Câu trả lời
+position.video: video, {time}
+position.slide: slide {number}
+position.paragraph: đoạn {number}
+position.file: tệp {name}
+review.title: Bài đánh giá

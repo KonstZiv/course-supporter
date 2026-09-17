@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Elfogadva
+verdict.failed: Elutasítva
+section.fixed: Javítva
+section.new_remarks: Új megjegyzések
+section.open: Nyitva maradt
+section.broken: Elromlott
+section.mentor_voice: A mentortól
+section.replies: Válaszok a megjegyzéseire
+section.verification: Ellenőrzés módja
+section.progress: Az Ön haladása
+remark.what: Mi a hiba
+remark.why: Miért fontos?
+remark.todo: Teendő
+remark.read: Olvasnivaló
+verification.by_run: Futtatással ellenőrizve
+verification.by_reading: Olvasással ellenőrizve
+reply.kind.question: Az Ön kérdése
+reply.kind.objection: Az Ön ellenvetése
+reply.kind.comment: Az Ön megjegyzése
+reply.answer: Válasz
+position.video: videó, {time}
+position.slide: dia {number}
+position.paragraph: bekezdés {number}
+position.file: fájl {name}
+review.title: Értékelés

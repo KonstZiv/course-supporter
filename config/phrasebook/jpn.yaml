@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: 合格
+verdict.failed: 不合格
+section.fixed: 修正済み
+section.new_remarks: 新しい指摘
+section.open: 未解決
+section.broken: デグレード
+section.mentor_voice: メンターから
+section.replies: コメントへの返信
+section.verification: 確認方法
+section.progress: 進捗状況
+remark.what: 問題点
+remark.why: 重要性
+remark.todo: 修正内容
+remark.read: 参考資料
+verification.by_run: 実行確認
+verification.by_reading: 目視確認
+reply.kind.question: 質問
+reply.kind.objection: 反論
+reply.kind.comment: コメント
+reply.answer: 回答
+position.video: 動画、{time}
+position.slide: スライド {number}
+position.paragraph: 段落 {number}
+position.file: ファイル {name}
+review.title: レビュー

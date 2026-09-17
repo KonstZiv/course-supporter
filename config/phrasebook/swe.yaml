@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Godkänd
+verdict.failed: Underkänd
+section.fixed: Åtgärdat
+section.new_remarks: Nya anmärkningar
+section.open: Kvarstår öppet
+section.broken: Gick sönder
+section.mentor_voice: Från mentorn
+section.replies: Svar på era kommentarer
+section.verification: Verifiering
+section.progress: Era framsteg
+remark.what: Vad som är fel
+remark.why: Varför det är viktigt
+remark.todo: Att göra
+remark.read: Lästips
+verification.by_run: Verifierad genom körning
+verification.by_reading: Verifierad genom läsning
+reply.kind.question: Er fråga
+reply.kind.objection: Er invändning
+reply.kind.comment: Er kommentar
+reply.answer: Svar
+position.video: video, {time}
+position.slide: bild {number}
+position.paragraph: stycke {number}
+position.file: fil {name}
+review.title: Granskning

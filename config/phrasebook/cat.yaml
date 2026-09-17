@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Aprovat
+verdict.failed: No aprovat
+section.fixed: Corregit
+section.new_remarks: Noves observacions
+section.open: Queda obert
+section.broken: Trencat
+section.mentor_voice: Del mentor
+section.replies: Respostes als vostres comentaris
+section.verification: Com s'ha verificat
+section.progress: El vostre progrés
+remark.what: Què no està bé
+remark.why: Per què és important
+remark.todo: Què cal fer
+remark.read: On llegir
+verification.by_run: Verificat per execució
+verification.by_reading: Verificat per lectura
+reply.kind.question: La vostra pregunta
+reply.kind.objection: La vostra objecció
+reply.kind.comment: El vostre comentari
+reply.answer: Resposta
+position.video: vídeo, {time}
+position.slide: diapositiva {number}
+position.paragraph: paràgraf {number}
+position.file: fitxer {name}
+review.title: Revisió

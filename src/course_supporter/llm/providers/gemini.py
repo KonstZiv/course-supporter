@@ -49,6 +49,34 @@ def _response_finish_reason(response: types.GenerateContentResponse) -> FinishRe
     )
 
 
+def _billable_output(
+    usage: types.GenerateContentResponseUsageMetadata | None,
+) -> tuple[int | None, int | None]:
+    """The output tokens Gemini bills, and the reasoning share inside them.
+
+    Gemini reports the answer and the thinking apart — ``candidates_token_count``
+    counts the answer alone, ``thoughts_token_count`` the reasoning — while the
+    bill, and ``max_output_tokens``, count both. Summing them is what makes
+    ``tokens_out`` mean here what it means on every other connector: the
+    billable output the register prices. Measured 2026-09-17 on
+    ``gemini-2.5-pro``: three answer tokens against 627 of reasoning, so the
+    register priced half a percent of that call before this (hotfix 3).
+
+    Reasoning stays ``None`` — "the provider did not report it", never a
+    fabricated zero — when the field is absent, and the sum then degrades to
+    the answer alone, which is the pre-hotfix number.
+    """
+    if usage is None:
+        return None, None
+    answer = usage.candidates_token_count
+    reasoning = usage.thoughts_token_count
+    if reasoning is None:
+        return answer, None
+    # An answer of ``None`` with reasoning present is the case this fix exists
+    # for: the ceiling was spent on thinking and nothing came back.
+    return (answer or 0) + reasoning, reasoning
+
+
 # Image MIME signatures (magic bytes). Only the formats Gemini accepts
 # and that we actually produce are listed: VD frame_sampler emits JPEG
 # (ffmpeg frame_%06d.jpg), presentation ingestion emits PNG (PyMuPDF
@@ -216,12 +244,14 @@ class GeminiProvider(LLMProvider):
         if request.expects_json:
             content = strip_markdown_json(content)
         usage = response.usage_metadata
+        tokens_out, tokens_reasoning = _billable_output(usage)
         return LLMResponse(
             content=content,
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
-            tokens_out=usage.candidates_token_count if usage else None,
+            tokens_out=tokens_out,
+            tokens_reasoning=tokens_reasoning,
             finish_reason=_response_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )
@@ -252,12 +282,14 @@ class GeminiProvider(LLMProvider):
             )
 
         usage = response.usage_metadata
+        tokens_out, tokens_reasoning = _billable_output(usage)
         llm_response = LLMResponse(
             content=response.text or "",
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
-            tokens_out=usage.candidates_token_count if usage else None,
+            tokens_out=tokens_out,
+            tokens_reasoning=tokens_reasoning,
             finish_reason=_response_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )

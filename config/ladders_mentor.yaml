@@ -181,9 +181,25 @@ stages:
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
+      # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 2,
+      # ratified 2026-09-17 — DD-SP-AY). The same fault hotfix 1 fixed one
+      # stage earlier, on the same provider: deepseek_thinking counts the
+      # reasoning inside max_output_tokens, so at 8192 the rung can spend the
+      # whole ceiling on reasoning and return an EMPTY body. Live run 1
+      # (2026-09-17) is the measurement: this rung returned exactly 8192 output
+      # tokens with an empty body (outcome ``empty_at_output_ceiling``,
+      # finish_reason ``output_ceiling``), the ladder descended to qwen3.7-max
+      # and the layer was paid twice — $0.0446, the most expensive row of the
+      # run. What pushed this stage over is hotfix 1 itself: the unblocked
+      # decomposition now yields 37 criteria instead of 18, and this rung
+      # applies them. The bounds are hotfix 1's, unchanged: observed generation
+      # is ~60-69 tokens/s, so a full 32768 is ~9 min against the 900 s HTTP
+      # read timeout (providers/openai_compat.py); 65536 would time out and be
+      # retried as an infrastructure error, each attempt paid. Provider, model
+      # and rungs 2 and 3 are unchanged; a test pins the value.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
-        max_output_tokens: 8192
+        max_output_tokens: 32768
       - provider: dashscope
         model: qwen3.7-max
         max_output_tokens: 8192
@@ -200,9 +216,16 @@ stages:
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
+      # Rung 1 ceiling: 32768 (hotfix 2, ratified 2026-09-17 — DD-SP-AY).
+      # Raised together with phase 1A above and for its reason, not its own
+      # history: same provider, same tier, same submission judged with the same
+      # model, so whatever grows one grows the other. This stage has not hit the
+      # ceiling — 5285 and 6928 output tokens on the two measured prod runs — so
+      # here the change is precaution, while for 1A it was repair. Bounds,
+      # provider, model and rungs 2 and 3 as above.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
-        max_output_tokens: 8192
+        max_output_tokens: 32768
       - provider: dashscope
         model: qwen3.7-max
         max_output_tokens: 8192

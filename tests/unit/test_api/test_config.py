@@ -47,8 +47,10 @@ class TestGetAllowedLanguages:
             assert isinstance(item["code"], str) and len(item["code"]) == 3
             assert item["code"] == item["code"].lower()
             assert isinstance(item["name_en"], str) and item["name_en"]
-            # name_native is optional (iso639 does not always carry it).
-            assert "name_native" in item
+            # Every code on the list has a native name now: they come from
+            # CLDR through ``config/language_names.yaml``, not from iso639,
+            # which has no such field at all.
+            assert isinstance(item["name_native"], str) and item["name_native"]
 
     async def test_includes_ukrainian_and_cantonese(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/config/languages")

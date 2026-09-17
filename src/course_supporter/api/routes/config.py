@@ -44,9 +44,9 @@ SharedDep = Annotated[
 async def get_allowed_languages(_tenant: SharedDep) -> AllowedLanguagesResponse:
     """Return the project-wide course-language whitelist.
 
-    Codes are canonical ISO 639-3; ``name_en`` is always populated
-    (via ``iso639``), ``name_native`` is best-effort (None when the
-    library does not carry a native-script name for that language).
+    Codes are canonical ISO 639-3; ``name_en`` comes from ``iso639`` and
+    ``name_native`` from ``config/language_names.yaml`` (CLDR). Both are
+    populated for every code on the whitelist.
     """
     items = list_allowed()
     return AllowedLanguagesResponse(items=items, total=len(items))

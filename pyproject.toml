@@ -73,6 +73,12 @@ dev = [
     "pre-commit>=4.1",
     "types-pyyaml>=6.0.12.20250915",
     "aiosmtpd>=1.4.6",
+    # CLDR, for the lock that keeps config/language_names.yaml generated
+    # rather than hand-written (task 04, DD-2.4-L). Runtime reads the file,
+    # not babel — which is why this is a dev dependency and not a runtime one.
+    # It arrived transitively via trafilatura; a test that imports it directly
+    # must not depend on a chain that can change under it.
+    "babel>=2.17",
 ]
 docs = [
     "mkdocs-material>=9",

@@ -476,6 +476,9 @@ class Settings(BaseSettings):
     auth_registry_path: Path = Path("config/auth.yaml")
     platform_registry_path: Path = Path("config/platforms.yaml")
     language_registry_path: Path = Path("config/languages.yaml")
+    # What each language calls itself, from CLDR: iso639 carries no native
+    # names at all (mentor-rebuild task 04, DD-2.4-L).
+    language_names_path: Path = Path("config/language_names.yaml")
     ladders_dir: Path = Path("config")
     mentor_review_config_path: Path = Path("config/mentor_review.yaml")
     sanity_config_path: Path = Path("config/sanity.yaml")

@@ -1,0 +1,207 @@
+# ============================================================
+# Native language names (mentor-rebuild task 04).
+# ============================================================
+#
+# What a language calls itself, for the language list the author app and the
+# student portal read. Every value comes from CLDR through ``babel`` — the real
+# i18n source ``DD-2.4-L`` asks for — and NOT from a hand-written table: a
+# hand-written one is the debt itself. ``iso639`` carries no native names at
+# all, which is why this file exists.
+#
+# Each value is what CLDR answers to ``get_language_name()`` for that code: the
+# language's own name, without the territory or script qualifier its full
+# display name would append (``українська``, not ``українська (Україна)``).
+#
+# ONE entry is a named exception, with its reason beside it. There is no second:
+# a value that had to be corrected by hand would mean this file had started
+# becoming the hand-written table, and that is a stop, not a quiet edit.
+# ``tests/unit/test_language_names.py`` asks CLDR again for every code and
+# allows a difference only for the one named below.
+#
+# Sorted by code. The set of codes matches ``config/languages.yaml`` both ways,
+# checked by the same test.
+
+ara:
+  name_en: Arabic
+  name_native: العربية
+aze:
+  name_en: Azerbaijani
+  name_native: azərbaycan
+bel:
+  name_en: Belarusian
+  name_native: беларуская
+ben:
+  name_en: Bengali
+  name_native: বাংলা
+bos:
+  name_en: Bosnian
+  name_native: bosanski
+bul:
+  name_en: Bulgarian
+  name_native: български
+cat:
+  name_en: Catalan
+  name_native: català
+ces:
+  name_en: Czech
+  name_native: čeština
+cmn:
+  name_en: Mandarin Chinese
+  name_native: 中文
+cnr:
+  name_en: Montenegrin
+  # THE ONE EXCEPTION. CLDR has no name of its own for this code: asked
+  # about ``cnr`` it answers ``srpski`` — Serbian. That is a different
+  # language, not a different spelling of this one, so the name here is
+  # ours, not CLDR's. Any second exception is a stop, not a quiet edit.
+  name_native: crnogorski
+dan:
+  name_en: Danish
+  name_native: dansk
+deu:
+  name_en: German
+  name_native: Deutsch
+ell:
+  name_en: Modern Greek (1453-)
+  name_native: Ελληνικά
+eng:
+  name_en: English
+  name_native: English
+est:
+  name_en: Estonian
+  name_native: eesti
+fas:
+  name_en: Persian
+  name_native: فارسی
+fil:
+  name_en: Filipino
+  name_native: Filipino
+fin:
+  name_en: Finnish
+  name_native: suomi
+fra:
+  name_en: French
+  name_native: français
+glg:
+  name_en: Galician
+  name_native: galego
+guj:
+  name_en: Gujarati
+  name_native: ગુજરાતી
+heb:
+  name_en: Hebrew
+  name_native: עברית
+hin:
+  name_en: Hindi
+  name_native: हिन्दी
+hrv:
+  name_en: Croatian
+  name_native: hrvatski
+hun:
+  name_en: Hungarian
+  name_native: magyar
+hye:
+  name_en: Armenian
+  name_native: հայերեն
+ind:
+  name_en: Indonesian
+  name_native: Indonesia
+isl:
+  name_en: Icelandic
+  name_native: íslenska
+ita:
+  name_en: Italian
+  name_native: italiano
+jpn:
+  name_en: Japanese
+  name_native: 日本語
+kan:
+  name_en: Kannada
+  name_native: ಕನ್ನಡ
+kat:
+  name_en: Georgian
+  name_native: ქართული
+kaz:
+  name_en: Kazakh
+  name_native: қазақ тілі
+lav:
+  name_en: Latvian
+  name_native: latviešu
+lit:
+  name_en: Lithuanian
+  name_native: lietuvių
+mal:
+  name_en: Malayalam
+  name_native: മലയാളം
+mar:
+  name_en: Marathi
+  name_native: मराठी
+mkd:
+  name_en: Macedonian
+  name_native: македонски
+mlt:
+  name_en: Maltese
+  name_native: Malti
+msa:
+  name_en: Malay (macrolanguage)
+  name_native: Melayu
+nep:
+  name_en: Nepali (macrolanguage)
+  name_native: नेपाली
+nld:
+  name_en: Dutch
+  name_native: Nederlands
+nor:
+  name_en: Norwegian
+  name_native: norsk
+ori:
+  name_en: Oriya (macrolanguage)
+  name_native: ଓଡ଼ିଆ
+pol:
+  name_en: Polish
+  name_native: polski
+por:
+  name_en: Portuguese
+  name_native: português
+ron:
+  name_en: Romanian
+  name_native: română
+rus:
+  name_en: Russian
+  name_native: русский
+slk:
+  name_en: Slovak
+  name_native: slovenčina
+slv:
+  name_en: Slovenian
+  name_native: slovenščina
+spa:
+  name_en: Spanish
+  name_native: español
+srp:
+  name_en: Serbian
+  name_native: српски
+swa:
+  name_en: Swahili (macrolanguage)
+  name_native: Kiswahili
+swe:
+  name_en: Swedish
+  name_native: svenska
+tam:
+  name_en: Tamil
+  name_native: தமிழ்
+tel:
+  name_en: Telugu
+  name_native: తెలుగు
+tur:
+  name_en: Turkish
+  name_native: Türkçe
+ukr:
+  name_en: Ukrainian
+  name_native: українська
+vie:
+  name_en: Vietnamese
+  name_native: Tiếng Việt
+yue:
+  name_en: Yue Chinese
+  name_native: 粵語

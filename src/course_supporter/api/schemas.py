@@ -205,9 +205,9 @@ class AllowedLanguagesResponse(BaseModel):
     """Response shape for ``GET /api/v1/config/languages``.
 
     Returns the project-wide course-language whitelist (canonical ISO 639-3
-    codes enriched with English names; native names when ``iso639`` carries
-    them). UI consumes this as the single source of truth for the language
-    selector — no hardcoded list on the client.
+    codes enriched with English names from ``iso639`` and native names from
+    ``config/language_names.yaml``). UI consumes this as the single source of
+    truth for the language selector — no hardcoded list on the client.
     """
 
     items: list[LanguageEntry] = Field(

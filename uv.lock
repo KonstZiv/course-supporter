@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
-    "python_full_version < '3.14' and sys_platform != 'darwin'",
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and sys_platform != 'darwin'",
     "python_full_version < '3.14' and sys_platform == 'darwin'",
 ]
 
@@ -517,6 +517,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "aiosmtpd" },
+    { name = "babel" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -573,6 +574,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "aiosmtpd", specifier = ">=1.4.6" },
+    { name = "babel", specifier = ">=2.17" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pre-commit", specifier = ">=4.1" },
     { name = "pytest", specifier = ">=8.3" },

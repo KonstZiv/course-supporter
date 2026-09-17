@@ -379,6 +379,39 @@ class TestRealConfigs:
         assert ladder[0].max_output_tokens == 32768
         assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
 
+    def test_layered_evaluation_node_course_rung_1_carries_hotfix_2_ceiling(
+        self,
+    ) -> None:
+        # Hotfix 2 (2026-09-17, DD-SP-AY): the fault hotfix 1 fixed for the
+        # decomposition reached this stage next — on live run 1 the thinking-on
+        # rung returned exactly 8192 output tokens with an empty body, the
+        # ladder descended to qwen3.7-max and the layer was paid twice. 32768
+        # is the ratified value, bounded by the 900 s HTTP read timeout (see
+        # ladders_mentor.yaml). Provider and model stay, the fallback rungs keep
+        # 8192: a swap or a silent revert breaks this test.
+        config = load_ladder_config(Path("config"))
+        ladder = config.get_stage("mentor_layered_evaluation_node_course").ladder
+
+        assert ladder[0].provider == "deepseek_thinking"
+        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].max_output_tokens == 32768
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+
+    def test_layered_evaluation_industry_rung_1_carries_hotfix_2_ceiling(
+        self,
+    ) -> None:
+        # The second half of hotfix 2: the industry layer judges the same
+        # submission with the same model as the node/course layer, so the pair
+        # moves together — here as precaution (it has not hit the ceiling yet),
+        # there as repair. Same value, same bounds, same fallback rungs.
+        config = load_ladder_config(Path("config"))
+        ladder = config.get_stage("mentor_layered_evaluation_industry").ladder
+
+        assert ladder[0].provider == "deepseek_thinking"
+        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].max_output_tokens == 32768
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+
     def test_pass_2a_fallback_rung_carries_max_output_tokens_4096_override(
         self,
     ) -> None:

@@ -456,15 +456,16 @@ class TestCountersCountLiveThingsOnly:
         assert after.helped == 0
         assert submission.deleted_at is None, "the submission stayed alive"
 
-    async def test_another_tenant_counts_nothing(
+    async def _one_counted_touch(
         self,
         db_session: AsyncSession,
         seed_tenant: Tenant,
         seed_root_node: CourseNode,
         seed_material_entry: AuthoredDocument,
-    ) -> None:
-        """Leak-safe: a foreign tenant gets zeros and an empty list, not an error."""
-        student = await _student(db_session, seed_tenant, "ext-isolation")
+        external_id: str,
+    ) -> Tenant:
+        """One counted touch in this tenant, plus a stranger tenant beside it."""
+        student = await _student(db_session, seed_tenant, external_id)
         submission = await _reviewed_submission(
             db_session,
             tenant=seed_tenant,
@@ -479,18 +480,65 @@ class TestCountersCountLiveThingsOnly:
             submission_id=submission.id,
             value=FeedbackValue.HELPED,
         )
-
         stranger = Tenant(name=f"test-stranger-{uuid.uuid4().hex[:8]}")
         db_session.add(stranger)
         await db_session.flush()
+        return stranger
 
+    async def test_a_foreign_key_reading_my_course_gets_an_empty_list(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """The course level, alone: a foreign tenant with MY course id sees nothing.
+
+        Its own test rather than half of one, because the two levels filter in
+        two separate queries: one of them could lose the tenant condition while
+        the other kept it.
+        """
+        stranger = await self._one_counted_touch(
+            db_session,
+            seed_tenant,
+            seed_root_node,
+            seed_material_entry,
+            "ext-isolation-course",
+        )
         repo = FeedbackRepository(db_session)
+        mine = await repo.counters_by_task(
+            tenant_id=seed_tenant.id, course_node_id=seed_root_node.id
+        )
+        assert mine, "the touch was not counted for its own tenant"
+
         assert (
             await repo.counters_by_task(
                 tenant_id=stranger.id, course_node_id=seed_root_node.id
             )
             == []
         )
+
+    async def test_a_foreign_key_reading_my_task_gets_zeros(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """The task level, alone: a foreign tenant with MY task id sees zeros."""
+        stranger = await self._one_counted_touch(
+            db_session,
+            seed_tenant,
+            seed_root_node,
+            seed_material_entry,
+            "ext-isolation-task",
+        )
+        repo = FeedbackRepository(db_session)
+        mine = await repo.counters_for_task(
+            tenant_id=seed_tenant.id, authored_document_id=seed_material_entry.id
+        )
+        assert mine.helped == 1, "the touch was not counted for its own tenant"
+
         total = await repo.counters_for_task(
             tenant_id=stranger.id, authored_document_id=seed_material_entry.id
         )

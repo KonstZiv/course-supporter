@@ -29,6 +29,7 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
+from course_supporter.api.routes._feedback_shared import to_touch
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
     curated_presentation,
@@ -39,21 +40,17 @@ from course_supporter.api.routes._portal_shared import (
     role_visible_to_student,
 )
 from course_supporter.api.schemas import (
+    FeedbackTouch,
     OptionalLanguageForm,
     PortalBaseDownload,
     PortalDeltaReceipt,
-    PortalFeedbackTouch,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
     PortalTouchRequest,
 )
 from course_supporter.auth.context import StudentContext
-from course_supporter.feedback_kinds import (
-    FeedbackKind,
-    FeedbackTargetKind,
-    FeedbackValue,
-)
+from course_supporter.feedback_kinds import FeedbackTargetKind
 from course_supporter.homework.feedback_core import touch_review
 from course_supporter.homework.submission_core import (
     MAX_HOMEWORK_SIZE,
@@ -73,7 +70,7 @@ from course_supporter.storage.document_summary_repository import (
 )
 from course_supporter.storage.feedback_repository import FeedbackRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.orm import HomeworkSubmission, Student, StudentFeedback
+from course_supporter.storage.orm import HomeworkSubmission, Student
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_enrollment_repository import (
@@ -392,22 +389,11 @@ async def _delta_receipt(
     )
 
 
-def _to_touch(row: StudentFeedback | None) -> PortalFeedbackTouch | None:
-    """One projection of a stored answer, for the two places that serve one."""
-    if row is None:
-        return None
-    return PortalFeedbackTouch(
-        kind=FeedbackKind(row.kind),
-        value=FeedbackValue(row.value),
-        updated_at=row.updated_at,
-    )
-
-
 def _to_detail(
     submission: HomeworkSubmission,
     *,
     delta: PortalDeltaReceipt | None = None,
-    own_feedback: PortalFeedbackTouch | None = None,
+    own_feedback: FeedbackTouch | None = None,
 ) -> PortalSubmissionDetail:
     """Curated detail — adds review_markdown and the structure; no trace.
 
@@ -524,12 +510,16 @@ async def get_portal_submission(
         target_kind=FeedbackTargetKind.REVIEW,
         target_id=submission.id,
     )
-    return _to_detail(submission, delta=delta, own_feedback=_to_touch(own))
+    return _to_detail(
+        submission,
+        delta=delta,
+        own_feedback=to_touch(own) if own is not None else None,
+    )
 
 
 @router.post(
     "/portal/submissions/{submission_id}/feedback",
-    response_model=PortalFeedbackTouch,
+    response_model=FeedbackTouch,
 )
 async def touch_portal_submission(
     student: StudentDep,
@@ -539,7 +529,7 @@ async def touch_portal_submission(
         uuid.UUID,
         Path(description="The submission whose review is being answered."),
     ],
-) -> PortalFeedbackTouch:
+) -> FeedbackTouch:
     """Answer whether this review helped — the student's own session (task 05).
 
     One of two doors into the same core; this one authenticates with the portal
@@ -564,7 +554,4 @@ async def touch_portal_submission(
         value=body.value,
     )
     await session.commit()
-    touch = _to_touch(row)
-    if touch is None:  # pragma: no cover — the core returns a row or raises
-        raise HTTPException(status_code=404, detail="Submission not found.")
-    return touch
+    return to_touch(row)

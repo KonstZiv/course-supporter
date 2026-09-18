@@ -1751,13 +1751,31 @@ class PortalTouchRequest(BaseModel):
     )
 
 
-class PortalFeedbackTouch(BaseModel):
-    """The student's own answer about a review, as it is served back.
+class ChannelTouchRequest(PortalTouchRequest):
+    """The same answer, arriving from the caller's channel (task 05).
 
-    Carried by the touch route's response AND by the submission detail, so the
-    portal reads one shape whether it has just written the answer or is finding
-    one written earlier. ``updated_at`` is the time of the CURRENT answer: a
-    repeat touch replaces the previous one, and the time moves with it.
+    Adds the one thing a tenant key cannot know by itself: WHICH student is
+    answering, named by the identifier the caller's own system uses. The touch
+    never creates that student — unlike a submission, which does.
+    """
+
+    student_external_id: str = Field(
+        min_length=1,
+        description="Student identifier from the caller's system, as used on "
+        "submission. Resolved within the key's tenant; never created here.",
+    )
+
+
+class FeedbackTouch(BaseModel):
+    """A student's own answer about a review, as it is served back.
+
+    Not ``Portal*``: this is the response of BOTH doors — the portal session
+    and the caller's channel — and the shape the submission detail serves on
+    the next read. A name that promised one of the two would mislead whoever
+    integrates with the other.
+
+    ``updated_at`` is the time of the CURRENT answer: a repeat touch replaces
+    the previous one, and the time moves with it.
     """
 
     kind: FeedbackKind
@@ -1806,7 +1824,7 @@ class PortalSubmissionDetail(BaseModel):
         description="I2 delta receipt (KD18 P5) for a project submission — "
         "counters + staleness; null for a non-project submission.",
     )
-    own_feedback: PortalFeedbackTouch | None = Field(
+    own_feedback: FeedbackTouch | None = Field(
         default=None,
         description="This student's own answer about this review (task 05); "
         "null when they have not answered, and on a submission that carries no "

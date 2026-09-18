@@ -12,18 +12,64 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+import structlog
+from pydantic import ValidationError
+
 from course_supporter.api.schemas import (
     PortalNotOpened,
     PortalPresentation,
     PortalRejection,
     PortalVerdict,
 )
+from course_supporter.models.review_schema import (
+    REVIEW_SCHEMA_VERSION,
+    review_schema_version,
+)
+from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.source import MaterialRole
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.storage.orm import HomeworkStatus
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
+
+
+logger = structlog.get_logger(__name__)
+
+
+def curated_structure(
+    review_result: dict[str, object] | None,
+) -> ReviewStructureV1 | None:
+    """The review structure, when the stored review is one (task 04).
+
+    One projection for two surfaces — the portal detail and the ``reviewed``
+    webhook both come through here, so neither can drift into reading the
+    column its own way.
+
+    Unlike :func:`curated_verdict`, this is not a slice of the trace: a
+    version-1 review IS the structure, written for the student, and it goes out
+    whole. Which of the two a row holds is answered by the version key, not by
+    guessing from content — a review written before the rebuild reads as
+    ``pre-rebuild`` and gets ``None`` here.
+
+    A row that claims version 1 and does not validate is our own bad data, not
+    the student's problem: it is logged and read as absent, so the rest of the
+    page still renders. Raising would turn one bad row into a broken page;
+    dropping it without a word would make it unfindable.
+    """
+    if not review_result:
+        return None
+    if review_schema_version(review_result) != REVIEW_SCHEMA_VERSION:
+        return None
+    try:
+        return ReviewStructureV1.model_validate(review_result)
+    except ValidationError as exc:
+        logger.error(
+            "review_structure_invalid",
+            errors=exc.error_count(),
+            detail=str(exc),
+        )
+        return None
 
 
 def role_visible_to_student(material_role: str) -> bool:
@@ -53,9 +99,10 @@ def role_visible_to_student(material_role: str) -> bool:
 def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:
     """Extract ONLY the caller-facing verdict from ``review_result``.
 
-    The full ``review_result`` JSONB (and ``safety_result`` / ``sanity_result``)
-    is the internal trace and is never returned — only its ``verdict`` block,
-    and only once a review has written it (``None`` otherwise).
+    For a pre-rebuild review, ``review_result`` is the internal trace and never
+    goes out; only its ``verdict`` block does, and only once a review has
+    written it (``None`` otherwise). The structure of a version-1 review is a
+    different matter and has its own projection above.
     """
     if not review_result:
         return None

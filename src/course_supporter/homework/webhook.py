@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import httpx
 import structlog
 
+from course_supporter.api.routes._portal_shared import curated_structure
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.call_outcome import CallOutcome
 from course_supporter.config import get_settings
@@ -86,6 +87,9 @@ def build_reviewed_payload(
             review_text=submission.review_markdown or "",
             response_language=submission.response_language or "en",
         ),
+        # The same projection the portal reads through: one place decides what
+        # a stored review is, so the two surfaces cannot drift (task 04).
+        structure=curated_structure(submission.review_result),
         timestamp=datetime.now(UTC),
     )
 

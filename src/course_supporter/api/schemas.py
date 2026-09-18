@@ -21,6 +21,7 @@ from course_supporter.language import (
     LanguageNotAllowedError,
     normalize_and_validate,
 )
+from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
 from course_supporter.storage.course_node_repository import SummaryStatus
@@ -1576,9 +1577,12 @@ class PortalSubmitResponse(BaseModel):
 class PortalVerdict(BaseModel):
     """Caller-facing verdict shown to the student (Phase 6 T2 read-path).
 
-    Derived from ``review_result['verdict']`` (the only review_result key the
-    student ever sees); None until a review has written it. The full layered
-    ``review_result`` JSONB is NEVER exposed.
+    Derived from ``review_result['verdict']``; None until a review has written
+    it. A pre-rebuild review's layered ``review_result`` is an internal trace
+    and never leaves the service — its ``verdict`` block is the one thing
+    curated out of it. (A version-1 review stores a review structure in that
+    same column rather than a trace; it has its own field and its own
+    projection — see ``PortalSubmissionDetail.structure``.)
     """
 
     passed: bool = Field(description="Whether the submission meets the bar.")
@@ -1658,10 +1662,11 @@ class PortalSubmissionListItem(BaseModel):
     """One attempt in the read-path list (Phase 6 T2). NO review_markdown.
 
     The list is intentionally light: the heavy ``review_markdown`` is fetched
-    only in the detail view. The internal trace
-    (``review_result``/``safety_result``/``sanity_result``) is NEVER included
-    — ``not_opened`` and ``recovered_encoding`` are curated projections OF
-    that trace, two facts about how the file was read, not the trace itself.
+    only in the detail view, and so is the review structure. The internal trace
+    (a pre-rebuild ``review_result``, ``safety_result``, ``sanity_result``) is
+    NEVER included — ``not_opened`` and ``recovered_encoding`` are curated
+    projections OF that trace, two facts about how the file was read, not the
+    trace itself.
     """
 
     id: uuid.UUID
@@ -1732,10 +1737,16 @@ class PortalDeltaReceipt(BaseModel):
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
-    The student sees ``status`` / ``score`` / ``verdict`` / ``review_markdown``
-    only. The internal trace (``review_result`` / ``safety_result`` /
-    ``sanity_result``) is NEVER serialized here. A project submission also
-    carries the ``delta`` receipt (KD18 P5); it is null for a non-project one.
+    The internal trace is NEVER serialized: not ``safety_result``, not
+    ``sanity_result``, and not the layered ``review_result`` of a pre-rebuild
+    review, which is the Mentor's own working notes. That rule is about the
+    trace, not about the column. From schema version 1 the same column holds a
+    review structure instead, and a structure is not a trace: every field of it
+    is written to be read by the student. It goes out whole, in ``structure``.
+    Which of the two a row holds is answered by the version key inside it.
+
+    A project submission also carries the ``delta`` receipt (KD18 P5); it is
+    null for a non-project one.
     """
 
     id: uuid.UUID
@@ -1746,6 +1757,14 @@ class PortalSubmissionDetail(BaseModel):
     )
     score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
     verdict: PortalVerdict | None = Field(default=None)
+    structure: ReviewStructureV1 | None = Field(
+        default=None,
+        description=(
+            "The review as data, in the student's language (schema version 1). "
+            "Null for every submission today: no stage writes one yet, and a "
+            "pre-rebuild review has no structure to project."
+        ),
+    )
     review_markdown: str | None = Field(
         default=None, description="Rendered Markdown review (None until reviewed)."
     )
@@ -1845,8 +1864,9 @@ class PortalAttemptResult(BaseModel):
     """A single attempt's curated outcome (Phase 6 T4a c2 overlay).
 
     Carried by ``last`` and ``best`` in the task overlay. Only the score and
-    the curated verdict — the internal trace (``review_result`` beyond
-    ``verdict`` / ``safety_result`` / ``sanity_result``) is never here.
+    the curated verdict: the internal trace is never here, and neither is the
+    review structure — an overlay is a summary, and the structure is the whole
+    review, which belongs in the detail view.
     """
 
     score: int | None = Field(

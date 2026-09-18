@@ -26,6 +26,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
+from course_supporter.feedback_kinds import (
+    FeedbackKind,
+    FeedbackTargetKind,
+    FeedbackValue,
+)
 from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.storage.cascade import (
     ScrubCallable,
@@ -1156,6 +1161,17 @@ def _nullable_in(column: str, values: type[StrEnum]) -> str:
     return f"{column} IS NULL OR {column} IN ({listed})"
 
 
+def _one_of(column: str, values: type[StrEnum]) -> str:
+    """``CHECK`` body admitting exactly one of an enum's values.
+
+    The NOT NULL twin of :func:`_nullable_in`, with the same contract: built
+    from the enum so the ORM cannot drift from the Python vocabulary, while
+    the migration spells the same list out literally.
+    """
+    listed = ", ".join(f"'{member.value}'" for member in values)
+    return f"{column} IN ({listed})"
+
+
 _FUNDS_ROW_COMMENT = (
     " Funds-port row only (mentor-rebuild task 02; KD5, rows without a model "
     "call): provider, model_id, success and cost_usd stay NULL on it, and cost "
@@ -1950,6 +1966,126 @@ class StudentEnrollment(Base):
         return (
             f"StudentEnrollment(id={self.id!r}, student_id={self.student_id!r}, "
             f"course_node_id={self.course_node_id!r})"
+        )
+
+
+class StudentFeedback(Base):
+    """What one student said about one thing they were shown (task 05).
+
+    One row per (target, student): a second touch on the same review REPLACES
+    the first, it does not add a row. The database holds that rule
+    (``uq_student_feedback_target``), not only the code — the two entry points
+    write through one core, but two requests can still race, and a unique index
+    is the only thing that decides such a race the same way every time.
+
+    The target is a PAIR — kind + id — and carries no foreign key on purpose
+    (ratified 2026-09-18). The second echelon points feedback at a remark and
+    at a library link, which live in different tables; a column per kind of
+    target would grow with the vocabulary, and a polymorphic FK does not exist.
+    What a FK would have bought — "the target is real" — is bought instead by
+    the single writer: the core reads the submission, and its review, before it
+    writes anything.
+
+    No soft-delete, and no cascade (KD3 is not weakened here): a cascade is
+    resolved BY the foreign key the target deliberately does not have
+    (``CascadeDeleteService``), and the reads this task ships filter on the
+    live submission and the live student anyway. A submission restored from a
+    soft-delete brings its touches back with it, without a second restore.
+
+    Counters are NOT stored here: they are counted on read, from these rows
+    (``03-BINDING.md`` §2.14, clarification of 2026-09-18). A stored counter
+    would be a second source of truth for a number this table already answers.
+
+    Two of the rules above hold for TOUCHES, which is all this table carries
+    today, and the member that changes them is known: a reply (second echelon)
+    is a record of a conversation branch (§2.14), so several of them can sit on
+    one target from one student, and a reply carries text where a touch carries
+    an answer. The migration that adds it narrows ``uq_student_feedback_target``
+    to touches — a partial unique index — and makes ``value`` nullable. Neither
+    is built now: for touches the plain uniqueness is the correct rule, and a
+    partial index built for a member that does not exist would be guesswork.
+    """
+
+    __tablename__ = "student_feedback"
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("target_kind", FeedbackTargetKind),
+            name="ck_student_feedback_target_kind",
+        ),
+        CheckConstraint(_one_of("kind", FeedbackKind), name="ck_student_feedback_kind"),
+        CheckConstraint(
+            _one_of("value", FeedbackValue), name="ck_student_feedback_value"
+        ),
+        Index(
+            "uq_student_feedback_target",
+            "target_kind",
+            "target_id",
+            "student_id",
+            unique=True,
+        ),
+        {
+            "comment": "One student's feedback on one target (mentor-rebuild "
+            "task 05). One row per (target, student): a repeat touch replaces "
+            "the previous one. Counters are derived on read, never stored."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Tenant. Every read and write of feedback is scoped by it.",
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Student (the author of the feedback).",
+    )
+    target_kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="What the feedback points at (FeedbackTargetKind). Today: "
+        "'review'. A second-echelon target is a new member, not a new table.",
+    )
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        comment="Identifier of the target — for 'review', the "
+        "HomeworkSubmission whose review it is. NO foreign key: the column "
+        "addresses different tables per kind; the writing core validates it.",
+    )
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="The kind of feedback (FeedbackKind). Today: 'touch'.",
+    )
+    value: Mapped[str] = mapped_column(
+        String(32),
+        comment="The answer (FeedbackValue): 'helped' or 'not_helped'.",
+    )
+    text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        comment="Optional free text. Always NULL in task 05 — a touch has no "
+        "text; the column is here because a reply is the same record.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the student first answered about this target.",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="When the answer last changed. On the ON CONFLICT DO UPDATE "
+        "path this column is set EXPLICITLY: SQLAlchemy does not apply a "
+        "Python-side onupdate to an upsert (dialects/postgresql/dml.py).",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"StudentFeedback(id={self.id!r}, target={self.target_kind!r}:"
+            f"{self.target_id!r}, student_id={self.student_id!r}, "
+            f"value={self.value!r})"
         )
 
 

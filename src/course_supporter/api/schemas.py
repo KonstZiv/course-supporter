@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.language import (
     InvalidLanguageError,
     LanguageEntry,
@@ -1734,6 +1735,54 @@ class PortalDeltaReceipt(BaseModel):
     )
 
 
+class PortalTouchRequest(BaseModel):
+    """What the student says about a review, as it arrives (task 05).
+
+    ``kind`` is spelled out although the vocabulary has one member: the second
+    echelon adds members, and a body that names the kind reads the same before
+    and after that, while a body that omits it would have to start naming it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: FeedbackKind = Field(description="The kind of feedback. Today: touch.")
+    value: FeedbackValue = Field(
+        description="The answer: helped or not_helped.",
+    )
+
+
+class ChannelTouchRequest(PortalTouchRequest):
+    """The same answer, arriving from the caller's channel (task 05).
+
+    Adds the one thing a tenant key cannot know by itself: WHICH student is
+    answering, named by the identifier the caller's own system uses. The touch
+    never creates that student — unlike a submission, which does.
+    """
+
+    student_external_id: str = Field(
+        min_length=1,
+        description="Student identifier from the caller's system, as used on "
+        "submission. Resolved within the key's tenant; never created here.",
+    )
+
+
+class FeedbackTouch(BaseModel):
+    """A student's own answer about a review, as it is served back.
+
+    Not ``Portal*``: this is the response of BOTH doors — the portal session
+    and the caller's channel — and the shape the submission detail serves on
+    the next read. A name that promised one of the two would mislead whoever
+    integrates with the other.
+
+    ``updated_at`` is the time of the CURRENT answer: a repeat touch replaces
+    the previous one, and the time moves with it.
+    """
+
+    kind: FeedbackKind
+    value: FeedbackValue
+    updated_at: datetime
+
+
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
@@ -1774,6 +1823,12 @@ class PortalSubmissionDetail(BaseModel):
         default=None,
         description="I2 delta receipt (KD18 P5) for a project submission — "
         "counters + staleness; null for a non-project submission.",
+    )
+    own_feedback: FeedbackTouch | None = Field(
+        default=None,
+        description="This student's own answer about this review (task 05); "
+        "null when they have not answered, and on a submission that carries no "
+        "review to answer about. Nobody else's answer is ever served here.",
     )
     rejection: PortalRejection | None = Field(
         default=None, description="Why the attempt was refused; null if it was not."

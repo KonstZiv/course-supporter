@@ -29,6 +29,7 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
+from course_supporter.api.routes._feedback_shared import to_touch
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
     curated_presentation,
@@ -39,14 +40,18 @@ from course_supporter.api.routes._portal_shared import (
     role_visible_to_student,
 )
 from course_supporter.api.schemas import (
+    FeedbackTouch,
     OptionalLanguageForm,
     PortalBaseDownload,
     PortalDeltaReceipt,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
+    PortalTouchRequest,
 )
 from course_supporter.auth.context import StudentContext
+from course_supporter.feedback_kinds import FeedbackTargetKind
+from course_supporter.homework.feedback_core import touch_review
 from course_supporter.homework.submission_core import (
     MAX_HOMEWORK_SIZE,
     PROJECT_SUBMISSION_MAX_UPLOAD_BYTES,
@@ -63,6 +68,7 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
+from course_supporter.storage.feedback_repository import FeedbackRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import HomeworkSubmission, Student
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
@@ -387,12 +393,15 @@ def _to_detail(
     submission: HomeworkSubmission,
     *,
     delta: PortalDeltaReceipt | None = None,
+    own_feedback: FeedbackTouch | None = None,
 ) -> PortalSubmissionDetail:
     """Curated detail — adds review_markdown and the structure; no trace.
 
     ``delta`` (KD18 P5) is the pre-computed I2 receipt for a project submission,
-    None for a non-project one. Kept as a defaulted param so the single caller
-    stays explicit and no other serialization path is affected.
+    None for a non-project one. ``own_feedback`` (task 05) is this student's own
+    answer about this review, read the same way. Both are defaulted params so
+    the single caller stays explicit and no other serialization path is
+    affected.
     """
     return PortalSubmissionDetail(
         id=submission.id,
@@ -405,6 +414,7 @@ def _to_detail(
         created_at=submission.created_at,
         original_filename=submission.original_filename,
         delta=delta,
+        own_feedback=own_feedback,
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
         recovered_encoding=curated_recovered_encoding(submission),
@@ -491,4 +501,57 @@ async def get_portal_submission(
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
     delta = await _delta_receipt(session, submission)
-    return _to_detail(submission, delta=delta)
+    # The student's own answer, read with the session's tenant AND student —
+    # never with the submission's. The row is served back to the person the
+    # session names, so the session is what the lookup is keyed on.
+    own = await FeedbackRepository(session).get_for_target(
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+        target_kind=FeedbackTargetKind.REVIEW,
+        target_id=submission.id,
+    )
+    return _to_detail(
+        submission,
+        delta=delta,
+        own_feedback=to_touch(own) if own is not None else None,
+    )
+
+
+@router.post(
+    "/portal/submissions/{submission_id}/feedback",
+    response_model=FeedbackTouch,
+)
+async def touch_portal_submission(
+    student: StudentDep,
+    session: SessionDep,
+    body: PortalTouchRequest,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission whose review is being answered."),
+    ],
+) -> FeedbackTouch:
+    """Answer whether this review helped — the student's own session (task 05).
+
+    One of two doors into the same core; this one authenticates with the portal
+    session and names the student from it. The submission is resolved by the
+    SAME helper the detail route uses, so a foreign, unknown or soft-deleted one
+    reaches the core as ``None`` and comes back as the one generic 404 the read
+    path already gives.
+
+    The core decides everything after that — it re-checks owner and liveness,
+    refuses with 409 when there is no review to answer about, and writes the row
+    replacing this student's previous answer if there was one. The route does
+    not repeat any of it: a check that lives in two places is a check that will
+    one day differ between them.
+    """
+    submission = await HomeworkRepository(session).get_owned(
+        submission_id, student.student_id
+    )
+    row = await touch_review(
+        session,
+        submission=submission,
+        student_id=student.student_id,
+        value=body.value,
+    )
+    await session.commit()
+    return to_touch(row)

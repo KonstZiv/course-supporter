@@ -8,6 +8,10 @@ parallel hand-written contract file).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
+from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.webhook import (
     ReviewSummary,
     WebhookFailedPayload,
@@ -52,8 +56,63 @@ class TestWebhookReviewedPayloadContract:
             "submission_id",
             "student_external_id",
             "review",
+            # Optional versioned review structure: added by the ratified
+            # decision of 2026-09-17 (mentor-rebuild task 04), which is the
+            # only kind of change ``reviewed`` accepts. The rule beside the
+            # models says so.
+            "structure",
             "timestamp",
         }
+
+    def test_structure_is_optional_and_null_today(self) -> None:
+        """The addition costs an existing consumer nothing.
+
+        A payload built the way every caller builds one today — without naming
+        the new field — still validates, and carries it as null. No stage
+        writes a structure yet, so null is what production sends.
+        """
+        payload = WebhookReviewedPayload(
+            submission_id="s-1",
+            student_external_id="e-1",
+            review=ReviewSummary(
+                passed=True,
+                score=90,
+                correctness="correct",
+                review_text="# Review",
+                response_language="uk",
+            ),
+            timestamp=datetime(2026, 9, 18, 12, 0, tzinfo=UTC),
+        )
+
+        assert payload.structure is None
+        assert payload.model_dump()["structure"] is None
+
+    def test_structure_carries_its_own_version(self) -> None:
+        """Versioned inside itself, not by a version field on the event: the
+        event has no contract version and is not getting one here."""
+        structure = ReviewStructureV1(
+            schema_version=REVIEW_SCHEMA_VERSION,
+            language="ukr",
+            progress="Третє завдання поспіль без зауважень до стилю.",
+        )
+        payload = WebhookReviewedPayload(
+            submission_id="s-1",
+            student_external_id="e-1",
+            review=ReviewSummary(
+                passed=True,
+                score=90,
+                correctness="correct",
+                review_text="# Review",
+                response_language="uk",
+            ),
+            structure=structure,
+            timestamp=datetime(2026, 9, 18, 12, 0, tzinfo=UTC),
+        )
+
+        assert payload.model_dump()["structure"]["schema_version"] == (
+            REVIEW_SCHEMA_VERSION
+        )
+        assert "version" not in {f for f in WebhookReviewedPayload.model_fields}
 
     def test_event_is_reviewed_only(self) -> None:
         # 3b: T5 finalises only the 'reviewed' event; failed/mismatch land in T7

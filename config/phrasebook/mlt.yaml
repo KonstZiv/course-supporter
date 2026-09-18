@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Aċċettat
+verdict.failed: Mhux Aċċettat
+section.fixed: Ikkoreġut
+section.new_remarks: Rimarki ġodda
+section.open: Baqa' miftuħ
+section.broken: Ma baqax jaħdem
+section.mentor_voice: Mill-Mentor
+section.replies: Tweġibiet għall-kummenti tiegħek
+section.verification: Kif ġie vverifikat
+section.progress: Il-progress tiegħek
+remark.what: X'hemm ħażin
+remark.why: Għaliex dan huwa importanti
+remark.todo: X'għandek tagħmel
+remark.read: Fejn tista' taqra
+verification.by_run: Ivverifikat bit-tħaddim
+verification.by_reading: Ivverifikat bil-qari
+reply.kind.question: Il-mistoqsija tiegħek
+reply.kind.objection: L-oġġezzjoni tiegħek
+reply.kind.comment: Il-kumment tiegħek
+reply.answer: Tweġiba
+position.video: vidjow, {time}
+position.slide: slajd {number}
+position.paragraph: paragrafu {number}
+position.file: fajl {name}
+review.title: Reviżjoni

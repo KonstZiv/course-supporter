@@ -63,7 +63,7 @@ class TestPortalLanguages:
         resp = await student_client.get(_PORTAL_URL)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == len(body["items"]) == 58
+        assert body["total"] == len(body["items"]) == 60
         codes = {item["code"] for item in body["items"]}
         assert {"ukr", "eng", "rus"} <= codes
 
@@ -74,7 +74,9 @@ class TestPortalLanguages:
             assert isinstance(item["code"], str) and len(item["code"]) == 3
             assert item["code"] == item["code"].lower()
             assert isinstance(item["name_en"], str) and item["name_en"]
-            assert "name_native" in item  # optional value, mandatory key
+            # Populated for all sixty, same as the author route — see the
+            # note there on where native names come from.
+            assert isinstance(item["name_native"], str) and item["name_native"]
 
     async def test_body_is_identical_to_the_author_route(
         self, student_client: AsyncClient

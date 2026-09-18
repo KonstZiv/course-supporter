@@ -32,12 +32,12 @@ async def client() -> AsyncClient:
 
 
 class TestGetAllowedLanguages:
-    async def test_returns_58_items(self, client: AsyncClient) -> None:
+    async def test_returns_60_items(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/config/languages")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 58
-        assert len(body["items"]) == 58
+        assert body["total"] == 60
+        assert len(body["items"]) == 60
 
     async def test_each_item_has_iso_639_3_and_english_name(
         self, client: AsyncClient
@@ -47,8 +47,10 @@ class TestGetAllowedLanguages:
             assert isinstance(item["code"], str) and len(item["code"]) == 3
             assert item["code"] == item["code"].lower()
             assert isinstance(item["name_en"], str) and item["name_en"]
-            # name_native is optional (iso639 does not always carry it).
-            assert "name_native" in item
+            # Every code on the list has a native name now: they come from
+            # CLDR through ``config/language_names.yaml``, not from iso639,
+            # which has no such field at all.
+            assert isinstance(item["name_native"], str) and item["name_native"]
 
     async def test_includes_ukrainian_and_cantonese(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/config/languages")

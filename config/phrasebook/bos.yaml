@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Položeno
+verdict.failed: Nije položeno
+section.fixed: Ispravljeno
+section.new_remarks: Nove primjedbe
+section.open: Ostalo otvoreno
+section.broken: Ne radi
+section.mentor_voice: Od mentora
+section.replies: Odgovori na Vaše replike
+section.verification: Kako je provjereno
+section.progress: Vaš napredak
+remark.what: Šta nije uredu
+remark.why: Zašto je ovo važno
+remark.todo: Šta uraditi
+remark.read: Gdje pročitati
+verification.by_run: Provjereno pokretanjem
+verification.by_reading: Provjereno čitanjem
+reply.kind.question: Vaše pitanje
+reply.kind.objection: Vaš prigovor
+reply.kind.comment: Vaš komentar
+reply.answer: Odgovor
+position.video: video, {time}
+position.slide: slajd {number}
+position.paragraph: pasus {number}
+position.file: datoteka {name}
+review.title: Recenzija

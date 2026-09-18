@@ -1,0 +1,294 @@
+"""Tests for the per-language phrase files (mentor-rebuild task 04).
+
+Fixtures are real YAML files in a temporary directory, not mocks: the loader's
+subject IS the file shape, and a mock would assert the shape we imagined
+(impl-rules#13).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import ClassVar
+
+import pytest
+
+from course_supporter.phrasebook import (
+    SOURCE_LANGUAGE,
+    Phrase,
+    load_language_file,
+    load_phrasebook,
+    phrases_for,
+    placeholder_faults,
+    validate_phrasebook,
+)
+
+
+def _write(directory: Path, code: str, body: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{code}.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+_SOURCE = "section.fixed: Виправлено\nsection.open: Відкрите\n"
+
+
+class TestLanguageFile:
+    def test_a_plain_string_is_a_machine_translation(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pol", "section.fixed: Poprawione\n")
+
+        phrases = load_language_file(path)
+
+        assert phrases["section.fixed"].text == "Poprawione"
+        assert phrases["section.fixed"].reviewed is False
+
+    def test_a_record_carries_the_review_mark(self, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path,
+            "pol",
+            "section.fixed:\n  text: Poprawione\n  reviewed: true\n"
+            "section.open:\n  text: Otwarte\n",
+        )
+
+        phrases = load_language_file(path)
+
+        assert phrases["section.fixed"].reviewed is True
+        # Absent mark reads as "not reviewed", never as "reviewed".
+        assert phrases["section.open"].reviewed is False
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "section.fixed: 42\n",
+            "section.fixed:\n  text: 42\n  reviewed: true\n",
+            "section.fixed:\n  text: Poprawione\n  reviewed: maybe\n",
+        ],
+        ids=["not-a-phrase", "text-not-a-string", "mark-not-a-boolean"],
+    )
+    def test_a_phrase_of_neither_shape_is_refused(
+        self, tmp_path: Path, body: str
+    ) -> None:
+        path = _write(tmp_path, "pol", body)
+
+        with pytest.raises(ValueError, match=re.escape("section.fixed")):
+            load_language_file(path)
+
+    def test_a_file_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pol", "- Poprawione\n")
+
+        with pytest.raises(ValueError, match="mapping of phrase key"):
+            load_language_file(path)
+
+    def test_a_missing_file_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_language_file(tmp_path / "pol.yaml")
+
+
+class TestPhrasebook:
+    def test_every_file_of_the_directory_by_code(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\nsection.open: Open\n")
+
+        book = load_phrasebook(tmp_path)
+
+        assert set(book) == {SOURCE_LANGUAGE, "eng"}
+        assert book["eng"]["section.open"].text == "Open"
+
+    def test_a_missing_directory_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_phrasebook(tmp_path / "nowhere")
+
+    def test_the_review_language_wins(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\nsection.open: Open\n")
+        _write(tmp_path, "fas", "section.fixed: اصلاح‌شده\nsection.open: باز\n")
+
+        assert phrases_for("fas", tmp_path)["section.fixed"] == "اصلاح‌شده"
+
+    def test_no_language_resolved_reads_english(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\nsection.open: Open\n")
+
+        # ``resolve_review_language`` returns None when all three sources are
+        # empty or unusable; that is the one case this fallback is for.
+        assert phrases_for(None, tmp_path)["section.fixed"] == "Fixed"
+        assert phrases_for("pol", tmp_path)["section.fixed"] == "Fixed"
+
+    def test_english_missing_falls_to_the_source(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+
+        assert phrases_for(None, tmp_path)["section.fixed"] == "Виправлено"
+
+    def test_nothing_to_fall_back_on_says_so(self, tmp_path: Path) -> None:
+        _write(tmp_path, "pol", "section.fixed: Poprawione\n")
+
+        with pytest.raises(ValueError, match="No phrases to fall back on"):
+            phrases_for(None, tmp_path)
+
+
+class TestStartupCheck:
+    def test_a_complete_phrasebook_passes(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\nsection.open: Open\n")
+
+        validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+    def test_a_missing_phrase_stops_the_boot(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\n")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+        assert "'eng' is missing the phrase 'section.open'" in str(exc_info.value)
+
+    def test_a_phrase_the_source_does_not_have_stops_the_boot(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(
+            tmp_path,
+            "eng",
+            "section.fixed: Fixed\nsection.open: Open\nsection.ghost: Ghost\n",
+        )
+
+        with pytest.raises(ValueError, match=re.escape("section.ghost")):
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+    def test_an_allowed_language_without_a_file_stops_the_boot(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+
+        with pytest.raises(ValueError, match="'eng' is allowed but has no phrase file"):
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+    def test_a_file_outside_the_language_list_stops_the_boot(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "pol", "section.fixed: Poprawione\nsection.open: Otwarte\n")
+
+        with pytest.raises(ValueError, match="'pol' is not an allowed language"):
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE])
+
+    def test_the_source_file_missing_stops_the_boot(self, tmp_path: Path) -> None:
+        _write(tmp_path, "eng", "section.fixed: Fixed\n")
+
+        with pytest.raises(ValueError, match="source language"):
+            validate_phrasebook(tmp_path, ["eng"])
+
+    def test_every_fault_is_reported_at_once(self, tmp_path: Path) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, _SOURCE)
+        _write(tmp_path, "eng", "section.fixed: Fixed\n")  # one key short
+        _write(tmp_path, "pol", "section.fixed: Poprawione\n")  # short and unlisted
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng", "fas"])
+
+        message = str(exc_info.value)
+        # An operator reading a refused boot should not have to fix one fault,
+        # restart, and find the next.
+        assert "'fas' is allowed but has no phrase file" in message
+        assert "'pol' is not an allowed language" in message
+        assert "'eng' is missing the phrase 'section.open'" in message
+
+
+class TestShippedSource:
+    """The file every translation derives from (mentor-rebuild task 04)."""
+
+    SOURCE_FILE = Path("config/phrasebook") / f"{SOURCE_LANGUAGE}.yaml"
+    PLACEHOLDERS: ClassVar[set[str]] = {"time", "number", "name"}
+
+    def test_it_reads_as_plain_phrases(self) -> None:
+        phrases = load_language_file(self.SOURCE_FILE)
+
+        assert phrases
+        for key, phrase in phrases.items():
+            assert phrase.text.strip(), f"'{key}' has no text"
+            # The source is not a translation: a review mark here would mean
+            # someone had started treating it as one.
+            assert phrase.reviewed is False, f"'{key}' carries a review mark"
+
+    def test_it_uses_only_the_placeholders_the_assembler_fills(self) -> None:
+        # A translator — or the script — carrying a placeholder through under a
+        # different name would leave the assembler with nothing to fill.
+        phrases = load_language_file(self.SOURCE_FILE)
+
+        found = {
+            name
+            for phrase in phrases.values()
+            for name in re.findall(r"\{([^}]*)\}", phrase.text)
+        }
+
+        assert found <= self.PLACEHOLDERS, (
+            f"unknown placeholders: {found - self.PLACEHOLDERS}"
+        )
+
+
+class TestPlaceholderCheck:
+    """A machine translation may rename, move or drop a placeholder.
+
+    It is the one fault a translated file trips on its own: nobody on this side
+    reads Arabic or Tamil, so the check is the only thing between a mangled
+    ``{number}`` and a student reading "слайд" with no number after it.
+    """
+
+    SOURCE = "position.slide: слайд {number}\nsection.fixed: Виправлено\n"
+
+    def test_a_translation_that_carries_them_through_passes(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, self.SOURCE)
+        _write(
+            tmp_path, "eng", "position.slide: slide {number}\nsection.fixed: Fixed\n"
+        )
+
+        validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+    @pytest.mark.parametrize(
+        ("translated", "reason"),
+        [
+            ("position.slide: slide {slide}\n", "renamed"),
+            ("position.slide: slide\n", "dropped"),
+            ("position.slide: slide {number} {name}\n", "invented"),
+            ("position.slide: slide { number }\n", "spaced-out"),
+        ],
+        ids=["renamed", "dropped", "invented", "spaced-out"],
+    )
+    def test_a_mangled_placeholder_stops_the_boot(
+        self, tmp_path: Path, translated: str, reason: str
+    ) -> None:
+        _write(tmp_path, SOURCE_LANGUAGE, self.SOURCE)
+        _write(tmp_path, "eng", translated + "section.fixed: Fixed\n")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_phrasebook(tmp_path, [SOURCE_LANGUAGE, "eng"])
+
+        assert "position.slide" in str(exc_info.value), reason
+        assert "placeholders" in str(exc_info.value)
+
+    def test_the_script_asks_the_same_question_before_it_writes(self) -> None:
+        # The script holds the translation in memory, not on disk: this is the
+        # same check, called on the pair, so a mangled language never lands.
+        source = {"position.slide": Phrase("слайд {number}", reviewed=False)}
+        good = {"position.slide": Phrase("slide {number}", reviewed=False)}
+        bad = {"position.slide": Phrase("slide {slide}", reviewed=False)}
+
+        assert placeholder_faults(source, good, code="eng") == []
+        assert placeholder_faults(source, bad, code="eng") == [
+            "Language 'eng', phrase 'position.slide': placeholders "
+            "['slide'] instead of ['number']"
+        ]
+
+    def test_a_key_the_translation_lacks_is_not_reported_twice(self) -> None:
+        # Missing keys are the completeness check's business; naming them here
+        # too would bury the placeholder difference this check exists for.
+        source = {
+            "position.slide": Phrase("слайд {number}", reviewed=False),
+            "section.fixed": Phrase("Виправлено", reviewed=False),
+        }
+        partial = {"section.fixed": Phrase("Fixed", reviewed=False)}
+
+        assert placeholder_faults(source, partial, code="eng") == []

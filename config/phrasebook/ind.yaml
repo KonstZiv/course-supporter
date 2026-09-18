@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Lulus
+verdict.failed: Tidak Lulus
+section.fixed: Diperbaiki
+section.new_remarks: Catatan baru
+section.open: Masih terbuka
+section.broken: Rusak
+section.mentor_voice: Dari Mentor
+section.replies: Balasan untuk komentar Anda
+section.verification: Cara verifikasi
+section.progress: Progres Anda
+remark.what: Apa yang salah
+remark.why: Mengapa ini penting
+remark.todo: Apa yang harus dilakukan
+remark.read: Bacaan lebih lanjut
+verification.by_run: Diverifikasi dengan menjalankan
+verification.by_reading: Diverifikasi dengan membaca
+reply.kind.question: Pertanyaan Anda
+reply.kind.objection: Keberatan Anda
+reply.kind.comment: Komentar Anda
+reply.answer: Jawaban
+position.video: video, {time}
+position.slide: slide {number}
+position.paragraph: paragraf {number}
+position.file: file {name}
+review.title: Ulasan

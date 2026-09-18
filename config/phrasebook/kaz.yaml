@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Есептелді
+verdict.failed: Есептелмеді
+section.fixed: Түзетілді
+section.new_remarks: Жаңа ескертулер
+section.open: Ашық қалды
+section.broken: Бұзылды
+section.mentor_voice: Ментордан
+section.replies: Сіздің пікірлеріңізге жауаптар
+section.verification: Қалай тексерілді
+section.progress: Сіздің ілгерілеуіңіз
+remark.what: Не дұрыс емес
+remark.why: Бұл неге маңызды
+remark.todo: Не істеу керек
+remark.read: Қайдан оқуға болады
+verification.by_run: Іске қосу арқылы тексерілді
+verification.by_reading: Оқу арқылы тексерілді
+reply.kind.question: Сіздің сұрағыңыз
+reply.kind.objection: Сіздің қарсылығыңыз
+reply.kind.comment: Сіздің пікіріңіз
+reply.answer: Жауап
+position.video: видео, {time}
+position.slide: слайд {number}
+position.paragraph: абзац {number}
+position.file: файл {name}
+review.title: Пікір

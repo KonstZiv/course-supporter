@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Επιτυχής
+verdict.failed: Αποτυχής
+section.fixed: Διορθώθηκε
+section.new_remarks: Νέες παρατηρήσεις
+section.open: Παραμένει ανοιχτό
+section.broken: Παρουσιάστηκε πρόβλημα
+section.mentor_voice: Από τον Μέντορα
+section.replies: Απαντήσεις στα σχόλιά σας
+section.verification: Τρόπος επαλήθευσης
+section.progress: Η πρόοδός σας
+remark.what: Τι είναι λάθος
+remark.why: Γιατί είναι σημαντικό
+remark.todo: Τι πρέπει να κάνετε
+remark.read: Πού να διαβάσετε
+verification.by_run: Επαληθεύτηκε με εκτέλεση
+verification.by_reading: Επαληθεύτηκε με ανάγνωση
+reply.kind.question: Η ερώτησή σας
+reply.kind.objection: Η αντίρρησή σας
+reply.kind.comment: Το σχόλιό σας
+reply.answer: Απάντηση
+position.video: βίντεο, {time}
+position.slide: διαφάνεια {number}
+position.paragraph: παράγραφος {number}
+position.file: αρχείο {name}
+review.title: Αξιολόγηση

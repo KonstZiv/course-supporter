@@ -496,6 +496,10 @@ class TestPortalReadDetail:
             "presentation",
             "score",
             "verdict",
+            # The review as data, in the student's language (task 04). Beside
+            # the curated verdict, not instead of it — same shape of addition
+            # as ``presentation`` above.
+            "structure",
             "review_markdown",
             "created_at",
             "original_filename",
@@ -509,6 +513,9 @@ class TestPortalReadDetail:
         assert data["verdict"] == {"passed": True, "correctness": "correct"}
         assert data["review_markdown"] == "## Good work\nWell done."
         assert data["delta"] is None
+        # This fixture is a pre-rebuild review: a layered trace, not a
+        # structure. The projection reads the version key and says so.
+        assert data["structure"] is None
 
         # The internal trace must NOT appear anywhere in the response body.
         body = resp.text

@@ -6,8 +6,10 @@ Single point of language logic for the backend. Two consumers today:
   and ``NodeUpdateRequest`` accept any standard description (639-1,
   639-3, or English name) and normalize to canonical 639-3.
 * ``api.routes.config`` — ``GET /api/v1/config/languages`` returns the
-  allowed set enriched with English names (and native names where
-  ``iso639`` exposes them) for the UI selector.
+  allowed set enriched with English names from ``iso639`` and native
+  names from ``config/language_names.yaml`` for the UI selector.
+  ``iso639`` exposes no native names at all — it has no such field — so
+  that file, generated from CLDR, is where they come from (task 04).
 
 The whitelist lives in ``config/languages.yaml``. The path is injected
 from ``Settings.language_registry_path`` so tests can swap fixtures.
@@ -22,6 +24,7 @@ only when a second module joins it.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -39,8 +42,9 @@ class LanguageEntry(BaseModel):
     name_native: str | None = Field(
         default=None,
         description=(
-            "Native-script name when iso639 carries one; None otherwise. "
-            "UI may fall back to ``name_en`` when missing."
+            "What the language calls itself, from ``config/language_names.yaml`` "
+            "(CLDR). ``None`` only for a code missing from that file; the file "
+            "covers the whole whitelist, and a test holds it to that."
         ),
     )
 
@@ -72,6 +76,7 @@ class LanguageNotAllowedError(ValueError):
 _registry: LanguageRegistryConfig | None = None
 _allowed_codes: frozenset[str] | None = None
 _allowed_entries: list[LanguageEntry] | None = None
+_native_names: dict[str, str] | None = None
 
 
 def load_language_registry(config_path: Path) -> LanguageRegistryConfig:
@@ -90,6 +95,13 @@ def load_language_registry(config_path: Path) -> LanguageRegistryConfig:
             f"Failed to parse language config '{config_path}': {exc}"
         ) from exc
     return LanguageRegistryConfig.model_validate(raw)
+
+
+def _default_names_path() -> Path:
+    """Resolve the native-names path from settings (lazy import, as above)."""
+    from course_supporter.config import get_settings
+
+    return get_settings().language_names_path
 
 
 def _default_config_path() -> Path:
@@ -257,23 +269,102 @@ def resolve_review_language(
     return ReviewLanguage(code=None, source="none")
 
 
-def list_allowed() -> list[LanguageEntry]:
-    """Return the allowed languages enriched with English (and native) names.
+def load_native_names(config_path: Path | None = None) -> dict[str, str]:
+    """What each language calls itself, by ISO 639-3 code.
 
-    The result is cached after the first call; reset by calling
-    ``get_language_registry(path=...)`` with an explicit path (used by
-    tests that swap fixtures).
+    Read from ``config/language_names.yaml`` — generated from CLDR, because
+    ``iso639`` has no native-name field at all. Cached like the registry; pass
+    a path to re-read (tests, generation).
+
+    Raises:
+        FileNotFoundError: when the file does not exist.
+        ValueError: when the YAML does not parse or an entry lacks a string
+            ``name_native``.
+    """
+    global _native_names
+    if _native_names is not None and config_path is None:
+        return _native_names
+    path = config_path if config_path is not None else _default_names_path()
+    if not path.exists():
+        raise FileNotFoundError(f"Language names file not found: {path}")
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Failed to parse language names '{path}': {exc}") from exc
+    if not isinstance(raw, dict):
+        msg = f"Language names '{path}' must be a mapping of code to names"
+        raise ValueError(msg)
+    names: dict[str, str] = {}
+    for code, entry in raw.items():
+        native = entry.get("name_native") if isinstance(entry, dict) else None
+        if not isinstance(native, str) or not native:
+            msg = f"Language '{code}' in '{path}' has no string 'name_native'"
+            raise ValueError(msg)
+        names[str(code)] = native
+    _native_names = names
+    return names
+
+
+def list_allowed() -> list[LanguageEntry]:
+    """Return the allowed languages enriched with English and native names.
+
+    English names come from the ``iso639`` SIL table, native ones from
+    ``config/language_names.yaml`` (CLDR). The result is cached after the first
+    call; reset by calling ``get_language_registry(path=...)`` with an explicit
+    path (used by tests that swap fixtures).
     """
     global _allowed_entries
     if _allowed_entries is not None:
         return _allowed_entries
     registry = get_language_registry()
+    native_names = load_native_names()
     entries: list[LanguageEntry] = []
     for code in registry.languages:
         lang = iso639.Language.from_part3(code)
-        # iso639 does not always expose a native-script name; fall back
-        # to None and let the UI render ``name_en``.
-        native = getattr(lang, "native", None) or None
-        entries.append(LanguageEntry(code=code, name_en=lang.name, name_native=native))
+        entries.append(
+            LanguageEntry(
+                code=code, name_en=lang.name, name_native=native_names.get(code)
+            )
+        )
     _allowed_entries = entries
     return entries
+
+
+def validate_native_names(
+    allowed_codes: Collection[str],
+    config_path: Path | None = None,
+) -> None:
+    """The native-names file covers the allowed list exactly, both ways.
+
+    Checked like the phrasebook's language set, and for the same two reasons: a
+    language on the list with no name is a null in the selector, and a name for
+    a language nobody may pick is dead weight nobody will notice going stale.
+
+    Args:
+        allowed_codes: The languages the system accepts —
+            ``config/languages.yaml`` through :func:`get_language_registry`.
+        config_path: Override for the names file (tests); ``None`` reads the
+            path from settings.
+
+    Raises:
+        FileNotFoundError: when the file does not exist.
+        ValueError: when the file does not parse, an entry has no name, or the
+            two sets differ — listing both differences at once.
+    """
+    names = set(load_native_names(config_path))
+    allowed = set(allowed_codes)
+
+    errors: list[str] = []
+    missing = sorted(allowed - names)
+    if missing:
+        errors.append(f"allowed languages with no native name: {missing}")
+    extra = sorted(names - allowed)
+    if extra:
+        errors.append(f"native names for languages not on the list: {extra}")
+
+    if errors:
+        path = config_path if config_path is not None else _default_names_path()
+        raise ValueError(
+            f"Language names '{path}' do not match the allowed list:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )

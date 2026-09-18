@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Հաշվարկված է
+verdict.failed: Հաշվարկված չէ
+section.fixed: Ուղղված է
+section.new_remarks: Նոր դիտողություններ
+section.open: Մնացել է բաց
+section.broken: Խափանվել է
+section.mentor_voice: Մենթորից
+section.replies: Պատասխաններ ձեր մեկնաբանություններին
+section.verification: Ինչպես է ստուգվել
+section.progress: Ձեր առաջընթացը
+remark.what: Ինչն է սխալ
+remark.why: Ինչու է սա կարևոր
+remark.todo: Ինչ անել
+remark.read: Որտեղ կարդալ
+verification.by_run: Ստուգվել է գործարկմամբ
+verification.by_reading: Ստուգվել է ընթերցմամբ
+reply.kind.question: Ձեր հարցը
+reply.kind.objection: Ձեր առարկությունը
+reply.kind.comment: Ձեր մեկնաբանությունը
+reply.answer: Պատասխան
+position.video: տեսանյութ, {time}
+position.slide: սլայդ {number}
+position.paragraph: պարբերություն {number}
+position.file: ֆայլ {name}
+review.title: Գրախոսություն

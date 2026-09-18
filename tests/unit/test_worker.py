@@ -253,6 +253,139 @@ class TestWorkerLifecycle:
             await startup(ctx)
         assert "stage_router" not in ctx
 
+    @pytest.fixture
+    def _phrasebook_copy(self, tmp_path: Path) -> Path:
+        """A working copy of the real phrasebook, for tests that break one thing."""
+        copy = tmp_path / "phrasebook"
+        copy.mkdir()
+        for path in sorted(get_settings().phrasebook_dir.glob("*.yaml")):
+            (copy / path.name).write_text(
+                path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        return copy
+
+    @pytest.fixture
+    def _restore_language_caches(self) -> Any:
+        """Put the module caches back after a test swaps a config path.
+
+        ``language.py`` caches per the module convention: an explicit path
+        re-reads AND replaces the cache, so a test that points at a broken
+        fixture would leave the broken read behind for everyone after it.
+        """
+        yield
+        from course_supporter import language
+
+        language.load_native_names(get_settings().language_names_path)
+        language.get_language_registry(get_settings().language_registry_path)
+
+    async def test_startup_refuses_a_phrasebook_missing_a_key(
+        self, _phrasebook_copy: Path
+    ) -> None:
+        """A phrase dropped from one language stops the worker booting.
+
+        Not a warning and not a fallback: a missing key would surface as a
+        section heading in the wrong language inside a student's review, long
+        after the deploy that caused it.
+        """
+        english = _phrasebook_copy / "eng.yaml"
+        lines = english.read_text(encoding="utf-8").splitlines(keepends=True)
+        english.write_text(
+            "".join(line for line in lines if not line.startswith("remark.why:")),
+            encoding="utf-8",
+        )
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch.object(get_settings(), "phrasebook_dir", _phrasebook_copy),
+            pytest.raises(ValueError, match=re.escape("remark.why")),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
+
+    async def test_startup_refuses_a_language_file_nobody_can_reach(
+        self, _phrasebook_copy: Path
+    ) -> None:
+        """A file for a language off the allowed list stops the worker booting.
+
+        The other direction of the same set check: phrases translated, paid for
+        and unreachable are a quiet waste, and the pair of checks is what keeps
+        the phrasebook a copy WITH a comparison rather than a copy.
+        """
+        (_phrasebook_copy / "epo.yaml").write_text(
+            (_phrasebook_copy / "eng.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch.object(get_settings(), "phrasebook_dir", _phrasebook_copy),
+            pytest.raises(ValueError, match="epo"),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
+
+    async def test_startup_refuses_a_language_with_no_native_name(
+        self, tmp_path: Path, _restore_language_caches: Any
+    ) -> None:
+        """A code on the list with no entry in the names file stops the boot."""
+        raw = yaml.safe_load(
+            get_settings().language_names_path.read_text(encoding="utf-8")
+        )
+        del raw["heb"]
+        broken = tmp_path / "language_names.yaml"
+        broken.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch.object(get_settings(), "language_names_path", broken),
+            pytest.raises(ValueError, match="heb"),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
+
+    async def test_startup_refuses_an_unreadable_ladder_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        """A renamed ladder prompt stops the worker booting (DD-SP-AP, half 2).
+
+        A copy of the real ladders with one stage pointed at a file that is not
+        there. Before this check the same typo surfaced on the first call
+        through that stage — for an ingest ladder, possibly days later.
+        """
+        ladders = tmp_path / "ladders"
+        ladders.mkdir()
+        for path in sorted(get_settings().ladders_dir.glob("ladders_*.yaml")):
+            (ladders / path.name).write_text(
+                path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        target = ladders / "ladders_mentor.yaml"
+        target.write_text(
+            target.read_text(encoding="utf-8").replace(
+                "prompts/mentor_synthesis/v1.md", "prompts/mentor_synthesis/v9.md"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx: dict[str, object] = {}
+        with (
+            patch("course_supporter.worker.configure_logging"),
+            patch("sqlalchemy.ext.asyncio.create_async_engine"),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
+            patch.object(get_settings(), "ladders_dir", ladders),
+            pytest.raises(ValueError, match=re.escape("v9.md")),
+        ):
+            await startup(ctx)
+        assert "stage_router" not in ctx
+
     async def test_shutdown_disposes_engine(self) -> None:
         mock_engine = MagicMock()
         mock_engine.dispose = AsyncMock()

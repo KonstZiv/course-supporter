@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: ჩათვლილია
+verdict.failed: არ არის ჩათვლილი
+section.fixed: გამოსწორებულია
+section.new_remarks: ახალი შენიშვნები
+section.open: ღიად დარჩა
+section.broken: ხარვეზები
+section.mentor_voice: მენტორისგან
+section.replies: პასუხები თქვენს რეპლიკებზე
+section.verification: როგორ შემოწმდა
+section.progress: თქვენი პროგრესი
+remark.what: რა არის არასწორად
+remark.why: რატომ არის მნიშვნელოვანი
+remark.todo: რა უნდა გაკეთდეს
+remark.read: სად წაიკითხოთ
+verification.by_run: შემოწმდა გაშვებით
+verification.by_reading: შემოწმდა წაკითხვით
+reply.kind.question: თქვენი შეკითხვა
+reply.kind.objection: თქვენი უთანხმოება
+reply.kind.comment: თქვენი კომენტარი
+reply.answer: პასუხი
+position.video: ვიდეო, {time}
+position.slide: სლაიდი {number}
+position.paragraph: აბზაცი {number}
+position.file: ფაილი {name}
+review.title: რეცენზია

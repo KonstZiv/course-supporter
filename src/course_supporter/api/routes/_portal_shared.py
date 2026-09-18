@@ -12,18 +12,65 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+import structlog
+from pydantic import ValidationError
+
 from course_supporter.api.schemas import (
     PortalNotOpened,
     PortalPresentation,
     PortalRejection,
     PortalVerdict,
 )
+from course_supporter.models.review_schema import (
+    REVIEW_SCHEMA_VERSION,
+    review_schema_version,
+)
+from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.source import MaterialRole
 from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.security.schemas import ViolationCategory
 from course_supporter.storage.orm import HomeworkStatus
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
+
+
+logger = structlog.get_logger(__name__)
+
+
+def curated_structure(
+    review_result: dict[str, object] | None,
+) -> ReviewStructureV1 | None:
+    """The review structure, when the stored review is one (task 04).
+
+    One projection for two surfaces — the portal detail and the ``reviewed``
+    webhook both come through here, so neither can drift into reading the
+    column its own way.
+
+    Unlike :func:`curated_verdict`, this is not a slice of the trace: a
+    version-1 review IS the structure, written for the student, and it goes out
+    whole. Which of the two a row holds is answered by the version key, not by
+    guessing from content — a review written before the rebuild reads as
+    ``pre-rebuild`` and gets ``None`` here.
+
+    A row that claims version 1 and does not validate is our own bad data, not
+    the student's problem: it is logged and read as absent, so the rest of the
+    page still renders. Raising would turn one bad row into a broken page;
+    dropping it without a word would make it unfindable.
+    """
+    if not review_result:
+        return None
+    if review_schema_version(review_result) != REVIEW_SCHEMA_VERSION:
+        return None
+    try:
+        return ReviewStructureV1.model_validate(review_result)
+    except ValidationError as exc:
+        logger.error(
+            "review_structure_invalid",
+            errors=exc.error_count(),
+            detail=str(exc),
+        )
+        return None
 
 
 def role_visible_to_student(material_role: str) -> bool:
@@ -53,9 +100,10 @@ def role_visible_to_student(material_role: str) -> bool:
 def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:
     """Extract ONLY the caller-facing verdict from ``review_result``.
 
-    The full ``review_result`` JSONB (and ``safety_result`` / ``sanity_result``)
-    is the internal trace and is never returned — only its ``verdict`` block,
-    and only once a review has written it (``None`` otherwise).
+    For a pre-rebuild review, ``review_result`` is the internal trace and never
+    goes out; only its ``verdict`` block does, and only once a review has
+    written it (``None`` otherwise). The structure of a version-1 review is a
+    different matter and has its own projection above.
     """
     if not review_result:
         return None
@@ -96,6 +144,18 @@ what to say would otherwise be discovered as a ``KeyError`` on someone's
 attempt, or — worse — quietly default to the wrong sentence.
 """
 
+_OFF_TOPIC_STATE: Final = "not_an_attempt"
+"""The state a read-but-off-topic submission gets, whatever its status says.
+
+Named against the map above rather than written as a literal at the use site,
+and checked below: a state nobody has a phrase for would reach a student as
+"Стан невідомий".
+"""
+
+if _OFF_TOPIC_STATE not in set(_PRESENTATION_STATE.values()):  # pragma: no cover
+    msg = f"Off-topic state {_OFF_TOPIC_STATE!r} is not one the portal knows"
+    raise RuntimeError(msg)
+
 _unmapped_statuses = {s.value for s in HomeworkStatus} - set(_PRESENTATION_STATE)
 if _unmapped_statuses:  # pragma: no cover — test-locked
     msg = (
@@ -104,6 +164,23 @@ if _unmapped_statuses:  # pragma: no cover — test-locked
         f"the status can be written."
     )
     raise RuntimeError(msg)
+
+OFF_TOPIC_REASON_CODE: Final = ViolationCategory.OFF_TOPIC.value
+"""A submission the checker read and found to be about something else.
+
+Given ONLY when off-topic is the whole of what Stage 2 found. The gate can
+return several categories at once, and beside a real violation this phrase
+would make light of it — so a submission that is both off-topic and, say, a
+prompt injection keeps the phrase about safety.
+
+It also decides the STATE (below), and that is the half that matters. Measured
+against today's portal: with the state left at ``not_opened``, the student reads
+"Роботу не перевірено. Спробуйте надіслати ще раз." — an invitation to send the
+same foreign file again. With ``not_an_attempt`` they read "Надіслане не схоже
+на рішення цього завдання. Перевірте, що подаєте правильний файл.", which is
+the sentence this is for, and it is already in the portal's state family: no
+interface change is needed for it, today or before this code is known there.
+"""
 
 FAILED_REASON_CODE: Final = "processing_failed"
 """The code for a run that broke — the surface pairs it with "send it again"."""
@@ -138,6 +215,13 @@ def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
     if submission.status == HomeworkStatus.AWAITING_FUNDS.value:
         return PortalPresentation(state=state, reason_code=AWAITING_FUNDS_REASON_CODE)
     rejection = curated_rejection(submission)
+    if rejection is not None and rejection.code == OFF_TOPIC_REASON_CODE:
+        # The one case where the code decides the state rather than the status
+        # doing it (task 04). Stage 2 stores this as a rejection, and every
+        # rejection maps to "not opened" — but it WAS opened and read, and that
+        # is exactly how we know it is about something else. Derived from the
+        # code and not decided a second time, so the two cannot disagree.
+        state = _OFF_TOPIC_STATE
     return PortalPresentation(
         state=state, reason_code=rejection.code if rejection else None
     )
@@ -189,10 +273,12 @@ def curated_rejection(
             return PortalRejection(code=category, details=submission.original_filename)
         return None
     if source == "stage2" and safety.get("is_safe") is False:
-        return PortalRejection(
-            code=ErrorCategory.STAGE2_REJECTED.value,
-            details=submission.original_filename,
+        code = (
+            OFF_TOPIC_REASON_CODE
+            if _off_topic_alone(safety.get("violations"))
+            else ErrorCategory.STAGE2_REJECTED.value
         )
+        return PortalRejection(code=code, details=submission.original_filename)
     if source == "normalizer" and safety.get("category") == _NORMALIZER_CODED:
         # Partial close of DD-6-Z (step E): the project branch's oversize
         # refusal is the one normalizer rejection that has both a category the
@@ -208,6 +294,22 @@ def curated_rejection(
             details=details if isinstance(details, str) else None,
         )
     return None
+
+
+def _off_topic_alone(violations: object) -> bool:
+    """Whether off-topic is the WHOLE of what Stage 2 found.
+
+    Read off the stored verdict, not out of a column of its own: the category
+    is already in ``safety_result``, and a fourth place to keep in step is what
+    ``DD-SP-Q`` records the cost of.
+
+    Several categories at once means a real violation stands beside this one,
+    and the sentence about a foreign file would make light of it. So this is
+    deliberately an equality, not a membership test.
+    """
+    if not isinstance(violations, list):
+        return False
+    return [str(v) for v in violations] == [OFF_TOPIC_REASON_CODE]
 
 
 def curated_not_opened(

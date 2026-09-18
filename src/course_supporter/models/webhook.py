@@ -6,8 +6,10 @@ caller after homework review — per decision 2.4.13 the contract lives in code
 ``reviewed``; the field set is locked by ``tests/unit/test_webhook_contract.py``
 so any change is a deliberate, test-breaking one.
 
-Three outbound event types (each a distinct ``event`` discriminator — new types
-WIDEN the set, they never mutate ``reviewed``):
+Three outbound event types (each a distinct ``event`` discriminator). New types
+WIDEN the set; ``reviewed`` takes only OPTIONAL versioned fields, and only by a
+ratified decision recorded in the canon (mentor-rebuild task 04, ratified
+2026-09-17). ``mismatch`` and ``failed`` take nothing at all.
 - reviewed: sent after Mentor review, delivers the final score and feedback.
 - mismatch: sent when the sanity gate rejects a submission as off-task (T7); the
   review graph did not run, so there is no score — only the gate's reason.
@@ -20,6 +22,8 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from course_supporter.models.review_structure import ReviewStructureV1
 
 
 class ReviewSummary(BaseModel):
@@ -47,12 +51,22 @@ class WebhookReviewedPayload(BaseModel):
     ``event`` is the discriminator for the (currently single) outbound event
     type; new event types added in T7 widen this Literal rather than mutating
     this payload.
+
+    ``structure`` is the one field added since the set was locked, by the
+    decision ratified 2026-09-17 (mentor-rebuild task 04): optional, versioned
+    inside itself, and null on every payload today because no stage writes a
+    structure yet. A consumer reading only the fields it knows is unaffected;
+    the rule above says what kind of addition this is and what kind is not.
     """
 
     event: Literal["reviewed"] = "reviewed"
     submission_id: str
     student_external_id: str
     review: ReviewSummary
+    structure: ReviewStructureV1 | None = Field(
+        default=None,
+        description="Versioned review structure; null until a stage writes one.",
+    )
     timestamp: datetime
 
 

@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Admis
+verdict.failed: Respins
+section.fixed: Corectat
+section.new_remarks: Observații noi
+section.open: Rămas deschis
+section.broken: Nu mai funcționează
+section.mentor_voice: De la Mentor
+section.replies: Răspunsuri la replicile dumneavoastră
+section.verification: Cum a fost verificat
+section.progress: Progresul dumneavoastră
+remark.what: Ce este greșit
+remark.why: De ce este important
+remark.todo: Ce este de făcut
+remark.read: Unde puteți citi
+verification.by_run: Verificat prin rulare
+verification.by_reading: Verificat prin citire
+reply.kind.question: Întrebarea dumneavoastră
+reply.kind.objection: Obiecția dumneavoastră
+reply.kind.comment: Comentariul dumneavoastră
+reply.answer: Răspuns
+position.video: video, {time}
+position.slide: slide {number}
+position.paragraph: paragraful {number}
+position.file: fișierul {name}
+review.title: Recenzie

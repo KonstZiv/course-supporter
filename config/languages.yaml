@@ -12,7 +12,7 @@
 # (≤10% WER per the official model card, verified 2026-06-02), plus the
 # platform languages admitted outside those tiers (see Caveats). The
 # list is grouped only for human readability — the loader treats it as a
-# flat 58-entry whitelist. Tier metadata (Excellent vs High) lives in
+# flat 60-entry whitelist. Tier metadata (Excellent vs High) lives in
 # the comments below; if a downstream consumer ever needs it, lift the
 # split into structured YAML at that point (reactive trigger).
 #
@@ -34,6 +34,20 @@
 #     auto-detect (``ingestion/audio.py``,
 #     ``ingestion/video_pipeline/steps.py``), so no tier promise is
 #     being relied on. Like ``yue``, it has no ISO 639-1 code.
+#   * Arabic (``ara``) and Hebrew (``heb``) were added for the review
+#     phrasebook (mentor-rebuild task 04, 2026-09-17): a review is
+#     written in the student's language, and these two are languages
+#     the platform means to serve. They are admitted on the same
+#     ground as Montenegrin — the course language never reaches the
+#     STT provider as a hint, so no tier promise rests on them.
+#   * Arabic is taken as the MACROLANGUAGE ``ara``, while Chinese is
+#     taken as the variety ``cmn``. The two look inconsistent and are
+#     not: the list carries two Chinese varieties (``cmn``, ``yue``),
+#     so ``zho`` would leave "Chinese" ambiguous between them — which
+#     is why it is refused. There is no second Arabic variety here, so
+#     ``ara`` is unambiguous, and picking ``arb`` (Standard Arabic)
+#     instead would refuse the natural inputs "ar" and "Arabic" for no
+#     gain.
 #   * The set is shared across all source_types deliberately, even
 #     though only STT is genuinely constrained by it.
 #
@@ -103,3 +117,6 @@ languages:
   - tel  # Telugu
   # Outside the Scribe tiers — platform languages (see Caveats), 1 code:
   - cnr  # Montenegrin (no 639-1 code)
+  # Added for the review phrasebook (see Caveats), 2 codes:
+  - ara  # Arabic (macrolanguage, deliberately — see Caveats)
+  - heb  # Hebrew

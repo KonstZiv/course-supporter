@@ -34,6 +34,7 @@ from course_supporter.api.routes._portal_shared import (
     curated_presentation,
     curated_recovered_encoding,
     curated_rejection,
+    curated_structure,
     curated_verdict,
     role_visible_to_student,
 )
@@ -387,7 +388,7 @@ def _to_detail(
     *,
     delta: PortalDeltaReceipt | None = None,
 ) -> PortalSubmissionDetail:
-    """Curated detail — adds review_markdown; still no internal trace.
+    """Curated detail — adds review_markdown and the structure; no trace.
 
     ``delta`` (KD18 P5) is the pre-computed I2 receipt for a project submission,
     None for a non-project one. Kept as a defaulted param so the single caller
@@ -399,6 +400,7 @@ def _to_detail(
         presentation=curated_presentation(submission),
         score=submission.score,
         verdict=curated_verdict(submission.review_result),
+        structure=curated_structure(submission.review_result),
         review_markdown=submission.review_markdown,
         created_at=submission.created_at,
         original_filename=submission.original_filename,
@@ -476,9 +478,12 @@ async def get_portal_submission(
     """Read one of the student's own submissions — the full curated slice.
 
     Ownership-only authorization (Q1): a non-owned, unknown, or soft-deleted
-    submission collapses to the same generic 404. The internal trace
-    (review_result / safety_result / sanity_result) is never serialized — the
-    student sees status / score / verdict / review_markdown only.
+    submission collapses to the same generic 404. The internal trace is never
+    serialized: not safety_result, not sanity_result, and not the layered
+    review_result of a pre-rebuild review. A version-1 review stores a review
+    structure in that column instead, and that is not a trace — it is the
+    review, written for the student, and it goes out whole in ``structure``
+    (task 04).
     """
     submission = await HomeworkRepository(session).get_owned(
         submission_id, student.student_id

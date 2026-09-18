@@ -283,3 +283,48 @@ def _stage_model_errors(
         )
 
     return errors
+
+
+def validate_ladder_prompts(
+    cfg: LadderConfig,
+    *,
+    prompt_base_path: Path | None = None,
+) -> None:
+    """Every ladder stage's prompt file exists and parses (``DD-SP-AP``, half 2).
+
+    The mirror of the check ``validate_path_config`` already runs over
+    ``config/submission_paths.yaml``: there a path stage's prompt is read at
+    boot, here a ladder stage's is. Without it a renamed or unparsable prompt
+    surfaces on the first call through that stage — for an ingest ladder, that
+    can be days later and in someone else's job.
+
+    The radius is deliberately wider than the Mentor: every ladder is covered,
+    ingest included. That breadth is the point of the debt, and it means a
+    broken prompt anywhere stops the boot everywhere.
+
+    Reports every fault at once, like its siblings: a caller fixing a bad
+    deploy should see the whole list, not the first line of it.
+
+    Args:
+        cfg: The loaded ladders.
+        prompt_base_path: Resolution base for ``prompt_ref``, as on
+            :func:`~course_supporter.llm.prompt_loader_md.load_prompt` —
+            ``None`` in production (CWD-relative), ``tmp_path`` in tests.
+
+    Raises:
+        ValueError: listing every stage whose prompt cannot be read.
+    """
+    from course_supporter.llm.error_categories import InvalidPromptError
+    from course_supporter.llm.prompt_loader_md import load_prompt
+
+    errors: list[str] = []
+    for stage_name, stage in cfg.stages.items():
+        try:
+            load_prompt(stage.prompt_ref, base_path=prompt_base_path)
+        except (FileNotFoundError, InvalidPromptError) as exc:
+            errors.append(f"Stage '{stage_name}' prompt cannot be read: {exc}")
+
+    if errors:
+        raise ValueError(
+            "Ladder prompts are not readable:\n" + "\n".join(f"  - {e}" for e in errors)
+        )

@@ -13,6 +13,7 @@ from course_supporter.llm.ladder_config import (
     load_ladder_config,
     validate_ladders_against_registry,
 )
+from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.registry import (
     Capability,
     ModelRegistryConfig,
@@ -396,6 +397,46 @@ class TestRealConfigs:
         assert ladder[0].model == "deepseek-v4-pro"
         assert ladder[0].max_output_tokens == 32768
         assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+
+    def test_dictionary_translation_is_one_rung_at_the_ratified_ceiling(
+        self,
+    ) -> None:
+        # Task 04: the phrasebook translation stage. One rung, no descent
+        # (ratified 2026-09-17): the Anthropic account has no funds, and a
+        # second provider would split the Usage difference — the only
+        # measurement of what a run costs — across two pages. The ceiling and
+        # the $6 cost ceiling of a run are one multiplication apart: 60 calls x
+        # 8192 x $0.010 per 1k = $4.92 of output. A second rung, or a different
+        # ceiling, breaks this test before it breaks the arithmetic.
+        config = load_ladder_config(Path("config"))
+        stage = config.get_stage("dictionary_translation")
+
+        assert stage.requires == [Capability.STRUCTURED_OUTPUT]
+        assert len(stage.ladder) == 1
+        assert stage.ladder[0].provider == "gemini"
+        assert stage.ladder[0].model == "gemini-2.5-pro"
+        assert stage.ladder[0].max_output_tokens == 8192
+
+    def test_dictionary_translation_prompt_renders_what_the_script_passes(
+        self,
+    ) -> None:
+        # The prompt and the script share three variables; StrictUndefined
+        # turns a rename on either side into an error at call time, which on a
+        # sixty-call run means sixty errors. This is that contract, checked
+        # once.
+        prompt = load_prompt("prompts/dictionary_translation/v1.md")
+
+        rendered = prompt.render(
+            language_name="Polish",
+            language_code="pol",
+            source_json='{"section.fixed": "Виправлено"}',
+        )
+
+        assert rendered.system is not None
+        assert "{number}" in rendered.system  # the placeholder rule, verbatim
+        assert rendered.user is not None
+        assert "Polish" in rendered.user
+        assert '"section.fixed"' in rendered.user
 
     def test_layered_evaluation_industry_rung_1_carries_hotfix_2_ceiling(
         self,
@@ -1001,6 +1042,10 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
         ("gemini", "gemini-2.5-flash"),
+    ],
+    # ladders_dictionary.yaml
+    "dictionary_translation": [
+        ("gemini", "gemini-2.5-pro"),
     ],
     # ladders_mentor.yaml
     "safety_check": [

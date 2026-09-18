@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Samþykkt
+verdict.failed: Ekki samþykkt
+section.fixed: Lagað
+section.new_remarks: Nýjar athugasemdir
+section.open: Enn opið
+section.broken: Bilaði
+section.mentor_voice: Frá leiðbeinanda
+section.replies: Svör við athugasemdum þínum
+section.verification: Hvernig var yfirfarið
+section.progress: Þín framvinda
+remark.what: Hvað er að
+remark.why: Af hverju það er mikilvægt
+remark.todo: Hvað á að gera
+remark.read: Hvar á að lesa
+verification.by_run: Yfirfarið með keyrslu
+verification.by_reading: Yfirfarið með lestri
+reply.kind.question: Þín spurning
+reply.kind.objection: Þín mótmæli
+reply.kind.comment: Þín athugasemd
+reply.answer: Svar
+position.video: myndband, {time}
+position.slide: glæra {number}
+position.paragraph: málsgrein {number}
+position.file: skrá {name}
+review.title: Yfirferð

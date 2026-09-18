@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: אושר
+verdict.failed: לא אושר
+section.fixed: תוקן
+section.new_remarks: הערות חדשות
+section.open: נותר פתוח
+section.broken: מה שהתקלקל
+section.mentor_voice: מהמנטור
+section.replies: תשובות לתגובות שלך
+section.verification: איך נבדק
+section.progress: ההתקדמות שלך
+remark.what: מה לא תקין
+remark.why: למה זה חשוב
+remark.todo: מה לעשות
+remark.read: חומר לקריאה
+verification.by_run: נבדק באמצעות הרצה
+verification.by_reading: נבדק בקריאה
+reply.kind.question: השאלה שלך
+reply.kind.objection: ההתנגדות שלך
+reply.kind.comment: ההערה שלך
+reply.answer: תשובה
+position.video: וידאו, {time}
+position.slide: שקופית {number}
+position.paragraph: פסקה {number}
+position.file: קובץ {name}
+review.title: סקירה

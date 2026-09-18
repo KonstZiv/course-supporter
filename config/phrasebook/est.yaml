@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Arvestatud
+verdict.failed: Mittearvestatud
+section.fixed: Parandatud
+section.new_remarks: Uued märkused
+section.open: Jäi lahtiseks
+section.broken: Katki läinud
+section.mentor_voice: Mentorilt
+section.replies: Vastused Teie kommentaaridele
+section.verification: Kuidas kontrolliti
+section.progress: Teie edusammud
+remark.what: Mis on valesti
+remark.why: Miks see on oluline
+remark.todo: Mida teha
+remark.read: Kust lugeda
+verification.by_run: Kontrollitud käivitamisega
+verification.by_reading: Kontrollitud lugemisega
+reply.kind.question: Teie küsimus
+reply.kind.objection: Teie vastuväide
+reply.kind.comment: Teie kommentaar
+reply.answer: Vastus
+position.video: video, {time}
+position.slide: slaid {number}
+position.paragraph: lõik {number}
+position.file: fail {name}
+review.title: Retsensioon

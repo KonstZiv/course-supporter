@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Kabul Edildi
+verdict.failed: Kabul Edilmedi
+section.fixed: Düzeltildi
+section.new_remarks: Yeni yorumlar
+section.open: Açık kalanlar
+section.broken: Bozulanlar
+section.mentor_voice: Mentordan
+section.replies: Yorumlarınıza yanıtlar
+section.verification: Nasıl kontrol edildi
+section.progress: İlerlemeniz
+remark.what: Sorun ne
+remark.why: Neden önemli
+remark.todo: Ne yapılmalı
+remark.read: Nereden okunur
+verification.by_run: Çalıştırılarak kontrol edildi
+verification.by_reading: Okunarak kontrol edildi
+reply.kind.question: Sorunuz
+reply.kind.objection: İtirazınız
+reply.kind.comment: Yorumunuz
+reply.answer: Yanıt
+position.video: video, {time}
+position.slide: slayt {number}
+position.paragraph: paragraf {number}
+position.file: dosya {name}
+review.title: Değerlendirme

@@ -1,0 +1,30 @@
+# Machine translation, not reviewed.
+#
+# Written by scripts/translate_phrasebook.py from the Ukrainian source.
+# A phrase a human has gone over carries ``reviewed: true`` and the script
+# leaves it alone; this header stays until every phrase in the file does.
+verdict.passed: Ieskaitīts
+verdict.failed: Nav ieskaitīts
+section.fixed: Izlabots
+section.new_remarks: Jaunas piezīmes
+section.open: Palika neatrisināts
+section.broken: Salūza
+section.mentor_voice: No mentora
+section.replies: Atbildes uz Jūsu replikām
+section.verification: Kā pārbaudīts
+section.progress: Jūsu progress
+remark.what: Kas nav pareizi
+remark.why: Kāpēc tas ir svarīgi
+remark.todo: Kas jādara
+remark.read: Kur palasīt
+verification.by_run: Pārbaudīts, palaižot
+verification.by_reading: Pārbaudīts, lasot
+reply.kind.question: Jūsu jautājums
+reply.kind.objection: Jūsu iebildums
+reply.kind.comment: Jūsu komentārs
+reply.answer: Atbilde
+position.video: video, {time}
+position.slide: slaids {number}
+position.paragraph: rindkopa {number}
+position.file: fails {name}
+review.title: Recenzija

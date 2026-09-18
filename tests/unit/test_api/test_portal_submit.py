@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +33,7 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
+from course_supporter.storage.feedback_repository import FeedbackRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
@@ -107,6 +109,18 @@ def _mock_job() -> MagicMock:
     job = MagicMock()
     job.id = uuid.uuid4()
     return job
+
+
+@pytest.fixture(autouse=True)
+def no_own_feedback() -> Iterator[None]:
+    """The detail route reads the student's own touch (task 05).
+
+    Every test in this module runs against a mocked session, which cannot
+    answer that read; the default here is "the student has not answered". The
+    answer itself has its own tests (``test_portal_feedback.py``).
+    """
+    with patch.object(FeedbackRepository, "get_for_target", return_value=None):
+        yield
 
 
 @pytest.fixture()
@@ -504,6 +518,9 @@ class TestPortalReadDetail:
             "created_at",
             "original_filename",
             "delta",
+            # This student's own answer about this review (task 05) — beside
+            # the review, never instead of it, and never anyone else's.
+            "own_feedback",
             "rejection",
             "not_opened",
             "recovered_encoding",

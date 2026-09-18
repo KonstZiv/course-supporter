@@ -24,6 +24,7 @@ only when a second module joins it.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -327,3 +328,43 @@ def list_allowed() -> list[LanguageEntry]:
         )
     _allowed_entries = entries
     return entries
+
+
+def validate_native_names(
+    allowed_codes: Collection[str],
+    config_path: Path | None = None,
+) -> None:
+    """The native-names file covers the allowed list exactly, both ways.
+
+    Checked like the phrasebook's language set, and for the same two reasons: a
+    language on the list with no name is a null in the selector, and a name for
+    a language nobody may pick is dead weight nobody will notice going stale.
+
+    Args:
+        allowed_codes: The languages the system accepts —
+            ``config/languages.yaml`` through :func:`get_language_registry`.
+        config_path: Override for the names file (tests); ``None`` reads the
+            path from settings.
+
+    Raises:
+        FileNotFoundError: when the file does not exist.
+        ValueError: when the file does not parse, an entry has no name, or the
+            two sets differ — listing both differences at once.
+    """
+    names = set(load_native_names(config_path))
+    allowed = set(allowed_codes)
+
+    errors: list[str] = []
+    missing = sorted(allowed - names)
+    if missing:
+        errors.append(f"allowed languages with no native name: {missing}")
+    extra = sorted(names - allowed)
+    if extra:
+        errors.append(f"native names for languages not on the list: {extra}")
+
+    if errors:
+        path = config_path if config_path is not None else _default_names_path()
+        raise ValueError(
+            f"Language names '{path}' do not match the allowed list:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )

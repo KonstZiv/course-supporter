@@ -163,13 +163,19 @@ async def startup(ctx: WorkerCtx) -> None:
         validate_path_config,
     )
     from course_supporter.homework.path_stages import validate_stage_executors
+    from course_supporter.language import (
+        get_language_registry,
+        validate_native_names,
+    )
     from course_supporter.llm.factory import create_providers
     from course_supporter.llm.ladder_config import (
         load_ladder_config,
+        validate_ladder_prompts,
         validate_ladders_against_registry,
     )
     from course_supporter.llm.registry import load_registry
     from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.phrasebook import validate_phrasebook
     from course_supporter.storage.s3 import S3Client
 
     s = get_settings()
@@ -216,6 +222,18 @@ async def startup(ctx: WorkerCtx) -> None:
     # A described stage nobody can run is the same kind of hole as a missing
     # field, and stops the worker for the same reason (mentor-rebuild task 03).
     validate_stage_executors(path_config.stages)
+    # Task 04's three checks, in the same place and for the same reason as the
+    # two above: a hole in configuration stops the boot instead of surfacing in
+    # a student's review. Every ladder prompt is read here (``DD-SP-AP``, half
+    # two — the half for path stages already runs inside validate_path_config);
+    # the phrasebook must carry every allowed language and every key of the
+    # source, both sets checked both ways; the native-names file must cover the
+    # same list. Reading the phrasebook at boot is also what lets the assembler
+    # never open a file at review time.
+    validate_ladder_prompts(ladder_config)
+    allowed_languages = get_language_registry().languages
+    validate_phrasebook(s.phrasebook_dir, allowed_languages)
+    validate_native_names(allowed_languages, s.language_names_path)
     stage_router_providers = create_providers(s)
     stage_router = StageRouter(
         ladder_config=ladder_config,

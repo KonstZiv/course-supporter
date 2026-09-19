@@ -26,6 +26,17 @@ Input and output:
     * :meth:`FundsPort.release_remainder` — at the end, with the
       :class:`SubmissionOutcome`: completed or failed. Returns nothing.
 
+    Work that is not a submission speaks through its own pair of operations and
+    its own :class:`VersionWorkContext` — a generation has no student, no
+    submission and no path (mentor-rebuild task 06, decision 1):
+
+    * :meth:`FundsPort.check_and_reserve_for_version` — before the work's first
+      paid call, with its ceiling estimate. Returns a :class:`FundsAnswer`.
+    * :meth:`FundsPort.account_version_work_cost` — after the work finishes,
+      with what it actually spent. It is FINAL: an implementation releases the
+      unused part of any hold here, and there is no third operation, because
+      the work has one result rather than two.
+
     Amounts are dollars as ``float``, the type of ``cost_usd`` in the register.
     A refusal is a returned value, never an exception, and the caller receives
     it exactly as the implementation built it. The port is told neither the
@@ -123,6 +134,49 @@ class SubmissionContext:
     path_key: PathKey
 
 
+class VersionWorkKind(StrEnum):
+    """Which work-once-per-version the port is being told about.
+
+    Its own vocabulary rather than ``JobType``: the port speaks about money and
+    must not learn how the work is scheduled (the same reason it is told
+    neither the stage nor the provider of a submission's calls). A second
+    member arrives with task 08's criteria decomposition.
+
+    * ``KEY_EXPLANATION`` — the explanations of a test's answer key.
+    """
+
+    KEY_EXPLANATION = "key_explanation"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VersionWorkContext:
+    """Whose work-once-per-version the port is being told about.
+
+    The submission context does not fit this work and is not stretched to: a
+    generation has no student, no submission and no path, and widening
+    :class:`SubmissionContext` with three optional fields would leave every
+    implementation guessing which shape it was handed (ratified 2026-09-19,
+    decision 1 of ``06-reference/TASK.md``).
+
+    What an implementation needs is here and nothing else. The payer is found
+    through ``tenant_id``, exactly as for a submission; the pair
+    (``authored_document_id``, ``source_content_hash``) is the key for acting
+    once — the work belongs to ONE version of ONE task, and a second request
+    for the same pair is the same work, not another one.
+
+    Attributes:
+        tenant_id: The tenant; the payer is found through it.
+        authored_document_id: The task whose version the work is about.
+        source_content_hash: That version — the task's content hash.
+        work_kind: Which work-once-per-version this is.
+    """
+
+    tenant_id: uuid.UUID
+    authored_document_id: uuid.UUID
+    source_content_hash: str
+    work_kind: VersionWorkKind
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FundsAnswer:
     """The answer before the first paid call: allowed, or refused with a reason.
@@ -181,6 +235,31 @@ class FundsPort(Protocol):
         """At the end: how the submission ended, so the rest can be settled."""
         ...
 
+    async def check_and_reserve_for_version(
+        self, context: VersionWorkContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """Before the first paid call of a work-once-per-version: may it spend?
+
+        A refusal is returned, never raised — as for a submission. The caller
+        (the generation job) leaves the version failed with the refusal as its
+        reason, so the author reads why nothing was written.
+        """
+        ...
+
+    async def account_version_work_cost(
+        self, context: VersionWorkContext, actual_usd: float
+    ) -> None:
+        """After the work finishes: its actual price, and the end of it.
+
+        This operation is FINAL for the work, and an implementation that placed
+        a hold releases the unused part of it here. There is deliberately no
+        third operation: a work-once-per-version has one result, not two, so
+        there is no moment between "it cost this much" and "it is over" for a
+        caller to get wrong (ratified 2026-09-19). A work that failed reports
+        what it spent before failing — the same call, a smaller number.
+        """
+        ...
+
 
 class AlwaysEnoughFundsPort:
     """The first implementation: no money exists yet, so every submission may spend.
@@ -224,3 +303,30 @@ class AlwaysEnoughFundsPort:
         self, context: SubmissionContext, outcome: SubmissionOutcome
     ) -> None:
         """Nothing was held, so nothing is released or refunded."""
+
+    async def check_and_reserve_for_version(
+        self, context: VersionWorkContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """Allow, and record the estimate with the answer.
+
+        The same writer as a submission's answer, so both kinds of spending
+        land in one series and can be compared without joining two shapes. The
+        row carries no path: this work takes none, and ``path_key`` stays NULL
+        rather than being filled with something that looks like one.
+        """
+        # Deferred: service_logging imports this module for FUNDS_PORT_ACTION.
+        from course_supporter.service_logging import record_funds_decision
+
+        answer = FundsAnswer.allowed()
+        await record_funds_decision(
+            self._session_factory,
+            path_key=None,
+            ceiling_estimate_usd=ceiling_estimate_usd,
+            answer=answer,
+        )
+        return answer
+
+    async def account_version_work_cost(
+        self, context: VersionWorkContext, actual_usd: float
+    ) -> None:
+        """Nothing was held, so there is nothing to settle or release."""

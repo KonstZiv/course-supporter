@@ -27,6 +27,8 @@ from course_supporter.funds_port import (
     FundsRefusalReason,
     SubmissionContext,
     SubmissionOutcome,
+    VersionWorkContext,
+    VersionWorkKind,
 )
 from course_supporter.homework.path_config import (
     PathConfig,
@@ -193,6 +195,23 @@ class _RefusingFundsPort:
     ) -> None:
         """Nothing was held."""
 
+    async def check_and_reserve_for_version(
+        self, context: VersionWorkContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """A work-once-per-version is refused the same way a submission is."""
+        await record_funds_decision(
+            self._session_factory,
+            path_key=None,
+            ceiling_estimate_usd=ceiling_estimate_usd,
+            answer=self.answer,
+        )
+        return self.answer
+
+    async def account_version_work_cost(
+        self, context: VersionWorkContext, actual_usd: float
+    ) -> None:
+        """Nothing was held."""
+
 
 class TestCeilingEditReachesTheRecord:
     """Acceptance 3: editing a ceiling in the file changes the recorded estimate."""
@@ -220,6 +239,78 @@ class TestCeilingEditReachesTheRecord:
         rows = await _register_rows(session_factory, committed_job_id)
         assert Counter(row.ceiling_estimate_usd for row in rows) == Counter(estimates)
         assert estimates[1] - estimates[0] == pytest.approx(0.03)
+
+
+class TestWorkThatIsNotASubmission:
+    """Task 06 decision 1: a work-once-per-version speaks its own two operations."""
+
+    async def test_the_row_carries_the_job_and_no_trace_of_a_submission(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        committed_seeds: dict[str, uuid.UUID],
+        committed_job_id: uuid.UUID,
+    ) -> None:
+        """One row, the work's own job, and ``path_key`` empty rather than invented.
+
+        The check that matters is the LAST one. A generation has no submission
+        and no path; if the port filled ``path_key`` with something plausible
+        to keep the column busy, every later reading of the register would
+        count this work as a submission down that path.
+        """
+        context = VersionWorkContext(
+            tenant_id=committed_seeds["tenant_id"],
+            authored_document_id=uuid.uuid4(),
+            source_content_hash="c" * 64,
+            work_kind=VersionWorkKind.KEY_EXPLANATION,
+        )
+        port: FundsPort = AlwaysEnoughFundsPort(session_factory)
+
+        with job_scope(committed_job_id):
+            answer = await port.check_and_reserve_for_version(context, 0.03)
+            await port.account_version_work_cost(context, 0.021)
+
+        assert answer == FundsAnswer.allowed()
+        # One row: nothing is held, so accounting the actual cost adds none.
+        (row,) = await _register_rows(session_factory, committed_job_id)
+        assert row.action == FUNDS_PORT_ACTION
+        assert row.job_id == committed_job_id, "the row belongs to the work's job"
+        assert row.ceiling_estimate_usd == pytest.approx(0.03)
+        assert row.funds_decision == FundsDecision.ALLOWED
+        assert row.funds_refusal_reason is None
+        assert row.path_key is None, "a work-once-per-version takes no path"
+        # A row without a model call (KD5), as for a submission.
+        assert row.provider is None
+        assert row.model_id is None
+        assert row.success is None
+        assert row.cost_usd is None
+        assert row.error_message is None
+        assert row.outcome is None
+
+    async def test_a_refusing_implementation_records_its_reason_the_same_way(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        committed_seeds: dict[str, uuid.UUID],
+        committed_job_id: uuid.UUID,
+    ) -> None:
+        """A replacement refuses a generation exactly as it refuses a submission."""
+        implementation = _RefusingFundsPort(session_factory)
+        port: FundsPort = implementation
+        context = VersionWorkContext(
+            tenant_id=committed_seeds["tenant_id"],
+            authored_document_id=uuid.uuid4(),
+            source_content_hash="d" * 64,
+            work_kind=VersionWorkKind.KEY_EXPLANATION,
+        )
+
+        with job_scope(committed_job_id):
+            answer = await port.check_and_reserve_for_version(context, 0.03)
+
+        assert answer.decision is FundsDecision.REFUSED
+        (row,) = await _register_rows(session_factory, committed_job_id)
+        assert row.funds_decision == FundsDecision.REFUSED
+        assert row.funds_refusal_reason == FundsRefusalReason.INSUFFICIENT_FUNDS
+        assert row.error_message is None, "a refusal is an answer, not a failed call"
+        assert row.path_key is None
 
 
 class TestThreeOperationsOnAnArtificialPath:

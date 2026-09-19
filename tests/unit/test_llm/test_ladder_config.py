@@ -1068,6 +1068,14 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
         ("dashscope", "qwen3.7-max"),
         ("deepseek", "deepseek-v4-flash"),
     ],
+    # mentor-rebuild task 06: a copy of criteria_decomposition's ladder, for
+    # the same reason — structured reasoning over one task document, paid once
+    # per task version rather than per submission.
+    "key_explanation": [
+        ("deepseek_thinking", "deepseek-v4-pro"),
+        ("dashscope", "qwen3.7-max"),
+        ("deepseek", "deepseek-v4-flash"),
+    ],
     "mentor_layered_evaluation_node_course": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),

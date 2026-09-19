@@ -165,6 +165,42 @@ class TaskReferenceRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def latest_for_key(
+        self,
+        *,
+        authored_document_id: uuid.UUID,
+        kind: ReferenceKind,
+        source_content_hash: str,
+        source_task_type: str,
+        answers_hash: str,
+        language: str,
+    ) -> TaskReference | None:
+        """The newest version for this key, ``failed`` ones included.
+
+        The reader's counterpart to :meth:`get_live_version`, and the two
+        differ on purpose. Creating a version asks "is there one that blocks a
+        new insert", and a failed one does not. Reporting the state asks "what
+        happened to this key", and a failure IS what happened — without this
+        method the author who is waiting for an answer would be told they never
+        sent a key.
+
+        Newest by version number, so a retry after a failure shows the retry.
+        """
+        stmt = (
+            select(TaskReference)
+            .where(
+                TaskReference.authored_document_id == authored_document_id,
+                TaskReference.kind == kind.value,
+                TaskReference.source_content_hash == source_content_hash,
+                TaskReference.source_task_type == source_task_type,
+                TaskReference.answers_hash == answers_hash,
+                TaskReference.language == language,
+            )
+            .order_by(TaskReference.version.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_by_id(self, reference_id: uuid.UUID) -> TaskReference | None:
         """Load one version by id (identity-map hit if already loaded)."""
         return await self._session.get(TaskReference, reference_id)

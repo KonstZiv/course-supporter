@@ -969,6 +969,92 @@ class PresignedUrlResponse(BaseModel):
     expires_in: int = Field(description="URL validity in seconds.")
 
 
+class ReferenceKeyUpdateRequest(BaseModel):
+    """Body of PUT /documents/{id}/reference/override (mentor-rebuild task 06).
+
+    The author's key, whole. There is no partial form on purpose (ratified
+    2026-09-19): a key is answered as a set, and a patch would leave states
+    where half the questions answer an older version of the test.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    answers: dict[str, list[str]] = Field(
+        min_length=1,
+        description=(
+            "The author's answers: question number → the option labels that "
+            "are right. A set of labels, not one label — how a multi-label "
+            "question scores is task 07's business, but the shape must not "
+            "need a migration then."
+        ),
+    )
+    author_explanations: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "The author's own explanations for individual questions. Outside "
+            "the generation key: editing one does not buy a fresh generation."
+        ),
+    )
+
+    @field_validator("answers")
+    @classmethod
+    def _labels_are_present(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Every question carries at least one non-blank label.
+
+        A question mapped to ``[]`` or to ``[""]`` passes the type and answers
+        nothing; the database CHECK only refuses a wholly empty key, so this is
+        the guard for the per-question case.
+        """
+        for number, labels in value.items():
+            if not labels or any(not label.strip() for label in labels):
+                msg = f"question {number} has no answer"
+                raise ValueError(msg)
+        return value
+
+
+class ReferenceViewResponse(BaseModel):
+    """What the author sees about a task's reference (mentor-rebuild task 06).
+
+    Returned by all three routes, so the author always reads the same shape —
+    after writing a key, after clearing one, and when merely looking.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str = Field(
+        description=(
+            "How far the CURRENT version got: ``awaiting_key`` (no usable key), "
+            "``generating``, ``ready`` or ``failed``."
+        )
+    )
+    version: int | None = Field(
+        default=None, description="1-based version number, or null when none exists."
+    )
+    answers: dict[str, list[str]] = Field(
+        default_factory=dict, description="The author's answers, as stored."
+    )
+    explanations: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "One explanation per question — the author's own where they wrote "
+            "one, the generated one otherwise. Empty until ``ready``."
+        ),
+    )
+    carried_over: bool = Field(
+        default=False,
+        description=(
+            "True when these answers reached the current task version "
+            "automatically because its question numbers were unchanged."
+        ),
+    )
+    language: str | None = Field(
+        default=None, description="Language the explanations are written in."
+    )
+    failure_reason: str | None = Field(
+        default=None, description="Why generation gave up, when ``failed``."
+    )
+
+
 class ProjectBaseAttachResponse(BaseModel):
     """Response for POST /documents/{document_id}/base (KD18 P2).
 

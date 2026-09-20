@@ -34,6 +34,7 @@ from course_supporter.funds_port import (
     SubmissionOutcome,
     VersionWorkContext,
 )
+from course_supporter.homework.reference_key import answers_digest
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
@@ -208,9 +209,7 @@ async def seeded(
             kind=ReferenceKind.TEST_KEY,
             source_content_hash=_HASH,
             source_task_type="test",
-            answers_hash=__import__(
-                "course_supporter.homework.reference_key", fromlist=["answers_digest"]
-            ).answers_digest(_KEY),
+            answers_hash=answers_digest(_KEY),
             language="ukr",
         )
         job = Job(

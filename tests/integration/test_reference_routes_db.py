@@ -55,9 +55,6 @@ class _CountingQueue:
         self.requests.append(reference_id)
 
 
-_QUEUE = _CountingQueue()
-
-
 def _key_context(tenant_id: uuid.UUID, *scopes: str) -> TenantContext:
     """A key context carrying exactly the scopes named — no more."""
     return TenantContext(
@@ -153,8 +150,15 @@ async def world(
 
 
 @pytest.fixture()
+def queue() -> _CountingQueue:
+    """A fresh counting queue per test — no state travels between them."""
+    return _CountingQueue()
+
+
+@pytest.fixture()
 async def client(
     world: dict[str, uuid.UUID],
+    queue: _CountingQueue,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[tuple[AsyncClient, Callable[[TenantContext], None]]]:
     """A live client, a key-context switch, and the counting queue wired in."""
@@ -163,7 +167,6 @@ async def client(
         async with session_factory() as session:
             yield session
 
-    _QUEUE.requests.clear()
     app.dependency_overrides[get_session] = _yield_session
     # The routes take the queue from the request, and the queue takes Redis.
     # The queue itself is replaced below, so what this override supplies is
@@ -179,7 +182,7 @@ async def client(
 
     with patch(
         "course_supporter.api.routes.references.ArqExplanationQueue",
-        return_value=_QUEUE,
+        return_value=queue,
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -200,6 +203,7 @@ class TestTheKeyRoundTrip:
     async def test_put_then_get_shows_the_answers(
         self,
         client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        queue: _CountingQueue,
         world: dict[str, uuid.UUID],
     ) -> None:
         """What the author sent comes back, and the work was asked for once."""
@@ -213,7 +217,7 @@ class TestTheKeyRoundTrip:
         assert body["carried_over"] is False
         assert body["language"] == "ukr"
         assert body["version"] == 1
-        assert len(_QUEUE.requests) == 1
+        assert len(queue.requests) == 1
 
         got = await ac.get(_read(world["test_task"]))
         assert got.status_code == 200
@@ -222,6 +226,7 @@ class TestTheKeyRoundTrip:
     async def test_the_same_key_again_asks_for_no_new_work(
         self,
         client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        queue: _CountingQueue,
         world: dict[str, uuid.UUID],
     ) -> None:
         ac, _ = client
@@ -232,7 +237,7 @@ class TestTheKeyRoundTrip:
 
         assert again.status_code == 200
         assert again.json()["version"] == 1
-        assert len(_QUEUE.requests) == 1, "a repeat must not buy a second generation"
+        assert len(queue.requests) == 1, "a repeat must not buy a second generation"
 
     async def test_a_task_without_a_key_is_awaiting_one_not_a_404(
         self,
@@ -317,6 +322,7 @@ class TestEveryRefusalCarriesItsOwnCode:
     async def test_a_key_that_misses_and_invents_says_both(
         self,
         client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        queue: _CountingQueue,
         world: dict[str, uuid.UUID],
     ) -> None:
         """One refusal naming both halves: a renumbered question is one mistake."""
@@ -330,7 +336,7 @@ class TestEveryRefusalCarriesItsOwnCode:
         assert detail["code"] == "KEY_DOES_NOT_MATCH_QUESTIONS"
         assert "missing: ['2']" in detail["details"]
         assert "unknown: ['9']" in detail["details"]
-        assert not _QUEUE.requests, "a refused key costs nothing"
+        assert not queue.requests, "a refused key costs nothing"
 
     async def test_an_empty_answer_is_refused_at_the_boundary(
         self,
@@ -391,3 +397,26 @@ class TestWhoMayKnock:
         ):
             assert foreign.status_code == absent.status_code == 404
             assert foreign.content == absent.content
+
+    async def test_the_404_is_the_one_the_document_routes_give(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+    ) -> None:
+        """Across routes, not only within them.
+
+        A refusal that reads differently from the sibling route's is a refusal
+        that says WHICH door was knocked on. The prose of the constant claimed
+        this agreement before anything checked it, and claimed it wrongly — the
+        string carried a trailing full stop the document route does not have.
+        Hence a test rather than a sentence.
+        """
+        ac, _ = client
+        missing = uuid.uuid4()
+
+        ours = await ac.get(_read(missing))
+        theirs = await ac.get(f"/api/v1/documents/{missing}")
+
+        assert ours.status_code == theirs.status_code == 404
+        assert ours.content, "the comparison is over a real body"
+        assert ours.content == theirs.content

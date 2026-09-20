@@ -21,7 +21,7 @@ not.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Final
 
 import structlog
 from arq.connections import ArqRedis
@@ -55,12 +55,16 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
-_DOCUMENT_NOT_FOUND = "Document not found."
+_DOCUMENT_NOT_FOUND: Final[str] = "Document not found"
 """The one answer for a task that is not there and a task that is not yours.
 
-Byte-identical on purpose: a distinguishable 404 would let a caller with a
-valid key of one tenant enumerate the document ids of another
-(``impl-rules#9``). The same string the base-archive routes use.
+Byte-identical on purpose, and in two directions. Within these routes, a
+distinguishable 404 would let a caller with a valid key of one tenant enumerate
+the document ids of another (``impl-rules#9``). Across routes, it is the very
+string ``api/routes/documents.py`` answers with — a caller cannot learn from
+the shape of a refusal which door it knocked on. A test holds the second
+direction, because prose claiming it once claimed it wrongly: this constant
+carried a trailing full stop the sibling does not have.
 """
 
 

@@ -165,6 +165,38 @@ stages:
         model: deepseek-v4-flash
         max_output_tokens: 8192
 
+  # ── key_explanation (mentor-rebuild task 06) ──
+  # Writes one explanation per question of a test's answer key: why the answer
+  # the AUTHOR gave is the right one. Runs ONCE per (task version, answers,
+  # language), outside any student submission — the same shape as
+  # criteria_decomposition above, and calibrated as a copy of it because the
+  # workload is the same kind: structured reasoning over one task document,
+  # amortised across every attempt at the test rather than paid per submission.
+  #
+  # The name does not repeat any stage of config/submission_paths.yaml (`safety`,
+  # `attempt_classifier`): the call register keys a call's cost on the stage
+  # name, so two different stages sharing one name would merge two prices.
+  #
+  # NOT CALIBRATED: no spike was run for this stage. The ladder, the rung-1
+  # output ceiling and the budget ratio are copied from criteria_decomposition,
+  # whose rationale (hotfix 1, ratified 2026-09-14) is that deepseek_thinking
+  # counts reasoning inside max_output_tokens and 8192 left nothing for the
+  # answer. The first live run of this stage is the calibration data.
+  key_explanation:
+    prompt_ref: "prompts/key_explanation/v1.md"
+    requires: [structured_output]
+    input_budget_ratio: 0.5
+    ladder:
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        max_output_tokens: 32768
+      - provider: dashscope
+        model: qwen3.7-max
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-v4-flash
+        max_output_tokens: 8192
+
   # ── Mentor review graph (sprint-mentor T6, vision §1369-1400 / D8-D12) ──
   # Three-phase review inside stage `review`. Ladders calibrated by reasoning
   # analogy (like criteria_decomposition — no pre-spike); quality of layered

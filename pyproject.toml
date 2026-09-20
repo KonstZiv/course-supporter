@@ -127,6 +127,10 @@ ignore = [
 "src/course_supporter/services/email_text.py" = ["RUF001"]
 "src/course_supporter/auth/recovery_tokens.py" = ["RUF001"]
 "src/course_supporter/security/regex_patterns.py" = ["RUF001", "RUF002"]
+# Answer-key examples: the option labels of a Ukrainian test ARE Cyrillic,
+# so a doctest that spelled them in Latin would document a format the
+# parser never sees.
+"src/course_supporter/homework/reference_key.py" = ["RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "tests/unit/test_linguistics.py" = ["RUF003"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]

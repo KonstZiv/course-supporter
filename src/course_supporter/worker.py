@@ -27,6 +27,7 @@ from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.workers.base_normalize import base_normalize_task
 from course_supporter.workers.email_send import arq_send_email
+from course_supporter.workers.key_explain import arq_explain_key
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
 
 if TYPE_CHECKING:
@@ -316,6 +317,7 @@ class WorkerSettings:
         s3_cleanup_task,
         arq_send_email,
         base_normalize_task,
+        arq_explain_key,
     ]
     on_startup = startup
     on_shutdown = shutdown

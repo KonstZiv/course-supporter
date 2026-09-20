@@ -32,6 +32,7 @@ from course_supporter.feedback_kinds import (
     FeedbackValue,
 )
 from course_supporter.llm.finish_reason import FinishReason
+from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.storage.cascade import (
     ScrubCallable,
     scrub_authored_document,
@@ -991,7 +992,7 @@ class Job(SoftDeleteMixin, Base):
         CheckConstraint(
             "job_type IN ('document_processing', 'node_summary_regeneration', "
             "'homework_processing', 's3_cleanup', 'base_normalize', "
-            "'document_preparation')",
+            "'document_preparation', 'key_explanation')",
             name="ck_jobs_job_type",
         ),
         CheckConstraint(
@@ -1019,6 +1020,8 @@ class Job(SoftDeleteMixin, Base):
             "AND subject_type = 'course_node') "
             "OR (job_type = 'base_normalize' "
             "AND subject_type = 'project_base') "
+            "OR (job_type = 'key_explanation' "
+            "AND subject_type = 'authored_document') "
             "OR subject_type IS NULL",
             name="ck_jobs_subject_type_legal",
         ),
@@ -2573,6 +2576,262 @@ class TaskCriteria(SoftDeleteMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class TaskReference(Base):
+    """One generated version of what a task is checked against (task 06).
+
+    The machine layer of a reference. Append-only per task, exactly like
+    ``ProjectBase``: a new version is version ``n+1``, and no row is ever
+    rewritten — a submission graded against version 2 keeps meaning what it
+    meant after version 3 arrives.
+
+    Four columns are the version key, and all four gate a reuse hit:
+
+    * ``source_content_hash`` — content axis = ``AuthoredDocument.content_hash``
+      at generation time (the ``TaskCriteria`` axis, same meaning);
+    * ``source_task_type`` — type axis = ``AuthoredDocument.task_type``;
+    * ``answers_hash`` — the author's answers this version explains. Ratified
+      2026-09-19: generation depends on the triple "version, answers,
+      language", so a changed answer is a different version to generate, while
+      an author's own explanation changes nothing here;
+    * ``language`` — explanations are stored per language; the first echelon
+      fills the course language only.
+
+    ``uq_task_reference_axes_active`` is what makes "the same triple costs zero
+    calls" a rule of the DATABASE rather than of the code (``TASK.md``
+    invariant 4). It excludes ``failed`` rows on purpose: a version that gave
+    up must not block the retry that replaces it.
+
+    Plain ``Base``, no ``SoftDeleteMixin`` — like ``ProjectBase`` and for the
+    same reason: versions are append-only and go away only with the task
+    (FK CASCADE). It is therefore a LEAF of the content_hash graph, never a
+    Merkle parent, and enters no content_hash formula.
+    """
+
+    __tablename__ = "task_references"
+    __table_args__ = (
+        CheckConstraint(_one_of("kind", ReferenceKind), name="ck_task_references_kind"),
+        CheckConstraint(
+            _one_of("state", ReferenceState), name="ck_task_references_state"
+        ),
+        Index(
+            "uq_task_reference_document_version",
+            "authored_document_id",
+            "version",
+            unique=True,
+        ),
+        # The zero-calls rule, held by the database (TASK.md invariant 4): one
+        # live version per (task, kind, content, type, answers, language).
+        # ``failed`` is outside it so a retry is possible at all.
+        Index(
+            "uq_task_reference_axes_active",
+            "authored_document_id",
+            "kind",
+            "source_content_hash",
+            "source_task_type",
+            "answers_hash",
+            "language",
+            unique=True,
+            postgresql_where=text("state <> 'failed'"),
+        ),
+        Index("ix_task_references_document_kind", "authored_document_id", "kind"),
+        {
+            "comment": "Append-only generated reference versions for a task "
+            "(mentor-rebuild task 06) — today the explanations of a test's "
+            "answer key. One live version per (task, kind, content, type, "
+            "answers, language)."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        comment="FK → AuthoredDocument (the task). CASCADE — deleting the task "
+        "removes its reference versions. The composite "
+        "(authored_document_id, version) unique index covers this FK "
+        "(leftmost prefix), so no standalone FK index.",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        comment="Monotonic 1-based version per document. A new generation is a "
+        "new version; an existing one is never rewritten. Unique per document.",
+    )
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="Which kind of reference this version carries (ReferenceKind). "
+        "Today: 'test_key'. Task 08 adds 'mandatory_points' as a MEMBER — a "
+        "widened CHECK, not a new table.",
+    )
+    source_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="Content-axis version key = AuthoredDocument.content_hash at "
+        "generation time (mirrors TaskCriteria.source_content_hash).",
+    )
+    source_task_type: Mapped[str] = mapped_column(
+        String(32),
+        comment="Type-axis version key = AuthoredDocument.task_type at "
+        "generation time. Re-typing the task invalidates this version.",
+    )
+    answers_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="Answer-axis version key: SHA-256 over the author's answers in "
+        "canonical form (sorted question numbers, sorted labels within each). "
+        "Canonical because JSONB key order is not guaranteed and an unstable "
+        "digest would buy a second paid generation for an unchanged key.",
+    )
+    language: Mapped[str] = mapped_column(
+        String(10),
+        comment="Language the explanations are written in, ISO 639-3 — the "
+        "course language in the first echelon. Part of the version key: the "
+        "same key in another language is another generation.",
+    )
+    explanations: Mapped[dict[str, str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="Generated explanations, {question number: text} — one per "
+        "question, why the right answer is right. NULL until READY.",
+    )
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default=ReferenceState.PENDING.value,
+        server_default=ReferenceState.PENDING.value,
+        comment="Generation lifecycle (ReferenceState): pending → ready | "
+        "failed(reason). Enforced by ck_task_references_state.",
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Human-readable reason when state='failed' (the ladder or "
+        "funds-port refusal). NULL otherwise.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TaskReference(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"version={self.version!r}, kind={self.kind!r}, "
+            f"state={self.state!r})"
+        )
+
+
+class TaskReferenceOverride(Base):
+    """The author's layer of a reference — the part a model never writes (task 06).
+
+    One row per (task, kind), replaced WHOLE rather than patched field by
+    field. That is the deliberate difference from ``NodeSummaryFinal``, whose
+    author edits are partial (``PATCH .../final``): ratified 2026-09-19, one
+    form serves the reference here and the criteria layer of task 08, and a
+    whole replacement leaves no half-changed state behind.
+
+    There are no versions here. The machine layer accumulates them because each
+    generation is a new fact; the author's answers are one current truth, and
+    the row carries its own ``source_content_hash`` to say which version of the
+    task text they were written against.
+
+    ``carried_over`` records that these answers reached a NEW version of the
+    task text automatically, because its question numbers were unchanged
+    (``TASK.md`` scope 6). It is the one place a reader can tell "the author
+    approved this for this text" from "the system kept it because nothing that
+    matters changed", and it is cleared the moment the author replaces the
+    layer.
+
+    Absence is meaningful: no row at all IS the state "waiting for a key". No
+    bitwise copy of a machine layer is created at the start, unlike
+    ``NodeSummaryFinal`` — there is nothing to copy, because the answers are
+    exactly what the model may not produce.
+    """
+
+    __tablename__ = "task_reference_overrides"
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("kind", ReferenceKind), name="ck_task_reference_overrides_kind"
+        ),
+        # An empty key is not a key. Without this the route's validation would
+        # be the only thing between "the author sent nothing" and a stored row
+        # that makes a test look answerable.
+        CheckConstraint(
+            "answers <> '{}'::jsonb", name="ck_task_reference_overrides_answers_present"
+        ),
+        Index(
+            "uq_task_reference_override_document_kind",
+            "authored_document_id",
+            "kind",
+            unique=True,
+        ),
+        {
+            "comment": "The author's layer of a task reference (mentor-rebuild "
+            "task 06) — one row per (task, kind), replaced whole. Its absence "
+            "is the 'waiting for a key' state."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        comment="FK → AuthoredDocument (the task). CASCADE — deleting the task "
+        "removes the author's layer with it. The composite "
+        "(authored_document_id, kind) unique index covers this FK (leftmost "
+        "prefix), so no standalone FK index.",
+    )
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="Which kind of reference this layer belongs to (ReferenceKind), "
+        "the same vocabulary as task_references.kind.",
+    )
+    answers: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="The author's answers, {question number: [option labels]}. A "
+        "set of labels, not one label: how a multi-label question scores is "
+        "task 07's business, but the shape must not need a migration then.",
+    )
+    author_explanations: Mapped[dict[str, str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="The author's own explanations for individual questions, "
+        "{question number: text}. Outside the generation key on purpose "
+        "(ratified 2026-09-19): editing one must not buy a fresh generation "
+        "of the whole set.",
+    )
+    source_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="AuthoredDocument.content_hash of the task text these answers "
+        "were written against. Compared with the live one to decide whether "
+        "the answers carry over to a new version or the task waits for a key.",
+    )
+    carried_over: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment="True when these answers reached the current task version "
+        "automatically (the question numbers were unchanged) rather than being "
+        "sent for it. Cleared when the author replaces the layer.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TaskReferenceOverride(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"kind={self.kind!r}, carried_over={self.carried_over!r})"
+        )
 
 
 # ──────────────────────────────────────────────

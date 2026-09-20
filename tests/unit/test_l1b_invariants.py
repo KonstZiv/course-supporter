@@ -32,11 +32,14 @@ from course_supporter.storage.orm import Job
 _SRC = Path(course_supporter.__file__).parent
 _VERSIONS = Path(course_supporter.__file__).parents[2] / "migrations" / "versions"
 _MIGRATION = _VERSIONS / "l1b_job_subject.py"
-# №21 BE1+BE3 widened ck_jobs_subject_type_legal (drop + re-add with the
-# document_preparation pair), so the prep migration — not l1b — is now the
-# authority for the legal-pair set. l1b stays the authority for the
-# uq_jobs_subject_in_flight index it also froze (untouched by №21).
-_PREP_MIGRATION = _VERSIONS / "n21_prep_jobtype.py"
+# The authority for ck_jobs_subject_type_legal is whichever migration re-added
+# it LAST: №21 took it from l1b with the document_preparation pair, and
+# mentor-rebuild task 06 took it from №21 with the key_explanation pair. l1b
+# stays the authority for the uq_jobs_subject_in_flight index it also froze
+# (untouched by either). Moving this pointer is how a widening is declared —
+# leaving it behind would let code and DB drift apart while the lock stayed
+# green against a superseded snapshot.
+_PREP_MIGRATION = _VERSIONS / "key_explanation_jobtype.py"
 
 
 def _load_module(path: Path, name: str) -> ModuleType:
@@ -54,8 +57,8 @@ def _load_migration() -> ModuleType:
 
 
 def _load_prep_migration() -> ModuleType:
-    """Load the №21 prep migration (current authority for the legal-pair CHECK)."""
-    return _load_module(_PREP_MIGRATION, "_n21_prep_migration")
+    """Load the migration that last re-added the legal-pair CHECK."""
+    return _load_module(_PREP_MIGRATION, "_legal_pairs_authority")
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -177,11 +180,12 @@ def test_migration_index_where_matches_in_flight() -> None:
 
 
 def test_migration_pairs_match_code() -> None:
-    """The prep migration's frozen legal-pair CHECK == JOB_SUBJECT_TYPE_PAIRS.
+    """The authority migration's frozen legal-pair CHECK == JOB_SUBJECT_TYPE_PAIRS.
 
-    №21 widened ck_jobs_subject_type_legal, so the authority is now the prep
-    migration's ``_SUBJECT_TYPE_CONDITION_NEW`` (the SQL it re-adds), not l1b's
-    superseded ``_TYPE_CONDITION``.
+    The authority is the migration that re-added the constraint LAST — today
+    task 06's ``key_explanation_jobtype`` — through its
+    ``_SUBJECT_TYPE_CONDITION_NEW`` (the SQL it re-adds), not l1b's superseded
+    ``_TYPE_CONDITION`` nor №21's, which task 06 in turn superseded.
     """
     mig = _load_prep_migration()
     assert _legal_pairs_from_check(mig._SUBJECT_TYPE_CONDITION_NEW) == set(
@@ -193,7 +197,7 @@ def test_migration_and_orm_predicates_agree() -> None:
     """Migration frozen SQL and ORM declaration agree on the index WHERE and
     the legal-pair CHECK — keep the two representations identical or model↔DB
     drifts (GIN 3.3b). Each leg reads its current authority: l1b for the
-    in-flight index, the №21 prep migration for the widened legal-pair CHECK."""
+    in-flight index, the last migration to re-add the legal-pair CHECK."""
     l1b_mig = _load_migration()
     prep_mig = _load_prep_migration()
     assert _statuses_from_where(l1b_mig._INFLIGHT_WHERE) == _statuses_from_where(

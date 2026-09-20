@@ -38,6 +38,7 @@ from course_supporter.funds_port import (
     FundsRefusalReason,
     SubmissionContext,
     SubmissionOutcome,
+    VersionWorkContext,
 )
 from course_supporter.homework.path_checkpoint import (
     FreezeReason,
@@ -195,6 +196,18 @@ class _PortDouble:
         self, context: SubmissionContext, outcome: SubmissionOutcome
     ) -> None:
         self.released.append((context, outcome))
+
+    async def check_and_reserve_for_version(
+        self, context: VersionWorkContext, ceiling_estimate_usd: float
+    ) -> FundsAnswer:
+        """Nothing on a submission path is a work-once-per-version (task 06)."""
+        raise AssertionError("the submission path must not use the version operations")
+
+    async def account_version_work_cost(
+        self, context: VersionWorkContext, actual_usd: float
+    ) -> None:
+        """Nothing on a submission path is a work-once-per-version (task 06)."""
+        raise AssertionError("the submission path must not use the version operations")
 
 
 def _stage(money_usd: float = 0.05) -> dict[str, Any]:

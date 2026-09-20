@@ -430,6 +430,60 @@ async def enqueue_base_normalize(
     return base
 
 
+async def enqueue_key_explanation(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+    reference_id: uuid.UUID,
+) -> Job:
+    """Create the Job for one reference version and enqueue its generation.
+
+    mentor-rebuild task 06. Helper-owns-commit (QQ5, as the siblings above):
+    the durable Job row is committed BEFORE the ARQ dispatch, so a hot worker
+    can never read a Job whose version is not yet visible.
+
+    The subject is the TASK, not the version. That is deliberate and it is what
+    ``uq_jobs_subject_in_flight`` then buys: while one generation for a task is
+    in flight, a second is refused by the database. The version the job works on
+    travels in the payload instead.
+
+    Returns:
+        The created Job — the caller logs or ignores it; the author's request
+        does not wait for the work.
+    """
+    log = structlog.get_logger().bind(
+        authored_document_id=str(authored_document_id),
+        reference_id=str(reference_id),
+    )
+    job_repo = JobRepository(session)
+    job = await job_repo.create(
+        tenant_id=tenant_id,
+        job_type=JobType.KEY_EXPLANATION,
+        input_params={"reference_id": str(reference_id)},
+        subject_type=JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION],
+        subject_id=authored_document_id,
+    )
+    await session.commit()
+
+    arq_job = await redis.enqueue_job(
+        "arq_explain_key",
+        str(job.id),
+        str(reference_id),
+    )
+    if arq_job is not None:
+        await job_repo.set_arq_job_id(job.id, arq_job.job_id)
+        await session.commit()
+
+    log.info(
+        "key_explanation_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
 async def enqueue_document_preparation(
     *,
     redis: ArqRedis,

@@ -346,7 +346,7 @@ async def record_review_metrics(
 async def record_funds_decision(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    path_key: PathKey,
+    path_key: PathKey | None,
     ceiling_estimate_usd: float,
     answer: FundsAnswer,
 ) -> None:
@@ -373,7 +373,7 @@ async def record_funds_decision(
         ceiling_estimate_usd=ceiling_estimate_usd,
         funds_decision=answer.decision,
         funds_refusal_reason=answer.refusal_reason,
-        path_key=str(path_key),
+        path_key=str(path_key) if path_key is not None else None,
     )
 
 

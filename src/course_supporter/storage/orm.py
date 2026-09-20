@@ -992,7 +992,7 @@ class Job(SoftDeleteMixin, Base):
         CheckConstraint(
             "job_type IN ('document_processing', 'node_summary_regeneration', "
             "'homework_processing', 's3_cleanup', 'base_normalize', "
-            "'document_preparation')",
+            "'document_preparation', 'key_explanation')",
             name="ck_jobs_job_type",
         ),
         CheckConstraint(
@@ -1020,6 +1020,8 @@ class Job(SoftDeleteMixin, Base):
             "AND subject_type = 'course_node') "
             "OR (job_type = 'base_normalize' "
             "AND subject_type = 'project_base') "
+            "OR (job_type = 'key_explanation' "
+            "AND subject_type = 'authored_document') "
             "OR subject_type IS NULL",
             name="ck_jobs_subject_type_legal",
         ),

@@ -1,6 +1,6 @@
 """Canonical Job type enum + application-level validation.
 
-Vision §3 KD13 fixes the universe of ``Job.job_type`` values to six:
+Vision §3 KD13 fixes the universe of ``Job.job_type`` values to seven:
 
 * ``document_processing`` — pipeline of one ``AuthoredDocument``
   (stages: pass_1 → pass_2a → pass_2b → pass_2c).
@@ -15,9 +15,15 @@ Vision §3 KD13 fixes the universe of ``Job.job_type`` values to six:
   ``AuthoredDocument`` (№21: extract + typicality + tree → file-role
   proposal; zero LLM). Same subject as ``document_processing``; the
   author's role decision gates the expensive processing job.
+* ``key_explanation`` — generation of a test key's explanations, once
+  per task version and outside any student submission (mentor-rebuild
+  task 06). Same subject as ``document_processing``: the job is
+  enqueued for the TASK, before the reference version it produces
+  exists.
 
 The DB-level CHECK constraint ``ck_jobs_job_type`` (L1a, widened by
-n21_prep_jobtype for ``document_preparation``) enforces exactly this set
+n21_prep_jobtype for ``document_preparation`` and by task_reference_key
+for ``key_explanation``) enforces exactly this set
 at the storage layer. :func:`validate_job_type`
 is the application-level mirror: it gives a clean ``ValueError`` at the
 call site before the INSERT rather than an opaque ``IntegrityError`` from
@@ -50,6 +56,13 @@ class JobType(StrEnum):
     # document_processing (authored_document) — the author's role decision gates
     # the expensive processing job. Added to both DB CHECKs by n21_prep_jobtype.
     DOCUMENT_PREPARATION = "document_preparation"
+    # mentor-rebuild task 06: generation of a test key's explanations — once per
+    # task version, OUTSIDE any student submission (TASK.md invariant 3). The
+    # subject is the task itself (authored_document), not the reference version:
+    # the version does not exist yet when the job is enqueued, and the
+    # in-flight idempotency index keys on the subject. Added to both DB CHECKs
+    # by task_reference_key.
+    KEY_EXPLANATION = "key_explanation"
 
 
 _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)
@@ -70,6 +83,7 @@ JOB_SUBJECT_TYPE: dict[JobType, str | None] = {
     JobType.HOMEWORK_PROCESSING: "homework_submission",
     JobType.NODE_SUMMARY_REGENERATION: "course_node",
     JobType.BASE_NORMALIZE: "project_base",
+    JobType.KEY_EXPLANATION: "authored_document",
     JobType.S3_CLEANUP: None,
 }
 

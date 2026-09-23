@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.agents.key_explainer import STAGE_NAME
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.funds_port import (
+    FUNDS_PORT_ACTION,
     FundsAnswer,
     FundsRefusalReason,
     SubmissionContext,
@@ -38,7 +39,7 @@ from course_supporter.homework.reference_key import answers_digest
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
-from course_supporter.service_logging import job_scope
+from course_supporter.service_logging import get_current_job_id
 from course_supporter.storage.orm import (
     AuthoredDocument,
     DocumentSegment,
@@ -298,12 +299,11 @@ class TestTheWorkThatSucceeds:
         router = _RouterDouble(session_factory, content=_GOOD)
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, explanations = await _version_state(
             session_factory, seeded["version_id"]
@@ -330,12 +330,11 @@ class TestTheWorkThatSucceeds:
         router = _RouterDouble(session_factory, content=_GOOD, cost_usd=0.0177)
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         async with session_factory() as session:
             registered = await session.scalar(
@@ -346,6 +345,9 @@ class TestTheWorkThatSucceeds:
                     ExternalServiceCall.action == STAGE_NAME,
                 )
             )
+        assert port.accounted and port.accounted[0] > 0, (
+            "the work paid, so its sum is above zero; two zeros agree over no rows"
+        )
         assert port.accounted == [pytest.approx(registered)]
 
 
@@ -368,12 +370,11 @@ class TestTheWorkThatSpendsNothing:
         router = _RouterDouble(session_factory, content=_GOOD)
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, _ = await _version_state(session_factory, seeded["version_id"])
         assert state == ReferenceState.FAILED.value
@@ -397,12 +398,11 @@ class TestTheWorkThatSpendsNothing:
         router = _RouterDouble(session_factory, content=_GOOD)
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, _ = await _version_state(session_factory, seeded["version_id"])
         assert state == ReferenceState.FAILED.value
@@ -418,12 +418,11 @@ class TestTheWorkThatSpendsNothing:
         router = _RouterDouble(session_factory, content=_GOOD)
         port = _RefusingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, _ = await _version_state(session_factory, seeded["version_id"])
         assert state == ReferenceState.FAILED.value
@@ -452,12 +451,11 @@ class TestTheWorkThatFailsLate:
         router = _RouterDouble(session_factory, content=_BAD)
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, explanations = await _version_state(
             session_factory, seeded["version_id"]
@@ -480,14 +478,49 @@ class TestTheWorkThatFailsLate:
         router.raise_instead = LadderExhaustedError(stage_name=STAGE_NAME, attempts=[])
         port = _CountingPort()
 
-        with job_scope(seeded["job_id"]):
-            await arq_explain_key(
-                _ctx(session_factory, router, port),
-                str(seeded["job_id"]),
-                str(seeded["version_id"]),
-            )
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
 
         state, reason, _ = await _version_state(session_factory, seeded["version_id"])
         assert state == ReferenceState.FAILED.value
         assert reason is not None and reason.startswith("generation failed:")
         assert await _job_status(session_factory, seeded["job_id"]) == "failed"
+
+
+class TestTheWorkThatIsWrittenDown:
+    async def test_the_entry_alone_writes_both_rows_under_its_own_job(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seeded: dict[str, uuid.UUID],
+    ) -> None:
+        """Called as ARQ calls it, the work still reaches the register.
+
+        Production paid for a generation on 2026-09-23 and the register got no
+        row of it: nothing on the worker's path put the job in context, and
+        every test here supplied it with ``job_scope`` (hotfix 4). So nothing
+        wraps the call below, the funds port is the shipped one, and both rows
+        the work owes the register are required under THIS job — the port's
+        decision and the stage's call.
+        """
+        assert get_current_job_id() is None, "premise: no job in context yet"
+        router = _RouterDouble(session_factory, content=_GOOD)
+
+        await arq_explain_key(
+            {"session_factory": session_factory, "stage_router": router, "job_try": 1},
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
+
+        async with session_factory() as session:
+            result = await session.execute(
+                select(ExternalServiceCall.action).where(
+                    ExternalServiceCall.job_id == seeded["job_id"]
+                )
+            )
+            actions = sorted(result.scalars())
+        assert actions == sorted([FUNDS_PORT_ACTION, STAGE_NAME]), (
+            "one funds decision and one stage call, both under this job"
+        )

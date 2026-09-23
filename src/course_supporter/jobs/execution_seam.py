@@ -33,6 +33,11 @@ Lifecycle a wrapped task goes through:
       exit (skip-if-dead). ``subject_type IS NULL`` (s3_cleanup, or a legacy
       NULL-subject row — A3) skips the liveness check entirely.
     * otherwise → ``active`` (+ ``started_at``; a no-op on replay).
+* **Register context** — the job's tenant and id are set for the call register
+  (``service_logging``), so the register row of every call the body makes
+  carries THIS job (KD5). Both come from the ``Job`` itself, which keeps the
+  step inside the boundary above. An entry that also sets them sets the same
+  values again.
 * **Body** — the wrapped task runs. A normal return → ``complete`` (+
   ``store_result`` when the body returned a dict). An exception → ``failed`` (+
   its structural ``error_category`` when it carries one, else the
@@ -61,6 +66,7 @@ from arq import Retry
 from course_supporter.config import get_settings
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE
 from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.service_logging import set_job_from_arq, set_tenant_from_job
 from course_supporter.storage.job_repository import (
     AT_REST_STATUSES,
     JobRepository,
@@ -273,6 +279,17 @@ async def _run_seam(
             return
         await repo.update_status(jid, "active")  # no-op on replay (active→active)
         await session.commit()
+
+    # ── Register context ──
+    # A call made with no job in context is dropped from the call register with
+    # nothing but a log line (DD-SP-AN). Setting it here, with the same two
+    # calls the ``api/tasks.py`` entries make at the top of their bodies, means
+    # an entry that forgets them no longer loses its rows — ``arq_explain_key``
+    # did, and paid for a generation with no register row in production on
+    # 2026-09-23 (hotfix 4). The entries' own calls stay: setting the same value
+    # twice is harmless, and removing them is task 08's decision.
+    await set_tenant_from_job(session_factory, jid)
+    set_job_from_arq(jid)
 
     # ── Body ──
     try:

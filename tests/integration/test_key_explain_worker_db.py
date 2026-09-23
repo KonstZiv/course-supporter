@@ -500,7 +500,7 @@ class TestTheWorkThatIsWrittenDown:
 
         Production paid for a generation on 2026-09-23 and the register got no
         row of it: nothing on the worker's path put the job in context, and
-        every test here supplied it with ``job_scope`` (hotfix 3). So nothing
+        every test here supplied it with ``job_scope`` (hotfix 4). So nothing
         wraps the call below, the funds port is the shipped one, and both rows
         the work owes the register are required under THIS job — the port's
         decision and the stage's call.

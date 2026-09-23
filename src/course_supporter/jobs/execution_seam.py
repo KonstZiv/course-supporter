@@ -286,7 +286,7 @@ async def _run_seam(
     # calls the ``api/tasks.py`` entries make at the top of their bodies, means
     # an entry that forgets them no longer loses its rows — ``arq_explain_key``
     # did, and paid for a generation with no register row in production on
-    # 2026-09-23 (hotfix 3). The entries' own calls stay: setting the same value
+    # 2026-09-23 (hotfix 4). The entries' own calls stay: setting the same value
     # twice is harmless, and removing them is task 08's decision.
     await set_tenant_from_job(session_factory, jid)
     set_job_from_arq(jid)

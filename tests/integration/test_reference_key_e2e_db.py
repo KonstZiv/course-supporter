@@ -38,7 +38,6 @@ from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.homework.reference_service import RefusalCode
 from course_supporter.jobs import JobType
-from course_supporter.service_logging import job_scope
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -251,16 +250,15 @@ async def _run_pending_work(
     jobs = await _pending_jobs(session_factory, tenant_id)
     for job in jobs:
         reference_id = job.input_params["reference_id"]
-        with job_scope(job.id):
-            await arq_explain_key(
-                {
-                    "session_factory": session_factory,
-                    "stage_router": router,
-                    "job_try": 1,
-                },
-                str(job.id),
-                str(reference_id),
-            )
+        await arq_explain_key(
+            {
+                "session_factory": session_factory,
+                "stage_router": router,
+                "job_try": 1,
+            },
+            str(job.id),
+            str(reference_id),
+        )
     return len(jobs)
 
 

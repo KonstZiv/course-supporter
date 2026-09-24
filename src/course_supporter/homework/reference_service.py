@@ -53,7 +53,8 @@ from course_supporter.homework.reference_key import (
     compare_to_questions,
     parse_question_numbers,
 )
-from course_supporter.homework.task_context import load_task_context
+from course_supporter.homework.task_context import load_task_source_text
+from course_supporter.homework.task_text import MENTOR_TASK_TEXT_MAX_BYTES
 from course_supporter.models.source import AssignmentType
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.storage.orm import (
@@ -284,8 +285,9 @@ class ReferenceService:
         if questions.truncated:
             raise ReferenceRefusedError(
                 RefusalCode.TASK_TEXT_TRUNCATED,
-                "the task text was truncated before it reached the check, so its "
-                "question numbers are incomplete",
+                f"the task text is longer than the "
+                f"{MENTOR_TASK_TEXT_MAX_BYTES // 1024} KiB every reader of it takes "
+                "whole, so a key checked against it would be explained against a part",
             )
         if not questions.numbers:
             raise ReferenceRefusedError(
@@ -296,9 +298,13 @@ class ReferenceService:
         return questions
 
     async def _task_text(self, document: AuthoredDocument) -> str:
-        """The task as the mentor pipeline assembles it."""
-        _, _, task_text = await load_task_context(self._session, document.id)
-        return task_text
+        """The task's source text, which its question numbers are read from.
+
+        Segments joined without a separator, not the stitched text the mentor
+        pipeline assembles: a stitch boundary falls mid-line and could split a
+        question's number (task 07, decision 8).
+        """
+        return await load_task_source_text(self._session, document.id)
 
     async def _carry_over_if_it_still_fits(
         self, document: AuthoredDocument, override: TaskReferenceOverride

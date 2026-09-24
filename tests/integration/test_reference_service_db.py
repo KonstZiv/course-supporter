@@ -381,7 +381,12 @@ class TestEachRefusalHasItsOwnCode:
     async def test_task_text_truncated(
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
-        """The marker reaches the service through the real stitching path."""
+        """An over-budget source text is refused, read through the real loader.
+
+        The tail alone is past the 512 KiB budget, so the refusal is about the
+        length of the text the service reads, not about a marker in it (task 07
+        reads the source text, which carries none).
+        """
         long_first = "1. Перше?" + "x" * 600
         document = await _test_task(db_session, seed_root_node, text=long_first)
         summary_id = await db_session.scalar(

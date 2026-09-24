@@ -21,6 +21,7 @@ from course_supporter.api.schemas import (
     PortalRejection,
     PortalVerdict,
 )
+from course_supporter.homework.test_scoring import Correctness, correctness
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
     review_schema_version,
@@ -97,16 +98,57 @@ def role_visible_to_student(material_role: str) -> bool:
     return material_role == MaterialRole.EDUCATIONAL.value
 
 
-def curated_verdict(review_result: dict[str, object] | None) -> PortalVerdict | None:
+def version_1_outcome(
+    structure: ReviewStructureV1, score: int | None
+) -> tuple[bool, Correctness]:
+    """``passed`` and ``correctness`` of a version-1 review (task 07, decision 14).
+
+    One function for both surfaces — the portal's verdict below and the
+    ``reviewed`` webhook — so the two cannot read the same row two ways.
+
+    * ``passed`` is the review's own verdict. A test's verdict is its pass mark
+      applied to its score (``homework/test_scoring.py``), so a TEST with no
+      verdict is a test with no pass mark: nobody set a bar to fail, and a
+      caller gating on the boolean must not be held back — ``True``. Any other
+      review without a verdict reads ``False``: the safe value a missing
+      verdict read as before task 07, and not a pass nobody decided.
+    * ``correctness`` comes from the score column, the same number the caller
+      is sent as ``score``: 100 correct, 0 incorrect, anything between
+      partially correct. A row without a score reads as 0, as the webhook's
+      ``score`` does. For a version-1 review that is not a test, this is the
+      rule only until task 08, which revisits it.
+    """
+    if structure.verdict is not None:
+        passed = structure.verdict.passed
+    else:
+        passed = structure.test is not None
+    return passed, correctness(score or 0)
+
+
+def curated_verdict(
+    review_result: dict[str, object] | None, *, score: int | None
+) -> PortalVerdict | None:
     """Extract ONLY the caller-facing verdict from ``review_result``.
 
     For a pre-rebuild review, ``review_result`` is the internal trace and never
     goes out; only its ``verdict`` block does, and only once a review has
-    written it (``None`` otherwise). The structure of a version-1 review is a
-    different matter and has its own projection above.
+    written it (``None`` otherwise). That branch is today's Mentor, read as it
+    always was.
+
+    A version-1 review is a structure written for the student, not a trace; its
+    outcome is :func:`version_1_outcome` of the structure and ``score`` — the
+    submission's score column, which is why every caller passes it. A row that
+    claims version 1 and does not validate reads as no verdict, as it does in
+    :func:`curated_structure`.
     """
     if not review_result:
         return None
+    if review_schema_version(review_result) == REVIEW_SCHEMA_VERSION:
+        structure = curated_structure(review_result)
+        if structure is None:
+            return None
+        passed, correct = version_1_outcome(structure, score)
+        return PortalVerdict(passed=passed, correctness=correct)
     verdict = review_result.get("verdict")
     if not isinstance(verdict, dict):
         return None

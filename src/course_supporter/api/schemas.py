@@ -1693,12 +1693,13 @@ class PortalSubmitResponse(BaseModel):
 class PortalVerdict(BaseModel):
     """Caller-facing verdict shown to the student (Phase 6 T2 read-path).
 
-    Derived from ``review_result['verdict']``; None until a review has written
-    it. A pre-rebuild review's layered ``review_result`` is an internal trace
-    and never leaves the service — its ``verdict`` block is the one thing
-    curated out of it. (A version-1 review stores a review structure in that
-    same column rather than a trace; it has its own field and its own
-    projection — see ``PortalSubmissionDetail.structure``.)
+    For a pre-rebuild review, derived from ``review_result['verdict']``; None
+    until a review has written it. Its layered ``review_result`` is an internal
+    trace and never leaves the service — the ``verdict`` block is the one thing
+    curated out of it. A version-1 review stores a review structure in that
+    same column rather than a trace (see ``PortalSubmissionDetail.structure``);
+    its verdict is the structure's own, true when it has none, and its
+    correctness comes from the score (task 07, decision 14).
     """
 
     passed: bool = Field(description="Whether the submission meets the bar.")

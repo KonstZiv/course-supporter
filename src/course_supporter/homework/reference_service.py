@@ -18,7 +18,8 @@ Interface:
     because another job of the task is in flight.
     :class:`ExplanationQueue` — the seam a generation request goes through.
     :class:`ReferenceService` — read, replace, clear; and for a submission,
-    whether the key applies and its explanations in a given language.
+    whether the key applies, its explanations in a given language, and the
+    request for them in the student's language once the review is out.
 
 The lazy path, and why the reader writes:
     There is no event that says "this task has a new version". The content hash
@@ -31,9 +32,11 @@ The lazy path, and why the reader writes:
     keys, decide). The ingestion pipeline stays untouched (ratified
     2026-09-19), and the price is that a read can write: carrying the author's
     answers onto a new task version happens when someone looks, not when the
-    version appears. One reader never writes: :meth:`ReferenceService.key_applies`,
-    the question a submission's doors ask, answers from the same test the
-    carry-over runs and leaves the carrying to the next read that may write.
+    version appears. Two readers never write: :meth:`ReferenceService.key_applies`
+    and :meth:`ReferenceService.explanations_for`, what a submission asks before
+    its review is delivered. They answer from the same test the carry-over runs
+    and leave the carrying to the next read that may write — for a submission,
+    :meth:`ReferenceService.request_explanations`, after delivery.
 
 Replacing the generation seam:
     :class:`ExplanationQueue` is the whole contract: one method, one pair of
@@ -213,7 +216,9 @@ class ReferenceService:
 
     A submission asks two more questions: whether the key applies to the test
     as the student sees it (:meth:`key_applies`), and what the key's
-    explanations are in a given language (:meth:`explanations_for`).
+    explanations are in a given language (:meth:`explanations_for`). Once its
+    review is delivered it asks for them in the student's language
+    (:meth:`request_explanations`).
     """
 
     def __init__(
@@ -255,16 +260,18 @@ class ReferenceService:
     ) -> ExplanationsView:
         """The current key and its explanations in ``language``, kept apart.
 
-        Reads the way :meth:`read` does, carry-over included — the same
-        question, what stands for the task as it is now, asked in one language
-        — so it can write and ask for work exactly where :meth:`read` can. The
-        carry-over asks for the course language only; nothing else creates a
-        version here, so a language without one comes back with the model's
-        side empty.
+        Read-only. A review reads this before it is delivered, and a write here
+        would ride on the submission's own transaction and could meet another
+        job of the task (task 07, decision 9). So the key is the one
+        :meth:`key_applies` sees — written for the current text, or one that
+        would be carried onto it — and the carrying, like the asking for work,
+        waits for :meth:`request_explanations`. Nothing is lost by waiting: a
+        version made now would still be ``pending`` when this review is sent.
+        A language without a version comes back with the model's side empty.
         """
         document = await self._require_test_task(authored_document_id)
-        override = await self._applicable_override(document)
-        if override is None:
+        override = await self._repo.get_override(authored_document_id, self._kind)
+        if override is None or not await self._applies(document, override):
             return ExplanationsView(language=language)
 
         version = await self._latest_version(document, override, language)
@@ -276,6 +283,31 @@ class ReferenceService:
             model=dict(version.explanations or {}) if version is not None else {},
             doubts=dict(version.doubts or {}) if version is not None else {},
         )
+
+    async def request_explanations(
+        self, authored_document_id: uuid.UUID, language: str
+    ) -> None:
+        """Ask for the key's explanations in ``language``, once per version.
+
+        A submission's step after its review is delivered (task 07, decision 9).
+        The key is carried onto the current text as :meth:`read` carries it —
+        which asks for its explanations in the course language when the text
+        moved — and then, if ``language`` has no version of this key yet, one is
+        made and its generation asked for. A version that exists asks for
+        nothing, whatever its state: a failed one is not retried from here, so
+        a generation that keeps failing is not paid for once per submission.
+
+        Raises:
+            GenerationInProgressError: another job of the task is in flight. The
+                caller rolls its session back; the next submission asks again.
+        """
+        document = await self._require_test_task(authored_document_id)
+        override = await self._applicable_override(document)
+        if override is None:
+            return
+        if await self._latest_version(document, override, language) is not None:
+            return
+        await self._ensure_version(document, override, language)
 
     async def key_applies(self, authored_document_id: uuid.UUID) -> bool:
         """Whether the author's key applies to the task as it stands — read-only.

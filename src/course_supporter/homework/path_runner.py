@@ -22,7 +22,15 @@ Extending:
     A new stage is a definition in ``config/submission_paths.yaml`` plus an
     executor in :mod:`course_supporter.homework.path_stages`; this module does
     not change. Freezing and continuation are task 03's next unit and live
-    beside this one.
+    beside this one. What a finished revision's result IS belongs to its task
+    type's result builder (:mod:`course_supporter.homework.result_builders`):
+    the body builds it before delivery and lets the builder follow up after.
+
+Failure:
+    An exception anywhere in the body fails the submission the way today's body
+    does (task 07, decision 15): ``failed`` with a short code, a ``failed`` event
+    for a webhook caller, and the exception on to the seam, which fails the job.
+    ``arq.Retry`` is not a failure but a re-queue, and passes through untouched.
 """
 
 from __future__ import annotations
@@ -54,6 +62,12 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
     get_stage_executor,
 )
+from course_supporter.homework.result_builders import (
+    BuildContext,
+    ResultBuilder,
+    ResultNotBuiltError,
+    get_result_builder,
+)
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -71,6 +85,13 @@ if TYPE_CHECKING:
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
+
+PATH_FAILED = "path_failed"
+"""The code a submission fails with when the body broke for no reason of its own.
+
+A builder that refuses names its own code (:class:`ResultNotBuiltError`); this
+one covers everything else — a defect, a storage error, a delivery that raised.
+"""
 
 
 def _nothing_is_switched(config: PathConfig) -> bool:
@@ -133,17 +154,28 @@ async def run_new_path_if_switched(
     port = (
         funds_port if funds_port is not None else AlwaysEnoughFundsPort(session_factory)
     )
+    from arq import Retry
+
     async with session_factory() as session:
-        await _run_path(
-            ctx,
-            session,
-            job_id=job_id,
-            submission_id=submission_id,
-            choice=choice,
-            config=config,
-            port=port,
-            resumed=resumed,
-        )
+        try:
+            await _run_path(
+                ctx,
+                session,
+                job_id=job_id,
+                submission_id=submission_id,
+                choice=choice,
+                config=config,
+                port=port,
+                resumed=resumed,
+            )
+        except Retry:
+            # A re-queue, asked for on purpose (``_stage_produced_nothing``):
+            # the revision is not over, and failing it here would end it.
+            raise
+        except Exception as exc:
+            await session.rollback()
+            await _fail_the_submission(session_factory, submission_id, exc)
+            raise
     return True
 
 
@@ -289,7 +321,27 @@ async def _run_path(
                 await port.release_remainder(context, SubmissionOutcome.COMPLETED)
                 return
 
-        # ── Finish ──
+        # ── The result, then the finish ──
+        await hw_repo.update_status(submission_id, "reviewing")
+        await session.commit()
+        builder = get_result_builder(choice.key.task_type)
+        build_context = BuildContext(
+            session=session,
+            session_factory=ctx["session_factory"],
+            submission=submission,
+            submission_text=submission_text,
+            review_language=language,
+            redis=ctx.get("redis"),
+        )
+        if builder is not None:
+            built = await builder.build(build_context)
+            await hw_repo.store_review_result(
+                submission_id,
+                result=built.structure.model_dump(mode="json"),
+                review_markdown=built.markdown,
+                score=built.score,
+            )
+            await session.commit()
         await _finish(
             session,
             hw_repo,
@@ -299,6 +351,8 @@ async def _run_path(
             log=log,
         )
         await port.release_remainder(context, SubmissionOutcome.COMPLETED)
+        if builder is not None:
+            await _after_delivery(builder, build_context, log=log)
     finally:
         if file_path is not None and file_path.exists():
             file_path.unlink()
@@ -373,6 +427,13 @@ async def _open_the_doors(
     ]
 
     file_bytes = file_path.read_bytes()
+    if task_doc is not None and task_doc.task_type == AssignmentType.TEST.value:
+        # A test is answered with a structure, not a file to read (task 07,
+        # decisions 6 and 7): the core stored its canonical answers as JSON,
+        # checked against the test at the door, and the result builder reads
+        # them. Stage 1 has nothing to open in them.
+        return file_path, file_bytes.decode("utf-8"), review_language.code
+
     if task_doc is not None and task_doc.task_type == AssignmentType.PROJECT.value:
         project_text = await process_project_submission(
             session=session,
@@ -612,12 +673,11 @@ async def _finish(
     tenant: Tenant | None,
     log: Any,
 ) -> None:
-    """Write the revision's result and deliver it, with today's own code.
+    """Complete the revision and deliver its result, with today's own code.
 
-    With no review stage on the path there is no review to write, so
-    ``review_result`` / ``review_markdown`` / ``score`` stay empty and the
-    webhook builds from its own defaults — a temporary result until the stages
-    that judge arrive (task 07). The delivery half is deliberately the same
+    The result is already stored when this runs: the body writes what the
+    type's builder built, and a type without one has none, so the webhook
+    builds from its own defaults. The delivery half is deliberately the same
     calls today's body makes: the external contract is not this task's to move.
     """
     from course_supporter.homework.webhook import (
@@ -626,8 +686,6 @@ async def _finish(
         resolve_webhook_url,
     )
 
-    await hw_repo.update_status(submission.id, "reviewing")
-    await session.commit()
     await hw_repo.update_status(submission.id, "completed")
     await session.commit()
 
@@ -643,3 +701,76 @@ async def _finish(
             await hw_repo.update_status(submission.id, "delivered")
     await session.commit()
     log.info("path_finished")
+
+
+async def _after_delivery(
+    builder: ResultBuilder, context: BuildContext, *, log: Any
+) -> None:
+    """Let the builder follow up; whatever it raises is logged, not raised.
+
+    The revision is delivered by now. A follow-up that fails — a request for
+    work that could not be made, say — must not turn a delivered review into a
+    failed submission (pre-flight 7.4).
+    """
+    try:
+        await builder.after_delivery(context)
+    except Exception:
+        log.warning("path_after_delivery_failed", exc_info=True)
+
+
+async def _fail_the_submission(
+    session_factory: async_sessionmaker[AsyncSession],
+    submission_id: uuid.UUID,
+    exc: Exception,
+) -> None:
+    """Fail the submission the way today's body does (task 07, decision 15).
+
+    In a fresh session, the body's own having been rolled back: ``failed`` with
+    a short code — the builder's when it refused, :data:`PATH_FAILED` otherwise
+    — and, when the submission reached ``failed`` here, the ``failed`` event
+    for a webhook caller. A submission already at the end of its road (it was
+    delivered, say, before a later step raised) is left as it is. A webhook
+    error never hides the failure. The caller re-raises, so the seam fails the
+    job (``api/tasks.py``, the contract of today's body).
+    """
+    code = exc.code if isinstance(exc, ResultNotBuiltError) else PATH_FAILED
+    log = logger.bind(submission_id=str(submission_id), code=code)
+    log.error("path_failed", error=f"{type(exc).__name__}: {exc}")
+    async with session_factory() as session:
+        try:
+            await HomeworkRepository(session).update_status(
+                submission_id, "failed", error_message=code
+            )
+        except ValueError as status_exc:
+            log.warning("path_failed_status_skipped", reason=str(status_exc))
+            return
+        await session.commit()
+        try:
+            await _notify_failed(session, submission_id, reason=code)
+        except Exception:
+            log.warning("path_failed_webhook_skipped", exc_info=True)
+
+
+async def _notify_failed(
+    session: AsyncSession, submission_id: uuid.UUID, *, reason: str
+) -> None:
+    """The ``failed`` event, when the submission has a webhook to hear it."""
+    from course_supporter.homework.webhook import (
+        build_failed_payload,
+        deliver_webhook,
+        resolve_webhook_url,
+    )
+
+    submission = await HomeworkRepository(session).get_by_id(submission_id)
+    if submission is None:
+        return
+    student, tenant = await _student_and_tenant(session, submission)
+    webhook_url = resolve_webhook_url(submission, tenant)
+    if not webhook_url or student is None:
+        return
+    await deliver_webhook(
+        url=webhook_url,
+        payload=build_failed_payload(submission, student, reason=reason),
+        session=session,
+    )
+    await session.commit()

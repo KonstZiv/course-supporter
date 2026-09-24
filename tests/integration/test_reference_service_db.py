@@ -628,18 +628,93 @@ class TestExplanationsInOneLanguage:
         assert seen.language == "ukr"
         assert (seen.answers, seen.model, seen.author) == ({}, {}, {})
 
-    async def test_it_carries_the_key_over_as_the_authors_read_does(
+    async def test_a_key_that_would_carry_over_is_read_without_writing(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """A review reads before it is delivered: the key as it will stand, and
+        nothing carried or asked for — that waits for request_explanations."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY, pass_threshold=80)
+        await _revise_text(db_session, document, _TEXT_V2_SAME_NUMBERS, "v2" + "0" * 62)
+        before = await _footprint(db_session, document.id)
+
+        seen = await service.explanations_for(document.id, "ukr")
+
+        assert (seen.answers, seen.pass_threshold) == (_KEY, 80)
+        assert (seen.model, seen.doubts) == ({}, {}), "no version for the new text yet"
+        assert await _footprint(db_session, document.id) == before
+        assert len(queue.requests) == 1, "only the author's own key was asked for"
+
+
+class TestAskingForExplanations:
+    """After delivery (task 07, decision 9): once per version and language."""
+
+    async def test_another_language_is_asked_for_once(
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
         service, queue = _service(db_session)
         await service.replace_key(document.id, _KEY)
+
+        await service.request_explanations(document.id, "eng")
+        await service.request_explanations(document.id, "eng")
+
+        assert len(queue.requests) == 2, "the course language, then English once"
+        assert (await _live_version(db_session, document, "eng")).state == "pending"
+
+    async def test_the_course_language_asks_for_nothing_it_has(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+
+        await service.request_explanations(document.id, "ukr")
+
+        assert len(queue.requests) == 1
+
+    async def test_it_carries_the_key_over_first(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """A new text with the same numbers: the key moves, its course language
+        is asked for, and then the language the student was reviewed in."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
         await _revise_text(db_session, document, _TEXT_V2_SAME_NUMBERS, "v2" + "0" * 62)
 
-        seen = await service.explanations_for(document.id, "ukr")
+        await service.request_explanations(document.id, "eng")
 
-        assert seen.answers == _KEY
-        assert len(queue.requests) == 2, "the new version asked for its explanations"
+        assert len(queue.requests) == 3
+        assert (await service.read(document.id)).carried_over is True
+        assert (await _live_version(db_session, document, "eng")).state == "pending"
+
+    async def test_a_failed_version_is_not_asked_for_again(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """So a generation that keeps failing is not paid for per submission."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+        await service.request_explanations(document.id, "eng")
+        english = await _live_version(db_session, document, "eng")
+        await TaskReferenceRepository(db_session).mark_failed(english.id, "ladder out")
+
+        await service.request_explanations(document.id, "eng")
+
+        assert len(queue.requests) == 2, "the failure is not retried from here"
+
+    async def test_no_key_asks_for_nothing(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+
+        await service.request_explanations(document.id, "eng")
+
+        assert not queue.requests
+        assert await _footprint(db_session, document.id) == (0, None)
 
 
 async def _live_version(

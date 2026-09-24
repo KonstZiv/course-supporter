@@ -34,6 +34,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from arq.constants import default_queue_name
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -164,6 +165,7 @@ class TestEnqueueS3CleanupContract:
             "s3_cleanup_task",
             file_keys=file_keys,
             job_id=str(job_id),
+            _queue_name=default_queue_name,
         )
 
         await _cleanup(s3orch_session_factory, [tenant_id], [job_id])

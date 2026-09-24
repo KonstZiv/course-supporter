@@ -351,7 +351,9 @@ class MentorReviewService:
             weaknesses: list[str] = []
             for layer in review_result.get("layers", []):
                 weaknesses.extend(layer.get("weaknesses", []))
-            verdict = review_result.get("verdict", {})
+            # A test reviewed with no pass mark stores ``"verdict": null`` (task
+            # 07): a missing verdict and an empty one read the same (hot fix 5).
+            verdict = review_result.get("verdict") or {}
             history.append(
                 {
                     "submission_id": str(row.id),

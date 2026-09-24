@@ -995,6 +995,18 @@ class ReferenceKeyUpdateRequest(BaseModel):
             "the generation key: editing one does not buy a fresh generation."
         ),
     )
+    pass_threshold: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description=(
+            "The pass mark: the percentage of questions a student must answer "
+            "right for the test to count as passed (task 07). Replaced with the "
+            "rest of the key, so a request without it clears it — and a review "
+            "then states the score and no verdict. Outside the generation key: "
+            "changing it buys no generation."
+        ),
+    )
 
     @field_validator("answers")
     @classmethod
@@ -1037,7 +1049,8 @@ class ReferenceViewResponse(BaseModel):
         default_factory=dict,
         description=(
             "One explanation per question — the author's own where they wrote "
-            "one, the generated one otherwise. Empty until ``ready``."
+            "one, the generated one otherwise. The author's own are here at "
+            "once; the generated ones only from ``ready``."
         ),
     )
     carried_over: bool = Field(
@@ -1052,6 +1065,22 @@ class ReferenceViewResponse(BaseModel):
     )
     failure_reason: str | None = Field(
         default=None, description="Why generation gave up, when ``failed``."
+    )
+    pass_threshold: int | None = Field(
+        default=None,
+        description=(
+            "The pass mark the author set, 1-100 (task 07); null when there is none."
+        ),
+    )
+    doubts: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Questions on which the model doubts the author's answer, "
+            "``{question: true}`` (task 07). Students are not shown the "
+            "generated explanation of a doubted question; the author's own "
+            "explanation of it they are. Empty when the model doubts nothing, "
+            "until ``ready``, and for explanations written before doubts existed."
+        ),
     )
 
 

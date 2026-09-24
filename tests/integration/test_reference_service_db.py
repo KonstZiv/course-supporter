@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.reference_key import answers_digest
@@ -33,6 +34,8 @@ from course_supporter.storage.orm import (
     CourseNode,
     DocumentSegment,
     DocumentSummary,
+    TaskReference,
+    TaskReferenceOverride,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
 
@@ -422,6 +425,261 @@ class TestEachRefusalHasItsOwnCode:
         assert exc.value.code is RefusalCode.KEY_DOES_NOT_MATCH_QUESTIONS
         assert "missing" in exc.value.details and "unknown" in exc.value.details
         assert not queue.requests, "a refused key costs nothing"
+
+
+class TestThePassMark:
+    """Task 07: the author's pass mark travels with the layer, and costs nothing."""
+
+    async def test_the_pass_mark_is_stored_with_the_key_and_read_back(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+
+        written = await service.replace_key(document.id, _KEY, pass_threshold=80)
+
+        assert written.pass_threshold == 80
+        assert (await service.read(document.id)).pass_threshold == 80
+
+    async def test_a_new_pass_mark_alone_asks_for_nothing_and_omitting_it_clears_it(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Outside the version key: the mark changes, the generation does not."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY, pass_threshold=80)
+
+        changed = await service.replace_key(document.id, dict(_KEY), pass_threshold=60)
+        cleared = await service.replace_key(document.id, dict(_KEY))
+
+        assert changed.pass_threshold == 60
+        assert cleared.pass_threshold is None, "the layer is replaced whole"
+        assert len(queue.requests) == 1, "the mark is not a new generation"
+
+    async def test_the_carry_over_keeps_the_pass_mark(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """The layer moves whole onto a new text — its pass mark included."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+        await service.replace_key(document.id, _KEY, pass_threshold=80)
+        await _revise_text(db_session, document, _TEXT_V2_SAME_NUMBERS, "v2" + "0" * 62)
+
+        view = await service.read(document.id)
+
+        assert view.carried_over is True, "the premise: carried, not sent again"
+        assert view.pass_threshold == 80
+        stored = await TaskReferenceRepository(db_session).get_override(
+            document.id, ReferenceKind.TEST_KEY
+        )
+        assert stored is not None
+        assert stored.pass_threshold == 80
+
+
+class TestWhetherTheKeyApplies:
+    """The doors' question (task 07, decision 12) — answered without writing."""
+
+    async def test_no_key_does_not_apply(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+
+        assert await service.key_applies(document.id) is False
+
+    async def test_a_key_written_for_the_current_text_applies(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+
+        assert await service.key_applies(document.id) is True
+
+    async def test_a_key_that_would_carry_over_applies_and_nothing_is_written(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Rows, the layer and the queue are the same before and after.
+
+        The premise is asserted as well: the same state, READ, does write — the
+        layer moves and one more version is asked for — so the footprint below
+        is one that sees a write when there is one.
+        """
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+        await _revise_text(db_session, document, _TEXT_V2_SAME_NUMBERS, "v2" + "0" * 62)
+        before = await _footprint(db_session, document.id)
+        requests_before = len(queue.requests)
+
+        assert await service.key_applies(document.id) is True
+        assert await _footprint(db_session, document.id) == before
+        assert len(queue.requests) == requests_before
+
+        await service.read(document.id)
+        assert await _footprint(db_session, document.id) != before
+        assert len(queue.requests) == requests_before + 1
+
+    async def test_a_key_for_other_questions_does_not_apply_and_nothing_is_written(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+        await _revise_text(
+            db_session, document, _TEXT_V3_FEWER_NUMBERS, "v3" + "0" * 62
+        )
+        before = await _footprint(db_session, document.id)
+        requests_before = len(queue.requests)
+
+        assert await service.key_applies(document.id) is False
+        assert await _footprint(db_session, document.id) == before
+        assert len(queue.requests) == requests_before
+
+
+class TestExplanationsInOneLanguage:
+    """What a review reads (task 07): the model's, the author's and the doubts apart."""
+
+    async def test_the_model_the_author_and_the_doubts_stay_apart(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """The author's view lets the author win; a review is shown both sides."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+        await service.replace_key(
+            document.id, _KEY, author_explanations={"2": "автор"}, pass_threshold=80
+        )
+        version = await _live_version(db_session, document, "ukr")
+        await TaskReferenceRepository(db_session).mark_ready(
+            version.id,
+            {"1": "машина", "2": "машина", "3": "машина"},
+            doubts={"2": True},
+        )
+
+        seen = await service.explanations_for(document.id, "ukr")
+
+        assert seen.answers == _KEY
+        assert seen.pass_threshold == 80
+        assert seen.model == {"1": "машина", "2": "машина", "3": "машина"}
+        assert seen.author == {"2": "автор"}
+        assert seen.doubts == {"2": True}
+
+        view = await service.read(document.id)
+        assert view.explanations == {"1": "машина", "2": "автор", "3": "машина"}
+        assert view.doubts == {"2": True}
+
+    async def test_each_language_is_read_from_its_own_version(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+        repo = TaskReferenceRepository(db_session)
+        await repo.mark_ready(
+            (await _live_version(db_session, document, "ukr")).id,
+            {"1": "укр", "2": "укр", "3": "укр"},
+            doubts={"1": True},
+        )
+        english, _ = await repo.create_version(
+            authored_document_id=document.id,
+            kind=ReferenceKind.TEST_KEY,
+            source_content_hash=document.content_hash or "",
+            source_task_type="test",
+            answers_hash=answers_digest(_KEY),
+            language="eng",
+        )
+        await repo.mark_ready(
+            english.id, {"1": "eng", "2": "eng", "3": "eng"}, doubts={}
+        )
+
+        in_english = await service.explanations_for(document.id, "eng")
+        in_ukrainian = await service.explanations_for(document.id, "ukr")
+
+        assert in_english.model == {"1": "eng", "2": "eng", "3": "eng"}
+        assert in_english.doubts == {}
+        assert in_ukrainian.model == {"1": "укр", "2": "укр", "3": "укр"}
+        assert in_ukrainian.doubts == {"1": True}
+
+    async def test_a_language_without_a_version_has_the_key_but_no_model_words(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Reading creates no version in that language and asks for nothing."""
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY, author_explanations={"2": "автор"})
+        before = await _footprint(db_session, document.id)
+
+        seen = await service.explanations_for(document.id, "eng")
+
+        assert seen.answers == _KEY
+        assert seen.author == {"2": "автор"}
+        assert (seen.model, seen.doubts) == ({}, {})
+        assert await _footprint(db_session, document.id) == before
+        assert len(queue.requests) == 1, "only the course language was asked for"
+
+    async def test_no_key_reads_as_no_answers(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, _ = _service(db_session)
+
+        seen = await service.explanations_for(document.id, "ukr")
+
+        assert seen.language == "ukr"
+        assert (seen.answers, seen.model, seen.author) == ({}, {}, {})
+
+    async def test_it_carries_the_key_over_as_the_authors_read_does(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _test_task(db_session, seed_root_node, text=_TEXT_V1)
+        service, queue = _service(db_session)
+        await service.replace_key(document.id, _KEY)
+        await _revise_text(db_session, document, _TEXT_V2_SAME_NUMBERS, "v2" + "0" * 62)
+
+        seen = await service.explanations_for(document.id, "ukr")
+
+        assert seen.answers == _KEY
+        assert len(queue.requests) == 2, "the new version asked for its explanations"
+
+
+async def _live_version(
+    session: AsyncSession, document: AuthoredDocument, language: str
+) -> TaskReference:
+    """The live version of ``_KEY`` for the task's current text, in ``language``."""
+    version = await TaskReferenceRepository(session).get_live_version(
+        authored_document_id=document.id,
+        kind=ReferenceKind.TEST_KEY,
+        source_content_hash=document.content_hash or "",
+        source_task_type="test",
+        answers_hash=answers_digest(_KEY),
+        language=language,
+    )
+    assert version is not None
+    return version
+
+
+async def _footprint(
+    session: AsyncSession, authored_document_id: uuid.UUID
+) -> tuple[int, tuple[str, bool] | None]:
+    """What a write to a task's reference would change: its versions and its layer.
+
+    Read with plain queries, not through loaded objects, so it reports the rows
+    as the database holds them.
+    """
+    versions = await session.scalar(
+        select(func.count())
+        .select_from(TaskReference)
+        .where(TaskReference.authored_document_id == authored_document_id)
+    )
+    layer = (
+        await session.execute(
+            select(
+                TaskReferenceOverride.source_content_hash,
+                TaskReferenceOverride.carried_over,
+            ).where(TaskReferenceOverride.authored_document_id == authored_document_id)
+        )
+    ).one_or_none()
+    return int(versions or 0), (layer[0], layer[1]) if layer is not None else None
 
 
 async def _revise_text(

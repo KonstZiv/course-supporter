@@ -97,10 +97,11 @@ one covers everything else — a defect, a storage error, a delivery that raised
 def _nothing_is_switched(config: PathConfig) -> bool:
     """Is every task type still served by today's Mentor?
 
-    The cheapest possible question, asked first: in production after this task
-    the answer is yes for all four types, and the homework body then costs
-    exactly what it cost before — one scan of a dict already in memory, no
-    database, no file.
+    The cheapest possible question, asked first: one scan of a dict already in
+    memory, no database, no file. The answer is yes only while no type is on the
+    new path. Since ``test`` was switched (task 07) it is no, and every
+    submission goes on to read its row, its checkpoint and its task
+    (:func:`run_new_path_if_switched`).
     """
     return all(
         declared.served_by is not ServedBy.NEW_PATH

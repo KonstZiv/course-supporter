@@ -34,9 +34,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.agents.key_explainer import STAGE_NAME
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_arq_redis, get_current_tenant
+from course_supporter.api.deps import (
+    api_key_header,
+    get_arq_redis,
+    get_current_tenant,
+)
 from course_supporter.auth.context import TenantContext
-from course_supporter.homework.reference_service import RefusalCode
+from course_supporter.homework.path_runner import PATH_FAILED
+from course_supporter.homework.reference_service import (
+    GenerationInProgressError,
+    RefusalCode,
+)
+from course_supporter.homework.test_doors import DoorCode
+from course_supporter.homework.test_result import (
+    TEST_NOT_READY as TEST_NOT_READY_FAILURE,
+)
 from course_supporter.jobs import JobType
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
@@ -387,9 +399,10 @@ class TestAcceptance:
 
 class TestTheDocumentationSaysWhatTheCodeDoes:
     """``impl-rules#20`` asks the operator to read the description instead of the
-    code — which only works while the two agree. These are the two lists a
-    reader would act on, and both are checked against the source rather than
-    trusted (``DD-SP-BC``: a documented example that nothing executes is prose).
+    code — which only works while the two agree. These are what a reader would
+    act on — the codes, the routes, the header a key travels in — and each is
+    checked against the source rather than trusted (``DD-SP-BC``: a documented
+    example that nothing executes is prose).
     """
 
     _README = (
@@ -424,6 +437,51 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
         assert documented, "the document shows some requests"
         assert real, "the application serves some reference routes"
         assert documented == real, f"documented {documented}, served {real}"
+
+    def test_every_code_of_a_test_is_documented(self) -> None:
+        """Task 07: the doors' codes, the author routes' collision, the failures."""
+        text = self._README.read_text(encoding="utf-8")
+        real = {code.value for code in DoorCode} | {
+            GenerationInProgressError.code,
+            PATH_FAILED,
+            TEST_NOT_READY_FAILURE,
+        }
+
+        assert real, "the vocabulary under test is not empty"
+        undocumented = sorted(code for code in real if f"`{code}`" not in text)
+        assert not undocumented, f"undocumented: {undocumented}"
+
+    def test_the_documented_test_routes_exist(self) -> None:
+        """Task 07: the four routes of a test, the portal's and the channel's."""
+        text = self._README.read_text(encoding="utf-8")
+        ends = {"test", "test-submissions", "submit-test"}
+        documented = {
+            path.replace("$TASK_ID", "{authored_document_id}").replace(
+                "{id}", "{authored_document_id}"
+            )
+            for path in re.findall(r"/api/v1/[\w{}$/.-]+", text)
+            if path.rsplit("/", 1)[-1] in ends
+        }
+        real = {
+            route.path
+            for route in app.routes
+            if getattr(route, "path", "").rsplit("/", 1)[-1] in ends
+        }
+
+        assert documented, "the document shows some test routes"
+        assert real, "the application serves some test routes"
+        assert documented == real, f"documented {documented}, served {real}"
+
+    def test_a_tenant_key_travels_in_the_header_the_code_reads(self) -> None:
+        """``Bearer`` is the portal's session; a tenant key is ``X-API-Key``."""
+        text = self._README.read_text(encoding="utf-8")
+        header = api_key_header.model.name
+        used = re.findall(r'-H "([^"]+): \$(?:PREP|CHECK)_KEY"', text)
+
+        assert header, "the code names the header"
+        assert used, "the document shows requests with a tenant key"
+        assert set(used) == {header}, f"headers used with a tenant key: {set(used)}"
+        assert not re.search(r"Bearer \$(?:PREP|CHECK)_KEY", text)
 
 
 async def _finished_jobs(

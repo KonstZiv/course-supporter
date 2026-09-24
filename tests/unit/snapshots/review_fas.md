@@ -2,7 +2,29 @@
 
 ## پذیرفته نشد
 
+امتیاز: 50٪
+
 Two of the four requirements are met.
+
+## سوالات آزمون
+
+توضیحات به زبان دوره ارائه شده است.
+
+**سوال 1:** صحیح
+
+**سوال 2:** غلط
+
+- **پاسخ صحیح:** б) The text the model sees in one call
+- The window is what the model reads at once.
+
+**سوال 3:** غلط
+
+- **پاسخ صحیح:** а) Yes; в) Only with a key
+- این سوال توضیحی ندارد.
+
+**سوال 4:** صحیح
+
+دوباره در آزمون شرکت کنید.
 
 ## اصلاح شد
 

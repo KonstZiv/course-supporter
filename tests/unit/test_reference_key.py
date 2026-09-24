@@ -7,9 +7,11 @@ and both are pinned to something outside this file:
   byte-for-byte copy of ``06-reference/TEST-SOURCE.md``, checked by digest, so
   a reformatting of that file cannot quietly stop meaning what the tests here
   say it means;
-* the truncation detector is run against text that ``stitch_task_text`` really
-  truncated, not against a hand-typed marker, so a change to either side shows
-  up as a red test instead of as a key accepted against half a task.
+* the length budget is read from ``stitch_task_text``'s own default, not typed
+  here, so the ceiling a key is checked under and the ceiling every reader of
+  the task text works under cannot drift apart without a red test (task 07:
+  the numbers are read from the source text, which no longer carries the
+  stitch's truncation marker).
 
 The module's docstring examples are executed here explicitly. Doctests are not
 collected by the gate (``--doctest-modules`` is enabled nowhere — ``DD-SP-BC``),
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import doctest
 import hashlib
+import inspect
 from pathlib import Path
 
 import pytest
@@ -30,7 +33,10 @@ from course_supporter.homework.reference_key import (
     compare_to_questions,
     parse_question_numbers,
 )
-from course_supporter.homework.task_text import stitch_task_text
+from course_supporter.homework.task_text import (
+    MENTOR_TASK_TEXT_MAX_BYTES,
+    stitch_task_text,
+)
 
 _FIXTURE = Path(__file__).parents[1] / "fixtures" / "reference" / "test_source.md"
 _FIXTURE_SHA256 = "ed51186e7369897324997a032dd011597ef6467c4084bbc9b2960489199da72a"
@@ -73,25 +79,33 @@ class TestTheParserReadsTheRealTest:
         assert found.truncated is False
         assert bool(found) is True
 
-    def test_the_same_text_stitched_from_segments_reads_the_same(
-        self, test_source: str
-    ) -> None:
-        """Ingestion cuts the text into segments; stitching adds a blank line.
+    def test_a_segment_boundary_inside_12_loses_no_number(self) -> None:
+        """The source text keeps a number a model's segment boundary cut in two.
 
-        This is the shape the mentor pipeline really hands over, and the one
-        place an index-based parser would go wrong: every segment boundary gains
-        a ``\\n\\n`` that is not in the authored file.
+        Ingestion lets a model choose where segments end, and on the polygon's
+        test every boundary fell mid-line (probe of task 07, section 3). Here one
+        falls between the ``1`` and the ``2.`` of question 12. Stitching puts a
+        blank line into that gap — the premise, asserted first — while joining
+        the segments without a separator gives the text back whole.
         """
-        head, tail = test_source.split("3. Навіщо", maxsplit=1)
-        stitched = stitch_task_text([head, "3. Навіщо" + tail])
-        assert stitched != test_source, "the stitch must really differ from the file"
-        assert parse_question_numbers(stitched).numbers == ("1", "2", "3", "4", "5")
+        text = "\n".join(f"{n}. Питання {n}?\nа) так\nб) ні" for n in range(1, 13))
+        cut = text.index("12.") + 1
+        segments = [text[:cut], text[cut:]]
+
+        stitched = stitch_task_text(segments)
+        assert "12" not in parse_question_numbers(stitched).numbers, (
+            "the premise: the stitched text really loses question 12"
+        )
+
+        found = parse_question_numbers("".join(segments))
+        assert found.numbers == tuple(str(n) for n in range(1, 13))
 
     def test_a_number_inside_a_line_is_not_a_question(self) -> None:
-        """Only a line that STARTS with the number counts."""
+        """Only a line that STARTS with the number counts — and not a decimal."""
         assert parse_question_numbers("see item 1. of the manual").numbers == ()
         assert parse_question_numbers("  1. indented").numbers == ()
         assert parse_question_numbers("x 2. tail\n3. real").numbers == ("3",)
+        assert parse_question_numbers("3.14 — число пі\n1. real").numbers == ("1",)
 
     def test_a_text_without_numbered_questions_is_empty_not_an_error(self) -> None:
         """The "no question numbers" refusal has its own, non-exceptional shape."""
@@ -105,27 +119,32 @@ class TestTheParserReadsTheRealTest:
 
 
 class TestTruncationIsItsOwnAnswer:
-    def test_a_genuinely_truncated_stitch_is_detected(self) -> None:
-        """The marker is produced by ``stitch_task_text``, not typed by hand.
+    def test_a_text_over_the_budget_is_flagged(self) -> None:
+        """Over the budget is refused even though every number was read.
 
-        A hand-typed marker would prove only that the detector matches the
-        string this file contains. Here the budget really is exceeded, so the
-        two modules are checked against each other.
+        The source text is read whole, so nothing is lost here; the flag says
+        the text is longer than the readers downstream take whole, and a key
+        explained against a cut text would be explained against a part.
         """
-        segments = ["1. Перше питання" + "x" * 500, "5. П'яте питання"]
-        assert len(segments[0].encode()) + 2 + len(segments[1].encode()) > 540, (
-            "the fixture must really exceed the budget below"
+        text = "1. Перше питання" + "x" * 500 + "\n5. П'яте питання"
+        assert len(text.encode()) > 540, "the fixture must really exceed the budget"
+        found = parse_question_numbers(text, max_bytes=540)
+
+        assert found.truncated is True, "the over-budget text must be flagged"
+        assert found.numbers == ("1", "5"), "the flag is about length, not loss"
+        assert bool(found) is False, "a text over the budget is not usable"
+
+    def test_a_text_within_the_budget_is_not_flagged(self) -> None:
+        assert (
+            parse_question_numbers("1. Перше\n2. Друге", max_bytes=540).truncated
+            is False
         )
-        stitched = stitch_task_text(segments, max_bytes=540)
-        found = parse_question_numbers(stitched)
 
-        assert found.truncated is True, "the over-budget stitch must be flagged"
-        assert "5" not in found.numbers, "the dropped segment's question is gone"
-        assert bool(found) is False, "a truncated text is not usable"
-
-    def test_an_intact_stitch_is_not_flagged(self) -> None:
-        stitched = stitch_task_text(["1. Перше", "2. Друге"])
-        assert parse_question_numbers(stitched).truncated is False
+    def test_the_default_budget_is_the_stitch_budget(self) -> None:
+        """One ceiling for the task text, read from where it is defined."""
+        own = inspect.signature(parse_question_numbers).parameters["max_bytes"]
+        stitch = inspect.signature(stitch_task_text).parameters["max_bytes"]
+        assert own.default == stitch.default == MENTOR_TASK_TEXT_MAX_BYTES
 
 
 class TestTheDigestIsCanonical:
@@ -158,8 +177,6 @@ class TestTheDigestIsCanonical:
         asserted they were ignored would be testing a branch that does not
         exist; what holds the rule is that there is nowhere to put them.
         """
-        import inspect
-
         parameters = inspect.signature(answers_digest).parameters
         assert list(parameters) == ["answers"]
 

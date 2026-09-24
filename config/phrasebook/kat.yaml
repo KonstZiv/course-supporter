@@ -28,3 +28,12 @@ position.slide: სლაიდი {number}
 position.paragraph: აბზაცი {number}
 position.file: ფაილი {name}
 review.title: რეცენზია
+section.test: ტესტის კითხვები
+test.question: კითხვა {number}
+test.correct: სწორია
+test.incorrect: არასწორია
+test.correct_answer: სწორი პასუხი
+test.score: 'ქულა: {number} %'
+test.try_again: სცადეთ ტესტის ხელახლა გავლა.
+test.no_explanation: ამ კითხვას განმარტება არ აქვს.
+test.explanations_in_course_language: განმარტება მოცემულია კურსის ენაზე.

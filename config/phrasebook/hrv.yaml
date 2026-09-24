@@ -28,3 +28,12 @@ position.slide: slajd {number}
 position.paragraph: odlomak {number}
 position.file: datoteka {name}
 review.title: Recenzija
+section.test: Pitanja na testu
+test.question: Pitanje {number}
+test.correct: Točno
+test.incorrect: Netočno
+test.correct_answer: Točan odgovor
+test.score: 'Rezultat: {number} %'
+test.try_again: Pokušajte ponovno riješiti test.
+test.no_explanation: Nema objašnjenja za ovo pitanje.
+test.explanations_in_course_language: Objašnjenja su na jeziku tečaja.

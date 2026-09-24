@@ -11,6 +11,7 @@ from course_supporter.llm.ladder_config import (
     LadderFile,
     StageConfig,
     load_ladder_config,
+    validate_ladder_prompts,
     validate_ladders_against_registry,
 )
 from course_supporter.llm.prompt_loader_md import load_prompt
@@ -437,6 +438,38 @@ class TestRealConfigs:
         assert rendered.user is not None
         assert "Polish" in rendered.user
         assert '"section.fixed"' in rendered.user
+
+    def test_key_explanation_runs_prompt_v2_and_the_boot_check_reads_it(
+        self,
+    ) -> None:
+        # Task 07: the stage names v2, and the check both boot halves run
+        # (``validate_ladder_prompts``) resolves and parses that file over the
+        # shipped ladders — a v2 that failed to load would stop this test the
+        # way it would stop the boot.
+        config = load_ladder_config(Path("config"))
+
+        assert config.get_stage("key_explanation").prompt_ref == (
+            "prompts/key_explanation/v2.md"
+        )
+        validate_ladder_prompts(config)
+
+    def test_key_explanation_prompt_renders_what_the_agent_passes(self) -> None:
+        # The agent passes three variables; StrictUndefined turns a rename on
+        # either side into an error at call time. This is that contract.
+        prompt = load_prompt("prompts/key_explanation/v2.md")
+
+        rendered = prompt.render(
+            language="Ukrainian",
+            task_text="1. Питання?\nа) так",
+            answers='{"1": ["а"]}',
+        )
+
+        assert rendered.system is not None
+        assert "Ukrainian" in rendered.system
+        assert '"doubts"' in rendered.system, "the shape the validator enforces"
+        assert rendered.user is not None
+        assert "1. Питання?" in rendered.user
+        assert '{"1": ["а"]}' in rendered.user
 
     def test_layered_evaluation_industry_rung_1_carries_hotfix_2_ceiling(
         self,

@@ -1,4 +1,4 @@
-"""The key-explanation agent's compute path (mentor-rebuild task 06, block G1).
+"""The key-explanation agent's compute path (mentor-rebuild tasks 06 and 07).
 
 A :class:`_FakeStageRouter` invokes the agent's ``response_validator`` with
 canned content — no real model, no database, no cost. The double is the one
@@ -9,7 +9,8 @@ What is worth testing here is not the happy path but the four ways a model can
 answer plausibly and wrongly: skip a question, invent one, leave one blank,
 answer in prose. Each of them would reach a student as a missing or empty
 explanation, and each is refused in code rather than asked against in the
-prompt alone.
+prompt alone. Task 07 adds a second field with the same rule: a doubt flag for
+exactly the key's questions, or the response is sent back.
 """
 
 from __future__ import annotations
@@ -66,16 +67,29 @@ class _FakeStageRouter:
         return None
 
 
-_VALID = json.dumps(
-    {
-        "explanations": {
-            "1": "Правильна відповідь «б», бо в питанні йдеться про протилежне.",
-            "2": "Відповідь «в» правильна, бо саме вона описує дію.",
-            "3": "«а» правильна: решта варіантів стосуються іншого.",
-        }
-    },
-    ensure_ascii=False,
-)
+_EXPLANATIONS = {
+    "1": "У питанні йдеться про протилежне, і саме це описує цей варіант.",
+    "2": "Лише цей варіант описує дію, про яку питають.",
+    "3": "Решта варіантів стосуються іншого, а цей — саме того, про що питання.",
+}
+_NO_DOUBT = {"1": False, "2": False, "3": False}
+
+
+def _response(
+    explanations: dict[str, str] | None = None,
+    doubts: dict[str, object] | None = None,
+) -> str:
+    """A prompt-v2 response: explanations and doubt flags."""
+    return json.dumps(
+        {
+            "explanations": _EXPLANATIONS if explanations is None else explanations,
+            "doubts": _NO_DOUBT if doubts is None else doubts,
+        },
+        ensure_ascii=False,
+    )
+
+
+_VALID = _response()
 
 
 def _agent(canned: str, *, exc: Exception | None = None) -> KeyExplainerAgent:
@@ -89,12 +103,12 @@ class TestTheHappyPath:
     async def test_it_returns_one_explanation_per_question(self) -> None:
         agent = _agent(_VALID)
 
-        explanations = await agent.explain(
+        written = await agent.explain(
             task_text=_TEXT, answers=_KEY, language="Ukrainian"
         )
 
-        assert set(explanations) == {"1", "2", "3"}
-        assert all(text.strip() for text in explanations.values())
+        assert set(written.explanations) == {"1", "2", "3"}
+        assert all(text.strip() for text in written.explanations.values())
 
     async def test_it_runs_the_stage_the_ladder_declares(self) -> None:
         agent = _agent(_VALID)
@@ -117,7 +131,10 @@ class TestTheHappyPath:
     async def test_the_answers_reach_the_prompt_in_question_order(self) -> None:
         """Sorted by number, so 10 follows 9 rather than 1."""
         agent = _agent(
-            json.dumps({"explanations": {str(n): "бо так" for n in (1, 2, 10)}})
+            _response(
+                {str(n): "бо так" for n in (1, 2, 10)},
+                {str(n): False for n in (1, 2, 10)},
+            )
         )
 
         await agent.explain(
@@ -172,6 +189,56 @@ class TestAPlausibleButWrongAnswerIsRefused:
     async def test_the_right_shape_with_the_wrong_field_is_refused(self) -> None:
         """``extra='forbid'``: a model that renames the field has not answered."""
         agent = _agent(json.dumps({"explanation": {"1": "a", "2": "b", "3": "c"}}))
+
+        with pytest.raises(StructuralRetryError):
+            await agent.explain(task_text=_TEXT, answers=_KEY, language=None)
+
+
+class TestTheDoubts:
+    """Task 07: a doubt flag per question, checked in code like the explanations."""
+
+    async def test_only_the_doubted_questions_come_back_each_as_true(self) -> None:
+        """The doubted question keeps its explanation; the flag travels apart."""
+        agent = _agent(_response(doubts={"1": False, "2": True, "3": False}))
+
+        written = await agent.explain(task_text=_TEXT, answers=_KEY, language=None)
+
+        assert written.doubts == {"2": True}
+        assert set(written.explanations) == {"1", "2", "3"}
+
+    async def test_no_doubt_at_all_is_an_empty_map(self) -> None:
+        agent = _agent(_VALID)
+
+        written = await agent.explain(task_text=_TEXT, answers=_KEY, language=None)
+
+        assert written.doubts == {}
+
+    @pytest.mark.parametrize(
+        ("doubts", "named"),
+        [
+            (None, "missing ['1', '2', '3']"),
+            ({"1": False, "2": True}, "missing ['3']"),
+            ({"1": False, "2": False, "3": False, "4": True}, "unexpected ['4']"),
+        ],
+        ids=["no-doubts-at-all", "a-question-without-a-flag", "an-invented-question"],
+    )
+    async def test_a_response_without_doubts_or_with_some_missing_is_retried(
+        self, doubts: dict[str, bool] | None, named: str
+    ) -> None:
+        """Silence is not "no doubt": an unasked question is refused, not read."""
+        payload: dict[str, object] = {"explanations": _EXPLANATIONS}
+        if doubts is not None:
+            payload["doubts"] = doubts
+        agent = _agent(json.dumps(payload, ensure_ascii=False))
+
+        with pytest.raises(StructuralRetryError) as exc:
+            await agent.explain(task_text=_TEXT, answers=_KEY, language=None)
+
+        assert "doubts must cover exactly the questions" in str(exc.value)
+        assert named in str(exc.value)
+
+    async def test_a_doubt_that_is_not_a_boolean_is_refused(self) -> None:
+        agent = _agent(_response(doubts={"1": "можливо", "2": False, "3": False}))
 
         with pytest.raises(StructuralRetryError):
             await agent.explain(task_text=_TEXT, answers=_KEY, language=None)

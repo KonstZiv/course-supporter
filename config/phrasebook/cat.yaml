@@ -28,3 +28,12 @@ position.slide: diapositiva {number}
 position.paragraph: paràgraf {number}
 position.file: fitxer {name}
 review.title: Revisió
+section.test: Pregunta del test
+test.question: Pregunta {number}
+test.correct: Correcte
+test.incorrect: Incorrecte
+test.correct_answer: Resposta correcta
+test.score: 'Puntuació: {number} %'
+test.try_again: Intenteu tornar a fer el test.
+test.no_explanation: No hi ha cap explicació per a aquesta pregunta.
+test.explanations_in_course_language: L'explicació es proporciona en l'idioma del curs.

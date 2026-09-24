@@ -28,3 +28,12 @@ position.slide: સ્લાઇડ {number}
 position.paragraph: ફકરો {number}
 position.file: ફાઇલ {name}
 review.title: સમીક્ષા
+section.test: ટેસ્ટના પ્રશ્નો
+test.question: પ્રશ્ન {number}
+test.correct: સાચું
+test.incorrect: ખોટું
+test.correct_answer: સાચો જવાબ
+test.score: 'સ્કોર: {number} %'
+test.try_again: ફરીથી ટેસ્ટ આપવાનો પ્રયાસ કરો.
+test.no_explanation: આ પ્રશ્ન માટે કોઈ સમજૂતી નથી.
+test.explanations_in_course_language: સમજૂતી કોર્સની ભાષામાં છે.

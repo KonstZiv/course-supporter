@@ -28,3 +28,12 @@ position.slide: slide {number}
 position.paragraph: paragraph {number}
 position.file: file {name}
 review.title: Review
+section.test: Test questions
+test.question: Question {number}
+test.correct: Correct
+test.incorrect: Incorrect
+test.correct_answer: Correct answer
+test.score: 'Score: {number}%'
+test.try_again: Try taking the test again.
+test.no_explanation: No explanation for this question.
+test.explanations_in_course_language: The explanation is provided in the course language.

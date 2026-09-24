@@ -17,6 +17,7 @@ from course_supporter.homework.path_config import (
     path_ceiling_estimate,
     validate_path_config,
 )
+from course_supporter.homework.path_stages import validate_stage_executors
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.models.source import AssignmentType
@@ -49,7 +50,8 @@ class TestCheckedInPaths:
     ) -> None:
         # Exactly what the app and the worker run at boot: the shipped ladders
         # supply the names a path stage may not reuse, and the prompt files are
-        # resolved from the repository root, as in production.
+        # resolved from the repository root, as in production. Since task 07
+        # this is also the proof that the switch of ``test`` passes the boot.
         validate_path_config(
             config,
             registry,
@@ -57,6 +59,7 @@ class TestCheckedInPaths:
                 get_settings().ladders_dir
             ).stages.keys(),
         )
+        validate_stage_executors(config.stages)
 
     def test_no_stage_name_repeats_a_ladder_stage(self, config: PathConfig) -> None:
         """Shared names would make the register sum two stages' costs as one."""
@@ -70,9 +73,18 @@ class TestCheckedInPaths:
                 f"stage {name!r} names a prompt that is not there: {stage.prompt_ref}"
             )
 
-    def test_every_type_is_served_by_todays_mentor(self, config: PathConfig) -> None:
+    def test_only_test_is_switched(self, config: PathConfig) -> None:
+        """Task 07 ships with ``test`` on the new path and the other three not.
+
+        Until task 07 every type stood on today's Mentor. A type moves by an
+        edit of this one assertion, beside the file's own line — never as a
+        side effect of some other change.
+        """
         assert {t: d.served_by for t, d in config.task_types.items()} == {
-            t: ServedBy.TODAYS_MENTOR for t in AssignmentType
+            AssignmentType.TEST: ServedBy.NEW_PATH,
+            AssignmentType.SHORT_TASK: ServedBy.TODAYS_MENTOR,
+            AssignmentType.TASK: ServedBy.TODAYS_MENTOR,
+            AssignmentType.PROJECT: ServedBy.TODAYS_MENTOR,
         }
 
     def test_nine_paths_are_described_and_short_task_has_none(

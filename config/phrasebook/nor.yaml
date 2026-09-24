@@ -28,3 +28,12 @@ position.slide: Lysbilde {number}
 position.paragraph: Avsnitt {number}
 position.file: Fil {name}
 review.title: Tilbakemelding
+section.test: Testspørsmål
+test.question: Spørsmål {number}
+test.correct: Riktig
+test.incorrect: Feil
+test.correct_answer: Riktig svar
+test.score: 'Poengsum: {number} %'
+test.try_again: Prøv å ta testen på nytt.
+test.no_explanation: Ingen forklaring for dette spørsmålet.
+test.explanations_in_course_language: Forklaringen er gitt på kursspråket.

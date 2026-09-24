@@ -25,7 +25,18 @@
 verdict.passed: Зараховано
 verdict.failed: Не зараховано
 
-# --- Section headings (structure sections 2-9, in that order) ---
+# --- A test (structure section 2: the score, then every question) ---
+section.test: Питання тесту
+test.question: Питання {number}
+test.correct: Правильно
+test.incorrect: Неправильно
+test.correct_answer: Правильна відповідь
+test.score: "Бал: {number} %"
+test.try_again: Спробуйте пройти тест ще раз.
+test.no_explanation: Пояснення до цього питання немає.
+test.explanations_in_course_language: Пояснення подано мовою курсу.
+
+# --- Section headings (structure sections 3-10, in that order) ---
 section.fixed: Виправлено
 section.new_remarks: Нові зауваження
 section.open: Лишилося відкритим
@@ -35,17 +46,17 @@ section.replies: Відповіді на ваші репліки
 section.verification: Як перевірено
 section.progress: Ваш прогрес
 
-# --- One remark, in the contrast form of 2.13 (sections 3, 4 and 5) ---
+# --- One remark, in the contrast form of 2.13 (sections 4, 5 and 6) ---
 remark.what: Що не так
 remark.why: Чому це важливо
 remark.todo: Що зробити
 remark.read: Де почитати
 
-# --- What was checked by running it, and what by reading (section 8) ---
+# --- What was checked by running it, and what by reading (section 9) ---
 verification.by_run: Перевірено запуском
 verification.by_reading: Перевірено читанням
 
-# --- The student's own replies, and the answer to each (section 7) ---
+# --- The student's own replies, and the answer to each (section 8) ---
 reply.kind.question: Ваше питання
 reply.kind.objection: Ваше заперечення
 reply.kind.comment: Ваш коментар

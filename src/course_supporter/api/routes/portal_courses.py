@@ -48,6 +48,7 @@ from course_supporter.api.schemas import (
     PortalTaskBase,
 )
 from course_supporter.auth.context import StudentContext
+from course_supporter.homework.test_doors import new_path_serves_tests
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -135,7 +136,7 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
     latest = attempts[0]
     last = PortalAttemptResult(
         score=latest.score,
-        verdict=curated_verdict(latest.review_result),
+        verdict=curated_verdict(latest.review_result, score=latest.score),
     )
     scored = [
         s
@@ -147,7 +148,7 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
         top = max(scored, key=lambda s: s.score or 0)
         best = PortalAttemptResult(
             score=top.score,
-            verdict=curated_verdict(top.review_result),
+            verdict=curated_verdict(top.review_result, score=top.score),
         )
     return PortalSubmissionOverlay(
         submission_status=_overlay_status(latest.status),
@@ -233,6 +234,11 @@ def _project_document(
         task_type=doc.task_type,
         base=bases.get(doc.id),
         overlay=overlay,
+        # DD-SP-BD: the portal shows the test form only on this flag, so a
+        # backend that does not send it leaves the file form in place.
+        test_form=(
+            doc.task_type == AssignmentType.TEST.value and new_path_serves_tests()
+        ),
     )
 
 

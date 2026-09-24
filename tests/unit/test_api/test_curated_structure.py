@@ -19,10 +19,16 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from structlog.testing import capture_logs
 
-from course_supporter.api.routes._portal_shared import curated_structure
+from course_supporter.api.routes._portal_shared import (
+    curated_structure,
+    curated_verdict,
+)
+from course_supporter.api.schemas import PortalVerdict
 from course_supporter.homework.webhook import build_reviewed_payload
+from course_supporter.models import review_structure
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import ReviewStructureV1, Verdict
 
@@ -135,3 +141,126 @@ class TestOneSourceForTwoSurfaces:
         payload = build_reviewed_payload(submission, student)
 
         assert detail.structure == payload.structure == A_STRUCTURE
+
+
+def _outcome(review_result: dict[str, Any] | None, score: int | None) -> tuple:
+    """What each surface says about one row: the webhook's pair, the portal's."""
+    submission = _submission(review_result)
+    submission.score = score
+    student = MagicMock()
+    student.external_id = "e-1"
+    review = build_reviewed_payload(submission, student).review
+    return (review.passed, review.correctness), curated_verdict(
+        review_result, score=score
+    )
+
+
+class TestAPreRebuildReviewReadsAsBefore:
+    """Today's Mentor, on both surfaces, byte for byte (task 07, decision 14).
+
+    The expected values are what the code gave before task 07 — frozen here,
+    not recomputed — and the score is chosen so a version-1 reading would give
+    a different answer: a trace is never read through the score.
+    """
+
+    @pytest.mark.parametrize(
+        ("review_result", "score", "webhook", "portal"),
+        [
+            (
+                A_PRE_REBUILD_TRACE,
+                100,
+                (True, "correct"),
+                PortalVerdict(passed=True, correctness="correct"),
+            ),
+            (
+                {"verdict": {"passed": False, "correctness": "incorrect"}},
+                100,
+                (False, "incorrect"),
+                PortalVerdict(passed=False, correctness="incorrect"),
+            ),
+            (
+                {"verdict": {"passed": True, "correctness": "partially_correct"}},
+                0,
+                (True, "partially_correct"),
+                PortalVerdict(passed=True, correctness="partially_correct"),
+            ),
+            (
+                {"verdict": {}},
+                100,
+                (False, "incorrect"),
+                PortalVerdict(passed=False, correctness="incorrect"),
+            ),
+            ({"layers": {"node": "trace only"}}, 100, (False, "incorrect"), None),
+            (None, 100, (False, "incorrect"), None),
+        ],
+        ids=["passed", "failed", "partial", "empty-verdict", "no-verdict", "no-review"],
+    )
+    def test_both_surfaces_give_what_they_gave(
+        self,
+        review_result: dict[str, Any] | None,
+        score: int,
+        webhook: tuple[bool, str],
+        portal: PortalVerdict | None,
+    ) -> None:
+        assert _outcome(review_result, score) == (webhook, portal)
+
+
+def _a_test_review(*, passed: bool | None, score: int) -> dict[str, Any]:
+    """A version-1 test review as stored; ``passed=None``: no pass mark."""
+    return ReviewStructureV1(
+        schema_version=REVIEW_SCHEMA_VERSION,
+        language="ukr",
+        verdict=None if passed is None else Verdict(passed=passed),
+        test=review_structure.TestSection(
+            score=score,
+            questions=[review_structure.TestQuestionResult(number="1", correct=True)],
+        ),
+    ).model_dump()
+
+
+class TestTheOutcomeOfATest:
+    """Version 1 (task 07, decision 14): passed by the pass mark, correctness by
+    the score — the same answer on the webhook and in the portal."""
+
+    def test_a_passed_test_is_not_reported_incorrect(self) -> None:
+        webhook, portal = _outcome(_a_test_review(passed=True, score=80), 80)
+
+        assert webhook == (True, "partially_correct")
+        assert portal == PortalVerdict(passed=True, correctness="partially_correct")
+
+    def test_a_test_without_a_pass_mark_is_passed(self) -> None:
+        """Nobody set a bar to fail, so a caller gating on it is not held back."""
+        webhook, portal = _outcome(_a_test_review(passed=None, score=60), 60)
+
+        assert webhook == (True, "partially_correct")
+        assert portal == PortalVerdict(passed=True, correctness="partially_correct")
+
+    def test_a_review_with_no_verdict_and_no_test_is_not_passed(self) -> None:
+        """Only a test's missing verdict means "no bar"; any other stays False."""
+        review = ReviewStructureV1(
+            schema_version=REVIEW_SCHEMA_VERSION,
+            language="ukr",
+            progress="Третє завдання поспіль без зауважень до стилю.",
+        ).model_dump()
+
+        webhook, portal = _outcome(review, 90)
+
+        assert webhook == (False, "partially_correct")
+        assert portal == PortalVerdict(passed=False, correctness="partially_correct")
+
+    def test_a_test_below_its_pass_mark_is_not_passed(self) -> None:
+        webhook, portal = _outcome(_a_test_review(passed=False, score=40), 40)
+
+        assert webhook == (False, "partially_correct")
+        assert portal == PortalVerdict(passed=False, correctness="partially_correct")
+
+    @pytest.mark.parametrize(
+        ("score", "expected"),
+        [(100, "correct"), (0, "incorrect"), (1, "partially_correct")],
+    )
+    def test_correctness_follows_the_score(self, score: int, expected: str) -> None:
+        webhook, portal = _outcome(_a_test_review(passed=None, score=score), score)
+
+        assert webhook[1] == expected
+        assert portal is not None
+        assert portal.correctness == expected

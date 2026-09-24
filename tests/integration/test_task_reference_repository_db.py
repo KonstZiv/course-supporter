@@ -19,6 +19,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -284,6 +285,85 @@ class TestTheAuthorLayer:
             )
         assert "ck_task_reference_overrides_answers_present" in str(exc_info.value)
 
+    @pytest.mark.parametrize("pass_mark", [0, 101])
+    async def test_the_database_refuses_a_pass_mark_outside_1_to_100(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+        pass_mark: int,
+    ) -> None:
+        """``pass_threshold BETWEEN 1 AND 100`` — a 0 would pass every submission."""
+        with pytest.raises(IntegrityError) as exc_info:
+            await db_session.execute(
+                text(
+                    "INSERT INTO task_reference_overrides (id, authored_document_id, "
+                    "kind, answers, source_content_hash, pass_threshold) VALUES "
+                    "(:id, :doc, 'test_key', CAST(:answers AS jsonb), :content, "
+                    ":pass_mark)"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "doc": seed_material_entry.id,
+                    "answers": json.dumps(_ANSWERS, ensure_ascii=False),
+                    "content": _HASH_A,
+                    "pass_mark": pass_mark,
+                },
+            )
+        assert "ck_task_reference_overrides_pass_threshold" in str(exc_info.value)
+
+    @pytest.mark.parametrize("pass_mark", [1, 100])
+    async def test_both_ends_of_the_pass_mark_range_are_accepted(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+        pass_mark: int,
+    ) -> None:
+        """The CHECK bounds are inclusive: 1 and 100 are real pass marks."""
+        layer = await TaskReferenceRepository(db_session).replace_override(
+            authored_document_id=seed_material_entry.id,
+            kind=ReferenceKind.TEST_KEY,
+            answers=_ANSWERS,
+            source_content_hash=_HASH_A,
+            pass_threshold=pass_mark,
+        )
+        assert layer.pass_threshold == pass_mark
+
+    async def test_a_replacement_without_a_pass_mark_clears_it(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """WHOLE includes the pass mark: a layer sent without one has none.
+
+        The upsert names ``pass_threshold`` in both of its arms. Without it in
+        the update arm, a pass mark would outlive the key it was set with and
+        grade the next key by a rule its author never sent. Read back from the
+        table, not only from the returned object, so the claim is about what is
+        stored.
+        """
+        repo = TaskReferenceRepository(db_session)
+        first = await repo.replace_override(
+            authored_document_id=seed_material_entry.id,
+            kind=ReferenceKind.TEST_KEY,
+            answers=_ANSWERS,
+            source_content_hash=_HASH_A,
+            pass_threshold=70,
+        )
+        assert first.pass_threshold == 70, "the premise: a pass mark was stored"
+
+        await repo.replace_override(
+            authored_document_id=seed_material_entry.id,
+            kind=ReferenceKind.TEST_KEY,
+            answers={"1": ["а"]},
+            source_content_hash=_HASH_A,
+        )
+        stored = await db_session.scalar(
+            select(TaskReferenceOverride.pass_threshold).where(
+                TaskReferenceOverride.authored_document_id == seed_material_entry.id
+            )
+        )
+        assert stored is None
+
     async def test_one_layer_per_task_and_kind(
         self,
         db_session: AsyncSession,
@@ -370,6 +450,57 @@ class TestTheAuthorLayer:
             await session.commit()
             assert second.updated_at > first_updated, "the upsert must move updated_at"
             assert second.created_at == created_at, "and must not move created_at"
+
+
+class TestAReadyVersionRecordsHowItWasWritten:
+    async def test_doubts_and_the_prompt_are_stored_with_the_explanations(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """Prompt v2 answers with doubts; the version keeps them and its prompt."""
+        repo = TaskReferenceRepository(db_session)
+        version, _ = await repo.create_version(**_key(seed_material_entry.id))  # type: ignore[arg-type]
+
+        ready = await repo.mark_ready(
+            version.id,
+            {"1": "бо так", "2": "бо інакше"},
+            doubts={"2": True},
+            prompt_ref="prompts/key_explanation/v2.md",
+        )
+
+        assert ready is not None
+        assert ready.state == ReferenceState.READY.value
+        assert ready.doubts == {"2": True}
+        assert ready.prompt_ref == "prompts/key_explanation/v2.md"
+
+    async def test_without_them_both_columns_stay_sql_null(
+        self,
+        db_session: AsyncSession,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """No doubts given means SQL NULL — not the JSON value ``null``.
+
+        NULL is what every version written before these columns carries, and a
+        reader must not have to tell two spellings of "unknown" apart. JSONB
+        stores a Python ``None`` as JSON ``null`` unless the column says
+        otherwise, which is how ``author_explanations`` reads on production.
+        """
+        repo = TaskReferenceRepository(db_session)
+        version, _ = await repo.create_version(**_key(seed_material_entry.id))  # type: ignore[arg-type]
+
+        await repo.mark_ready(version.id, {"1": "бо так", "2": "бо інакше"})
+
+        row = (
+            await db_session.execute(
+                text(
+                    "SELECT doubts IS NULL, jsonb_typeof(doubts), prompt_ref IS NULL "
+                    "FROM task_references WHERE id = :id"
+                ),
+                {"id": version.id},
+            )
+        ).one()
+        assert tuple(row) == (True, None, True)
 
 
 @pytest.fixture()

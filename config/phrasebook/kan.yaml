@@ -28,3 +28,12 @@ position.slide: ಸ್ಲೈಡ್ {number}
 position.paragraph: ಪ್ಯಾರಾಗ್ರಾಫ್ {number}
 position.file: ಫೈಲ್ {name}
 review.title: ವಿಮರ್ಶೆ
+section.test: ಪರೀಕ್ಷೆಯ ಪ್ರಶ್ನೆಗಳು
+test.question: ಪ್ರಶ್ನೆ {number}
+test.correct: ಸರಿ
+test.incorrect: ತಪ್ಪು
+test.correct_answer: ಸರಿಯಾದ ಉತ್ತರ
+test.score: 'ಅಂಕ: {number} %'
+test.try_again: ಪರೀಕ್ಷೆಯನ್ನು ಮತ್ತೊಮ್ಮೆ ಪ್ರಯತ್ನಿಸಿ.
+test.no_explanation: ಈ ಪ್ರಶ್ನೆಗೆ ಯಾವುದೇ ವಿವರಣೆಯಿಲ್ಲ.
+test.explanations_in_course_language: ವಿವರಣೆಗಳನ್ನು ಕೋರ್ಸ್‌ನ ಭಾಷೆಯಲ್ಲಿ ನೀಡಲಾಗಿದೆ.

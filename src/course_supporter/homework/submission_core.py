@@ -16,13 +16,26 @@ resolves the node-context (mode-1 from Form fields; mode-2 derived from the
 ``create_and_dispatch_submission`` is the byte-identical extraction of mode-1's
 former inline body: ``resolve_student`` is invoked INSIDE the S3-cleanup guard,
 so a student-resolution failure cleans up the uploaded file exactly as before.
+
+A test is answered with a structure rather than a file (task 07):
+``create_and_dispatch_test_submission`` runs the test's doors, stores the
+canonical answers the way a file is stored, and shares everything after the
+upload with the file path — one private tail, so the two cannot drift. The one
+difference in the tail is deduplication: a file is deduplicated, a test is not,
+because every attempt at a test is scored anew (task 07, decision 7).
 """
 
 from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -34,6 +47,8 @@ from course_supporter.api.upload_validation import (
     file_extension,
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.homework.test_doors import check_test_answers
+from course_supporter.homework.test_text import canonical_answers_json
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.stage1 import archive_kind_for_filename
@@ -77,6 +92,12 @@ PROJECT_SUBMISSION_MAX_UPLOAD_BYTES = PROJECT_ARCHIVE_MAX_UPLOAD_BYTES
 ALLOWED_HOMEWORK_EXTENSIONS: frozenset[str] = frozenset(
     f".{ext}" for ext in HOMEWORK_POLICY.allowed_extensions
 )
+
+TEST_ANSWERS_FILENAME = "answers.json"
+"""The name a test's answers are stored under, where a file's name would be."""
+
+TEST_ANSWERS_CONTENT_TYPE = "application/json"
+"""The content type a test's answers are stored with (task 07, decision 7)."""
 
 
 def _door_refusal(code: ErrorCategory, details: str) -> dict[str, str]:
@@ -341,6 +362,131 @@ async def create_and_dispatch_submission(
         file_hash=file_hash,
     )
 
+    return await _record_and_dispatch(
+        session=session,
+        s3=s3,
+        arq=arq,
+        tenant_id=tenant_id,
+        resolve_student=resolve_student,
+        course_node_id=course_node_id,
+        node_id=node_id,
+        authored_document_id=authored_document_id,
+        key=key,
+        s3_url=s3_url,
+        content_type=content_type,
+        original_filename=file.filename,
+        file_hash=file_hash,
+        deduplicate=True,
+        delivery_mode=delivery_mode,
+        webhook_url=webhook_url,
+        response_language=response_language,
+        student_note=student_note,
+        base_id=base_id,
+    )
+
+
+async def create_and_dispatch_test_submission(
+    *,
+    session: AsyncSession,
+    s3: S3Client,
+    arq: ArqRedis,
+    tenant_id: uuid.UUID,
+    resolve_student: Callable[[], Awaitable[tuple[Student, bool]]],
+    course_node_id: uuid.UUID,
+    node_id: uuid.UUID,
+    task_doc: AuthoredDocument,
+    answers: Mapping[str, Sequence[str]],
+    test_version: str | None,
+    delivery_mode: str,
+    webhook_url: str | None = None,
+    response_language: str | None = None,
+    student_note: str | None = None,
+) -> SubmissionDispatch:
+    """Refuse at the test's doors, store the answers, then record and dispatch.
+
+    The doors run first (``test_doors.check_test_answers``) — before the
+    upload and before any row (task 07, decision 12) — so a
+    refused structure stores nothing and writes nothing. What passes is stored
+    the way a file is (decision 7): one object under the same key pattern,
+    holding the canonical answers the result builder reads, with ``file_hash``
+    the hash of exactly those bytes. From there the tail is the file path's own,
+    with one difference: no deduplication — the same answers twice are two
+    submissions, each scored anew.
+    """
+    canonical = await check_test_answers(session, task_doc, answers, test_version)
+    payload = canonical_answers_json(canonical).encode("utf-8")
+    key = f"homework/{tenant_id}/{uuid.uuid4()}/{TEST_ANSWERS_FILENAME}"
+    s3_url, _ = await s3.upload_smart(
+        stream=_one_chunk(payload),
+        key=key,
+        content_type=TEST_ANSWERS_CONTENT_TYPE,
+        file_size=len(payload),
+    )
+    file_hash = hashlib.sha256(payload).hexdigest()
+    logger.info(
+        "homework_test_answers_uploaded",
+        key=key,
+        size=len(payload),
+        file_hash=file_hash,
+    )
+
+    return await _record_and_dispatch(
+        session=session,
+        s3=s3,
+        arq=arq,
+        tenant_id=tenant_id,
+        resolve_student=resolve_student,
+        course_node_id=course_node_id,
+        node_id=node_id,
+        authored_document_id=task_doc.id,
+        key=key,
+        s3_url=s3_url,
+        content_type=TEST_ANSWERS_CONTENT_TYPE,
+        original_filename=TEST_ANSWERS_FILENAME,
+        file_hash=file_hash,
+        deduplicate=False,
+        delivery_mode=delivery_mode,
+        webhook_url=webhook_url,
+        response_language=response_language,
+        student_note=student_note,
+        base_id=None,
+    )
+
+
+async def _one_chunk(payload: bytes) -> AsyncIterator[bytes]:
+    """Bytes already in memory, as the stream the upload reads."""
+    yield payload
+
+
+async def _record_and_dispatch(
+    *,
+    session: AsyncSession,
+    s3: S3Client,
+    arq: ArqRedis,
+    tenant_id: uuid.UUID,
+    resolve_student: Callable[[], Awaitable[tuple[Student, bool]]],
+    course_node_id: uuid.UUID,
+    node_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+    key: str,
+    s3_url: str,
+    content_type: str,
+    original_filename: str | None,
+    file_hash: str,
+    deduplicate: bool,
+    delivery_mode: str,
+    webhook_url: str | None,
+    response_language: str | None,
+    student_note: str | None,
+    base_id: uuid.UUID | None,
+) -> SubmissionDispatch:
+    """The tail both submissions share, from the stored object to the dispatch.
+
+    Inside the S3-cleanup guard: resolve the student, deduplicate when asked,
+    create the submission and its durable Job, commit. After the commit:
+    dispatch (DD-3.2.6-A). A failure before the commit deletes the stored
+    object; a dispatch failure leaves the committed submission re-dispatchable.
+    """
     try:
         student, student_created = await resolve_student()
         if student_created:
@@ -348,11 +494,16 @@ async def create_and_dispatch_submission(
 
         hw_repo = HomeworkRepository(session)
 
-        # Dedup: identical file already reviewed for this student + task.
-        existing = await hw_repo.find_duplicate(
-            student_id=student.id,
-            authored_document_id=authored_document_id,
-            file_hash=file_hash,
+        # Dedup: identical file already reviewed for this student + task. A
+        # test is not deduplicated: every attempt at it is scored anew.
+        existing = (
+            await hw_repo.find_duplicate(
+                student_id=student.id,
+                authored_document_id=authored_document_id,
+                file_hash=file_hash,
+            )
+            if deduplicate
+            else None
         )
         if existing is not None:
             await s3.delete_object(key)
@@ -379,7 +530,7 @@ async def create_and_dispatch_submission(
             authored_document_id=authored_document_id,
             file_url=s3_url,
             file_type=content_type,
-            original_filename=file.filename,
+            original_filename=original_filename,
             webhook_url=webhook_url,
             file_hash=file_hash,
             response_language=response_language,

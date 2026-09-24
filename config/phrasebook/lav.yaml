@@ -28,3 +28,12 @@ position.slide: slaids {number}
 position.paragraph: rindkopa {number}
 position.file: fails {name}
 review.title: Recenzija
+section.test: Testa jautājumi
+test.question: Jautājums {number}
+test.correct: Pareizi
+test.incorrect: Nepareizi
+test.correct_answer: Pareizā atbilde
+test.score: 'Vērtējums: {number} %'
+test.try_again: Mēģiniet vēlreiz nokārtot testu.
+test.no_explanation: Šim jautājumam nav paskaidrojuma.
+test.explanations_in_course_language: Paskaidrojumi ir sniegti kursa valodā.

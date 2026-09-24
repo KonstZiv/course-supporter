@@ -28,3 +28,12 @@ position.slide: slayt {number}
 position.paragraph: paragraf {number}
 position.file: dosya {name}
 review.title: Değerlendirme
+section.test: Test Soruları
+test.question: Soru {number}
+test.correct: Doğru
+test.incorrect: Yanlış
+test.correct_answer: Doğru cevap
+test.score: 'Puan: {number} %'
+test.try_again: Testi tekrar çözmeyi deneyin.
+test.no_explanation: Bu soru için açıklama yok.
+test.explanations_in_course_language: Açıklamalar kurs dilinde verilmiştir.

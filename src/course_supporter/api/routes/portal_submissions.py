@@ -4,6 +4,10 @@ Routes
 ------
 - ``POST /portal/tasks/{authored_document_id}/submissions`` — submit a solution
   from the student's own session (mode-2, ``in_app``).
+- ``GET /portal/tasks/{authored_document_id}/test`` — a test's questions, never
+  its key (task 07).
+- ``POST /portal/tasks/{authored_document_id}/test-submissions`` — answer a test
+  with its answers (task 07).
 
 These live on the native session path (bearer token, ``get_current_student``):
 no API key, no scope. The session entry-point reuses the SAME submission core as
@@ -39,6 +43,10 @@ from course_supporter.api.routes._portal_shared import (
     curated_verdict,
     role_visible_to_student,
 )
+from course_supporter.api.routes._test_shared import (
+    require_ready,
+    structure_response,
+)
 from course_supporter.api.schemas import (
     FeedbackTouch,
     OptionalLanguageForm,
@@ -47,7 +55,9 @@ from course_supporter.api.schemas import (
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
+    PortalTestSubmitRequest,
     PortalTouchRequest,
+    TestStructureResponse,
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.feedback_kinds import FeedbackTargetKind
@@ -56,8 +66,13 @@ from course_supporter.homework.submission_core import (
     MAX_HOMEWORK_SIZE,
     PROJECT_SUBMISSION_MAX_UPLOAD_BYTES,
     create_and_dispatch_submission,
+    create_and_dispatch_test_submission,
     project_preflight,
     validate_homework_file,
+)
+from course_supporter.homework.test_doors import (
+    answer_sheet,
+    refuse_a_file_for_a_test,
 )
 from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import compute_delta, manifest_from_jsonb
@@ -70,7 +85,7 @@ from course_supporter.storage.document_summary_repository import (
 )
 from course_supporter.storage.feedback_repository import FeedbackRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.orm import HomeworkSubmission, Student
+from course_supporter.storage.orm import AuthoredDocument, HomeworkSubmission, Student
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_enrollment_repository import (
@@ -205,6 +220,11 @@ async def submit_portal_homework(
             "(its summary has not been generated).",
         )
 
+    # --- A test is answered with its answers, not a file (task 07, decision
+    # 12) — once tests are on the new path. Before the upload, so a refused
+    # file stores nothing; on today's Mentor a file stays a test's form. ---
+    refuse_a_file_for_a_test(task_doc)
+
     # --- Resolve the session student (validated by get_current_student) ---
     student_obj = await session.get(Student, student.student_id)
     if student_obj is None:
@@ -254,6 +274,104 @@ async def submit_portal_homework(
         submission_id=result.submission.id,
         status="received",
     )
+
+
+@router.get(
+    "/portal/tasks/{authored_document_id}/test",
+    response_model=TestStructureResponse,
+)
+async def get_portal_test(
+    authored_document_id: uuid.UUID,
+    student: StudentDep,
+    session: SessionDep,
+) -> TestStructureResponse:
+    """A test as the student answers it — questions, never the key (task 07).
+
+    The same access gates as a file submission: the task visible to students,
+    in the student's tenant, in a course they are enrolled in — one 404 for
+    every way of failing them. **422** ``NOT_A_TEST_TASK`` for a task of another
+    type; **409** while the task is not ready.
+    """
+    task_doc = await _answerable_task(session, student, authored_document_id)
+    await require_ready(session, authored_document_id)
+    return structure_response(await answer_sheet(session, task_doc))
+
+
+@router.post(
+    "/portal/tasks/{authored_document_id}/test-submissions",
+    status_code=202,
+    response_model=PortalSubmitResponse,
+)
+async def submit_portal_test(
+    authored_document_id: uuid.UUID,
+    body: PortalTestSubmitRequest,
+    student: StudentDep,
+    session: SessionDep,
+    s3: S3Dep,
+    arq: ArqDep,
+) -> PortalSubmitResponse:
+    """Answer a test with its answers, from the student's session (task 07).
+
+    The access and readiness gates of a file submission, then the test's own
+    doors, each with its code (``{"code", "details"}``). A refused submission
+    stores nothing; the review is read in the portal, as for a file; the same
+    answers sent twice are two attempts.
+    """
+    task_doc = await _answerable_task(session, student, authored_document_id)
+    await require_ready(session, authored_document_id)
+    student_obj = await session.get(Student, student.student_id)
+    if student_obj is None:
+        raise HTTPException(status_code=401, detail="Session is no longer valid")
+    resolved_student: Student = student_obj
+
+    async def _resolve_student() -> tuple[Student, bool]:
+        return resolved_student, False
+
+    result = await create_and_dispatch_test_submission(
+        session=session,
+        s3=s3,
+        arq=arq,
+        tenant_id=student.tenant_id,
+        resolve_student=_resolve_student,
+        course_node_id=task_doc.course_root_id,
+        node_id=task_doc.course_node_id,
+        task_doc=task_doc,
+        answers=body.answers,
+        test_version=body.test_version,
+        delivery_mode="in_app",
+        webhook_url=None,
+        response_language=body.response_language,
+        student_note=body.student_note,
+    )
+    return PortalSubmitResponse(submission_id=result.submission.id, status="received")
+
+
+async def _answerable_task(
+    session: AsyncSession, student: StudentContext, authored_document_id: uuid.UUID
+) -> AuthoredDocument:
+    """The access gates of a file submission, in its order, with its one 404.
+
+    A task visible to students, in the student's tenant, in a course they are
+    enrolled in; anything else is ``Task not found.``, so the portal never tells
+    which tasks exist outside the student's access.
+    """
+    task_doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
+    if (
+        task_doc is None
+        or task_doc.deleted_at is not None
+        or task_doc.task_type is None
+        or not role_visible_to_student(task_doc.material_role)
+    ):
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+    root_node = await CourseNodeRepository(session).get_by_id(task_doc.course_root_id)
+    if root_node is None or root_node.tenant_id != student.tenant_id:
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+    enrolled = await StudentEnrollmentRepository(session).is_enrolled(
+        student.student_id, task_doc.course_root_id
+    )
+    if not enrolled:
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+    return task_doc
 
 
 @router.get(
@@ -319,7 +437,7 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
         status=submission.status,
         presentation=curated_presentation(submission),
         score=submission.score,
-        verdict=curated_verdict(submission.review_result),
+        verdict=curated_verdict(submission.review_result, score=submission.score),
         created_at=submission.created_at,
         original_filename=submission.original_filename,
         rejection=curated_rejection(submission),
@@ -408,7 +526,7 @@ def _to_detail(
         status=submission.status,
         presentation=curated_presentation(submission),
         score=submission.score,
-        verdict=curated_verdict(submission.review_result),
+        verdict=curated_verdict(submission.review_result, score=submission.score),
         structure=curated_structure(submission.review_result),
         review_markdown=submission.review_markdown,
         created_at=submission.created_at,

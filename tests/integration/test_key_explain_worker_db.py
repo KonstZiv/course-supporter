@@ -12,6 +12,13 @@ Four of the five tests are about NOT spending: a key that moved, a port that
 refuses, a model that answers badly. The fifth is the one that costs money, and
 it checks that what the port is told afterwards equals what the register says.
 
+Task 07 adds what a version keeps besides its explanations — the doubted
+questions and the prompt that wrote them — and what the model reads: the
+test's source text, not the stitched one. Those tests run the REAL router over
+the real ladder and the real prompt, with a provider double in place of the
+model, because the claims are about that chain: the ladder names prompt v2,
+the router renders it and records it, the work stores it.
+
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
 
@@ -19,7 +26,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select
@@ -36,8 +45,15 @@ from course_supporter.funds_port import (
     VersionWorkContext,
 )
 from course_supporter.homework.reference_key import answers_digest
+from course_supporter.homework.task_text import stitch_task_text
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderExhaustedError
+from course_supporter.llm.finish_reason import FinishReason
+from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.registry import load_registry
+from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.stage_router import StageRouter
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.service_logging import get_current_job_id
 from course_supporter.storage.orm import (
@@ -57,8 +73,12 @@ pytestmark = pytest.mark.requires_db
 _KEY: dict[str, list[str]] = {"1": ["б"], "2": ["в"]}
 _TEXT = "1. Перше?\nа) так\nб) ні\n\n2. Друге?\nв) так\nг) ні"
 _HASH = "e" * 64
-_GOOD = '{"explanations": {"1": "Бо так, і ось чому.", "2": "Бо саме так."}}'
+_GOOD = (
+    '{"explanations": {"1": "Бо так, і ось чому.", "2": "Бо саме так."}, '
+    '"doubts": {"1": false, "2": true}}'
+)
 _BAD = '{"explanations": {"1": "Лише перше."}}'
+_PROMPT_V2 = "prompts/key_explanation/v2.md"
 _COST = 0.0231
 
 
@@ -524,3 +544,112 @@ class TestTheWorkThatIsWrittenDown:
         assert actions == sorted([FUNDS_PORT_ACTION, STAGE_NAME]), (
             "one funds decision and one stage call, both under this job"
         )
+
+
+class TestWhatTheVersionKeeps:
+    """Task 07: the doubts and the prompt, through the real router and ladder."""
+
+    async def test_the_doubts_and_the_prompt_that_wrote_them_are_kept(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seeded: dict[str, uuid.UUID],
+    ) -> None:
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
+
+        async with session_factory() as session:
+            version = await TaskReferenceRepository(session).get_by_id(
+                seeded["version_id"]
+            )
+        assert version is not None
+        assert version.state == ReferenceState.READY.value
+        assert version.explanations is not None
+        assert set(version.explanations) == {"1", "2"}
+        assert version.doubts == {"2": True}, "only the doubted question, as true"
+        assert version.prompt_ref == _PROMPT_V2
+
+    async def test_the_model_reads_the_source_text_not_the_stitched_one(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seeded: dict[str, uuid.UUID],
+    ) -> None:
+        """A segment boundary inside question 2 — where processing may put one."""
+        head, tail = _TEXT[:25], _TEXT[25:]
+        stitched = stitch_task_text([head, tail])
+        assert head + tail == _TEXT
+        assert stitched != _TEXT, "the premise: the stitch splits the question"
+        await _split_the_segment(session_factory, seeded["document_id"], head, tail)
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
+
+        request: LLMRequest = provider.complete.await_args.args[0]
+        assert _TEXT in request.prompt
+        assert stitched not in request.prompt
+
+
+def _provider_answering(content: str) -> AsyncMock:
+    """The first rung's provider, answering once, as a model would."""
+    provider = AsyncMock(spec=LLMProvider)
+    provider.enabled = True
+    provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content=content,
+            provider="deepseek_thinking",
+            model_id="deepseek-v4-pro",
+            tokens_in=900,
+            tokens_out=300,
+            finish_reason=FinishReason.STOP,
+        )
+    )
+    return provider
+
+
+def _real_router(
+    session_factory: async_sessionmaker[AsyncSession], provider: AsyncMock
+) -> StageRouter:
+    """The shipped ladder, registry and prompt; only the model is a double."""
+    return StageRouter(
+        load_ladder_config(Path("config")),
+        {"deepseek_thinking": provider},  # type: ignore[dict-item]
+        registry=load_registry(Path("config/external_services.yaml")),
+        session_factory=session_factory,
+    )
+
+
+async def _split_the_segment(
+    session_factory: async_sessionmaker[AsyncSession],
+    document_id: uuid.UUID,
+    head: str,
+    tail: str,
+) -> None:
+    """Store the test as two segments that meet at ``head``'s last character."""
+    async with session_factory() as session:
+        segment = await session.scalar(
+            select(DocumentSegment)
+            .join(DocumentSummary)
+            .where(DocumentSummary.authored_document_id == document_id)
+        )
+        assert segment is not None
+        segment.content = head
+        session.add(
+            DocumentSegment(
+                document_summary_id=segment.document_summary_id,
+                course_root_id=segment.course_root_id,
+                order=1,
+                content=tail,
+                description="the rest of the test",
+                start_pos=len(head),
+                end_pos=len(_TEXT),
+            )
+        )
+        await session.commit()

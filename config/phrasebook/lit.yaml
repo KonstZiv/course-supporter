@@ -28,3 +28,12 @@ position.slide: Skaidrė {number}
 position.paragraph: Pastraipa {number}
 position.file: Failas {name}
 review.title: Recenzija
+section.test: Testo klausimai
+test.question: Klausimas {number}
+test.correct: Teisingai
+test.incorrect: Neteisingai
+test.correct_answer: Teisingas atsakymas
+test.score: 'Įvertinimas: {number} %'
+test.try_again: Pabandykite atlikti testą dar kartą.
+test.no_explanation: Šiam klausimui paaiškinimo nėra.
+test.explanations_in_course_language: Paaiškinimai pateikti kurso kalba.

@@ -28,3 +28,12 @@ position.slide: snímka {number}
 position.paragraph: odsek {number}
 position.file: súbor {name}
 review.title: Recenzia
+section.test: Testové otázky
+test.question: Otázka {number}
+test.correct: Správne
+test.incorrect: Nesprávne
+test.correct_answer: Správna odpoveď
+test.score: 'Skóre: {number} %'
+test.try_again: Skúste test absolvovať znova.
+test.no_explanation: K tejto otázke nie je vysvetlenie.
+test.explanations_in_course_language: Vysvetlenie je uvedené v jazyku kurzu.

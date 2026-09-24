@@ -28,3 +28,12 @@ position.slide: 投影片 {number}
 position.paragraph: 段落 {number}
 position.file: 檔案 {name}
 review.title: 審閱
+section.test: 測驗問題
+test.question: 第 {number} 題
+test.correct: 正確
+test.incorrect: 唔正確
+test.correct_answer: 正確答案
+test.score: 分數：{number} %
+test.try_again: 請再試一次測驗。
+test.no_explanation: 此問題沒有解釋。
+test.explanations_in_course_language: 解釋以課程語言提供。

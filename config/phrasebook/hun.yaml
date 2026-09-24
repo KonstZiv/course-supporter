@@ -28,3 +28,12 @@ position.slide: dia {number}
 position.paragraph: bekezdés {number}
 position.file: fájl {name}
 review.title: Értékelés
+section.test: Tesztkérdés
+test.question: '{number}. kérdés'
+test.correct: Helyes
+test.incorrect: Helytelen
+test.correct_answer: Helyes válasz
+test.score: 'Pontszám: {number} %'
+test.try_again: Próbálja meg újra kitölteni a tesztet.
+test.no_explanation: Ehhez a kérdéshez nincs magyarázat.
+test.explanations_in_course_language: A magyarázat a kurzus nyelvén olvasható.

@@ -28,3 +28,12 @@ position.slide: Slide {number}
 position.paragraph: Afsnit {number}
 position.file: Fil {name}
 review.title: Gennemgang
+section.test: Testspørgsmål
+test.question: Spørgsmål {number}
+test.correct: Korrekt
+test.incorrect: Forkert
+test.correct_answer: Korrekt svar
+test.score: 'Score: {number} %'
+test.try_again: Prøv testen igen.
+test.no_explanation: Der er ingen forklaring til dette spørgsmål.
+test.explanations_in_course_language: Forklaringer er på kursets sprog.

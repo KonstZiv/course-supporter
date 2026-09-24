@@ -28,3 +28,12 @@ position.slide: スライド {number}
 position.paragraph: 段落 {number}
 position.file: ファイル {name}
 review.title: レビュー
+section.test: テスト問題
+test.question: 質問 {number}
+test.correct: 正解
+test.incorrect: 不正解
+test.correct_answer: 正しい答え
+test.score: 'スコア: {number} %'
+test.try_again: もう一度テストを受けてください。
+test.no_explanation: この質問の解説はありません。
+test.explanations_in_course_language: 解説はコースの言語で記載されています。

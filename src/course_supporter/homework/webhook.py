@@ -18,10 +18,17 @@ from typing import TYPE_CHECKING
 import httpx
 import structlog
 
-from course_supporter.api.routes._portal_shared import curated_structure
+from course_supporter.api.routes._portal_shared import (
+    curated_structure,
+    version_1_outcome,
+)
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.call_outcome import CallOutcome
 from course_supporter.config import get_settings
+from course_supporter.models.review_schema import (
+    REVIEW_SCHEMA_VERSION,
+    review_schema_version,
+)
 from course_supporter.models.webhook import (
     ReviewSummary,
     WebhookFailedPayload,
@@ -73,23 +80,39 @@ def build_reviewed_payload(
     ``review_result`` key pinned in T3; its full layered shape lands with the
     review graph in T6. Until the graph writes a real verdict (the T6 stub
     does not), the reads degrade to safe defaults so the webhook still builds.
+
+    A version-1 review has no such block: its ``passed`` and ``correctness``
+    are :func:`version_1_outcome` of its structure and the score column — the
+    function the portal reads through (task 07, decision 14). A row that claims
+    version 1 and does not validate gets the same safe defaults.
     """
     review_result = submission.review_result or {}
-    verdict = review_result.get("verdict", {})
+    # The same projection the portal reads through: one place decides what a
+    # stored review is, so the two surfaces cannot drift (task 04).
+    structure = curated_structure(submission.review_result)
+
+    if review_schema_version(review_result) == REVIEW_SCHEMA_VERSION:
+        passed, correctness = (
+            version_1_outcome(structure, submission.score)
+            if structure is not None
+            else (False, "incorrect")
+        )
+    else:
+        verdict = review_result.get("verdict", {})
+        passed = verdict.get("passed", False)
+        correctness = verdict.get("correctness", "incorrect")
 
     return WebhookReviewedPayload(
         submission_id=str(submission.id),
         student_external_id=student.external_id,
         review=ReviewSummary(
-            passed=verdict.get("passed", False),
+            passed=passed,
             score=submission.score or 0,
-            correctness=verdict.get("correctness", "incorrect"),
+            correctness=correctness,
             review_text=submission.review_markdown or "",
             response_language=submission.response_language or "en",
         ),
-        # The same projection the portal reads through: one place decides what
-        # a stored review is, so the two surfaces cannot drift (task 04).
-        structure=curated_structure(submission.review_result),
+        structure=structure,
         timestamp=datetime.now(UTC),
     )
 

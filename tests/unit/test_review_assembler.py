@@ -33,6 +33,7 @@ from course_supporter.homework.review_assembler import (
     MissingPhraseError,
     assemble_review,
 )
+from course_supporter.models import review_structure
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
     SECTION_ORDER,
@@ -60,11 +61,14 @@ SNAPSHOT_LANGUAGES = ("ukr", "eng", "fas")
 def full_review(language: str) -> ReviewStructureV1:
     """A review that uses every phrase in the dictionary.
 
-    Deliberately maximal: all nine sections, both halves of the verification,
-    all three kinds of reply, and one remark carrying each of the four kinds of
-    position. A fixture that exercised less would let a phrase rot unnoticed —
-    the snapshot would still match, and the unused phrase would be wrong in
-    sixty files before anyone found out.
+    Deliberately maximal: all ten sections, both halves of the verification,
+    all three kinds of reply, one remark carrying each of the four kinds of
+    position, and a test with a right answer, a wrong one with an explanation
+    and a wrong one of two correct options with none. A fixture that exercised
+    less would let a phrase rot unnoticed — the snapshot would still match, and
+    the unused phrase would be wrong in sixty files before anyone found out.
+    No real review carries a test beside remarks; this one does because it is a
+    fixture of phrases, not of reviews.
 
     Every phrase but one: the verdict here fails, so ``verdict.passed`` is the
     single key this cannot reach, and ``test_every_phrase_is_used`` covers it
@@ -77,6 +81,33 @@ def full_review(language: str) -> ReviewStructureV1:
         schema_version=REVIEW_SCHEMA_VERSION,
         language=language,
         verdict=Verdict(passed=False, why="Two of the four requirements are met."),
+        test=review_structure.TestSection(
+            score=50,
+            questions=[
+                review_structure.TestQuestionResult(number="1", correct=True),
+                review_structure.TestQuestionResult(
+                    number="2",
+                    correct=False,
+                    correct_answer=[
+                        review_structure.TestOption(
+                            label="б", text="The text the model sees in one call"
+                        )
+                    ],
+                    explanation="The window is what the model reads at once.",
+                ),
+                review_structure.TestQuestionResult(
+                    number="3",
+                    correct=False,
+                    correct_answer=[
+                        review_structure.TestOption(label="а", text="Yes"),
+                        review_structure.TestOption(label="в", text="Only with a key"),
+                    ],
+                ),
+                review_structure.TestQuestionResult(number="4", correct=True),
+            ],
+            explanations_in_course_language=True,
+            retry_offer=True,
+        ),
         fixed=[
             Remark(
                 what="The loop read past the end of the list.",
@@ -168,7 +199,7 @@ class TestAcceptance:
         assert assembled == expected
 
     def test_every_phrase_is_used(self) -> None:
-        """Every one of the 25 keys reaches a reader through this assembler.
+        """Every key of the source reaches a reader through this assembler.
 
         A phrase nobody renders is a phrase nobody notices going wrong — and it
         was paid for in sixty languages. The two reviews below are all it takes
@@ -203,6 +234,103 @@ class TestAcceptance:
         for forbidden in ("llm", "provider", "stage_router", "httpx", "requests"):
             assert f"import {forbidden}" not in source
             assert f"from course_supporter.{forbidden}" not in source
+
+
+def review_of_a_test(*, passed: bool | None) -> ReviewStructureV1:
+    """A test's review as the builder writes it: a verdict and the questions.
+
+    ``passed`` is the verdict, or ``None`` for a test with no pass mark — no
+    verdict at all, and the score opens the test section instead.
+    """
+    return ReviewStructureV1(
+        schema_version=REVIEW_SCHEMA_VERSION,
+        language="ukr",
+        verdict=None if passed is None else Verdict(passed=passed),
+        test=review_structure.TestSection(
+            score=60,
+            questions=[
+                review_structure.TestQuestionResult(number="1", correct=True),
+                review_structure.TestQuestionResult(number="2", correct=True),
+                review_structure.TestQuestionResult(
+                    number="3",
+                    correct=False,
+                    correct_answer=[
+                        review_structure.TestOption(
+                            label="б",
+                            text="Обсяг тексту, який модель бачить за один виклик",
+                        )
+                    ],
+                    explanation=(
+                        "Вікно — це те, що модель читає за один раз, а не те, "
+                        "що вона пам'ятає між розмовами."
+                    ),
+                ),
+                review_structure.TestQuestionResult(number="4", correct=True),
+                review_structure.TestQuestionResult(
+                    number="5",
+                    correct=False,
+                    correct_answer=[
+                        review_structure.TestOption(label="в", text="Температура")
+                    ],
+                ),
+            ],
+            retry_offer=passed is False,
+        ),
+    )
+
+
+class TestTheTestSection:
+    """A test's review (task 07): the score at the top, then every question."""
+
+    def test_a_test_review_reads_as_its_snapshot(self) -> None:
+        """What the student of a failed test reads, character for character."""
+        expected = (SNAPSHOTS / "review_test_ukr.md").read_text(encoding="utf-8")
+
+        assert assemble_review(review_of_a_test(passed=False)) == expected
+
+    def test_the_score_stands_under_the_verdict(self) -> None:
+        lines = assemble_review(review_of_a_test(passed=True)).splitlines()
+
+        verdict = lines.index("## Зараховано")
+        assert lines[verdict + 1 : verdict + 3] == ["", "Бал: 60 %"]
+
+    def test_without_a_pass_mark_the_score_opens_the_test_section(self) -> None:
+        """No verdict to carry it, so the section does (03-BINDING 4.4, point 4)."""
+        assembled = assemble_review(review_of_a_test(passed=None))
+        lines = assembled.splitlines()
+
+        heading = lines.index("## Питання тесту")
+        assert lines[heading + 1 : heading + 3] == ["", "Бал: 60 %"]
+        assert "Зараховано" not in assembled
+        assert assembled.count("Бал: 60 %") == 1
+
+    def test_the_offer_to_try_again_is_the_last_line_only_when_not_passed(
+        self,
+    ) -> None:
+        failed = assemble_review(review_of_a_test(passed=False))
+        passed = assemble_review(review_of_a_test(passed=True))
+
+        assert failed.splitlines()[-1] == "Спробуйте пройти тест ще раз."
+        assert "Спробуйте пройти тест ще раз." not in passed
+
+    def test_the_course_language_line_appears_only_when_asked_for(self) -> None:
+        review = review_of_a_test(passed=False)
+        assert review.test is not None
+        flagged = review.model_copy(
+            update={
+                "test": review.test.model_copy(
+                    update={"explanations_in_course_language": True}
+                )
+            }
+        )
+
+        line = "Пояснення подано мовою курсу."
+        assert line not in assemble_review(review)
+        lines = assemble_review(flagged).splitlines()
+        assert lines.count(line) == 1
+        assert lines.index(line) < lines.index("**Питання 1:** Правильно"), (
+            "said before the questions it is about"
+        )
 
 
 class TestPurity:

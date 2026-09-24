@@ -28,3 +28,12 @@ position.slide: slide {number}
 position.paragraph: alinea {number}
 position.file: bestand {name}
 review.title: Beoordeling
+section.test: Testvragen
+test.question: Vraag {number}
+test.correct: Correct
+test.incorrect: Incorrect
+test.correct_answer: Correct antwoord
+test.score: 'Score: {number} %'
+test.try_again: Doe de test opnieuw.
+test.no_explanation: Geen uitleg beschikbaar.
+test.explanations_in_course_language: De uitleg is in de taal van de cursus.

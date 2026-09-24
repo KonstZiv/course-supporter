@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     Uuid,
@@ -2693,6 +2694,25 @@ class TaskReference(Base):
         comment="Generated explanations, {question number: text} — one per "
         "question, why the right answer is right. NULL until READY.",
     )
+    # none_as_null: a Python None must land as SQL NULL, not as JSON 'null'.
+    # NULL is what every version written before this column existed carries, and
+    # "doubts unknown" has to read the same whichever way it arose (task 07).
+    doubts: Mapped[dict[str, bool] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+        default=None,
+        comment="Questions on which the model doubts the author's answer, "
+        "{question number: true} (task 07, prompt v2). {} — v2 found none; NULL "
+        "— a version generated before v2, read as no doubt. A doubt hides the "
+        "model's explanation from the student and never changes the score.",
+    )
+    prompt_ref: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="The prompt that wrote these explanations, as the ladder names it "
+        "(task 07). Outside the version key on purpose: a new prompt does not "
+        "regenerate existing versions. NULL — generated before task 07 (v1).",
+    )
     state: Mapped[str] = mapped_column(
         String(20),
         default=ReferenceState.PENDING.value,
@@ -2759,6 +2779,12 @@ class TaskReferenceOverride(Base):
         CheckConstraint(
             "answers <> '{}'::jsonb", name="ck_task_reference_overrides_answers_present"
         ),
+        # Same units as the score: a percentage of questions answered right.
+        # 0 would pass every submission and is not a threshold.
+        CheckConstraint(
+            "pass_threshold IS NULL OR pass_threshold BETWEEN 1 AND 100",
+            name="ck_task_reference_overrides_pass_threshold",
+        ),
         Index(
             "uq_task_reference_override_document_kind",
             "authored_document_id",
@@ -2800,6 +2826,15 @@ class TaskReferenceOverride(Base):
         "{question number: text}. Outside the generation key on purpose "
         "(ratified 2026-09-19): editing one must not buy a fresh generation "
         "of the whole set.",
+    )
+    pass_threshold: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="The author's pass mark, 1-100, in the units of the score: the "
+        "percentage of questions answered right (task 07). NULL — no pass mark, "
+        "so a review states the score and no verdict. Outside the generation "
+        "key: changing it buys no generation. Replaced with the layer, so a "
+        "replacement that omits it clears it.",
     )
     source_content_hash: Mapped[str] = mapped_column(
         String(64),

@@ -28,3 +28,12 @@ position.slide: diapositiva {number}
 position.paragraph: párrafo {number}
 position.file: archivo {name}
 review.title: Revisión
+section.test: Preguntas del test
+test.question: Pregunta {number}
+test.correct: Correcto
+test.incorrect: Incorrecto
+test.correct_answer: Respuesta correcta
+test.score: 'Puntuación: {number} %'
+test.try_again: Vuelva a realizar el test.
+test.no_explanation: No hay explicación para esta pregunta.
+test.explanations_in_course_language: La explicación está en el idioma del curso.

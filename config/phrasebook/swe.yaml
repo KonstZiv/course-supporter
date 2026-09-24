@@ -28,3 +28,12 @@ position.slide: bild {number}
 position.paragraph: stycke {number}
 position.file: fil {name}
 review.title: Granskning
+section.test: Testfrågor
+test.question: Fråga {number}
+test.correct: Rätt
+test.incorrect: Fel
+test.correct_answer: Rätt svar
+test.score: 'Poäng: {number} %'
+test.try_again: Försök göra testet igen.
+test.no_explanation: Förklaring saknas.
+test.explanations_in_course_language: Förklaringar på kursspråket.

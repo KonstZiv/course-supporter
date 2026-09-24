@@ -38,6 +38,7 @@ from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.homework.explanation_queue import ArqExplanationQueue
 from course_supporter.homework.reference_service import (
+    GenerationInProgressError,
     ReferenceRefusedError,
     ReferenceService,
     ReferenceView,
@@ -103,6 +104,29 @@ def _refusal(exc: ReferenceRefusedError) -> HTTPException:
     )
 
 
+def _generation_in_progress(exc: GenerationInProgressError) -> HTTPException:
+    """Turn a job collision into the 409 the author reads (task 07, decision 9).
+
+    409, not 422: nothing is wrong with the key or with the task. Another job of
+    this task holds the one slot the database allows; the request is not wrong,
+    only early. Nothing the request wrote stands — neither the key nor a
+    version: the refused insert voided the transaction, and the route rolls the
+    session back before answering (``GenerationInProgressError`` says why both).
+    The answer says so.
+    """
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": exc.code,
+            "details": (
+                "another job of this task is still running — its explanations "
+                "being written, or the task itself being processed; nothing was "
+                "saved, so send the request again once it finishes"
+            ),
+        },
+    )
+
+
 @router.get("/documents/{document_id}/reference")
 async def get_reference(
     document_id: uuid.UUID,
@@ -119,13 +143,18 @@ async def get_reference(
     The read is not free of consequences, and that is deliberate (the lazy path
     of ``reference_service``): if the test text changed and its question
     numbers did not, this call carries the author's answers onto the new
-    version and asks for their explanations.
+    version and asks for their explanations. When another job of the task is
+    in flight, that request cannot be made: **409** ``GENERATION_IN_PROGRESS``,
+    and the carrying is undone with it.
     """
     await _require_tenant_task(session, document_id, tenant.tenant_id)
     try:
         view = await _service(session, arq, tenant).read(document_id)
     except ReferenceRefusedError as exc:
         raise _refusal(exc) from exc
+    except GenerationInProgressError as exc:
+        await session.rollback()
+        raise _generation_in_progress(exc) from exc
     await session.commit()
     return _response(view)
 
@@ -147,14 +176,25 @@ async def put_reference_override(
     Sending the same answers again costs nothing: the version for that key
     already exists, so no new work is asked for, and the response reports its
     current state.
+
+    A key that needs a new generation, sent while another job of the task is
+    in flight — the previous key's generation, or the task's own processing —
+    answers **409** ``GENERATION_IN_PROGRESS``, and nothing is stored: not the
+    key, not its version (task 07, decision 9).
     """
     await _require_tenant_task(session, document_id, tenant.tenant_id)
     try:
         view = await _service(session, arq, tenant).replace_key(
-            document_id, body.answers, body.author_explanations
+            document_id,
+            body.answers,
+            body.author_explanations,
+            pass_threshold=body.pass_threshold,
         )
     except ReferenceRefusedError as exc:
         raise _refusal(exc) from exc
+    except GenerationInProgressError as exc:
+        await session.rollback()
+        raise _generation_in_progress(exc) from exc
     await session.commit()
     logger.info(
         "reference_key_replaced",
@@ -205,4 +245,6 @@ def _response(view: ReferenceView) -> ReferenceViewResponse:
         carried_over=view.carried_over,
         language=view.language,
         failure_reason=view.failure_reason,
+        pass_threshold=view.pass_threshold,
+        doubts=view.doubts,
     )

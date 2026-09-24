@@ -131,6 +131,10 @@ ignore = [
 # so a doctest that spelled them in Latin would document a format the
 # parser never sees.
 "src/course_supporter/homework/reference_key.py" = ["RUF002"]
+# Canonical labels: Latin letters drawn like Cyrillic ones are what this module
+# maps, so its table and its examples spell both alphabets on purpose.
+"src/course_supporter/homework/test_text.py" = ["RUF001", "RUF002"]
+"tests/unit/test_homework/test_test_text.py" = ["RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "tests/unit/test_linguistics.py" = ["RUF003"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]

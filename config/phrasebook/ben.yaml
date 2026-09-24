@@ -28,3 +28,12 @@ position.slide: স্লাইড {number}
 position.paragraph: অনুচ্ছেদ {number}
 position.file: ফাইল {name}
 review.title: পর্যালোচনা
+section.test: টেস্টের প্রশ্ন
+test.question: প্রশ্ন {number}
+test.correct: সঠিক
+test.incorrect: ভুল
+test.correct_answer: সঠিক উত্তর
+test.score: 'স্কোর: {number} %'
+test.try_again: আবার টেস্টটি দেওয়ার চেষ্টা করুন।
+test.no_explanation: এই প্রশ্নের কোনো ব্যাখ্যা নেই।
+test.explanations_in_course_language: ব্যাখ্যাটি কোর্সের ভাষায় দেওয়া হয়েছে।

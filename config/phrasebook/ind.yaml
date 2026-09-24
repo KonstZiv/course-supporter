@@ -28,3 +28,12 @@ position.slide: slide {number}
 position.paragraph: paragraf {number}
 position.file: file {name}
 review.title: Ulasan
+section.test: Pertanyaan tes
+test.question: Pertanyaan {number}
+test.correct: Benar
+test.incorrect: Salah
+test.correct_answer: Jawaban yang benar
+test.score: 'Skor: {number}%'
+test.try_again: Coba ikuti tes lagi.
+test.no_explanation: Tidak ada penjelasan untuk pertanyaan ini.
+test.explanations_in_course_language: Penjelasan diberikan dalam bahasa kursus.

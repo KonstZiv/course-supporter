@@ -70,8 +70,14 @@ class TaskReferenceRepository:
         source_content_hash: str,
         author_explanations: dict[str, str] | None = None,
         carried_over: bool = False,
+        pass_threshold: int | None = None,
     ) -> TaskReferenceOverride:
         """Replace the author's layer WHOLE — the last replacement wins.
+
+        WHOLE includes the pass mark: a replacement that does not name one
+        clears it, exactly as it clears author explanations it does not repeat.
+        A caller that moves an existing layer rather than replacing it — the
+        carry-over onto a new task version — must pass the current value on.
 
         One statement, not read-then-write: two replacements can arrive
         together, and only the database decides that race the same way every
@@ -101,6 +107,7 @@ class TaskReferenceRepository:
                 author_explanations=author_explanations,
                 source_content_hash=source_content_hash,
                 carried_over=carried_over,
+                pass_threshold=pass_threshold,
             )
             .on_conflict_do_update(
                 index_elements=list(_OVERRIDE_UNIQUE),
@@ -109,6 +116,7 @@ class TaskReferenceRepository:
                     "author_explanations": author_explanations,
                     "source_content_hash": source_content_hash,
                     "carried_over": carried_over,
+                    "pass_threshold": pass_threshold,
                     "updated_at": func.now(),
                 },
             )
@@ -278,13 +286,25 @@ class TaskReferenceRepository:
         raise RuntimeError(msg)
 
     async def mark_ready(
-        self, reference_id: uuid.UUID, explanations: dict[str, str]
+        self,
+        reference_id: uuid.UUID,
+        explanations: dict[str, str],
+        *,
+        doubts: dict[str, bool] | None = None,
+        prompt_ref: str | None = None,
     ) -> TaskReference | None:
-        """Store the generated explanations and open the version for reading."""
+        """Store the generated explanations and open the version for reading.
+
+        ``doubts`` and ``prompt_ref`` arrive with prompt v2 (task 07); a caller
+        that has neither leaves both NULL, which readers take as "no doubt,
+        prompt unknown" — the state of every version written before them.
+        """
         reference = await self.get_by_id(reference_id)
         if reference is None:
             return None
         reference.explanations = explanations
+        reference.doubts = doubts
+        reference.prompt_ref = prompt_ref
         reference.state = ReferenceState.READY.value
         reference.failure_reason = None
         await self._session.flush()

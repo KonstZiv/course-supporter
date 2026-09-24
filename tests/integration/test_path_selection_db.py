@@ -294,22 +294,31 @@ class TestChoosePath:
     ) -> None:
         """Without an explicit config the choice reads what the boot validated.
 
-        Every type in the shipped file is on today's Mentor, so every type
-        answers ``None`` — which is also the production fact this task ships
-        with (acceptance criterion 13).
+        Since task 07 the shipped file puts ``test`` on the new path, and a
+        first submission of it walks ``test/first`` with no stage; the other
+        three types are on today's Mentor and answer ``None``. Before task 07
+        every type answered ``None`` — the production fact of task 03's
+        acceptance criterion 13.
         """
         student = await StudentRepository(db_session).create(
             tenant_id=seed_tenant.id, external_id="ext-shipped-switch"
         )
 
-        for task_type in AssignmentType:
-            choice = await choose_path(
+        chosen = {
+            task_type: await choose_path(
                 db_session,
                 task_type=task_type,
                 student_id=student.id,
                 authored_document_id=seed_material_entry.id,
             )
-            assert choice is None, f"{task_type.value} is not on today's Mentor"
+            for task_type in AssignmentType
+        }
+
+        test_choice = chosen.pop(AssignmentType.TEST)
+        assert test_choice is not None, "test is on the new path"
+        assert test_choice.key == PathKey(AssignmentType.TEST, SubmissionState.FIRST)
+        assert test_choice.stages == ()
+        assert chosen == dict.fromkeys(chosen), "the other three are on today's Mentor"
 
     async def test_first_submission_walks_the_first_path(
         self,

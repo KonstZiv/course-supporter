@@ -1,4 +1,4 @@
-"""The work that writes a test key's explanations (mentor-rebuild task 06).
+"""The work that writes a test key's explanations (mentor-rebuild tasks 06, 07).
 
 Runs once per (task version, answers, language), outside any student
 submission — ``TASK.md`` invariant 3. The service decides that a version is
@@ -17,10 +17,14 @@ Order of the body, and why each step is where it is:
 3. **Ask the funds port**, before the first paid call, with this stage's
    ceiling. A refusal is an answer: the version fails with it as its reason,
    and the author reads why nothing was written.
-4. **Generate.** The agent's validator is what guarantees one non-empty
-   explanation per question. ANY failure here — the ladder running out, or a
-   defect nobody foresaw — fails the version with a reason and re-raises, so
-   the author never sees "still writing" for work that has already stopped.
+4. **Generate**, from the test's source text — the text its questions are
+   parsed from, not the stitched one (task 07, decision 25). The agent's
+   validator is what guarantees one non-empty explanation and one doubt flag
+   per question. ANY failure here — the ladder running out, or a defect nobody
+   foresaw — fails the version with a reason and re-raises, so the author
+   never sees "still writing" for work that has already stopped. A success
+   stores the explanations, the doubted questions and the prompt that wrote
+   them — the prompt read from this job's register rows, like the cost below.
 5. **Account the actual cost** — after success AND after a failure that already
    spent something, because a failed generation is not a free one. The number
    is summed from the register rows of THIS job, so it is what was really
@@ -135,7 +139,7 @@ async def arq_explain_key(
         # (4) The only paid step.
         task_text = await _task_text(session, document.id)
         try:
-            explanations = await KeyExplainerAgent(stage_router).explain(
+            written = await KeyExplainerAgent(stage_router).explain(
                 task_text=task_text,
                 answers=override.answers,
                 language=display_name(version.language) if version.language else None,
@@ -166,7 +170,15 @@ async def arq_explain_key(
             )
             raise
 
-        await repo.mark_ready(version.id, explanations)
+        prompt_ref = await _prompt_of(session, uuid.UUID(job_id))
+        if prompt_ref is None:
+            log.warning("key_explanation.prompt_unrecorded", version=version.version)
+        await repo.mark_ready(
+            version.id,
+            written.explanations,
+            doubts=written.doubts,
+            prompt_ref=prompt_ref,
+        )
         await session.commit()
 
         spent = await _spent_on(session, uuid.UUID(job_id))
@@ -174,12 +186,14 @@ async def arq_explain_key(
         log.info(
             "key_explanation.ready",
             version=version.version,
-            questions=len(explanations),
+            questions=len(written.explanations),
+            doubted=len(written.doubts),
             spent_usd=spent,
         )
         return {
             "state": "ready",
-            "questions": len(explanations),
+            "questions": len(written.explanations),
+            "doubted": len(written.doubts),
             "cost_usd": spent,
         }
 
@@ -212,11 +226,38 @@ async def _tenant_of(session: AsyncSession, document: AuthoredDocument) -> uuid.
 
 
 async def _task_text(session: AsyncSession, document_id: uuid.UUID) -> str:
-    """The test as the mentor pipeline assembles it."""
-    from course_supporter.homework.task_context import load_task_context
+    """The test's source text: its segments joined without a separator.
 
-    _, _, task_text = await load_task_context(session, document_id)
-    return task_text
+    The text its questions are parsed from and the author's key is checked
+    against (task 07, decision 25). The text the mentor pipeline stitches puts a
+    blank line at every segment boundary, and a boundary can fall inside a
+    question — a model reading it would be reading a different test.
+    """
+    from course_supporter.homework.task_context import load_task_source_text
+
+    return await load_task_source_text(session, document_id)
+
+
+async def _prompt_of(session: AsyncSession, job_id: uuid.UUID) -> str | None:
+    """The prompt that wrote the explanations, as the register recorded it.
+
+    The router writes the stage's ``prompt_ref`` on every call it makes, so the
+    register names the prompt that actually answered this job — not whichever
+    one the ladder names by the time anyone reads it. ``None`` when the register
+    has no such row: its writes are best-effort, and a lost row loses this too.
+    """
+    stmt = (
+        select(ExternalServiceCall.prompt_ref)
+        .where(
+            ExternalServiceCall.job_id == job_id,
+            ExternalServiceCall.action == STAGE_NAME,
+            ExternalServiceCall.success.is_(True),
+        )
+        .order_by(ExternalServiceCall.created_at.desc())
+        .limit(1)
+    )
+    prompt_ref: str | None = (await session.execute(stmt)).scalar_one_or_none()
+    return prompt_ref
 
 
 async def _spent_on(session: AsyncSession, job_id: uuid.UUID) -> float:

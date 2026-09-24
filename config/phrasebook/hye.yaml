@@ -28,3 +28,12 @@ position.slide: սլայդ {number}
 position.paragraph: պարբերություն {number}
 position.file: ֆայլ {name}
 review.title: Գրախոսություն
+section.test: Թեստի հարցեր
+test.question: Հարց {number}
+test.correct: Ճիշտ է
+test.incorrect: Սխալ է
+test.correct_answer: Ճիշտ պատասխան
+test.score: Գնահատական՝ {number} %
+test.try_again: Փորձեք նորից անցնել թեստը։
+test.no_explanation: Այս հարցի համար բացատրություն չկա։
+test.explanations_in_course_language: Բացատրությունը տրված է դասընթացի լեզվով։

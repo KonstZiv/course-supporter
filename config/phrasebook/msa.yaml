@@ -28,3 +28,12 @@ position.slide: slaid {number}
 position.paragraph: perenggan {number}
 position.file: fail {name}
 review.title: Ulasan
+section.test: Soalan Ujian
+test.question: Soalan {number}
+test.correct: Betul
+test.incorrect: Salah
+test.correct_answer: Jawapan yang betul
+test.score: 'Skor: {number} %'
+test.try_again: Sila cuba ujian ini sekali lagi.
+test.no_explanation: Tiada penjelasan untuk soalan ini.
+test.explanations_in_course_language: Penjelasan diberikan dalam bahasa kursus.

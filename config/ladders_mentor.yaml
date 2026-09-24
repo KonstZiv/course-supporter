@@ -182,8 +182,14 @@ stages:
   # whose rationale (hotfix 1, ratified 2026-09-14) is that deepseek_thinking
   # counts reasoning inside max_output_tokens and 8192 left nothing for the
   # answer. The first live run of this stage is the calibration data.
+  #
+  # Prompt v2 (mentor-rebuild task 07): a doubt flag per question beside each
+  # explanation, and the reason told through the option's content, not its
+  # label. v1 stays in the tree: the versions it wrote are not regenerated (the
+  # prompt is not part of a version's key, task 07 decision 3), and the
+  # register rows of their jobs name it.
   key_explanation:
-    prompt_ref: "prompts/key_explanation/v1.md"
+    prompt_ref: "prompts/key_explanation/v2.md"
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:

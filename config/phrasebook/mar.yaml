@@ -28,3 +28,12 @@ position.slide: स्लाइड {number}
 position.paragraph: परिच्छेद {number}
 position.file: फाईल {name}
 review.title: पुनरावलोकन
+section.test: चाचणी प्रश्न
+test.question: प्रश्न {number}
+test.correct: बरोबर
+test.incorrect: चूक
+test.correct_answer: बरोबर उत्तर
+test.score: 'गुण: {number} %'
+test.try_again: पुन्हा चाचणी देण्याचा प्रयत्न करा.
+test.no_explanation: या प्रश्नासाठी कोणतेही स्पष्टीकरण नाही.
+test.explanations_in_course_language: स्पष्टीकरण कोर्सच्या भाषेत दिले आहे.

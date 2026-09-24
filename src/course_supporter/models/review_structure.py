@@ -6,19 +6,22 @@ Purpose:
     review be written in sixty languages, be re-read years later, and be
     checked by a test instead of by reading it.
 
-    This module defines the shape. It does not fill it: the stages of tasks
-    08-13 do that, and today every stored review is pre-rebuild, so the field
-    is empty on every row in production.
+    This module defines the shape. It does not fill it: a test's result
+    builder (task 07) and the stages of tasks 08-13 do that, and today every
+    stored review is pre-rebuild, so the field is empty on every row in
+    production.
 
 Interface:
     :class:`ReviewStructureV1` — the whole review. Subclass of
     :class:`~course_supporter.models.review_schema.VersionedReview`, so it
     carries that one required ``schema_version`` and declares no version key of
     its own: one review, one version, named in one place.
-    :data:`SECTION_ORDER` — the nine sections in the order §2.13 ratified. The
+    :data:`SECTION_ORDER` — the ten sections in the order §2.13 ratified. The
     assembler walks this; the order of fields below is only for reading.
     :class:`Remark`, :class:`Reply`, :class:`Verdict`, :class:`Verification`,
     :class:`Position`, :class:`Reference` — the parts.
+    :class:`TestSection`, :class:`TestQuestionResult`, :class:`TestOption` —
+    a test's result, question by question (task 07).
 
 Two rules the model enforces rather than documents:
 
@@ -57,6 +60,7 @@ from course_supporter.models.review_schema import VersionedReview
 
 SECTION_ORDER: Final[tuple[str, ...]] = (
     "verdict",
+    "test",
     "fixed",
     "new_remarks",
     "open",
@@ -66,13 +70,14 @@ SECTION_ORDER: Final[tuple[str, ...]] = (
     "verification",
     "progress",
 )
-"""The nine sections, in the order ratified in ``03-BINDING.md`` §2.13.
+"""The ten sections, in the order ratified in ``03-BINDING.md`` §2.13.
 
 The order is part of the contract, not a detail of rendering: a student reads
 the verdict first and the word about progress last, in every language. It lives
 here rather than in the assembler so that "what a review is" and "in what order
 it is read" stay in one file, and so a reordering shows up as a change to the
-contract.
+contract. The test's questions come second, right under the verdict and its
+score (task 07, decision 13): the order of §2.13 holds for a test too.
 """
 
 PositionKind = Literal["video", "slide", "paragraph", "file"]
@@ -171,16 +176,26 @@ class Reply(BaseModel):
 
 
 class Verdict(BaseModel):
-    """Passed or not, and why -- never one without the other.
+    """Passed or not, and why.
 
-    ``why`` is required on both outcomes. A pass with no reason teaches as
-    little as a failure with none.
+    ``why`` is given on both outcomes: a pass with no reason teaches as little
+    as a failure with none. A test's verdict is the one exception, because its
+    reason is its score, and the score is written by the assembler from the
+    test section (task 07, decision 20). So the rule is checked where both are
+    visible — on :class:`ReviewStructureV1` — not here.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     passed: bool = Field(description="Whether the work is accepted.")
-    why: str = Field(min_length=1, description="The reason, in the student's language.")
+    why: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The reason, in the student's language. Left out only by a test's "
+            "verdict, whose reason is the score."
+        ),
+    )
 
 
 class Verification(BaseModel):
@@ -213,6 +228,91 @@ class Verification(BaseModel):
         return self
 
 
+class TestOption(BaseModel):
+    """One option of a test question, as the author wrote it: label and text.
+
+    The label is the author's own — the letter as the test prints it, capital
+    or small — not the canonical form the answers are checked in: the student
+    recognises the option they saw.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, description="The label, as written in the test.")
+    text: str = Field(
+        description="The option's text; empty when the label is all it says."
+    )
+
+
+class TestQuestionResult(BaseModel):
+    """One question of a test: right or wrong, and for a wrong one, what is right.
+
+    A right answer gets its verdict and nothing else. A wrong one gets the
+    correct option, label and text, and the explanation — or ``None`` when
+    there is none to show: none written yet, none in any language the student
+    can be given, or one the model doubted (``03-BINDING.md`` 4.4, points 5, 6
+    and 8).
+
+    >>> TestQuestionResult(number="1", correct=True).correct_answer is None
+    True
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    number: str = Field(min_length=1, description="The question's number, as asked.")
+    correct: bool = Field(description="Whether the student's answer is right.")
+    correct_answer: list[TestOption] | None = Field(
+        default=None,
+        description="The correct option or options, for a wrong answer only.",
+    )
+    explanation: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Why the correct answer is correct, for a wrong answer only.",
+    )
+
+    @model_validator(mode="after")
+    def _a_verdict_and_what_it_needs(self) -> Self:
+        if self.correct and (
+            self.correct_answer is not None or self.explanation is not None
+        ):
+            msg = "A question answered right gets its verdict and nothing else"
+            raise ValueError(msg)
+        if not self.correct and not self.correct_answer:
+            msg = "A question answered wrong shows the correct answer"
+            raise ValueError(msg)
+        return self
+
+
+class TestSection(BaseModel):
+    """A test's result: the score, and every question in the order it was asked.
+
+    The score is the share of questions answered right, in whole percent,
+    rounded down (``homework/test_scoring.py``). It is printed by the assembler
+    — under the verdict when there is one, as the first line of this section
+    when there is not — which is why the verdict of a test needs no ``why``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: int = Field(ge=0, le=100, description="Whole percent of questions right.")
+    questions: list[TestQuestionResult] = Field(
+        min_length=1, description="Every question of the test, in order."
+    )
+    explanations_in_course_language: bool = Field(
+        default=False,
+        description=(
+            "True when an explanation shown here is in the course language "
+            "rather than the review's, which the review then says."
+        ),
+    )
+    retry_offer: bool = Field(
+        default=False,
+        description="True when the test is not passed: the review ends with an "
+        "offer to take it again.",
+    )
+
+
 class ReviewStructureV1(VersionedReview):
     """A whole review, in the order it will be read.
 
@@ -240,6 +340,9 @@ class ReviewStructureV1(VersionedReview):
     # Declared in SECTION_ORDER's order for reading. The assembler walks
     # SECTION_ORDER, not these fields -- a field moved here changes nothing.
     verdict: Verdict | None = Field(default=None, description="Passed or not, and why.")
+    test: TestSection | None = Field(
+        default=None, description="A test's score and its questions, one by one."
+    )
     fixed: list[Remark] = Field(
         default_factory=list, description="Remarks from before that are now dealt with."
     )
@@ -271,6 +374,23 @@ class ReviewStructureV1(VersionedReview):
         if not _LANGUAGE_CODE.match(self.language):
             msg = (
                 f"language must be a three-letter ISO 639-3 code, got {self.language!r}"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _a_verdict_says_why(self) -> Self:
+        """A verdict gives its reason, unless the reason is a test's score.
+
+        Task 07, decision 20: the score is the reason a test is passed or not,
+        and the text of a review is born only in the assembler (invariant 6),
+        which prints the score from the test section. So a verdict may leave
+        ``why`` out exactly when the review carries a test section.
+        """
+        if self.verdict is not None and self.verdict.why is None and self.test is None:
+            msg = (
+                "A verdict says why it was given; only a test's verdict leaves "
+                "that to its score"
             )
             raise ValueError(msg)
         return self

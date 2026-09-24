@@ -28,3 +28,12 @@ position.slide: слайд {number}
 position.paragraph: абзац {number}
 position.file: файл {name}
 review.title: Ревю
+section.test: Въпроси от теста
+test.question: Въпрос {number}
+test.correct: Правилно
+test.incorrect: Неправилно
+test.correct_answer: Правилен отговор
+test.score: 'Резултат: {number} %'
+test.try_again: Опитайте да решите теста отново.
+test.no_explanation: Няма обяснение за този въпрос.
+test.explanations_in_course_language: Обяснението е на езика на курса.

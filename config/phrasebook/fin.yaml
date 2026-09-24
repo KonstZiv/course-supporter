@@ -28,3 +28,12 @@ position.slide: dia {number}
 position.paragraph: kappale {number}
 position.file: tiedosto {name}
 review.title: Arviointi
+section.test: Testin kysymykset
+test.question: Kysymys {number}
+test.correct: Oikein
+test.incorrect: Väärin
+test.correct_answer: Oikea vastaus
+test.score: 'Pisteet: {number} %'
+test.try_again: Yritä testiä uudelleen.
+test.no_explanation: Tähän kysymykseen ei ole selitystä.
+test.explanations_in_course_language: Selitykset ovat kurssin kielellä.

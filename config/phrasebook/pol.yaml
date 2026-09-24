@@ -28,3 +28,12 @@ position.slide: slajd {number}
 position.paragraph: akapit {number}
 position.file: plik {name}
 review.title: Recenzja
+section.test: Pytania testowe
+test.question: Pytanie {number}
+test.correct: Prawidłowo
+test.incorrect: Nieprawidłowo
+test.correct_answer: Prawidłowa odpowiedź
+test.score: 'Wynik: {number}%'
+test.try_again: Proszę spróbować rozwiązać test jeszcze raz.
+test.no_explanation: Brak wyjaśnienia do tego pytania.
+test.explanations_in_course_language: Wyjaśnienia podano w języku kursu.

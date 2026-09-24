@@ -28,3 +28,12 @@ position.slide: слајд {number}
 position.paragraph: пасус {number}
 position.file: датотека {name}
 review.title: Рецензија
+section.test: Прашања од тестот
+test.question: Прашање {number}
+test.correct: Точно
+test.incorrect: Неточно
+test.correct_answer: Точен одговор
+test.score: 'Резултат: {number} %'
+test.try_again: Обидете се да го решите тестот повторно.
+test.no_explanation: Нема објаснување за ова прашање.
+test.explanations_in_course_language: Објаснувањето е дадено на јазикот на курсот.

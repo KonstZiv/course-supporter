@@ -28,3 +28,12 @@ position.slide: اسلاید {number}
 position.paragraph: پاراگراف {number}
 position.file: فایل {name}
 review.title: بازبینی
+section.test: سوالات آزمون
+test.question: سوال {number}
+test.correct: صحیح
+test.incorrect: غلط
+test.correct_answer: پاسخ صحیح
+test.score: 'امتیاز: {number}٪'
+test.try_again: دوباره در آزمون شرکت کنید.
+test.no_explanation: این سوال توضیحی ندارد.
+test.explanations_in_course_language: توضیحات به زبان دوره ارائه شده است.

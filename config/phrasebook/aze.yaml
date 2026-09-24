@@ -28,3 +28,12 @@ position.slide: slayd {number}
 position.paragraph: abzas {number}
 position.file: fayl {name}
 review.title: Rəy
+section.test: Test sualları
+test.question: Sual {number}
+test.correct: Düzgün
+test.incorrect: Səhv
+test.correct_answer: Düzgün cavab
+test.score: 'Bal: {number} %'
+test.try_again: Testi bir daha sınayın.
+test.no_explanation: Bu sual üçün izah yoxdur.
+test.explanations_in_course_language: İzah kursun dilində verilib.

@@ -28,3 +28,12 @@ position.slide: ସ୍ଲାଇଡ୍ {number}
 position.paragraph: ଅନୁଚ୍ଛେଦ {number}
 position.file: ଫାଇଲ୍ {name}
 review.title: ସମୀକ୍ଷା
+section.test: ପରୀକ୍ଷା ପ୍ରଶ୍ନ
+test.question: ପ୍ରଶ୍ନ {number}
+test.correct: ଠିକ୍
+test.incorrect: ଭୁଲ
+test.correct_answer: ସଠିକ ଉତ୍ତର
+test.score: 'ସ୍କୋର: {number} %'
+test.try_again: ପୁଣିଥରେ ପରୀକ୍ଷା ଦେବାକୁ ଚେଷ୍ଟା କରନ୍ତୁ।
+test.no_explanation: ଏହି ପ୍ରଶ୍ନ ପାଇଁ କୌଣସି ବ୍ୟାଖ୍ୟା ନାହିଁ।
+test.explanations_in_course_language: ବ୍ୟାଖ୍ୟା ପାଠ୍ୟକ୍ରମର ଭାଷାରେ ଦିଆଯାଇଛି।

@@ -28,3 +28,12 @@ position.slide: ஸ்லைடு {number}
 position.paragraph: பத்தி {number}
 position.file: கோப்பு {name}
 review.title: மதிப்பாய்வு
+section.test: தேர்வு கேள்விகள்
+test.question: கேள்வி {number}
+test.correct: சரி
+test.incorrect: தவறு
+test.correct_answer: சரியான பதில்
+test.score: 'மதிப்பெண்: {number} %'
+test.try_again: தேர்வை மீண்டும் முயற்சிக்கவும்.
+test.no_explanation: இந்தக் கேள்விக்கு விளக்கம் இல்லை.
+test.explanations_in_course_language: விளக்கம் பாடத்தின் மொழியில் கொடுக்கப்பட்டுள்ளது.

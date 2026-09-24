@@ -28,3 +28,12 @@ position.slide: diapozitiv {number}
 position.paragraph: odstavek {number}
 position.file: datoteka {name}
 review.title: Recenzija
+section.test: Vprašanja na testu
+test.question: Vprašanje {number}
+test.correct: Pravilno
+test.incorrect: Napačno
+test.correct_answer: Pravilen odgovor
+test.score: 'Rezultat: {number} %'
+test.try_again: Poskusite ponovno rešiti test.
+test.no_explanation: Za to vprašanje ni pojasnila.
+test.explanations_in_course_language: Pojasnilo je v jeziku tečaja.

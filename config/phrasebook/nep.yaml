@@ -28,3 +28,12 @@ position.slide: स्लाइड {number}
 position.paragraph: अनुच्छेद {number}
 position.file: फाइल {name}
 review.title: समीक्षा
+section.test: परीक्षा प्रश्न
+test.question: प्रश्न {number}
+test.correct: सही
+test.incorrect: गलत
+test.correct_answer: सही उत्तर
+test.score: 'अङ्क: {number} %'
+test.try_again: फेरि परीक्षा दिन प्रयास गर्नुहोस्।
+test.no_explanation: यस प्रश्नको लागि कुनै स्पष्टीकरण छैन।
+test.explanations_in_course_language: स्पष्टीकरण पाठ्यक्रमको भाषामा दिइएको छ।

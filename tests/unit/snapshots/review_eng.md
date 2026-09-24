@@ -2,7 +2,29 @@
 
 ## Failed
 
+Score: 50%
+
 Two of the four requirements are met.
+
+## Test questions
+
+The explanation is provided in the course language.
+
+**Question 1:** Correct
+
+**Question 2:** Incorrect
+
+- **Correct answer:** б) The text the model sees in one call
+- The window is what the model reads at once.
+
+**Question 3:** Incorrect
+
+- **Correct answer:** а) Yes; в) Only with a key
+- No explanation for this question.
+
+**Question 4:** Correct
+
+Try taking the test again.
 
 ## Fixed
 

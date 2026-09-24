@@ -28,3 +28,12 @@ position.slide: Slide {number}
 position.paragraph: Talata {number}
 position.file: File {name}
 review.title: Pagsusuri
+section.test: Mga tanong sa pagsusulit
+test.question: Tanong {number}
+test.correct: Tama
+test.incorrect: Mali
+test.correct_answer: Tamang sagot
+test.score: 'Puntos: {number} %'
+test.try_again: Subukang kunin muli ang pagsusulit.
+test.no_explanation: Walang paliwanag para sa tanong na ito.
+test.explanations_in_course_language: Ang paliwanag ay nasa wika ng kurso.

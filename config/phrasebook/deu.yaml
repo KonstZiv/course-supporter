@@ -28,3 +28,12 @@ position.slide: Folie {number}
 position.paragraph: Absatz {number}
 position.file: Datei {name}
 review.title: Rezension
+section.test: Testfragen
+test.question: Frage {number}
+test.correct: Richtig
+test.incorrect: Falsch
+test.correct_answer: Richtige Antwort
+test.score: 'Ergebnis: {number} %'
+test.try_again: Versuchen Sie den Test erneut.
+test.no_explanation: Für diese Frage gibt es keine Erklärung.
+test.explanations_in_course_language: Die Erklärung ist in der Kurssprache.

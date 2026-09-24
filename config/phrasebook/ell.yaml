@@ -28,3 +28,12 @@ position.slide: διαφάνεια {number}
 position.paragraph: παράγραφος {number}
 position.file: αρχείο {name}
 review.title: Αξιολόγηση
+section.test: Ερωτήσεις τεστ
+test.question: Ερώτηση {number}
+test.correct: Σωστό
+test.incorrect: Λάθος
+test.correct_answer: Σωστή απάντηση
+test.score: 'Βαθμολογία: {number} %'
+test.try_again: Προσπαθήστε ξανά.
+test.no_explanation: Δεν υπάρχει εξήγηση για αυτήν την ερώτηση.
+test.explanations_in_course_language: Οι εξηγήσεις παρέχονται στη γλώσσα του μαθήματος.

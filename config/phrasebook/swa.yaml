@@ -28,3 +28,12 @@ position.slide: slaidi {number}
 position.paragraph: aya {number}
 position.file: faili {name}
 review.title: Mapitio
+section.test: Maswali ya mtihani
+test.question: Swali {number}
+test.correct: Sahihi
+test.incorrect: Si sahihi
+test.correct_answer: Jibu sahihi
+test.score: 'Alama: {number} %'
+test.try_again: Jaribu kufanya mtihani tena.
+test.no_explanation: Hakuna maelezo kwa swali hili.
+test.explanations_in_course_language: Maelezo yametolewa kwa lugha ya kozi.

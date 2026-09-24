@@ -28,3 +28,12 @@ position.slide: glæra {number}
 position.paragraph: málsgrein {number}
 position.file: skrá {name}
 review.title: Yfirferð
+section.test: Prófspurningar
+test.question: Spurning {number}
+test.correct: Rétt
+test.incorrect: Rangt
+test.correct_answer: Rétt svar
+test.score: 'Einkunn: {number} %'
+test.try_again: Reyndu prófið aftur.
+test.no_explanation: Engin útskýring.
+test.explanations_in_course_language: Útskýringar eru á tungumáli námskeiðsins.

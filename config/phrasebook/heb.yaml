@@ -28,3 +28,12 @@ position.slide: שקופית {number}
 position.paragraph: פסקה {number}
 position.file: קובץ {name}
 review.title: סקירה
+section.test: שאלות המבחן
+test.question: שאלה {number}
+test.correct: נכון
+test.incorrect: לא נכון
+test.correct_answer: תשובה נכונה
+test.score: 'ציון: {number}%'
+test.try_again: נסו לענות על המבחן שוב.
+test.no_explanation: אין הסבר לשאלה זו.
+test.explanations_in_course_language: ההסבר מוצג בשפת הקורס.

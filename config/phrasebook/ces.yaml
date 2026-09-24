@@ -28,3 +28,12 @@ position.slide: snímek {number}
 position.paragraph: odstavec {number}
 position.file: soubor {name}
 review.title: Recenze
+section.test: Testové otázky
+test.question: Otázka {number}
+test.correct: Správně
+test.incorrect: Nesprávně
+test.correct_answer: Správná odpověď
+test.score: 'Skóre: {number} %'
+test.try_again: Zkuste test absolvovat znovu.
+test.no_explanation: K této otázce není žádné vysvětlení.
+test.explanations_in_course_language: Vysvětlení je uvedeno v jazyce kurzu.

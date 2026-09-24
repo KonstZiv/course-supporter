@@ -28,3 +28,12 @@ position.slide: slajd {number}
 position.paragraph: paragrafu {number}
 position.file: fajl {name}
 review.title: Reviżjoni
+section.test: Mistoqsijiet tat-test
+test.question: Mistoqsija {number}
+test.correct: Korrett
+test.incorrect: Skorrett
+test.correct_answer: Risposta korretta
+test.score: 'Punteġġ: {number} %'
+test.try_again: Erġa' pprova agħmel it-test.
+test.no_explanation: M'hemmx spjegazzjoni għal din il-mistoqsija.
+test.explanations_in_course_language: L-ispjegazzjoni tingħata fil-lingwa tal-kors.

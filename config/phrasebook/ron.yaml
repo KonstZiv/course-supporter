@@ -28,3 +28,12 @@ position.slide: slide {number}
 position.paragraph: paragraful {number}
 position.file: fișierul {name}
 review.title: Recenzie
+section.test: Întrebări de test
+test.question: Întrebarea {number}
+test.correct: Corect
+test.incorrect: Incorect
+test.correct_answer: Răspunsul corect
+test.score: 'Scor: {number} %'
+test.try_again: Încercați să refaceți testul.
+test.no_explanation: Nu există nicio explicație pentru această întrebare.
+test.explanations_in_course_language: Explicațiile sunt oferite în limba cursului.

@@ -28,3 +28,12 @@ position.slide: 幻灯片 {number}
 position.paragraph: 第 {number} 段
 position.file: 文件 {name}
 review.title: 评审
+section.test: 测验问题
+test.question: 第 {number} 题
+test.correct: 正确
+test.incorrect: 错误
+test.correct_answer: 正确答案
+test.score: 分数：{number} %
+test.try_again: 请再试一次。
+test.no_explanation: 本题没有解释。
+test.explanations_in_course_language: 解释以课程语言提供。

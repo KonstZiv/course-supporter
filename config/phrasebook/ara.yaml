@@ -28,3 +28,12 @@ position.slide: شريحة {number}
 position.paragraph: فقرة {number}
 position.file: ملف {name}
 review.title: مراجعة
+section.test: أسئلة الاختبار
+test.question: السؤال {number}
+test.correct: صحيح
+test.incorrect: غير صحيح
+test.correct_answer: الإجابة الصحيحة
+test.score: 'الدرجة: {number}%'
+test.try_again: حاول إجراء الاختبار مرة أخرى.
+test.no_explanation: لا يوجد شرح لهذا السؤال.
+test.explanations_in_course_language: الشرح مقدم بلغة الدورة.

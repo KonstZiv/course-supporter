@@ -28,3 +28,12 @@ position.slide: слайд {number}
 position.paragraph: абзац {number}
 position.file: файл {name}
 review.title: Пікір
+section.test: Тест сұрақтары
+test.question: Сұрақ {number}
+test.correct: Дұрыс
+test.incorrect: Бұрыс
+test.correct_answer: Дұрыс жауап
+test.score: 'Ұпай: {number} %'
+test.try_again: Тестті қайта тапсырып көріңіз.
+test.no_explanation: Бұл сұраққа түсініктеме жоқ.
+test.explanations_in_course_language: Түсініктеме курс тілінде берілген.

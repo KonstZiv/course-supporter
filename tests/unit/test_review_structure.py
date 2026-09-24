@@ -27,6 +27,19 @@ from course_supporter.models.review_structure import (
 )
 
 _A_REMARK = Remark(what="Wrong.", why="It matters.", todo="Fix it.")
+# Reached through the module: a class named Test* imported into a test module
+# is something pytest tries to collect.
+_AN_OPTION = review_structure.TestOption(label="b", text="The right one.")
+_A_TEST = review_structure.TestSection(
+    score=50,
+    questions=[
+        review_structure.TestQuestionResult(number="1", correct=True),
+        review_structure.TestQuestionResult(
+            number="2", correct=False, correct_answer=[_AN_OPTION]
+        ),
+    ],
+    retry_offer=True,
+)
 
 
 def _review(**sections: object) -> ReviewStructureV1:
@@ -93,11 +106,13 @@ class TestLanguage:
 
 
 class TestSections:
-    def test_the_nine_sections_are_the_ratified_order(self) -> None:
-        """§2.13: verdict, fixed, new, open, broken, voice, replies, checks,
-        progress — in that order and no other."""
+    def test_the_ten_sections_are_the_ratified_order(self) -> None:
+        """§2.13: verdict, test, fixed, new, open, broken, voice, replies,
+        checks, progress — in that order and no other. The test's questions
+        come right under the verdict and its score (task 07, decision 13)."""
         assert SECTION_ORDER == (
             "verdict",
+            "test",
             "fixed",
             "new_remarks",
             "open",
@@ -123,9 +138,10 @@ class TestSections:
 
     @pytest.mark.parametrize("section", SECTION_ORDER)
     def test_one_section_alone_is_a_valid_review(self, section: str) -> None:
-        """Each of the nine, on its own. All of them are optional."""
+        """Each of the ten, on its own. All of them are optional."""
         only: dict[str, object] = {
             "verdict": Verdict(passed=True, why="Good work."),
+            "test": _A_TEST,
             "fixed": [_A_REMARK],
             "new_remarks": [_A_REMARK],
             "open": [_A_REMARK],
@@ -208,11 +224,64 @@ class TestParts:
         with pytest.raises(ValidationError, match="said"):
             Reply(kind="question", answer="Because.")  # type: ignore[call-arg]
 
-    def test_a_verdict_always_says_why(self) -> None:
+    def test_a_verdict_says_why_unless_a_test_score_does(self) -> None:
         """On both outcomes: a pass with no reason teaches as little as a
-        failure with none."""
-        with pytest.raises(ValidationError, match="why"):
-            Verdict(passed=True)  # type: ignore[call-arg]
+        failure with none. The rule sits on the review since task 07: a test's
+        verdict leaves its reason to the score (decision 20), which only the
+        review, holding both, can tell apart."""
+        with pytest.raises(ValidationError, match="says why"):
+            _review(verdict=Verdict(passed=True))
+
+
+class TestTheTestSection:
+    """A test's result, question by question (task 07, decisions 13 and 20)."""
+
+    def test_a_tests_verdict_may_leave_its_reason_to_the_score(self) -> None:
+        review = _review(verdict=Verdict(passed=False), test=_A_TEST)
+
+        assert review.verdict is not None
+        assert review.verdict.why is None
+
+    def test_a_right_answer_gets_its_verdict_and_nothing_else(self) -> None:
+        """03-BINDING 4.4, point 5: nothing to explain on a right answer."""
+        with pytest.raises(ValidationError, match="nothing else"):
+            review_structure.TestQuestionResult(
+                number="1", correct=True, correct_answer=[_AN_OPTION]
+            )
+        with pytest.raises(ValidationError, match="nothing else"):
+            review_structure.TestQuestionResult(
+                number="1", correct=True, explanation="Because."
+            )
+
+    def test_a_wrong_answer_shows_the_correct_one(self) -> None:
+        with pytest.raises(ValidationError, match="shows the correct answer"):
+            review_structure.TestQuestionResult(number="2", correct=False)
+        with pytest.raises(ValidationError, match="shows the correct answer"):
+            review_structure.TestQuestionResult(
+                number="2", correct=False, correct_answer=[]
+            )
+
+    def test_a_wrong_answer_may_have_no_explanation(self) -> None:
+        """4.4, point 8: none written yet, or one the model doubted."""
+        question = review_structure.TestQuestionResult(
+            number="2", correct=False, correct_answer=[_AN_OPTION]
+        )
+
+        assert question.explanation is None
+
+    @pytest.mark.parametrize("score", [-1, 101])
+    def test_the_score_is_a_whole_percent(self, score: int) -> None:
+        with pytest.raises(ValidationError, match="score"):
+            review_structure.TestSection(score=score, questions=_A_TEST.questions)
+
+    def test_a_test_section_has_questions(self) -> None:
+        with pytest.raises(ValidationError, match="questions"):
+            review_structure.TestSection(score=0, questions=[])
+
+    def test_it_survives_a_round_trip_through_storage(self) -> None:
+        original = _review(verdict=Verdict(passed=False), test=_A_TEST)
+
+        assert ReviewStructureV1.model_validate(original.model_dump()) == original
 
 
 class TestShape:

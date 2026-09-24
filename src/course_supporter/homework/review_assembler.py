@@ -56,6 +56,8 @@ from course_supporter.models.review_structure import (
     Remark,
     Reply,
     ReviewStructureV1,
+    TestOption,
+    TestSection,
     Verification,
 )
 from course_supporter.phrasebook import phrases_for
@@ -201,6 +203,65 @@ def _verification_section(
     return lines
 
 
+def _score_line(test: TestSection, phrases: Mapping[str, str], language: str) -> str:
+    """The test's score, as the phrase with the number put in."""
+    return _fill(_phrase(phrases, "test.score", language), str(test.score))
+
+
+def _option(option: TestOption) -> str:
+    """An option as the student saw it in the test: its label, then its text."""
+    return f"{option.label}) {option.text}".rstrip()
+
+
+def _test_section(
+    test: TestSection,
+    phrases: Mapping[str, str],
+    language: str,
+    *,
+    with_score: bool,
+) -> list[str]:
+    """The questions of a test, one by one, in the order they were asked.
+
+    A right answer is its verdict and nothing else. A wrong one adds the
+    correct option — label and text, what the student saw — and its
+    explanation, or the phrase that there is none; that phrase promises
+    nothing, because an explanation may never come (``03-BINDING.md`` 4.4,
+    point 8).
+
+    The score opens the section only when the review has no verdict to carry
+    it (``with_score``). When some explanation is in the course language rather
+    than the review's, one line says so before the questions. The offer to
+    take the test again is the section's last line — and, a test review having
+    no other sections, the review's last line too (task 07, decision 13).
+    """
+    lines: list[str] = []
+    if with_score:
+        lines.append(_score_line(test, phrases, language))
+    if test.explanations_in_course_language:
+        if lines:
+            lines.append("")
+        lines.append(_phrase(phrases, "test.explanations_in_course_language", language))
+
+    answer_label = _phrase(phrases, "test.correct_answer", language)
+    for question in test.questions:
+        if lines:
+            lines.append("")
+        number = _fill(_phrase(phrases, "test.question", language), question.number)
+        key = "test.correct" if question.correct else "test.incorrect"
+        lines.append(f"**{number}:** {_phrase(phrases, key, language)}")
+        if question.correct:
+            continue
+        answer = "; ".join(_option(option) for option in question.correct_answer or ())
+        explanation = question.explanation or _phrase(
+            phrases, "test.no_explanation", language
+        )
+        lines.extend(("", f"- **{answer_label}:** {answer}", f"- {explanation}"))
+
+    if test.retry_offer:
+        lines.extend(("", _phrase(phrases, "test.try_again", language)))
+    return lines
+
+
 def assemble_review(structure: ReviewStructureV1) -> str:
     """Write the review out as markdown, in the language it was written for.
 
@@ -253,10 +314,25 @@ def _section(
         if verdict is None:
             return None
         key = "verdict.passed" if verdict.passed else "verdict.failed"
-        return _phrase(phrases, key, language), [verdict.why]
+        # A test's score stands right under the verdict it decided; a verdict
+        # without a test always says why (the structure refuses otherwise).
+        body: list[str] = []
+        if structure.test is not None:
+            body.append(_score_line(structure.test, phrases, language))
+        if verdict.why is not None:
+            body.extend(("", verdict.why) if body else (verdict.why,))
+        return _phrase(phrases, key, language), body
 
     def heading() -> str:
         return _phrase(phrases, f"section.{section}", language)
+
+    if section == "test":
+        test = structure.test
+        if test is None:
+            return None
+        return heading(), _test_section(
+            test, phrases, language, with_score=structure.verdict is None
+        )
 
     if section in {"fixed", "new_remarks", "open", "broken"}:
         remarks: Sequence[Remark] = getattr(structure, section)

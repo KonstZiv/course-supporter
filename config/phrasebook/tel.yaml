@@ -28,3 +28,12 @@ position.slide: స్లయిడ్ {number}
 position.paragraph: పేరా {number}
 position.file: ఫైల్ {name}
 review.title: సమీక్ష
+section.test: టెస్ట్ ప్రశ్నలు
+test.question: ప్రశ్న {number}
+test.correct: సరియైనది
+test.incorrect: తప్పు
+test.correct_answer: సరియైన సమాధానం
+test.score: 'స్కోర్: {number} %'
+test.try_again: మళ్లీ టెస్ట్ ప్రయత్నించండి.
+test.no_explanation: ఈ ప్రశ్నకు వివరణ లేదు.
+test.explanations_in_course_language: వివరణ కోర్సు భాషలో ఇవ్వబడింది.

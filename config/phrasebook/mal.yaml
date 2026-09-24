@@ -28,3 +28,12 @@ position.slide: സ്ലൈഡ് {number}
 position.paragraph: ഖണ്ഡിക {number}
 position.file: ഫയൽ {name}
 review.title: അവലോകനം
+section.test: ടെസ്റ്റ് ചോദ്യം
+test.question: ചോദ്യം {number}
+test.correct: ശരി
+test.incorrect: തെറ്റ്
+test.correct_answer: ശരിയായ ഉത്തരം
+test.score: 'സ്കോർ: {number} %'
+test.try_again: ടെസ്റ്റ് വീണ്ടും ശ്രമിക്കുക.
+test.no_explanation: ഈ ചോദ്യത്തിന് വിശദീകരണമില്ല.
+test.explanations_in_course_language: വിശദീകരണം കോഴ്‌സിൻ്റെ ഭാഷയിലാണ് നൽകിയിരിക്കുന്നത്.

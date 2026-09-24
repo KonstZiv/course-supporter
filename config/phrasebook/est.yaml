@@ -28,3 +28,12 @@ position.slide: slaid {number}
 position.paragraph: lõik {number}
 position.file: fail {name}
 review.title: Retsensioon
+section.test: Testi küsimused
+test.question: Küsimus {number}
+test.correct: Õige
+test.incorrect: Vale
+test.correct_answer: Õige vastus
+test.score: 'Tulemus: {number} %'
+test.try_again: Proovige testi uuesti sooritada.
+test.no_explanation: Sellele küsimusele selgitus puudub.
+test.explanations_in_course_language: Selgitused on esitatud kursuse keeles.

@@ -28,3 +28,12 @@ position.slide: Slide {number}
 position.paragraph: Paragrafo {number}
 position.file: File {name}
 review.title: Recensione
+section.test: Domande del test
+test.question: Domanda {number}
+test.correct: Corretto
+test.incorrect: Errato
+test.correct_answer: Risposta corretta
+test.score: 'Punteggio: {number} %'
+test.try_again: Provi a rifare il test.
+test.no_explanation: Nessuna spiegazione per questa domanda.
+test.explanations_in_course_language: Le spiegazioni sono fornite nella lingua del corso.

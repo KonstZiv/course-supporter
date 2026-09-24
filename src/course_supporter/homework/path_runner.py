@@ -115,10 +115,17 @@ async def run_new_path_if_switched(
     *,
     funds_port: FundsPort | None = None,
 ) -> bool:
-    """Run the new path for this submission, or answer ``False`` for today's.
+    """Run the new path for this submission, or answer ``False`` for today's body.
 
-    ``False`` means nothing was read, nothing was written, and the caller must
-    run today's body — byte for byte what it did before this task existed.
+    ``False`` means the submission's type is not on the new path — or the
+    submission, or its task, is no longer there — and the caller runs today's
+    body unchanged; nothing is written on the way to that answer.
+
+    What the answer costs depends on the switches. With no type switched it is
+    one look at the configuration already in memory. Once a type is switched
+    (``test``, since task 07), every submission — today's Mentor's included —
+    opens a session and reads its row, its checkpoint and its task before the
+    answer.
     """
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     config = get_path_config()

@@ -4,8 +4,10 @@
 # "assignment type x submission state". Every stage is defined once under
 # `stages` and a path lists stage names; a stage that needs different ceilings
 # on another path gets another name. Shape and checks: homework/path_config.py.
-# Nothing reads this file to route a submission yet: choosing the path is
-# task 03, and every type below is still served by today's Mentor.
+# The file routes every submission: a type served by `new_path` walks the path
+# its submission state selects (homework/path_selection.py, path_runner.py);
+# `todays_mentor` leaves the type with today's Mentor. Read once at startup,
+# after the checks pass, so an edit takes effect on the next start.
 #
 # Submission states: first | repeat_without_replies | repeat_with_replies.
 # `repeat_with_replies` is described but unreachable until student replies
@@ -81,9 +83,11 @@ stages:
         max_output_tokens: null
 
 task_types:
-  # A test makes no model call on any path.
+  # A test makes no model call on any path. On the new path since task 07:
+  # answered with its answers and scored against the author's key
+  # (homework/test_result.py); `todays_mentor` here is the way back.
   test:
-    served_by: todays_mentor
+    served_by: new_path
     paths:
       first: []
       repeat_without_replies: []

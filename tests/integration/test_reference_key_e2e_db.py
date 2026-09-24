@@ -97,7 +97,15 @@ class _RouterDouble:
         if response_validator is not None:
             import json
 
-            response_validator(json.dumps({"explanations": self.answer}))
+            # Prompt v2's shape (task 07): a doubt flag beside every explanation.
+            response_validator(
+                json.dumps(
+                    {
+                        "explanations": self.answer,
+                        "doubts": {number: False for number in self.answer},
+                    }
+                )
+            )
         return None
 
 

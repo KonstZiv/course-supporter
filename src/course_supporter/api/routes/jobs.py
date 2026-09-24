@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Annotated, Any, NamedTuple
 
 from arq.connections import ArqRedis
+from arq.constants import default_queue_name
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +48,9 @@ class _ReenqueueDispatch(NamedTuple):
 
     ``args`` are positional task args passed to the ARQ function;
     ``task_kwargs`` are keyword args (used by tasks with kw-only
-    parameters like :func:`s3_cleanup_task`); ``queue_name`` selects
-    a non-default ARQ queue (e.g. ``"homework"``).
+    parameters like :func:`s3_cleanup_task`); ``queue_name`` names the
+    ARQ queue — every dispatch names one, the default included, so where a
+    job lands never depends on the pool it is handed (hot fix 5).
     """
 
     arq_function: str
@@ -106,6 +108,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         p["source_url"],
                         job.priority,
                     ],
+                    queue_name=default_queue_name,
                 )
             case JobType.HOMEWORK_PROCESSING:
                 return _ReenqueueDispatch(
@@ -124,6 +127,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         "file_keys": p["file_keys"],
                         "job_id": jid,
                     },
+                    queue_name=default_queue_name,
                 )
             case JobType.NODE_SUMMARY_REGENERATION:
                 # Phase 3.2.4 — the methodist two-pass orchestrator
@@ -139,6 +143,7 @@ def _resolve_reenqueue(job: Job) -> _ReenqueueDispatch:
                         _subject(),
                         p.get("force", False),
                     ],
+                    queue_name=default_queue_name,
                 )
             case _:
                 raise HTTPException(

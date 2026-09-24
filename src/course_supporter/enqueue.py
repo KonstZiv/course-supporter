@@ -2,6 +2,12 @@
 
 The email helper (``enqueue_email``) is the fire-and-forget exception — no
 ``Job`` row, no DB tracking (Phase 6 R1's 4th enqueue form).
+
+Every enqueue names its queue. A pool's default queue is set by whoever built
+the pool — the API's pool and the default worker's point at arq's default queue,
+the homework worker's at ``homework`` — so a call that names none lands wherever
+its caller's pool points. That is how the explanations of task 07 were lost
+(hot fix 5); ``tests/unit/test_queue_completeness.py`` holds the rule.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from typing import TypedDict
 
 import structlog
 from arq.connections import ArqRedis
+from arq.constants import default_queue_name
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,6 +189,7 @@ async def enqueue_ingestion(
         source_type,
         source_url,
         priority.value,
+        _queue_name=default_queue_name,
         **defer_kwargs,
     )
 
@@ -339,6 +347,7 @@ async def enqueue_node_summary_regeneration(
         str(job.id),
         str(vertex_node_id),
         force,
+        _queue_name=default_queue_name,
     )
 
     if arq_job is not None:
@@ -414,6 +423,7 @@ async def enqueue_base_normalize(
         "base_normalize_task",
         str(job.id),
         str(base.id),
+        _queue_name=default_queue_name,
     )
 
     if arq_job is not None:
@@ -467,10 +477,14 @@ async def enqueue_key_explanation(
     )
     await session.commit()
 
+    # Named, not inherited: a review's after-delivery request runs this from the
+    # homework worker, whose pool defaults to ``homework`` — where nothing runs
+    # ``arq_explain_key`` (hot fix 5).
     arq_job = await redis.enqueue_job(
         "arq_explain_key",
         str(job.id),
         str(reference_id),
+        _queue_name=default_queue_name,
     )
     if arq_job is not None:
         await job_repo.set_arq_job_id(job.id, arq_job.job_id)
@@ -549,6 +563,7 @@ async def enqueue_document_preparation(
         "arq_prepare_document",
         str(job.id),
         str(authored_document_id),
+        _queue_name=default_queue_name,
     )
     if arq_job is not None:
         await job_repo.set_arq_job_id(job.id, arq_job.job_id)
@@ -590,5 +605,6 @@ async def enqueue_email(
         message_id=message_id,
         to=to,
         context=context,
+        _queue_name=default_queue_name,
     )
     log.info("email_enqueued")

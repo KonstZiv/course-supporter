@@ -31,6 +31,7 @@ from __future__ import annotations
 import uuid
 
 from arq.connections import ArqRedis
+from arq.constants import default_queue_name
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
@@ -111,6 +112,7 @@ async def enqueue_s3_cleanup(
         "s3_cleanup_task",
         file_keys=file_keys,
         job_id=str(job.id),
+        _queue_name=default_queue_name,
     )
     if arq_job is not None:
         await job_repo.set_arq_job_id(job.id, arq_job.job_id)

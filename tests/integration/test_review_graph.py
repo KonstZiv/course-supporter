@@ -25,6 +25,8 @@ from course_supporter.agents.mentor_review import (
 )
 from course_supporter.homework.review_config import get_mentor_review_config
 from course_supporter.homework.review_graph import MentorReviewService
+from course_supporter.models import review_structure
+from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -306,6 +308,81 @@ class TestHistory:
         await service.review(submission=current, submission_text="x", language="ukr")
 
         assert agent.calls["reconcile"]["history"] == []
+
+    async def test_a_test_reviewed_with_no_pass_mark_among_prior_attempts(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """Hot fix 5: a test with no pass mark has no verdict, stored as ``null``.
+
+        The review of the student's next task must still go through, reading that
+        attempt as having no verdict — not fall over on it.
+        """
+        student = await _make_student(db_session, seed_root_node.tenant_id)
+        test_task = AuthoredDocument(
+            course_node_id=seed_root_node.id,
+            course_root_id=seed_root_node.id,
+            source_type="text",
+            source_url="https://example.com/test.md",
+            task_type="test",
+            language="ukr",
+        )
+        db_session.add(test_task)
+        await db_session.flush()
+        # Built and stored the way the new path stores a test's review
+        # (``homework/path_runner.py``): the model, dumped to JSON as it is.
+        test_review = ReviewStructureV1(
+            schema_version="1",
+            language="ukr",
+            test=review_structure.TestSection(
+                score=50,
+                questions=[
+                    review_structure.TestQuestionResult(number="1", correct=True),
+                    review_structure.TestQuestionResult(
+                        number="2",
+                        correct=False,
+                        correct_answer=[
+                            review_structure.TestOption(label="б", text="8")
+                        ],
+                        explanation="Два в кубі — вісім.",
+                    ),
+                ],
+            ),
+        ).model_dump(mode="json")
+        assert test_review["verdict"] is None, "no pass mark stores no verdict"
+        prior = await _make_submission(
+            db_session,
+            tenant_id=seed_root_node.tenant_id,
+            student_id=student.id,
+            node_id=seed_root_node.id,
+            authored_document_id=test_task.id,
+            status="completed",
+            score=50,
+            review_result=test_review,
+        )
+        current = await _make_submission(
+            db_session,
+            tenant_id=seed_root_node.tenant_id,
+            student_id=student.id,
+            node_id=seed_root_node.id,
+            authored_document_id=seed_material_entry.id,
+        )
+        agent = _FakeAgent()
+        service = _service(db_session, agent, _FakeCriteria(None))
+
+        output = await service.review(
+            submission=current, submission_text="x", language="ukr"
+        )
+
+        history = agent.calls["reconcile"]["history"]
+        assert [entry["submission_id"] for entry in history] == [str(prior.id)]
+        assert history[0]["correctness"] == "unknown"
+        assert history[0]["score"] == 50
+        assert history[0]["same_task"] is False
+        assert history[0]["weaknesses"] == []
+        assert output.review_markdown == "# Review\n\nWell done."
 
 
 class TestHallucinationGuard:

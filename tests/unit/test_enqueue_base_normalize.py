@@ -10,6 +10,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from arq.constants import default_queue_name
 from sqlalchemy.exc import IntegrityError
 
 from course_supporter.enqueue import enqueue_base_normalize
@@ -73,6 +74,7 @@ class TestEnqueueBaseNormalize:
             "base_normalize_task",
             str(job.id),
             str(base.id),
+            _queue_name=default_queue_name,
         )
         # Job created as BASE_NORMALIZE carrying project_base_id (worker
         # re-reads archive_key from the ProjectBase by id).

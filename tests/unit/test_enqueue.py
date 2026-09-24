@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from arq.constants import default_queue_name
 from fastapi import HTTPException
 
 from course_supporter.config import get_settings
@@ -190,6 +191,7 @@ class TestEnqueueIngestion:
             "video",
             "s3://bucket/key",
             "immediate",
+            _queue_name=default_queue_name,
         )
 
     async def test_sets_arq_job_id(self) -> None:
@@ -547,8 +549,8 @@ class TestEnqueueIngestionWorkWindowDefer:
     A NORMAL ingest raised outside an ENABLED window is dispatched with
     ``_defer_until`` (== ``window.next_start()``) so the Job stays honestly
     ``queued`` and the seam never flips it to ``active``. Every other cell of
-    the (enabled x active_now x priority) matrix adds NO kwarg — the call is
-    byte-identical to the pre-L3 dispatch.
+    the (enabled x active_now x priority) matrix adds NO kwarg of its own — the
+    window changes nothing else in the call.
     """
 
     async def test_normal_enabled_outside_window_defers(self) -> None:
@@ -557,7 +559,10 @@ class TestEnqueueIngestionWorkWindowDefer:
             priority=JobPriority.NORMAL,
             window=_mock_window(enabled=True, active_now=False),
         )
-        assert kwargs == {"_defer_until": _DEFER_NEXT_START}
+        assert kwargs == {
+            "_defer_until": _DEFER_NEXT_START,
+            "_queue_name": default_queue_name,
+        }
 
     async def test_normal_enabled_inside_window_no_defer(self) -> None:
         """Inside an enabled window → run now, no defer kwarg."""

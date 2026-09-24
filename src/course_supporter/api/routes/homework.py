@@ -37,6 +37,7 @@ from course_supporter.homework.submission_core import (
     project_preflight,
     validate_homework_file,
 )
+from course_supporter.homework.test_doors import refuse_a_file_for_a_test
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -205,6 +206,11 @@ async def submit_homework(
             detail="Task is not ready for submissions yet "
             "(its summary has not been generated).",
         )
+
+    # --- A test is answered with its answers, not a file (task 07, decision
+    # 12) — once tests are on the new path. Before the upload, so a refused
+    # file stores nothing; on today's Mentor a file stays a test's form. ---
+    refuse_a_file_for_a_test(task_doc)
 
     # --- Project preflight (KD18 P3): archive-only + echo-match → base_id, ALL
     # before any S3 upload so a rejection never orphans a file. Only runs for a

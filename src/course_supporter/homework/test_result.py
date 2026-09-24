@@ -42,6 +42,7 @@ from course_supporter.homework.explanation_queue import ArqExplanationQueue
 from course_supporter.homework.reference_service import (
     ExplanationsView,
     GenerationInProgressError,
+    ReadOnlyQueue,
     ReferenceRefusedError,
     ReferenceService,
 )
@@ -183,7 +184,7 @@ class TestResultBuilder:
         )
         student_answers = _read_answers(context.submission_text)
 
-        service = ReferenceService(context.session, _NoRequests())
+        service = ReferenceService(context.session, ReadOnlyQueue())
         try:
             course = await service.explanations_for(document_id, course_language)
             review = (
@@ -245,23 +246,6 @@ class TestResultBuilder:
                     submission_id=str(submission.id),
                     language=review_language,
                 )
-
-
-class _NoRequests:
-    """The queue a review reads through: asking it for work is a defect.
-
-    :meth:`ReferenceService.explanations_for` never asks; this makes a change
-    that started to ask fail loudly instead of paying from a submission.
-    """
-
-    async def request(
-        self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
-    ) -> None:
-        msg = (
-            f"a review asked for work on task {authored_document_id}; a review "
-            "is built by reading, and asks after delivery"
-        )
-        raise RuntimeError(msg)
 
 
 async def _languages(

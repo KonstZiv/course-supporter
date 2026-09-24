@@ -16,7 +16,8 @@ Interface:
     :class:`ReferenceRefusedError` — a refusal with the code the author reads.
     :class:`GenerationInProgressError` — no generation could be asked for,
     because another job of the task is in flight.
-    :class:`ExplanationQueue` — the seam a generation request goes through.
+    :class:`ExplanationQueue` — the seam a generation request goes through;
+    :class:`ReadOnlyQueue` — the one to hand a service that must only read.
     :class:`ReferenceService` — read, replace, clear; and for a submission,
     whether the key applies, its explanations in a given language, and the
     request for them in the student's language once the review is out.
@@ -209,6 +210,25 @@ class ExplanationQueue(Protocol):
     async def request(
         self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
     ) -> None: ...
+
+
+class ReadOnlyQueue:
+    """The queue behind a service that must only read.
+
+    :meth:`ReferenceService.key_applies` and
+    :meth:`ReferenceService.explanations_for` never ask for work. A caller that
+    must not pay — a submission's doors, its review — hands them this, so a
+    change that started to ask fails loudly instead of paying from there.
+    """
+
+    async def request(
+        self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
+    ) -> None:
+        msg = (
+            f"a read-only use of the reference asked for work on task "
+            f"{authored_document_id}"
+        )
+        raise RuntimeError(msg)
 
 
 class ReferenceService:

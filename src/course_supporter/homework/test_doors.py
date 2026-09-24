@@ -10,6 +10,8 @@ Purpose:
 
 Interface:
     :func:`new_path_serves_tests` — whether the ``test`` type is on the new path.
+    :func:`answer_sheet` — the test as it is answered: questions and options,
+    its version, whether answers are taken — and nothing of the key.
     :func:`refuse_a_file_for_a_test` — the file routes' door.
     :func:`check_test_answers` — the structure routes' door; returns the answers
     in canonical form, the form stored and scored.
@@ -28,6 +30,7 @@ no trace anywhere.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -48,10 +51,13 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.homework.test_text import Question
     from course_supporter.storage.orm import AuthoredDocument
 
 __all__ = [
+    "AnswerSheet",
     "DoorCode",
+    "answer_sheet",
     "check_test_answers",
     "new_path_serves_tests",
     "refuse_a_file_for_a_test",
@@ -89,6 +95,44 @@ def new_path_serves_tests() -> bool:
     """
     declared = get_path_config().task_types.get(AssignmentType.TEST)
     return declared is not None and declared.served_by is ServedBy.NEW_PATH
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerSheet:
+    """A test as it is answered: its version, whether answers are taken, questions.
+
+    ``questions`` are the test's own — each number, text and option with its
+    label as the author wrote them. Nothing of the key is here: not which
+    options are right, not how many, not an explanation, a doubt or the pass
+    mark (task 07, invariant 5 and decision 22).
+    """
+
+    version: str
+    accepting_answers: bool
+    questions: tuple[Question, ...]
+
+
+async def answer_sheet(
+    session: AsyncSession, task_doc: AuthoredDocument
+) -> AnswerSheet:
+    """The test as a student is shown it, before answering.
+
+    ``accepting_answers`` is the two conditions a submission's doors will ask:
+    tests are on the new path, and the author's key applies to this version.
+    The key is read, never written.
+
+    Raises:
+        HTTPException: 422 ``NOT_A_TEST_TASK`` for a task that is not a test.
+    """
+    if task_doc.task_type != AssignmentType.TEST.value:
+        raise _refusal(422, DoorCode.NOT_A_TEST_TASK, "This task is not a test.")
+    test = parse_test(await load_task_source_text(session, task_doc.id))
+    accepting = new_path_serves_tests() and await _key_applies(session, task_doc.id)
+    return AnswerSheet(
+        version=task_doc.content_hash or "",
+        accepting_answers=accepting,
+        questions=test.questions,
+    )
 
 
 def refuse_a_file_for_a_test(task_doc: AuthoredDocument) -> None:

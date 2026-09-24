@@ -7,6 +7,8 @@ processing into the separate ``homework`` ARQ queue.
 Routes
 ------
 - ``POST /homework/submit`` — Submit homework for review (202 Accepted)
+- ``GET /homework/tasks/{id}/test`` — A test's questions, never its key (task 07)
+- ``POST /homework/submit-test`` — Answer a test with its answers (202, task 07)
 """
 
 from __future__ import annotations
@@ -20,11 +22,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
+from course_supporter.api.routes._test_shared import (
+    require_ready,
+    structure_response,
+)
 from course_supporter.api.schemas import (
     HomeworkSubmitResponse,
+    HomeworkTestSubmitRequest,
     OptionalLanguageForm,
     ProjectBaseDescriptorResponse,
     TenantWebhookResponse,
+    TestStructureResponse,
 )
 from course_supporter.api.url_validation import validate_webhook_url
 from course_supporter.auth.context import TenantContext
@@ -34,10 +42,14 @@ from course_supporter.homework.submission_core import (
     MAX_HOMEWORK_SIZE,
     PROJECT_SUBMISSION_MAX_UPLOAD_BYTES,
     create_and_dispatch_submission,
+    create_and_dispatch_test_submission,
     project_preflight,
     validate_homework_file,
 )
-from course_supporter.homework.test_doors import refuse_a_file_for_a_test
+from course_supporter.homework.test_doors import (
+    answer_sheet,
+    refuse_a_file_for_a_test,
+)
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -51,7 +63,7 @@ from course_supporter.storage.s3 import S3Client
 from course_supporter.storage.student_repository import StudentRepository
 
 if TYPE_CHECKING:
-    from course_supporter.storage.orm import Student
+    from course_supporter.storage.orm import AuthoredDocument, Student
 
 logger = structlog.get_logger()
 
@@ -268,6 +280,146 @@ async def submit_homework(
         status="received",
         job_id=result.job_id,
     )
+
+
+@router.get("/homework/tasks/{authored_document_id}/test")
+async def get_test_structure(
+    authored_document_id: uuid.UUID,
+    tenant: CheckDep,
+    session: SessionDep,
+) -> TestStructureResponse:
+    """A test as the channel shows it to its student — questions, never the key.
+
+    Task 07: the questions and options as the author wrote them, the version to
+    send back with the answers, and whether answers are taken now. Nothing of
+    the key is returned.
+
+    **404** ``Task not found.`` for a task that is not there, is deleted, or is
+    another tenant's — one body for all three. **422** ``NOT_A_TEST_TASK`` for a
+    document that is not a test. **409** while the task is not ready.
+    """
+    task_doc = await _tenant_task(session, authored_document_id, tenant.tenant_id)
+    await require_ready(session, authored_document_id)
+    return structure_response(await answer_sheet(session, task_doc))
+
+
+@router.post("/homework/submit-test", status_code=202)
+async def submit_test_answers(
+    body: HomeworkTestSubmitRequest,
+    tenant: CheckDep,
+    session: SessionDep,
+    s3: S3Dep,
+    arq: ArqDep,
+) -> HomeworkSubmitResponse:
+    """Answer a test with its answers, from a channel (task 07).
+
+    The same gates as ``POST /homework/submit`` — the course and the node in
+    this tenant, the task in this course, the task ready — and then the test's
+    own doors, each with its code (``{"code", "details"}``): answers while tests
+    are still answered with a file, to a task that is not a test, to another
+    version of it, before its key applies to this version, or naming what the
+    test does not have. A refused submission stores nothing. The review is
+    delivered by webhook, as for a file; the same answers sent twice are two
+    attempts.
+    """
+    webhook_url = (
+        await validate_webhook_url(body.webhook_url)
+        if body.webhook_url is not None
+        else None
+    )
+    task_doc = await _course_task(
+        session,
+        tenant_id=tenant.tenant_id,
+        course_node_id=body.course_node_id,
+        node_id=body.node_id,
+        authored_document_id=body.authored_document_id,
+    )
+    await require_ready(session, body.authored_document_id)
+
+    student_repo = StudentRepository(session)
+
+    async def _resolve_student() -> tuple[Student, bool]:
+        return await student_repo.get_or_create(
+            tenant_id=tenant.tenant_id,
+            external_id=body.student_external_id,
+        )
+
+    result = await create_and_dispatch_test_submission(
+        session=session,
+        s3=s3,
+        arq=arq,
+        tenant_id=tenant.tenant_id,
+        resolve_student=_resolve_student,
+        course_node_id=body.course_node_id,
+        node_id=body.node_id,
+        task_doc=task_doc,
+        answers=body.answers,
+        test_version=body.test_version,
+        delivery_mode="webhook",
+        webhook_url=webhook_url,
+        response_language=body.response_language,
+        student_note=body.student_note,
+    )
+    return HomeworkSubmitResponse(
+        submission_id=result.submission.id,
+        student_id=result.student.id,
+        status="received",
+        job_id=result.job_id,
+    )
+
+
+async def _tenant_task(
+    session: AsyncSession, authored_document_id: uuid.UUID, tenant_id: uuid.UUID
+) -> AuthoredDocument:
+    """The task, if it is there, not deleted and this tenant's; one 404 otherwise.
+
+    Ownership is read through the task's node, as ``GET /homework/tasks/{id}/base``
+    reads it.
+    """
+    doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
+    if doc is None or doc.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    node = await CourseNodeRepository(session).get_by_id(doc.course_node_id)
+    if node is None or node.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return doc
+
+
+async def _course_task(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    course_node_id: uuid.UUID,
+    node_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+) -> AuthoredDocument:
+    """The anchor gates of ``POST /homework/submit``, in its order and words."""
+    node_repo = CourseNodeRepository(session)
+    course_node = await node_repo.get_by_id(course_node_id)
+    if course_node is None or course_node.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Course node not found.")
+    if course_node.parent_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="course_node_id must be a root node (course level).",
+        )
+    target_node = await node_repo.get_by_id(node_id)
+    if target_node is None or target_node.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Node not found.")
+    task_doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
+    if (
+        task_doc is None
+        or task_doc.deleted_at is not None
+        or task_doc.course_root_id != course_node_id
+    ):
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if task_doc.task_type is None:
+        raise HTTPException(
+            status_code=422,
+            detail="authored_document_id must reference a task "
+            "(an AuthoredDocument with task_type set).",
+        )
+    return task_doc
 
 
 @router.patch(

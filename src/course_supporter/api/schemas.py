@@ -780,7 +780,7 @@ class AuthoredDocumentCreateResponse(BaseModel):
 
 
 class HomeworkSubmitResponse(BaseModel):
-    """Response for POST /homework/submit (202 Accepted)."""
+    """Response for POST /homework/submit and POST /homework/submit-test (202)."""
 
     submission_id: uuid.UUID = Field(
         description="Unique ID of the created homework submission."
@@ -791,8 +791,8 @@ class HomeworkSubmitResponse(BaseModel):
     status: str = Field(description="Initial status: ``received``.")
     job_id: uuid.UUID | None = Field(
         default=None,
-        description="Background job ID for tracking processing progress. "
-        "None when returning a cached duplicate result.",
+        description="Background job ID for tracking processing progress. For a "
+        "cached duplicate, the job of the submission returned.",
     )
     duplicate: bool = Field(
         default=False,
@@ -1690,6 +1690,149 @@ class PortalSubmitResponse(BaseModel):
     )
 
 
+# ── A test answered with its answers (mentor-rebuild task 07) ─────────────
+
+_MAX_TEST_QUESTIONS = 500
+_MAX_LABELS_PER_QUESTION = 26
+_MAX_ANSWER_TOKEN = 32
+
+
+def _bounded_answers(value: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Answers the size of a test, not of a payload built to be expensive.
+
+    The doors check every question and option against the test itself; these
+    bounds only keep that check from being handed a million keys first.
+    """
+    if len(value) > _MAX_TEST_QUESTIONS:
+        msg = f"at most {_MAX_TEST_QUESTIONS} questions can be answered"
+        raise ValueError(msg)
+    for number, labels in value.items():
+        if len(number) > _MAX_ANSWER_TOKEN or len(labels) > _MAX_LABELS_PER_QUESTION:
+            msg = f"question {number[:_MAX_ANSWER_TOKEN]!r} is not a question's answer"
+            raise ValueError(msg)
+        if any(len(label) > _MAX_ANSWER_TOKEN for label in labels):
+            msg = f"question {number!r} names an option that is not a label"
+            raise ValueError(msg)
+    return value
+
+
+_ANSWERS_DESCRIPTION = (
+    "The answers: question number → the labels of the options chosen, as the "
+    'test prints them (``{"1": ["B"], "2": ["A", "C"]}``). Labels '
+    "are compared in canonical form — case, spaces, a trailing ``)`` or ``.``, and "
+    "Latin letters drawn like Cyrillic ones do not matter. A question left out "
+    "is not refused: it counts as answered wrong."
+)
+_TEST_VERSION_DESCRIPTION = (
+    "The ``version`` of the test these answers were given to, as the structure "
+    "route returned it. When it is not the test's current version the answers "
+    "are refused with ``TEST_VERSION_CHANGED``; when omitted, the current "
+    "version is assumed."
+)
+
+
+class TestStructureOption(BaseModel):
+    """One option of a question, as the test prints it."""
+
+    label: str = Field(description="The option's label as the test prints it.")
+    text: str = Field(description="The option's text.")
+
+
+class TestStructureQuestion(BaseModel):
+    """One question of a test, with its options in the order the test lists them."""
+
+    number: str = Field(description="The question's number as the test prints it.")
+    text: str = Field(description="The question's text.")
+    options: list[TestStructureOption] = Field(
+        description="The options, in the order the test lists them."
+    )
+
+
+class TestStructureResponse(BaseModel):
+    """A test as it is answered: its version, whether answers are taken, questions.
+
+    Returned by ``GET /portal/tasks/{id}/test`` and ``GET /homework/tasks/{id}/test``.
+    Nothing of the key crosses here — not the right options, not how many of
+    them a question has, not the explanations, the doubts or the pass mark
+    (task 07, invariant 5 and decision 22).
+    """
+
+    version: str = Field(
+        description="The test's current version. Send it back as ``test_version`` "
+        "with the answers."
+    )
+    accepting_answers: bool = Field(
+        description="True when answers are taken now: tests are answered on the "
+        "new path and the author's key applies to this version. While false, "
+        "answers are refused (``TEST_FORM_UNAVAILABLE`` or ``TEST_NOT_READY``)."
+    )
+    questions: list[TestStructureQuestion] = Field(
+        description="Every question of the test, in the order it asks them."
+    )
+
+
+class PortalTestSubmitRequest(BaseModel):
+    """Body of POST /portal/tasks/{id}/test-submissions (task 07)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answers: dict[str, list[str]] = Field(description=_ANSWERS_DESCRIPTION)
+    test_version: str | None = Field(
+        default=None, max_length=64, description=_TEST_VERSION_DESCRIPTION
+    )
+    response_language: OptionalLanguageForm = Field(
+        default=None,
+        description="Language of the review; ISO 639-1 or 639-3 accepted, stored "
+        "as 639-3. If omitted: the student's stored preference, then the course "
+        "language.",
+    )
+    student_note: str | None = Field(
+        default=None, description="The student's comment on this attempt."
+    )
+
+    _bounded = field_validator("answers")(_bounded_answers)
+
+
+class HomeworkTestSubmitRequest(BaseModel):
+    """Body of POST /homework/submit-test (task 07): a test answered by a channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    student_external_id: str = Field(
+        description="Student identifier from the caller's system."
+    )
+    course_node_id: uuid.UUID = Field(
+        description="Root CourseNode UUID representing the course."
+    )
+    node_id: uuid.UUID = Field(
+        description="Specific course node the submission targets."
+    )
+    authored_document_id: uuid.UUID = Field(
+        description="The test (an AuthoredDocument of task_type ``test``) the "
+        "answers are given to; it must belong to this course."
+    )
+    answers: dict[str, list[str]] = Field(description=_ANSWERS_DESCRIPTION)
+    test_version: str | None = Field(
+        default=None, max_length=64, description=_TEST_VERSION_DESCRIPTION
+    )
+    webhook_url: str | None = Field(
+        default=None,
+        description="Per-submission webhook URL override (falls back to tenant "
+        "default).",
+    )
+    response_language: OptionalLanguageForm = Field(
+        default=None,
+        description="Language of the review; ISO 639-1 or 639-3 accepted, stored "
+        "as 639-3. If omitted: the student's stored preference, then the course "
+        "language.",
+    )
+    student_note: str | None = Field(
+        default=None, description="The student's comment on this attempt."
+    )
+
+    _bounded = field_validator("answers")(_bounded_answers)
+
+
 class PortalVerdict(BaseModel):
     """Caller-facing verdict shown to the student (Phase 6 T2 read-path).
 
@@ -2139,6 +2282,13 @@ class PortalMaterialItem(BaseModel):
     overlay: PortalSubmissionOverlay | None = Field(
         default=None,
         description="Submission overlay — present iff ``kind=task``, else null.",
+    )
+    test_form: bool = Field(
+        default=False,
+        description="True when this task is a test answered with the test form "
+        "(task 07): show the questions of GET /portal/tasks/{id}/test instead of "
+        "a file upload. False for every other document — and for a test while "
+        "tests are still answered with a file.",
     )
 
 

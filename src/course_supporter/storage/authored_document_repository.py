@@ -38,6 +38,7 @@ class AuthoredDocumentRepository:
         course_root_id: uuid.UUID | None = None,
         raw_hash: str | None = None,
         raw_size_bytes: int | None = None,
+        title: str | None = None,
     ) -> AuthoredDocument:
         """Create a new material entry with auto-incremented order.
 
@@ -74,6 +75,9 @@ class AuthoredDocumentRepository:
                 omitted by abbreviation — D17 acknowledged deviation).
                 Populated alongside ``raw_hash`` from the same buffer
                 via ``len(upload_bytes)``. ``None`` for URL-only paths.
+            title: The name both trees show (task 07b, decision 7) — a test
+                written in the system has one; ``None`` leaves a material to
+                its filename.
 
         Returns:
             The newly created AuthoredDocument.
@@ -129,6 +133,7 @@ class AuthoredDocumentRepository:
             order=next_order,
             raw_hash=raw_hash,
             raw_size_bytes=raw_size_bytes,
+            title=title,
         )
         self._session.add(entry)
         await self._session.flush()

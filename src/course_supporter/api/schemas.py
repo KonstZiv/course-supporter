@@ -429,10 +429,8 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     filename: str | None = Field(description="Original filename, if available.")
     title: str | None = Field(
         default=None,
-        description=(
-            "The name both trees show — a test written in the system has one, "
-            "draft or published (task 07b). ``null`` for a document without one."
-        ),
+        description="The name both trees show (task 07b); ``null`` for a "
+        "document without one.",
     )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
@@ -599,6 +597,11 @@ class AuthoredDocumentResponse(BaseModel):
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
+    title: str | None = Field(
+        default=None,
+        description="The name both trees show (task 07b); ``null`` for a "
+        "document without one.",
+    )
     language: str | None = Field(
         default=None,
         description=(
@@ -746,6 +749,11 @@ class AuthoredDocumentCreateResponse(BaseModel):
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
+    title: str | None = Field(
+        default=None,
+        description="The name both trees show (task 07b); ``null`` for a "
+        "document without one.",
+    )
     language: str | None = Field(
         default=None,
         description=(
@@ -1838,6 +1846,86 @@ class HomeworkTestSubmitRequest(BaseModel):
     )
 
     _bounded = field_validator("answers")(_bounded_answers)
+
+
+# ── A test written in the system: the author's routes (task 07b) ─────────
+
+
+class WrittenTestOption(BaseModel):
+    """An option of a draft as its author sees it, with the letter it would get."""
+
+    label: str = Field(
+        description="The letter a publication gives this option now: its place "
+        "in the question, in the course's alphabet."
+    )
+    text: str = Field(description="The option's text.")
+    correct: bool = Field(description="Whether the author marked it right.")
+
+
+class WrittenTestQuestion(BaseModel):
+    """A question of a draft as its author sees it, numbered as it would be."""
+
+    number: str = Field(description="Its place in the test, from 1.")
+    text: str = Field(description="The question's text.")
+    options: list[WrittenTestOption] = Field(description="Its options, in order.")
+    explanation: str | None = Field(
+        description="The author's own explanation, when written."
+    )
+
+
+class WrittenTestDraft(BaseModel):
+    """The draft of a test written in the system, marks and all."""
+
+    pass_threshold: int | None = Field(description="The pass mark, 1 to 100, if set.")
+    questions: list[WrittenTestQuestion] = Field(
+        description="Every question, in order."
+    )
+
+
+class WrittenTestVersion(BaseModel):
+    """A published version of a test written in the system."""
+
+    number: int = Field(description="The version's number, from 1.")
+    version: str = Field(
+        description="Its visible digest — the ``version`` the structure routes "
+        "show a student."
+    )
+    published_at: datetime = Field(description="When it was published.")
+
+
+class WrittenTestResponse(BaseModel):
+    """A test written in the system as its author reads it (task 07b).
+
+    Returned by ``POST /nodes/{node_id}/tests`` and by the ``/tests/{id}/draft``
+    routes. The draft carries the marks the author set and the letters a
+    publication would give its options now; ``published`` is the version in
+    force, or ``null`` before the first publication.
+    """
+
+    id: uuid.UUID = Field(description="The test's document id.")
+    course_node_id: uuid.UUID = Field(description="The node the test is in.")
+    title: str | None = Field(description="The name both trees show.")
+    language: str = Field(
+        description="The course language the letters are in (ISO 639-3)."
+    )
+    draft: WrittenTestDraft = Field(
+        description="The draft, as a publication would read it now."
+    )
+    published: WrittenTestVersion | None = Field(
+        description="The version in force, or null before the first publication."
+    )
+
+
+class WrittenTestPublicationResponse(BaseModel):
+    """What ``POST /tests/{id}/publish`` did: a new version, or the same one."""
+
+    created: bool = Field(
+        description="True for a new version (201); false when the draft equals "
+        "the version in force (200)."
+    )
+    published: WrittenTestVersion = Field(
+        description="The version in force after the publication."
+    )
 
 
 class PortalVerdict(BaseModel):

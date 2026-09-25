@@ -8,8 +8,11 @@ Purpose:
     explanations and costs money.
 
 Interface:
-    :class:`TestObjectService` — save the draft, publish it, read the version
-        in force, and ask for a version's explanations as a submission does.
+    :class:`TestObjectService` — create a test with its draft, save the draft,
+        publish it, read the version in force, and ask for a version's
+        explanations as a submission does.
+    :data:`WRITTEN_TEST_URL` — the source URL every test written in the
+        system carries.
     :class:`Publication` — the version a publication gave, and whether it is
         new.
     :class:`NotATestObjectError` — the document is not a test written in the
@@ -21,7 +24,7 @@ Publishing (section 8.1):
        the test is created and stays behind a course whose language was changed
        since. When the two differ, the document's follows the course in the
        same transaction (operator's decision, 2026-09-25). A root without a
-       language cannot exist — see :meth:`TestObjectService._course_language`.
+       language cannot exist — see :meth:`TestObjectService.course_language`.
     2. The draft is numbered, lettered and digested
        (:mod:`course_supporter.homework.test_object`).
     3. A version is created unless the draft equals the latest one
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,8 +63,11 @@ from course_supporter.homework.test_object import (
     published_form,
     version_digests,
 )
-from course_supporter.models.source import SourceType
+from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.reference_kinds import ReferenceKind
+from course_supporter.storage.authored_document_repository import (
+    AuthoredDocumentRepository,
+)
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -68,6 +75,14 @@ from course_supporter.storage.orm import (
     TestVersion,
 )
 from course_supporter.storage.test_object_repository import TestObjectRepository
+
+WRITTEN_TEST_URL: Final[str] = "test-object:"
+"""The source URL of a test written in the system: a fixed placeholder.
+
+There is no file behind it (PRE-FLIGHT section 4.3). Storage clean-up reads no
+key out of it and passes it by, and the portal's material route refuses the
+document before anything could hand it out as a link.
+"""
 
 
 class NotATestObjectError(Exception):
@@ -104,6 +119,34 @@ class TestObjectService:
         self._repo = TestObjectRepository(session)
         self._references = ReferenceService(session, queue, kind=kind)
 
+    async def create(
+        self,
+        course_node_id: uuid.UUID,
+        body: DraftBody,
+        *,
+        title: str,
+        language: str,
+    ) -> AuthoredDocument:
+        """Create a test written in the system in a node: its document and draft.
+
+        The document is the row of PRE-FLIGHT section 4.3: no file, never
+        processed, and so ready from its first moment — whether a student sees
+        it is its publication's to decide (decision 8). Its language is the
+        course's, read by the caller now (decision 7), and it is created with
+        its title — the name both trees show — never without one. Nothing is
+        asked for: a draft costs nothing until it is published.
+        """
+        document = await AuthoredDocumentRepository(self._session).create(
+            node_id=course_node_id,
+            source_type=SourceType.TEST_OBJECT.value,
+            source_url=WRITTEN_TEST_URL,
+            task_type=AssignmentType.TEST,
+            language=language,
+            title=title,
+        )
+        await self._repo.replace_draft(document.id, body.to_jsonb())
+        return document
+
     async def save_draft(
         self,
         authored_document_id: uuid.UUID,
@@ -131,7 +174,7 @@ class TestObjectService:
                 has no language, or the test has no draft.
         """
         document = await self._require_test_object(authored_document_id)
-        language = await self._course_language(document)
+        language = await self.course_language(document.course_root_id)
         draft = await self._repo.get_draft(document.id)
         if draft is None:
             msg = f"test {document.id} has no draft; a test is created with one"
@@ -197,7 +240,7 @@ class TestObjectService:
             raise NotATestObjectError(authored_document_id)
         return document
 
-    async def _course_language(self, document: AuthoredDocument) -> str:
+    async def course_language(self, course_root_id: uuid.UUID) -> str:
         """The course root's language as it stands now.
 
         A root without a language is a state no author can reach, so its
@@ -209,13 +252,13 @@ class TestObjectService:
         raised as one (operator's decision at the stop of commit V1,
         2026-09-25) — and no test pins it, because no test can build it.
         """
-        root = await self._session.get(CourseNode, document.course_root_id)
+        root = await self._session.get(CourseNode, course_root_id)
         language = root.default_language if root is not None else None
         if not language:
             msg = (
-                f"the course root {document.course_root_id} of test {document.id} "
-                "is missing or has no language; the database forbids both "
-                "(its foreign key, course_nodes_root_language_required)"
+                f"the course root {course_root_id} is missing or has no "
+                "language; the database forbids both (its foreign key, "
+                "course_nodes_root_language_required)"
             )
             raise RuntimeError(msg)
         return language

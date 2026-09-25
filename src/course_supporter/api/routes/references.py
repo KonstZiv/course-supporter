@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
+from course_supporter.api.routes._author_shared import generation_in_progress
 from course_supporter.api.schemas import (
     ReferenceKeyUpdateRequest,
     ReferenceViewResponse,
@@ -94,36 +95,14 @@ def _service(
 def _refusal(exc: ReferenceRefusedError) -> HTTPException:
     """Turn a service refusal into the 422 the author reads.
 
-    422 for every one of them, and the code is what distinguishes them: four
-    say something about the TASK and one about the key, and the surface sends
-    the author to a different place for each.
+    422 for every one of them, and the code is what distinguishes them: most
+    say something about the TASK, one about the key and one about where the
+    key lives (:class:`~course_supporter.homework.reference_service.RefusalCode`),
+    and the surface sends the author to a different place for each.
     """
     return HTTPException(
         status_code=422,
         detail={"code": exc.code.value, "details": exc.details},
-    )
-
-
-def _generation_in_progress(exc: GenerationInProgressError) -> HTTPException:
-    """Turn a job collision into the 409 the author reads (task 07, decision 9).
-
-    409, not 422: nothing is wrong with the key or with the task. Another job of
-    this task holds the one slot the database allows; the request is not wrong,
-    only early. Nothing the request wrote stands — neither the key nor a
-    version: the refused insert voided the transaction, and the route rolls the
-    session back before answering (``GenerationInProgressError`` says why both).
-    The answer says so.
-    """
-    return HTTPException(
-        status_code=409,
-        detail={
-            "code": exc.code,
-            "details": (
-                "another job of this task is still running — its explanations "
-                "being written, or the task itself being processed; nothing was "
-                "saved, so send the request again once it finishes"
-            ),
-        },
     )
 
 
@@ -154,7 +133,7 @@ async def get_reference(
         raise _refusal(exc) from exc
     except GenerationInProgressError as exc:
         await session.rollback()
-        raise _generation_in_progress(exc) from exc
+        raise generation_in_progress(exc) from exc
     await session.commit()
     return _response(view)
 
@@ -194,7 +173,7 @@ async def put_reference_override(
         raise _refusal(exc) from exc
     except GenerationInProgressError as exc:
         await session.rollback()
-        raise _generation_in_progress(exc) from exc
+        raise generation_in_progress(exc) from exc
     await session.commit()
     logger.info(
         "reference_key_replaced",

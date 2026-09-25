@@ -138,6 +138,7 @@ def app_with_overrides(
         doc.source_type = kwargs.get("source_type", "text")
         doc.source_url = kwargs.get("source_url", "http://example.com")
         doc.filename = kwargs.get("filename")
+        doc.title = kwargs.get("title")
         doc.material_role = kwargs.get("material_role", "educational")
         doc.task_type = kwargs.get("task_type")
         doc.language = kwargs.get("language")

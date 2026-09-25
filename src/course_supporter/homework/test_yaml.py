@@ -9,9 +9,14 @@ Purpose:
     fault is in. The file is also read the way a person reads it: ``yes`` and
     ``1990`` in a text are that text, not a boolean and a number.
 
+    The same test can also be sent as JSON (task 07b, commit E1): the same
+    structure, read by the same walk and the same rules, and placed by the
+    question and the option only — JSON leaves no marks to count lines by.
+
 Interface:
     :func:`load_test_yaml` — the bytes of a YAML test → :class:`LoadedDraft`,
         its title and its draft, or :class:`DraftRefusedError`.
+    :func:`load_test_json` — the same, for the same test sent as JSON.
     :func:`screen_texts` — a draft's texts through the Stage 1 screens as
         they will be read, whatever format the draft came in.
     :func:`dump_test_yaml` — a draft and its title → the canonical YAML.
@@ -84,6 +89,7 @@ Extending:
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -117,6 +123,7 @@ __all__ = [
     "LoadedDraft",
     "RefusalPlace",
     "dump_test_yaml",
+    "load_test_json",
     "load_test_yaml",
     "screen_texts",
 ]
@@ -142,6 +149,11 @@ _OPTION_FIELDS: Final = ("text", "correct")
 
 _BOOL_TAG: Final = "tag:yaml.org,2002:bool"
 _INT_TAG: Final = "tag:yaml.org,2002:int"
+_FLOAT_TAG: Final = "tag:yaml.org,2002:float"
+_NULL_TAG: Final = "tag:yaml.org,2002:null"
+_STR_TAG: Final = "tag:yaml.org,2002:str"
+_SEQ_TAG: Final = "tag:yaml.org,2002:seq"
+_MAP_TAG: Final = "tag:yaml.org,2002:map"
 _WHOLE_NUMBER: Final = re.compile(r"[0-9]+")
 
 _MAX_DEPTH: Final[int] = 32
@@ -245,7 +257,11 @@ class _Loader(yaml.SafeLoader):
 
 
 def load_test_yaml(
-    content: bytes, *, language: str | None, filename: str = "test.yaml"
+    content: bytes,
+    *,
+    language: str | None,
+    filename: str = "test.yaml",
+    title_required: bool = False,
 ) -> LoadedDraft:
     """Read a YAML test into its title and its draft, or refuse it with a place.
 
@@ -256,6 +272,10 @@ def load_test_yaml(
             then refused rather than guessed at.
         filename: The name Stage 1 screens the text under. A request body has
             none, so a YAML name stands in for it.
+        title_required: Whether the test must name itself. A test created by
+            its route must (operator's decision at the show of commit E1,
+            2026-09-25): without a ``title`` it is refused as any missing field
+            is. A replaced draft keeps the name the test has.
 
     Returns:
         The title, when the file gives one, and the checked draft.
@@ -294,7 +314,65 @@ def load_test_yaml(
             f"the file is not YAML: {exc}",
             RefusalPlace(),
         ) from exc
-    return screen_texts(_read_test(root), language=language)
+    return screen_texts(
+        _read_test(root, title_required=title_required), language=language
+    )
+
+
+def load_test_json(
+    content: bytes, *, language: str | None, title_required: bool = False
+) -> LoadedDraft:
+    """Read the same test sent as JSON into its title and its draft, or refuse it.
+
+    The body is decoded keeping a key given twice, and turned into the nodes the
+    walk of a YAML test reads — nodes with no mark in a file, so a refusal names
+    the question and the option only (section 6.2). From there it is the same
+    walk, the same rules and the same codes as a YAML test, and the texts go
+    through the same screens (:func:`screen_texts`). A value reads as its YAML
+    twin would: a number or a boolean where a text is expected is that text,
+    ``null`` is an empty field.
+
+    Args:
+        content: The body of the request.
+        language: The course language, ISO 639-3, for the screens.
+        title_required: Whether the test must name itself, as for
+            :func:`load_test_yaml`.
+
+    Returns:
+        The title, when the body gives one, and the checked draft.
+
+    Raises:
+        DraftRefusedError: The body breaks a rule of the format. A body that is
+            not JSON is ``TEST_YAML_UNREADABLE`` — the syntax of the format —
+            at the line and the column the decoder names.
+        SecurityRejectedError: A Stage 1 screen refused a text.
+    """
+    if len(content) > MAX_BODY_BYTES:
+        raise DraftRefusedError(
+            DraftRefusalCode.TEST_TOO_LARGE,
+            f"the test is {len(content)} bytes; a test may have {MAX_BODY_BYTES}",
+            RefusalPlace(),
+        )
+    try:
+        decoded = json.loads(content, object_pairs_hook=_JsonObject)
+    except json.JSONDecodeError as exc:
+        raise DraftRefusedError(
+            DraftRefusalCode.TEST_YAML_UNREADABLE,
+            f"the body is not JSON: {exc.msg}",
+            RefusalPlace(line=exc.lineno, column=exc.colno),
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise DraftRefusedError(
+            DraftRefusalCode.TEST_YAML_UNREADABLE,
+            "the body is not JSON: it is not text in a Unicode encoding",
+            RefusalPlace(),
+        ) from exc
+    except RecursionError as exc:
+        raise _too_deep_a_body() from exc
+    return screen_texts(
+        _read_test(_json_node(decoded, 0), title_required=title_required),
+        language=language,
+    )
 
 
 def screen_texts(loaded: LoadedDraft, *, language: str | None) -> LoadedDraft:
@@ -404,17 +482,62 @@ def _dumped(question: DraftQuestion) -> dict[str, object]:
     return dumped
 
 
+# ── a JSON body, as the walk reads it ─────────────────────────────────
+
+
+class _JsonObject(list[tuple[str, object]]):
+    """A JSON object as its pairs, in order: a key given twice stays twice."""
+
+
+def _json_node(value: object, depth: int) -> Node:
+    """A decoded JSON value as the node the walk reads — with no mark in a file."""
+    if depth == _MAX_DEPTH:
+        raise _too_deep_a_body()
+    if isinstance(value, _JsonObject):
+        return MappingNode(
+            _MAP_TAG,
+            [
+                (ScalarNode(_STR_TAG, key), _json_node(item, depth + 1))
+                for key, item in value
+            ],
+        )
+    if isinstance(value, list):
+        return SequenceNode(_SEQ_TAG, [_json_node(item, depth + 1) for item in value])
+    # A boolean before a number: to Python ``True`` is the integer 1.
+    if isinstance(value, bool):
+        return ScalarNode(_BOOL_TAG, "true" if value else "false")
+    if isinstance(value, int):
+        return ScalarNode(_INT_TAG, str(value))
+    if isinstance(value, float):
+        return ScalarNode(_FLOAT_TAG, repr(value))
+    if value is None:
+        return ScalarNode(_NULL_TAG, "")
+    return ScalarNode(_STR_TAG, str(value))
+
+
+def _too_deep_a_body() -> DraftRefusedError:
+    return DraftRefusedError(
+        DraftRefusalCode.TEST_FIELD_INVALID,
+        f"the body nests deeper than {_MAX_DEPTH} levels; a test has six",
+        RefusalPlace(),
+    )
+
+
 # ── the walk ──────────────────────────────────────────────────────────
 
 
-def _read_test(root: Node | None) -> LoadedDraft:
+def _read_test(root: Node | None, *, title_required: bool) -> LoadedDraft:
     if root is None:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_FIELD_INVALID,
             "the file holds no test: a test needs questions",
             RefusalPlace(),
         )
-    fields = _fields(root, _TEST_FIELDS, required=("questions",))
+    fields = _fields(
+        root,
+        _TEST_FIELDS,
+        required=("questions", "title") if title_required else ("questions",),
+    )
     title = (
         _text(fields["title"], "title", MAX_TITLE_CHARS) if "title" in fields else None
     )

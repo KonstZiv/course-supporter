@@ -118,6 +118,9 @@ def _mock_entry(
     entry.task_type = task_type
     entry.source_url = source_url
     entry.filename = filename
+    # A column since task 07b, None for a document without a name; a bare
+    # MagicMock would hand the response a mock instead.
+    entry.title = None
     entry.language = None
     entry.order = order
     entry.state = state

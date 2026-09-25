@@ -418,9 +418,10 @@ def material_label(
     """Display label for an authored document: its title, else the filename,
     else a derived ``{source_type} #{order}``.
 
-    The title is the name both trees show (task 07b, decision 7): a test
-    written in the system has one and no file. A document without a title
-    keeps the label it had — byte-identical to the prior
+    The title is the name both trees show (task 07b, decision 7), and a test
+    written in the system always has one: nothing creates it without. A
+    document without a title keeps the label it had — byte-identical to the
+    prior
     ``portal_courses._material_label`` (Phase 6 T4a). Extracted here (6.HC) so
     the homework-cost drill-down composes the SAME task label the portal
     materials tree shows — one source, no duplicated format string (same house

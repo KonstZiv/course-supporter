@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.enqueue import enqueue_key_explanation
 from course_supporter.homework.reference_service import GenerationInProgressError
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
+from course_supporter.storage.job_repository import JobRepository
 
 
 class ArqExplanationQueue:
@@ -63,3 +65,15 @@ class ArqExplanationQueue:
             )
         except IntegrityError as exc:
             raise GenerationInProgressError(authored_document_id) from exc
+
+    async def in_flight(self, *, authored_document_id: uuid.UUID) -> bool:
+        """Whether a job of the task is queued or running — any job of it.
+
+        The predicate of ``uq_jobs_subject_in_flight``, the index that would
+        refuse a request now: the task is the subject of its explanation jobs
+        and of its own processing alike.
+        """
+        job = await JobRepository(self._session).get_inflight_job_for_subject(
+            JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION], authored_document_id
+        )
+        return job is not None

@@ -47,6 +47,9 @@ class SourceType(StrEnum):
     WEB = "web"
     AUDIO = "audio"
     CODE = "code"
+    # A test the author writes in the system (task 07b): no file, never
+    # processed — no ingestion processor exists for it.
+    TEST_OBJECT = "test_object"
 
 
 class MaterialRole(StrEnum):

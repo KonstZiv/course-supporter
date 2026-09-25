@@ -58,7 +58,9 @@ A test written in the system (task 07b):
     course language and by a submission in the student's
     (:meth:`ReferenceService.request_explanations`). A version left ``pending``
     with no job of the task in flight is stuck, and both ask for it again; a
-    ``failed`` one only a publication does (task 07b, decision 13).
+    ``failed`` one only a publication does (task 07b, decision 13). The author
+    reads its state (:meth:`ReferenceService.read`) from its version in force,
+    and that read writes nothing.
 """
 
 from __future__ import annotations
@@ -80,6 +82,7 @@ from course_supporter.homework.reference_key import (
 )
 from course_supporter.homework.task_context import load_task_source_text
 from course_supporter.homework.task_text import MENTOR_TASK_TEXT_MAX_BYTES
+from course_supporter.homework.test_object import PublishedBody
 from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.storage.orm import (
@@ -120,6 +123,14 @@ class ReferenceStatus(StrEnum):
     GENERATING = "generating"
     READY = "ready"
     FAILED = "failed"
+
+
+_STATUS_OF_STATE: Final[dict[str, ReferenceStatus]] = {
+    ReferenceState.PENDING.value: ReferenceStatus.GENERATING,
+    ReferenceState.READY.value: ReferenceStatus.READY,
+    ReferenceState.FAILED.value: ReferenceStatus.FAILED,
+}
+"""What the author reads for the stored state of a version."""
 
 
 class RefusalCode(StrEnum):
@@ -301,8 +312,14 @@ class ReferenceService:
         a shape to carry a key (no language yet, truncated text, no numbered
         questions) the carry is skipped rather than refused: the author asked
         what the state is, and "awaiting key" IS the answer.
+
+        A test written in the system is read from its version in force and
+        nothing is written: its explanations are asked for when it is
+        published, not when anyone looks (task 07b).
         """
         document = await self._require_test_task(authored_document_id)
+        if _is_test_object(document):
+            return await self._read_a_written_test(document)
         override = await self._applicable_override(document)
         if override is None:
             return ReferenceView(
@@ -716,6 +733,53 @@ class ReferenceService:
                 "published version marks; change the draft and publish it",
             )
 
+    async def _read_a_written_test(self, document: AuthoredDocument) -> ReferenceView:
+        """What the author sees of a written test, from its version in force.
+
+        The key, the pass mark and the author's own explanations are the
+        version's; the model's explanations, its doubts and the state are the
+        machine layer's, for the version's axes in the version's language — and
+        the author's words win per question, as for a key typed in (task 07b,
+        PRE-FLIGHT section 7.3).
+        """
+        published = await TestObjectRepository(self._session).latest_version(
+            document.id
+        )
+        if published is None:
+            return ReferenceView(
+                status=ReferenceStatus.AWAITING_KEY, language=document.language
+            )
+        body = PublishedBody.from_jsonb(published.body)
+        explanation = await self._repo.latest_for_key(
+            authored_document_id=document.id,
+            kind=self._kind,
+            source_content_hash=published.content_digest,
+            source_task_type=document.task_type or "",
+            answers_hash=published.answers_digest,
+            language=published.language,
+        )
+        if explanation is None:
+            # A publication asks for these before it commits, so a version
+            # without them is not a state the service leaves behind.
+            return ReferenceView(
+                status=ReferenceStatus.AWAITING_KEY,
+                answers=body.answer_key(),
+                language=published.language,
+                pass_threshold=body.pass_threshold,
+            )
+        explanations = dict(explanation.explanations or {})
+        explanations.update(body.explanations())
+        return ReferenceView(
+            status=_STATUS_OF_STATE[explanation.state],
+            version=explanation.version,
+            answers=body.answer_key(),
+            explanations=explanations,
+            language=explanation.language,
+            failure_reason=explanation.failure_reason,
+            pass_threshold=body.pass_threshold,
+            doubts=dict(explanation.doubts or {}),
+        )
+
     def _view(
         self,
         document: AuthoredDocument,
@@ -732,15 +796,10 @@ class ReferenceService:
                 pass_threshold=override.pass_threshold,
             )
 
-        status = {
-            ReferenceState.PENDING.value: ReferenceStatus.GENERATING,
-            ReferenceState.READY.value: ReferenceStatus.READY,
-            ReferenceState.FAILED.value: ReferenceStatus.FAILED,
-        }[version.state]
         explanations = dict(version.explanations or {})
         explanations.update(override.author_explanations or {})
         return ReferenceView(
-            status=status,
+            status=_STATUS_OF_STATE[version.state],
             version=version.version,
             answers=dict(override.answers),
             explanations=explanations,

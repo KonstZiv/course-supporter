@@ -39,6 +39,7 @@ from course_supporter.homework.explanation_queue import ArqExplanationQueue
 from course_supporter.homework.reference_service import (
     GenerationInProgressError,
     ReferenceService,
+    ReferenceStatus,
 )
 from course_supporter.homework.test_object import (
     DraftBody,
@@ -68,7 +69,9 @@ from tests._helpers.course_node_factory import make_root_course_node
 pytestmark = pytest.mark.requires_db
 
 
-def _draft(*, right: int = 1, pass_threshold: int | None = 80) -> DraftBody:
+def _draft(
+    *, right: int = 1, pass_threshold: int | None = 80, explanation: str | None = None
+) -> DraftBody:
     """One question, two options; ``right`` is the position of the right one."""
     return DraftBody(
         pass_threshold=pass_threshold,
@@ -79,6 +82,7 @@ def _draft(*, right: int = 1, pass_threshold: int | None = 80) -> DraftBody:
                     DraftOption(text="6", correct=right == 0),
                     DraftOption(text="8", correct=right == 1),
                 ),
+                explanation=explanation,
             ),
         ),
     )
@@ -525,3 +529,62 @@ class TestTheDraft:
             await service.publish(document.id)
         with pytest.raises(NotATestObjectError):
             await service.current_version(document.id)
+
+
+class TestWhatTheAuthorReads:
+    """Task 07b, commit G1: the state of a written test's explanations."""
+
+    async def test_the_state_is_read_from_the_version_in_force(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        own = "Два в кубі — вісім."
+        document = await _written_test(
+            db_session, seed_root_node, _draft(explanation=own)
+        )
+        await _service(db_session, seed_root_node.tenant_id).publish(document.id)
+        references = _references(db_session, seed_root_node.tenant_id)
+
+        writing = await references.read(document.id)
+
+        assert writing.status is ReferenceStatus.GENERATING
+        assert writing.answers == {"1": ["б"]}
+        assert (writing.pass_threshold, writing.language) == (80, "ukr")
+        assert writing.explanations == {"1": own}, "the author's own, meanwhile"
+
+        [explanation] = await _explanations(db_session, document.id)
+        await TaskReferenceRepository(db_session).mark_ready(
+            explanation.id, {"1": "Модель пише інше."}, doubts={"1": True}
+        )
+
+        ready = await references.read(document.id)
+
+        assert ready.status is ReferenceStatus.READY
+        assert ready.explanations == {"1": own}, "the author's words win"
+        assert ready.doubts == {"1": True}
+        assert len(await _jobs(db_session, document.id)) == 1, "a read asks for none"
+
+    async def test_the_state_follows_the_version_in_force(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _written_test(db_session, seed_root_node)
+        service = _service(db_session, seed_root_node.tenant_id)
+        await service.publish(document.id)
+        await _finish_the_work(db_session, document.id)
+        await service.save_draft(document.id, _B)
+        await service.publish(document.id)
+
+        view = await _references(db_session, seed_root_node.tenant_id).read(document.id)
+
+        assert view.status is ReferenceStatus.GENERATING, "the new version's own"
+        assert view.answers == {"1": ["а"]}
+
+    async def test_nothing_published_is_awaiting_a_key_and_writes_nothing(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        document = await _written_test(db_session, seed_root_node)
+
+        view = await _references(db_session, seed_root_node.tenant_id).read(document.id)
+
+        assert view.status is ReferenceStatus.AWAITING_KEY
+        assert await _explanations(db_session, document.id) == []
+        assert await _jobs(db_session, document.id) == []

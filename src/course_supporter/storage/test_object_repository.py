@@ -143,3 +143,30 @@ class TestObjectRepository:
     async def get_version(self, version_id: uuid.UUID) -> TestVersion | None:
         """A published version by its id — what a submission names."""
         return await self._session.get(TestVersion, version_id)
+
+    async def version_with_digests(
+        self,
+        authored_document_id: uuid.UUID,
+        *,
+        content_digest: str,
+        answers_digest: str,
+    ) -> TestVersion | None:
+        """The newest published version with these two digests, or ``None``.
+
+        What a version of the explanations was asked for: its axes are the
+        visible digest and the key's digest. Several versions can share them —
+        a pass mark or an explanation of the author's own changed in between —
+        and every one of them has the same text and the same key, so the newest
+        stands for all. Served by ``ix_test_versions_document_content``.
+        """
+        stmt = (
+            select(TestVersion)
+            .where(
+                TestVersion.authored_document_id == authored_document_id,
+                TestVersion.content_digest == content_digest,
+                TestVersion.answers_digest == answers_digest,
+            )
+            .order_by(TestVersion.version.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()

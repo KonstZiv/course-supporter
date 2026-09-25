@@ -9,7 +9,7 @@ Purpose:
 
 Interface:
     :class:`TestObjectService` — save the draft, publish it, read the version
-        in force.
+        in force, and ask for a version's explanations as a submission does.
     :class:`Publication` — the version a publication gave, and whether it is
         new.
     :class:`NotATestObjectError` — the document is not a test written in the
@@ -161,6 +161,29 @@ class TestObjectService:
         """The version in force — the latest published — or ``None`` before any."""
         document = await self._require_test_object(authored_document_id)
         return await self._repo.latest_version(document.id)
+
+    async def request_explanations(self, version_id: uuid.UUID, language: str) -> None:
+        """Ask for a version's explanations in ``language``, as a submission does.
+
+        A submission's step once its review is out: for the version it was taken
+        for — not the newest — in the review's language (task 07b, decisions 13
+        and 14). A stuck version is asked for again; a failed one is not, so a
+        generation that keeps failing is not paid for once per submission.
+
+        Raises:
+            GenerationInProgressError: another job of the task is in flight; the
+                caller rolls back, and the next submission asks again.
+            RuntimeError: the version is not there — versions go only with their
+                test, so this is a broken invariant.
+        """
+        published = await self._repo.get_version(version_id)
+        if published is None:
+            msg = f"published version {version_id} is not there"
+            raise RuntimeError(msg)
+        document = await self._require_test_object(published.authored_document_id)
+        await self._references.order_explanations(
+            document, published, language, retry_failed=False
+        )
 
     async def _require_test_object(
         self, authored_document_id: uuid.UUID

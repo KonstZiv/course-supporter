@@ -1,4 +1,4 @@
-"""A test's review, built from the answers and the key — no model call (task 07).
+"""A test's review, built from the answers and the key — no model call (tasks 07, 07b).
 
 Purpose:
     The result builder of the ``test`` type (``homework/result_builders.py``).
@@ -9,30 +9,28 @@ Purpose:
     submission pays for nothing (task 07, invariant 1).
 
 The order, and why each step is where it is (pre-flight 7.4):
-    1. The student's canonical answers, from the file the doors read.
-    2. The key and its explanations in the course language and in the review's
-       — READ, never written (:meth:`ReferenceService.explanations_for`).
+    1. The student's canonical answers and the published version the doors
+       took them for, from the file the core stored (task 07b, decision 14).
+    2. That version's key, pass mark and the author's own explanations, and
+       the model's explanations for its axes in the course language and in
+       the review's — READ, never written
+       (:meth:`ReferenceService.explanations_of`).
     3. The pure functions: check, score, verdict, which explanation.
     4. The structure (:class:`ReviewStructureV1` with a test section).
     5. Its markdown, by the assembler.
     After delivery, :meth:`TestResultBuilder.after_delivery` asks for the
-    explanations in the student's language.
+    explanations in the student's language, for the same version.
 
 How the review survives another job of the task (task 07, decision 9):
-    The database keeps one job in flight per task, and carrying the key onto a
-    new text asks for one. So the review never carries anything: it reads, and
-    a key that would be carried reads as it will stand — the same answers and
-    the same pass mark — with no model explanations for the new text yet, which
-    is also all a version made at that moment could offer. The carrying and
-    the asking happen after delivery, in a session of their own; a collision
-    there is rolled back and logged, and the delivered review is not touched.
-    The next submission asks again.
+    The database keeps one job in flight per task, and asking for explanations
+    takes one. So the review never asks: it reads what is written, and the
+    asking happens after delivery, in a session of its own; a collision there
+    is rolled back and logged, and the delivered review is not touched. The
+    next submission asks again.
 """
 
 from __future__ import annotations
 
-import json
-import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -43,26 +41,18 @@ from course_supporter.homework.reference_service import (
     ExplanationsView,
     GenerationInProgressError,
     ReadOnlyQueue,
-    ReferenceRefusedError,
     ReferenceService,
 )
-from course_supporter.homework.result_builders import (
-    BuildContext,
-    BuiltResult,
-    ResultNotBuiltError,
-)
+from course_supporter.homework.result_builders import BuildContext, BuiltResult
 from course_supporter.homework.review_assembler import assemble_review
-from course_supporter.homework.task_context import load_task_source_text
+from course_supporter.homework.test_doors import questions_of, read_stored_answers
+from course_supporter.homework.test_object_service import TestObjectService
 from course_supporter.homework.test_scoring import (
     choose_explanation,
     pass_verdict,
     score_answers,
 )
-from course_supporter.homework.test_text import (
-    ParsedTest,
-    canonical_label,
-    parse_test,
-)
+from course_supporter.homework.test_text import ParsedTest, canonical_label
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
     ReviewStructureV1,
@@ -73,10 +63,9 @@ from course_supporter.models.review_structure import (
 )
 from course_supporter.phrasebook import FALLBACK_LANGUAGE
 from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from course_supporter.homework.test_text import Option
 
 __all__ = ["TEST_NOT_READY", "TestResultBuilder", "build_test_review"]
@@ -84,11 +73,11 @@ __all__ = ["TEST_NOT_READY", "TestResultBuilder", "build_test_review"]
 logger = structlog.get_logger(__name__)
 
 TEST_NOT_READY = "test_not_ready"
-"""The code a submission fails with when no key applies to the test any more.
+"""The code a submission failed with when no key applied to the test any more.
 
-The doors let the submission in because a key applied then; the author cleared
-or changed it before the work ran (pre-flight 7.5). The portal reads this code
-as it reads the door's own refusal of the same name.
+Not given since task 07b: a submission is scored by the version it was taken
+for, which always carries its key. Kept while the docs and the README's lock
+name it (task 07b, commit Zh1).
 """
 
 
@@ -169,40 +158,45 @@ class TestResultBuilder:
     """The result of a test: scored by code, explained from the reference."""
 
     async def build(self, context: BuildContext) -> BuiltResult:
-        """Read the answers and the key, and write the review out.
+        """Read the answers and the version they were taken for, and write the review.
+
+        The version is the one the doors bound the answers to, not the newest:
+        a version published while the submission waited does not re-score it
+        (task 07b, decision 14). Its key, pass mark and the author's own
+        explanations come with it; the model's explanations are read for its
+        axes, in the course language and the review's.
 
         Raises:
-            ResultNotBuiltError: no key applies to the test any more
-                (:data:`TEST_NOT_READY`).
-            ValueError: the stored answers are not the shape the core writes —
-                our own fault, and the body fails the submission with its
-                generic code.
+            ValueError: the stored answers are not what the core writes, or the
+                version they name is not there — our own fault, and the body
+                fails the submission with its generic code.
         """
-        document_id = context.submission.authored_document_id
-        course_language, review_language = await _languages(
-            context.session, document_id, context.review_language
+        version_id, student_answers = read_stored_answers(context.submission_text)
+        published = await TestObjectRepository(context.session).get_version(version_id)
+        document = (
+            await context.session.get(AuthoredDocument, published.authored_document_id)
+            if published is not None
+            else None
         )
-        student_answers = _read_answers(context.submission_text)
+        if published is None or document is None:
+            msg = f"the version {version_id} the answers were taken for is not there"
+            raise ValueError(msg)
+        course_language = published.language
+        review_language = context.review_language or course_language
 
         service = ReferenceService(context.session, ReadOnlyQueue())
-        try:
-            course = await service.explanations_for(document_id, course_language)
-            review = (
-                course
-                if review_language == course_language
-                else await service.explanations_for(document_id, review_language)
-            )
-        except ReferenceRefusedError as exc:
-            raise ResultNotBuiltError(TEST_NOT_READY, exc.details) from exc
-        if not course.answers:
-            raise ResultNotBuiltError(
-                TEST_NOT_READY,
-                "no answer key applies to the current version of the test",
-            )
+        course = await service.explanations_of(document, published, course_language)
+        review = (
+            course
+            if review_language == course_language
+            else await service.explanations_of(document, published, review_language)
+        )
 
-        test = parse_test(await load_task_source_text(context.session, document_id))
         structure, score = build_test_review(
-            student_answers=student_answers, test=test, course=course, review=review
+            student_answers=student_answers,
+            test=ParsedTest(questions=questions_of(published)),
+            course=course,
+            review=review,
         )
         return BuiltResult(
             structure=structure, markdown=assemble_review(structure), score=score
@@ -211,13 +205,13 @@ class TestResultBuilder:
     async def after_delivery(self, context: BuildContext) -> None:
         """Ask for the explanations in the student's language, in a session of its own.
 
-        :meth:`ReferenceService.request_explanations` carries the key onto a
-        new text and asks for work once per version and language. Another job
-        of the task in flight is an ordinary state, not a failure: the session
-        is rolled back — no version is left without its job — and the next
-        submission asks again. Anything else propagates to the body, which logs
-        it: the review is already out, and a failed request must not take it
-        back.
+        For the version the submission was taken for, through the object's
+        service (task 07b, decision 14), once per version and language. Another
+        job of the task in flight is an ordinary state, not a failure: the
+        session is rolled back — no version is left without its job — and the
+        next submission asks again. Anything else propagates to the body, which
+        logs it: the review is already out, and a failed request must not take
+        it back.
         """
         submission = context.submission
         if context.redis is None:
@@ -227,16 +221,18 @@ class TestResultBuilder:
                 reason="no_queue",
             )
             return
+        version_id, _ = read_stored_answers(context.submission_text)
         async with context.session_factory() as session:
-            _, review_language = await _languages(
-                session, submission.authored_document_id, context.review_language
+            published = await TestObjectRepository(session).get_version(version_id)
+            review_language = context.review_language or (
+                published.language if published is not None else FALLBACK_LANGUAGE
             )
             queue = ArqExplanationQueue(
                 redis=context.redis, session=session, tenant_id=submission.tenant_id
             )
             try:
-                await ReferenceService(session, queue).request_explanations(
-                    submission.authored_document_id, review_language
+                await TestObjectService(session, queue).request_explanations(
+                    version_id, review_language
                 )
                 await session.commit()
             except GenerationInProgressError:
@@ -246,31 +242,6 @@ class TestResultBuilder:
                     submission_id=str(submission.id),
                     language=review_language,
                 )
-
-
-async def _languages(
-    session: AsyncSession, document_id: uuid.UUID, resolved: str | None
-) -> tuple[str, str]:
-    """The course language and the review's, each a code a structure can carry.
-
-    The review's is the doors' resolution; with none, the review is in the
-    course language — the language its explanations are written in.
-    """
-    document = await session.get(AuthoredDocument, document_id)
-    course = (document.language if document is not None else None) or FALLBACK_LANGUAGE
-    return course, resolved or course
-
-
-def _read_answers(text: str) -> dict[str, list[str]]:
-    """The canonical answers the core stored, checked for shape before use."""
-    raw = json.loads(text)
-    if not isinstance(raw, dict) or not all(
-        isinstance(labels, list) and all(isinstance(label, str) for label in labels)
-        for labels in raw.values()
-    ):
-        msg = "the stored answers are not a mapping of question to labels"
-        raise ValueError(msg)
-    return {str(number): list(labels) for number, labels in raw.items()}
 
 
 def _options_by_question(test: ParsedTest) -> dict[str, tuple[Option, ...]]:

@@ -1,4 +1,4 @@
-"""Acceptance of task 07, walked end to end (mentor-rebuild task 07).
+"""Acceptance of task 07, walked end to end (mentor-rebuild tasks 07, 07b).
 
 The criterion this file exists for is a THROUGH one — "a test answered with its
 answers is reviewed without a model call, its explanations are written once
@@ -6,8 +6,11 @@ per version and language, and what cannot be answered is refused at the door"
 — and a through criterion is not proved by a pile of unit tests, each of which
 can be green while the joints between them are broken (``vision-rules#25``).
 
-So nothing here is called directly. The key goes in and out through the
-author's routes with a key of scope PREP; the student answers through the
+So nothing here is called directly but one thing. Since task 07b the test is
+written in the system and its key is its published version's; the author's
+routes that publish it come with commit E1, so until then the author publishes
+through the test's service — the one direct call. The key is read back through
+the author's route with a key of scope PREP; the student answers through the
 portal with a real bearer session from a real login; the channel answers with
 a key of scope CHECK. Every submission is stored by the core in the storage
 double and read back from it by the real ARQ body, which the test runs itself,
@@ -39,18 +42,28 @@ from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.auth.context import TenantContext
 from course_supporter.funds_port import FUNDS_PORT_ACTION
+from course_supporter.homework.explanation_queue import ArqExplanationQueue
 from course_supporter.homework.path_config import (
     PathConfig,
     ServedBy,
     SubmissionState,
 )
+from course_supporter.homework.test_object import (
+    DraftBody,
+    DraftOption,
+    DraftQuestion,
+)
+from course_supporter.homework.test_object_service import (
+    Publication,
+    TestObjectService,
+)
+from course_supporter.homework.test_text import parse_test
 from course_supporter.jobs import JobType
 from course_supporter.service_logging import get_current_job_id
+from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
     AuthoredDocument,
-    DocumentSegment,
-    DocumentSummary,
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
@@ -61,6 +74,7 @@ from course_supporter.storage.orm import (
     TaskReference,
     Tenant,
 )
+from course_supporter.storage.test_object_repository import TestObjectRepository
 from course_supporter.workers.key_explain import arq_explain_key
 from tests._helpers.course_node_factory import make_root_course_node
 
@@ -68,7 +82,6 @@ pytestmark = pytest.mark.requires_db
 
 _SOURCE = Path(__file__).parents[1] / "fixtures" / "reference" / "test_source.md"
 _TEXT = _SOURCE.read_text(encoding="utf-8")
-_HASH = "07" + "e" * 62
 _KEY: dict[str, list[str]] = {
     "1": ["б"],
     "2": ["в"],
@@ -94,6 +107,58 @@ _SWITCHES = (
     "course_supporter.homework.test_doors.get_path_config",
     "course_supporter.homework.path_runner.get_path_config",
 )
+
+
+def _draft() -> DraftBody:
+    """The fixture's five questions as the author writes them in the system.
+
+    Read out of the fixture file, not retyped: the right options are the key's,
+    the pass mark is 80, and question 3 carries the author's own words.
+    """
+    return DraftBody(
+        pass_threshold=_PASS_MARK,
+        questions=tuple(
+            DraftQuestion(
+                text=question.text,
+                options=tuple(
+                    DraftOption(
+                        text=option.text,
+                        correct=option.label in _KEY[question.number],
+                    )
+                    for option in question.options
+                ),
+                explanation=_AUTHOR_ON_3 if question.number == "3" else None,
+            )
+            for question in parse_test(_TEXT).questions
+        ),
+    )
+
+
+async def _publish(
+    session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: uuid.UUID,
+    test_id: uuid.UUID,
+    draft: DraftBody | None = None,
+) -> Publication:
+    """The author publishes — through the service until commit E1 gives a route.
+
+    The queue is the real one over a double of Redis, as the author's routes
+    wire it: the explanations' job is a real row, which the test then runs.
+    """
+    async with session_factory() as session:
+        service = TestObjectService(
+            session,
+            ArqExplanationQueue(
+                redis=AsyncMock(enqueue_job=AsyncMock(return_value=None)),
+                session=session,
+                tenant_id=tenant_id,
+            ),
+        )
+        if draft is not None:
+            await service.save_draft(test_id, draft)
+        publication = await service.publish(test_id)
+        await session.commit()
+    return publication
 
 
 def _config() -> PathConfig:
@@ -234,11 +299,9 @@ async def world(
 ) -> AsyncGenerator[dict[str, uuid.UUID]]:
     """A course in Ukrainian with the test of five questions, and its student.
 
-    The test's text is the fixture file whole, stored as two segments cut in
-    the middle of a question — ingestion cuts where it cuts, and everything
-    that reads a test reads the segments glued back without a separator.
+    The test is written in the system (task 07b): the fixture file's questions
+    as its draft, not yet published — publishing it is the author's first step.
     """
-    cut = _TEXT.index("Навіщо запускати") + 8
     async with session_factory() as session:
         tenant = Tenant(
             name=f"e2e-test-{uuid.uuid4().hex[:8]}",
@@ -252,36 +315,17 @@ async def world(
         test = AuthoredDocument(
             course_node_id=course.id,
             course_root_id=course.id,
-            source_type="text",
-            source_url="https://example.com/test_source.md",
-            filename="test_source.md",
+            source_type="test_object",
+            source_url="test-object:",
             order=1,
             task_type="test",
             language="ukr",
-            content_hash=_HASH,
+            content_hash=compute_content_hash(b"", []),
+            title="Тест: основи роботи з агентом",
         )
         session.add(test)
         await session.flush()
-        summary = DocumentSummary(
-            authored_document_id=test.id,
-            course_root_id=course.id,
-            title="Тест",
-            status="ready",
-        )
-        session.add(summary)
-        await session.flush()
-        for order, (start, end) in enumerate(((0, cut), (cut, len(_TEXT)))):
-            session.add(
-                DocumentSegment(
-                    document_summary_id=summary.id,
-                    course_root_id=course.id,
-                    order=order,
-                    content=_TEXT[start:end],
-                    description="the test",
-                    start_pos=start,
-                    end_pos=end,
-                )
-            )
+        await TestObjectRepository(session).replace_draft(test.id, _draft().to_jsonb())
         student = Student(tenant_id=tenant.id, external_id=_EXTERNAL_ID)
         session.add(student)
         await session.flush()
@@ -573,18 +617,12 @@ class TestAcceptance:
             patch(_SWITCHES[1], return_value=_config()),
             patch("course_supporter.homework.webhook.deliver_webhook", new=delivered),
         ):
-            # ── 1. The author's key: pass mark 80, their own words on 3 ─────
+            # ── 1. The author publishes: the key, pass mark 80, own words on 3
             use_key(_key(tenant_id, "prep"))
             rows_before = await _tenant_rows(session_factory, tenant_id)
-            put = await ac.put(
-                f"{reference}/override",
-                json={
-                    "answers": _KEY,
-                    "author_explanations": {"3": _AUTHOR_ON_3},
-                    "pass_threshold": _PASS_MARK,
-                },
-            )
-            assert put.status_code == 200, put.text
+            publication = await _publish(session_factory, tenant_id, test_id)
+            assert publication.created, "step 1: the first version"
+            digest = publication.version.content_digest
             model.explanations, model.doubts = dict(_MODEL_UKR), {"2": True}
             (generation,) = await _run_explanations(session_factory, tenant_id, model)
             await _one_generation(session_factory, generation, step=1)
@@ -603,7 +641,7 @@ class TestAcceptance:
             assert set(sheet) == {"version", "accepting_answers", "questions"}, (
                 "step 2: the three fields"
             )
-            assert (sheet["version"], sheet["accepting_answers"]) == (_HASH, True)
+            assert (sheet["version"], sheet["accepting_answers"]) == (digest, True)
             assert [q["number"] for q in sheet["questions"]] == list(_KEY)
             flat = json.dumps(sheet, ensure_ascii=False)
             for word in ('"answers"', '"explanations"', '"doubts"', _MODEL_UKR["1"]):
@@ -636,7 +674,7 @@ class TestAcceptance:
             rows_before = await _tenant_rows(session_factory, tenant_id)
             answered = await ac.post(
                 f"/api/v1/portal/tasks/{test_id}/test-submissions",
-                json={"answers": _WRONG_ON_5, "test_version": _HASH},
+                json={"answers": _WRONG_ON_5, "test_version": digest},
                 headers=bearer,
             )
             assert answered.status_code == 202, answered.text
@@ -706,7 +744,7 @@ class TestAcceptance:
                 "node_id": str(world["course_id"]),
                 "authored_document_id": str(test_id),
                 "answers": _WRONG_ON_5,
-                "test_version": _HASH,
+                "test_version": digest,
                 "response_language": "eng",
             }
             answered = await ac.post("/api/v1/homework/submit-test", json=channel_body)
@@ -728,7 +766,7 @@ class TestAcceptance:
                 if generation not in generations_before
             ]
             assert [(language, version) for _, language, version in asked] == [
-                ("eng", _HASH)
+                ("eng", digest)
             ], "step 5: exactly one generation asked for, for (version, eng)"
 
             # ── 6. It runs; the second English answer reads English ─────────
@@ -752,20 +790,33 @@ class TestAcceptance:
                 "step 6: no new generation"
             )
 
-            # ── 7. The key is cleared: the doors refuse, nothing is stored ──
-            use_key(_key(tenant_id, "prep"))
-            cleared = await ac.delete(f"{reference}/override")
-            assert cleared.status_code == 200, cleared.text
+            # ── 7. A question is added and published: the old form is refused
             rows_before = await _tenant_rows(session_factory, tenant_id)
+            extended = DraftBody(
+                pass_threshold=_PASS_MARK,
+                questions=(
+                    *_draft().questions,
+                    DraftQuestion(
+                        text="Чи варто перевіряти зміни агента?",
+                        options=(
+                            DraftOption(text="Так", correct=True),
+                            DraftOption(text="Ні", correct=False),
+                        ),
+                    ),
+                ),
+            )
+            renewed = await _publish(session_factory, tenant_id, test_id, extended)
+            assert renewed.created, "step 7: the premise, a new version"
+            assert renewed.version.content_digest != digest, "step 7: another form"
             submissions_before = await _submissions(session_factory, test_id)
             objects_before = len(storage.objects)
             refused = await ac.post(
                 f"/api/v1/portal/tasks/{test_id}/test-submissions",
-                json={"answers": _KEY},
+                json={"answers": _KEY, "test_version": digest},
                 headers=bearer,
             )
             assert refused.status_code == 409, refused.text
-            assert refused.json()["detail"]["code"] == "TEST_NOT_READY", "step 7"
+            assert refused.json()["detail"]["code"] == "TEST_VERSION_CHANGED", "step 7"
             assert await _submissions(session_factory, test_id) == submissions_before, (
                 "step 7: no submission row"
             )

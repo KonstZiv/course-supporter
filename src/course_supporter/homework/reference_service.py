@@ -55,12 +55,13 @@ A test written in the system (task 07b):
     :meth:`ReferenceService.clear_key` refuse it (``KEY_LIVES_IN_TEST``). Its
     explanations are asked for by the axes of a published version —
     :meth:`ReferenceService.order_explanations` — by a publication in the
-    course language and by a submission in the student's
-    (:meth:`ReferenceService.request_explanations`). A version left ``pending``
-    with no job of the task in flight is stuck, and both ask for it again; a
-    ``failed`` one only a publication does (task 07b, decision 13). The author
-    reads its state (:meth:`ReferenceService.read`) from its version in force,
-    and that read writes nothing.
+    course language and by a submission in the student's, for the version it
+    was taken for (``TestObjectService.request_explanations``). A review reads
+    them for that version (:meth:`ReferenceService.explanations_of`). A
+    version left ``pending`` with no job of the task in flight is stuck, and
+    both ask for it again; a ``failed`` one only a publication does (task 07b,
+    decision 13). The author reads its state (:meth:`ReferenceService.read`)
+    from its version in force, and that read writes nothing.
 """
 
 from __future__ import annotations
@@ -360,6 +361,29 @@ class ReferenceService:
             doubts=dict(version.doubts or {}) if version is not None else {},
         )
 
+    async def explanations_of(
+        self, document: AuthoredDocument, published: TestVersion, language: str
+    ) -> ExplanationsView:
+        """A published version's key and its explanations in ``language`` — read-only.
+
+        What the review of a submission reads for the version the submission
+        was taken for (task 07b, decision 14): the key, the pass mark and the
+        author's own explanations are the version's; the model's explanations
+        and doubts are the machine layer's for the version's axes, and empty
+        until they are written. Nothing is written and nothing is asked for:
+        the review is built inside the submission's own transaction.
+        """
+        body = PublishedBody.from_jsonb(published.body)
+        explanation = await self._explanation_version(document, published, language)
+        return ExplanationsView(
+            language=language,
+            answers=body.answer_key(),
+            pass_threshold=body.pass_threshold,
+            author=body.explanations(),
+            model=dict(explanation.explanations or {}) if explanation else {},
+            doubts=dict(explanation.doubts or {}) if explanation else {},
+        )
+
     async def request_explanations(
         self, authored_document_id: uuid.UUID, language: str
     ) -> None:
@@ -373,26 +397,16 @@ class ReferenceService:
         nothing, whatever its state: a failed one is not retried from here, so
         a generation that keeps failing is not paid for once per submission.
 
-        A test written in the system has no layer to carry: its explanations
-        are asked for by the axes of its current published version, through
-        :meth:`order_explanations` — a stuck version asked for again, a failed
-        one left as it is (task 07b, decision 13). Nothing published, nothing
-        asked.
+        A test written in the system has no layer to carry, and nothing is
+        asked here: its submission asks by the version it was taken for,
+        through the object's service (task 07b, decision 14;
+        ``TestObjectService.request_explanations``).
 
         Raises:
             GenerationInProgressError: another job of the task is in flight. The
                 caller rolls its session back; the next submission asks again.
         """
         document = await self._require_test_task(authored_document_id)
-        if _is_test_object(document):
-            published = await TestObjectRepository(self._session).latest_version(
-                document.id
-            )
-            if published is not None:
-                await self.order_explanations(
-                    document, published, language, retry_failed=False
-                )
-            return
         override = await self._applicable_override(document)
         if override is None:
             return
@@ -750,13 +764,8 @@ class ReferenceService:
                 status=ReferenceStatus.AWAITING_KEY, language=document.language
             )
         body = PublishedBody.from_jsonb(published.body)
-        explanation = await self._repo.latest_for_key(
-            authored_document_id=document.id,
-            kind=self._kind,
-            source_content_hash=published.content_digest,
-            source_task_type=document.task_type or "",
-            answers_hash=published.answers_digest,
-            language=published.language,
+        explanation = await self._explanation_version(
+            document, published, published.language
         )
         if explanation is None:
             # A publication asks for these before it commits, so a version
@@ -778,6 +787,24 @@ class ReferenceService:
             failure_reason=explanation.failure_reason,
             pass_threshold=body.pass_threshold,
             doubts=dict(explanation.doubts or {}),
+        )
+
+    async def _explanation_version(
+        self, document: AuthoredDocument, published: TestVersion, language: str
+    ) -> TaskReference | None:
+        """The newest version of a published test's explanations in ``language``.
+
+        Found by the published version's axes — its visible digest and its
+        key's digest — a failed one included, as :meth:`_latest_version` finds
+        a typed-in key's.
+        """
+        return await self._repo.latest_for_key(
+            authored_document_id=document.id,
+            kind=self._kind,
+            source_content_hash=published.content_digest,
+            source_task_type=document.task_type or "",
+            answers_hash=published.answers_digest,
+            language=language,
         )
 
     def _view(

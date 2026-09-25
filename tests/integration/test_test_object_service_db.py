@@ -360,12 +360,11 @@ class TestExplanationsThatWillNotBeWritten:
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         document = await _written_test(db_session, seed_root_node)
-        await _service(db_session, seed_root_node.tenant_id).publish(document.id)
+        service = _service(db_session, seed_root_node.tenant_id)
+        publication = await service.publish(document.id)
         await _the_job_dies(db_session, document.id)
 
-        await _references(db_session, seed_root_node.tenant_id).request_explanations(
-            document.id, "ukr"
-        )
+        await service.request_explanations(publication.version.id, "ukr")
 
         stuck, fresh = await _explanations(db_session, document.id)
         assert (stuck.state, fresh.state) == ("failed", "pending")
@@ -375,11 +374,10 @@ class TestExplanationsThatWillNotBeWritten:
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         document = await _written_test(db_session, seed_root_node)
-        await _service(db_session, seed_root_node.tenant_id).publish(document.id)
+        service = _service(db_session, seed_root_node.tenant_id)
+        publication = await service.publish(document.id)
 
-        await _references(db_session, seed_root_node.tenant_id).request_explanations(
-            document.id, "ukr"
-        )
+        await service.request_explanations(publication.version.id, "ukr")
 
         [explanation] = await _explanations(db_session, document.id)
         assert explanation.state == "pending"
@@ -389,12 +387,11 @@ class TestExplanationsThatWillNotBeWritten:
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         document = await _written_test(db_session, seed_root_node)
-        await _service(db_session, seed_root_node.tenant_id).publish(document.id)
+        service = _service(db_session, seed_root_node.tenant_id)
+        publication = await service.publish(document.id)
         await _the_generation_fails(db_session, document.id)
 
-        await _references(db_session, seed_root_node.tenant_id).request_explanations(
-            document.id, "ukr"
-        )
+        await service.request_explanations(publication.version.id, "ukr")
 
         [failed] = await _explanations(db_session, document.id)
         assert failed.state == "failed"
@@ -420,14 +417,11 @@ class TestAStudentsLanguage:
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         document = await _written_test(db_session, seed_root_node)
-        publication = await _service(db_session, seed_root_node.tenant_id).publish(
-            document.id
-        )
+        service = _service(db_session, seed_root_node.tenant_id)
+        publication = await service.publish(document.id)
         await _finish_the_work(db_session, document.id)
 
-        await _references(db_session, seed_root_node.tenant_id).request_explanations(
-            document.id, "eng"
-        )
+        await service.request_explanations(publication.version.id, "eng")
 
         course, student = await _explanations(db_session, document.id)
         assert (course.language, student.language) == ("ukr", "eng")
@@ -437,17 +431,28 @@ class TestAStudentsLanguage:
         )
         assert len(await _jobs(db_session, document.id)) == 2
 
-    async def test_nothing_published_asks_for_nothing(
+    async def test_a_submission_asks_for_the_version_it_was_taken_for(
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
+        """Not the newest: the review was scored by this one (decision 14)."""
         document = await _written_test(db_session, seed_root_node)
+        service = _service(db_session, seed_root_node.tenant_id)
+        taken_for = await service.publish(document.id)
+        await _finish_the_work(db_session, document.id)
+        await service.save_draft(document.id, _B)
+        await service.publish(document.id)
+        await _finish_the_work(db_session, document.id)
 
-        await _references(db_session, seed_root_node.tenant_id).request_explanations(
-            document.id, "eng"
-        )
+        await service.request_explanations(taken_for.version.id, "eng")
 
-        assert await _explanations(db_session, document.id) == []
-        assert await _jobs(db_session, document.id) == []
+        english = [
+            (e.source_content_hash, e.answers_hash)
+            for e in await _explanations(db_session, document.id)
+            if e.language == "eng"
+        ]
+        assert english == [
+            (taken_for.version.content_digest, taken_for.version.answers_digest)
+        ]
 
 
 class TestTheCourseLanguage:

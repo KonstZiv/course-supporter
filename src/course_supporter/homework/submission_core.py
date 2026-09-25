@@ -47,8 +47,7 @@ from course_supporter.api.upload_validation import (
     file_extension,
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
-from course_supporter.homework.test_doors import check_test_answers
-from course_supporter.homework.test_text import canonical_answers_json
+from course_supporter.homework.test_doors import check_test_answers, stored_answers
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.stage1 import archive_kind_for_filename
@@ -65,6 +64,7 @@ if TYPE_CHECKING:
         AuthoredDocument,
         HomeworkSubmission,
         Student,
+        TestVersion,
     )
     from course_supporter.storage.s3 import S3Client
 
@@ -395,6 +395,7 @@ async def create_and_dispatch_test_submission(
     course_node_id: uuid.UUID,
     node_id: uuid.UUID,
     task_doc: AuthoredDocument,
+    published: TestVersion,
     answers: Mapping[str, Sequence[str]],
     test_version: str | None,
     delivery_mode: str,
@@ -408,13 +409,15 @@ async def create_and_dispatch_test_submission(
     upload and before any row (task 07, decision 12) — so a
     refused structure stores nothing and writes nothing. What passes is stored
     the way a file is (decision 7): one object under the same key pattern,
-    holding the canonical answers the result builder reads, with ``file_hash``
-    the hash of exactly those bytes. From there the tail is the file path's own,
-    with one difference: no deduplication — the same answers twice are two
-    submissions, each scored anew.
+    holding the canonical answers the result builder reads and the version
+    they were taken for — ``published``, the version in force at the doors,
+    which the review is then scored by (task 07b, decision 14) — with
+    ``file_hash`` the hash of exactly those bytes. From there the tail is the
+    file path's own, with one difference: no deduplication — the same answers
+    twice are two submissions, each scored anew.
     """
-    canonical = await check_test_answers(session, task_doc, answers, test_version)
-    payload = canonical_answers_json(canonical).encode("utf-8")
+    canonical = check_test_answers(published, answers, test_version)
+    payload = stored_answers(published.id, canonical).encode("utf-8")
     key = f"homework/{tenant_id}/{uuid.uuid4()}/{TEST_ANSWERS_FILENAME}"
     s3_url, _ = await s3.upload_smart(
         stream=_one_chunk(payload),

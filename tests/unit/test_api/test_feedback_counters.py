@@ -55,6 +55,7 @@ def _row(
 ) -> TaskCountersRow:
     return TaskCountersRow(
         authored_document_id=uuid.uuid4(),
+        title=None,
         filename="homework.md",
         source_type="text",
         order=2,

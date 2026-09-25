@@ -131,14 +131,15 @@ class HomeworkByCourseRow(NamedTuple):
 class HomeworkByTaskRow(NamedTuple):
     """One task (AuthoredDocument) in the /cost/homework/course/{id} breakdown.
 
-    Carries the raw label fields (``filename``/``source_type``/``order``)
-    rather than a composed label: the display label is composed in the route
-    layer via the shared ``material_label`` helper (an api-layer projection
-    the storage layer must not import). ``is_deleted`` flags a soft-deleted
-    task — shown, not filtered (its processing cost still counts).
+    Carries the raw label fields (``title``/``filename``/``source_type``/
+    ``order``) rather than a composed label: the display label is composed in
+    the route layer via the shared ``material_label`` helper (an api-layer
+    projection the storage layer must not import). ``is_deleted`` flags a
+    soft-deleted task — shown, not filtered (its processing cost still counts).
     """
 
     authored_document_id: uuid.UUID
+    title: str | None
     filename: str | None
     source_type: str
     order: int
@@ -652,6 +653,7 @@ class HomeworkCostRepository:
         stmt = (
             select(
                 AuthoredDocument.id.label("authored_document_id"),
+                AuthoredDocument.title.label("title"),
                 AuthoredDocument.filename.label("filename"),
                 AuthoredDocument.source_type.label("source_type"),
                 AuthoredDocument.order.label("order"),
@@ -678,6 +680,7 @@ class HomeworkCostRepository:
             )
             .group_by(
                 AuthoredDocument.id,
+                AuthoredDocument.title,
                 AuthoredDocument.filename,
                 AuthoredDocument.source_type,
                 AuthoredDocument.order,
@@ -691,6 +694,7 @@ class HomeworkCostRepository:
         return [
             HomeworkByTaskRow(
                 authored_document_id=row.authored_document_id,
+                title=row.title,
                 filename=row.filename,
                 source_type=row.source_type,
                 order=row.order,

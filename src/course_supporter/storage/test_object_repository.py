@@ -9,6 +9,7 @@ never commits — the caller owns the transaction boundary.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from typing import Any, Final
 
 from sqlalchemy import func, select
@@ -143,6 +144,23 @@ class TestObjectRepository:
     async def get_version(self, version_id: uuid.UUID) -> TestVersion | None:
         """A published version by its id — what a submission names."""
         return await self._session.get(TestVersion, version_id)
+
+    async def published_among(
+        self, authored_document_ids: Collection[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        """Which of these tests have been published — one query for a whole tree.
+
+        No ids, no query: a tree without a test written in the system asks
+        nothing.
+        """
+        if not authored_document_ids:
+            return set()
+        stmt = (
+            select(TestVersion.authored_document_id)
+            .where(TestVersion.authored_document_id.in_(authored_document_ids))
+            .distinct()
+        )
+        return set((await self._session.execute(stmt)).scalars())
 
     async def version_with_digests(
         self,

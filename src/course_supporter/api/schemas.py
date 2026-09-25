@@ -427,6 +427,13 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     )
     source_url: str = Field(description="URL or S3 path to the raw material.")
     filename: str | None = Field(description="Original filename, if available.")
+    title: str | None = Field(
+        default=None,
+        description=(
+            "The name both trees show — a test written in the system has one, "
+            "draft or published (task 07b). ``null`` for a document without one."
+        ),
+    )
     order: int = Field(description="0-based position among sibling materials.")
     state: str = Field(
         description=("Derived lifecycle state: ``pending``, ``ready``, or ``error``."),

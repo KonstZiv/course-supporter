@@ -141,6 +141,7 @@ async def get_course_touch_counters(
             TaskTouchCountersEntry(
                 authored_document_id=row.authored_document_id,
                 task_label=material_label(
+                    title=row.title,
                     filename=row.filename,
                     source_type=row.source_type,
                     order=row.order,

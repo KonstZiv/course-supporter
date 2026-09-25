@@ -42,6 +42,7 @@ class TaskCountersRow(NamedTuple):
     """
 
     authored_document_id: uuid.UUID
+    title: str | None
     filename: str | None
     source_type: str
     order: int
@@ -173,6 +174,7 @@ class FeedbackRepository:
             self._touches_on_live_reviews()
             .add_columns(
                 AuthoredDocument.id.label("authored_document_id"),
+                AuthoredDocument.title.label("title"),
                 AuthoredDocument.filename.label("filename"),
                 AuthoredDocument.source_type.label("source_type"),
                 AuthoredDocument.order.label("order"),
@@ -188,6 +190,7 @@ class FeedbackRepository:
             )
             .group_by(
                 AuthoredDocument.id,
+                AuthoredDocument.title,
                 AuthoredDocument.filename,
                 AuthoredDocument.source_type,
                 AuthoredDocument.order,
@@ -201,6 +204,7 @@ class FeedbackRepository:
         return [
             TaskCountersRow(
                 authored_document_id=row.authored_document_id,
+                title=row.title,
                 filename=row.filename,
                 source_type=row.source_type,
                 order=row.order,

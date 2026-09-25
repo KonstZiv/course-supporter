@@ -12,6 +12,8 @@ Purpose:
 Interface:
     :func:`load_test_yaml` — the bytes of a YAML test → :class:`LoadedDraft`,
         its title and its draft, or :class:`DraftRefusedError`.
+    :func:`screen_texts` — a draft's texts through the Stage 1 screens as
+        they will be read, whatever format the draft came in.
     :func:`dump_test_yaml` — a draft and its title → the canonical YAML.
     :class:`DraftRefusalCode` and :class:`RefusalPlace` — what a refusal says.
     :data:`MAX_BODY_BYTES` and the other limits of sections 6.1 and 6.2.
@@ -33,6 +35,11 @@ How a file is read (section 6.2):
        ``false``; ``pass_threshold`` only a whole number. A key given twice
        (``TEST_YAML_DUPLICATE_KEY``) or unknown to the schema is refused at the
        key; a missing field, at the set of fields that lacks it.
+    5. The texts are screened again as they will be read
+       (:func:`screen_texts`): a double-quoted string decodes its escapes —
+       ``\\u200b``, ``\\x49`` — only in step 3, after the screens of step 2
+       have read the file. What the screens refuse in a text written plainly,
+       they refuse written as escapes too.
 
     >>> source = b'''questions:
     ... - text: Is 1 odd?
@@ -78,6 +85,7 @@ Extending:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -110,6 +118,7 @@ __all__ = [
     "RefusalPlace",
     "dump_test_yaml",
     "load_test_yaml",
+    "screen_texts",
 ]
 
 MAX_BODY_BYTES: Final[int] = 256 * 1024
@@ -123,6 +132,9 @@ MAX_OPTION_CHARS: Final[int] = 500
 MAX_EXPLANATION_CHARS: Final[int] = 2_000
 MIN_PASS_THRESHOLD: Final[int] = 1
 MAX_PASS_THRESHOLD: Final[int] = 100
+
+_FIELDS_FILENAME: Final = "test-fields.txt"
+"""The name a draft's texts are screened under: plain text, whatever the format."""
 
 _TEST_FIELDS: Final = ("title", "pass_threshold", "questions")
 _QUESTION_FIELDS: Final = ("text", "options", "explanation")
@@ -250,7 +262,8 @@ def load_test_yaml(
 
     Raises:
         DraftRefusedError: The file breaks a rule of the format.
-        SecurityRejectedError: A Stage 1 screen refused the text.
+        SecurityRejectedError: A Stage 1 screen refused the file, or a text
+            read out of it (:func:`screen_texts`).
     """
     if len(content) > MAX_BODY_BYTES:
         raise DraftRefusedError(
@@ -281,7 +294,76 @@ def load_test_yaml(
             f"the file is not YAML: {exc}",
             RefusalPlace(),
         ) from exc
-    return _read_test(root)
+    return screen_texts(_read_test(root), language=language)
+
+
+def screen_texts(loaded: LoadedDraft, *, language: str | None) -> LoadedDraft:
+    """Screen a draft's texts as they will be read; return them in NFC.
+
+    The screens of Stage 1 read a file as it is written, and a YAML file is not
+    yet what it says: a double-quoted string decodes its escapes only when it
+    is parsed, after those screens. A JSON body decodes its own the same way.
+    So the texts are screened again, as they will be stored and read: each in
+    NFC, all of them one text, a field per line — the title, then each
+    question's text, its options' texts and its explanation.
+
+    Only the texts are read, never the format, so a draft read out of a JSON
+    body takes the same call (task 07b, commit E1).
+
+    Args:
+        loaded: The title and the draft, as a format was read into them.
+        language: The course language, ISO 639-3, as for the file's own screen.
+
+    Returns:
+        The same title and draft, every text in NFC.
+
+    Raises:
+        SecurityRejectedError: A screen refused a text; the category is the
+            screen's.
+    """
+    normalized = LoadedDraft(
+        title=None if loaded.title is None else _nfc(loaded.title),
+        body=DraftBody(
+            pass_threshold=loaded.body.pass_threshold,
+            questions=tuple(
+                DraftQuestion(
+                    text=_nfc(question.text),
+                    options=tuple(
+                        DraftOption(text=_nfc(option.text), correct=option.correct)
+                        for option in question.options
+                    ),
+                    explanation=(
+                        None
+                        if question.explanation is None
+                        else _nfc(question.explanation)
+                    ),
+                )
+                for question in loaded.body.questions
+            ),
+        ),
+    )
+    run_stage1(
+        filename=_FIELDS_FILENAME,
+        content="\n".join(_texts(normalized)).encode("utf-8"),
+        context="authored",
+        languages=(language,) if language else (),
+    )
+    return normalized
+
+
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+def _texts(loaded: LoadedDraft) -> list[str]:
+    """Every text of a draft in reading order, the title first when it has one."""
+    texts = [] if loaded.title is None else [loaded.title]
+    for question in loaded.body.questions:
+        texts.append(question.text)
+        texts.extend(option.text for option in question.options)
+        if question.explanation is not None:
+            texts.append(question.explanation)
+    return texts
 
 
 def dump_test_yaml(draft: DraftBody, *, title: str | None = None) -> str:

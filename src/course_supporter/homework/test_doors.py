@@ -111,9 +111,10 @@ class DoorCode(StrEnum):
 def new_path_serves_tests() -> bool:
     """Whether the ``test`` type is reviewed on the new path.
 
-    The switch in ``config/submission_paths.yaml``. While it is off, a test is
-    reviewed by today's Mentor, which reads a file — so a file stays a test's
-    form, and answers have nowhere to go.
+    The switch in ``config/submission_paths.yaml``. While it is off, answers
+    have nowhere to go: a test written as a file goes back to today's Mentor,
+    which reads the file, and a test written in the system cannot be taken at
+    all — it has no file for anyone to read (task 07b).
     """
     declared = get_path_config().task_types.get(AssignmentType.TEST)
     return declared is not None and declared.served_by is ServedBy.NEW_PATH
@@ -215,7 +216,7 @@ def check_test_answers(
         raise _refusal(
             409,
             DoorCode.TEST_FORM_UNAVAILABLE,
-            "Tests are not taken as answers yet: send the work as a file.",
+            "Tests are temporarily unavailable: try again later.",
         )
     if test_version is not None and test_version != published.content_digest:
         raise _refusal(

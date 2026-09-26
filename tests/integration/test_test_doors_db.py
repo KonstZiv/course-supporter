@@ -609,3 +609,25 @@ class TestEveryRefusalAtTheDoors:
         assert await _rows(session_factory, task_id) == before
         s3.upload_smart.assert_not_awaited()
         student.assert_not_awaited()
+
+    async def test_a_test_that_takes_no_answers_yet_sends_no_one_to_a_file(
+        self,
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The text a channel shows for a code it does not know yet (task 07b).
+
+        A test written in the system refuses a file whatever the switch, so
+        the text of ``TEST_FORM_UNAVAILABLE`` must not send the student to one:
+        the one thing left to do is to come back later.
+        """
+        with (
+            patch(_SWITCH, return_value=_config(test_on_new_path=False)),
+            pytest.raises(HTTPException) as refused,
+        ):
+            await _submit(session_factory, world, answers=dict(_ANSWERS))
+
+        assert refused.value.detail["code"] == "TEST_FORM_UNAVAILABLE"
+        details = refused.value.detail["details"].lower()
+        assert "file" not in details, details
+        assert "later" in details, details

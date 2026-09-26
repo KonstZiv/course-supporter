@@ -35,6 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
+from course_supporter.api.routes._author_shared import (
+    draft_refused,
+    security_rejected,
+    too_large_a_test,
+)
 from course_supporter.api.schemas import (
     AuthoredDocumentCreateResponse,
     AuthoredDocumentResponse,
@@ -62,6 +67,16 @@ from course_supporter.enqueue import (
     enqueue_base_normalize,
     enqueue_document_preparation,
     enqueue_ingestion,
+)
+from course_supporter.homework.reference_service import ReadOnlyQueue
+from course_supporter.homework.test_object_service import TestObjectService
+from course_supporter.homework.test_yaml import (
+    MAX_BODY_BYTES,
+    MAX_TITLE_CHARS,
+    DraftRefusedError,
+    LoadedDraft,
+    load_test_yaml,
+    screen_texts,
 )
 from course_supporter.ingestion.base import ProcessingError, UnsupportedFormatError
 from course_supporter.ingestion.code_structure import split_structure_reason
@@ -504,6 +519,130 @@ async def _enqueue_document_flow(
     )
 
 
+# ── A test written in the system (mentor-rebuild task 07b, commit E2) ──
+
+_YAML_EXTENSIONS: Final = frozenset({"yaml", "yml"})
+"""The extensions a test is uploaded under (task 07b, decision 18)."""
+
+
+def _test_object_source_reserved() -> HTTPException:
+    """``test_object`` named by a client: refused before anything is read.
+
+    Only the system gives a document that kind — the author's test routes, and
+    a YAML file uploaded here with the task kind ``test``. A request naming it
+    would otherwise have a document created and sent to a processing no worker
+    does.
+    """
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": "TEST_OBJECT_SOURCE_RESERVED",
+            "details": (
+                "source_type 'test_object' is not for a client to name: a test "
+                "is written by its own route, or uploaded as a YAML file with "
+                "task_type 'test'"
+            ),
+        },
+    )
+
+
+def _test_file_not_yaml() -> HTTPException:
+    """A test sent as anything but a YAML file through the multipart upload."""
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": "TEST_FILE_NOT_YAML",
+            "details": (
+                "a test is uploaded as a YAML file (.yaml or .yml) through the "
+                "multipart document route; another file, a link or a presigned "
+                "upload is not a test"
+            ),
+        },
+    )
+
+
+def _test_object_refusal(code: str, details: str) -> HTTPException:
+    """A change a test written in the system does not take (PRE-FLIGHT 7.3)."""
+    return HTTPException(status_code=422, detail={"code": code, "details": details})
+
+
+def _title_from_file(name: str) -> str:
+    """A file's name without its YAML extension: a test's name when it has none.
+
+    >>> _title_from_file("lecture 3.yaml")
+    'lecture 3'
+    >>> _title_from_file("notes.YML")
+    'notes'
+    """
+    base = name.rsplit("/", 1)[-1].strip()
+    stem, dot, extension = base.rpartition(".")
+    if dot and stem.strip() and extension.lower() in _YAML_EXTENSIONS:
+        base = stem.strip()
+    return base[:MAX_TITLE_CHARS]
+
+
+async def _create_written_test_from_file(
+    *,
+    session: AsyncSession,
+    tenant: TenantContext,
+    node_id: uuid.UUID,
+    file: UploadFile | None,
+    filename: str | None,
+) -> AuthoredDocumentCreateResponse:
+    """A YAML file with the task kind ``test``: a test written in the system.
+
+    Decision 18 (PRE-FLIGHT section 7.2): the file is read into the test's draft
+    and kept nowhere else — no storage write, no processing job — since the raw
+    YAML is not stored (decision 1) and a written test is never processed. The
+    checks are the author's routes' own: the format's rules with their place,
+    and the Stage 1 screens over the file and over its texts. The test takes
+    the course's language, whatever the request names, and is named by the
+    file's ``title``, or else by the file's name without its extension
+    (decision 7); it is an educational task whatever role the request names
+    (section 4.3). The response carries no job.
+    """
+    if file is None or extension_of(file.filename or "") not in _YAML_EXTENSIONS:
+        raise _test_file_not_yaml()
+    await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+    root = await CourseNodeRepository(session).get_root_for(
+        node_id, tenant_id=tenant.tenant_id
+    )
+    if root is None:
+        msg = f"node {node_id} reaches no root of its own tenant"
+        raise RuntimeError(msg)
+    if file.size is not None and file.size > MAX_BODY_BYTES:
+        raise draft_refused(too_large_a_test())
+    content = await file.read(MAX_BODY_BYTES + 1)
+    if len(content) > MAX_BODY_BYTES:
+        raise draft_refused(too_large_a_test())
+    service = TestObjectService(session, ReadOnlyQueue())
+    language = await service.course_language(root.id)
+    try:
+        loaded = load_test_yaml(
+            content, language=language, filename=file.filename or "test.yaml"
+        )
+        if loaded.title is None:
+            named = _title_from_file(filename or file.filename or "")
+            loaded = screen_texts(
+                LoadedDraft(title=named, body=loaded.body), language=language
+            )
+    except DraftRefusedError as exc:
+        raise draft_refused(exc) from exc
+    except SecurityRejectedError as exc:
+        raise security_rejected(exc) from exc
+    if loaded.title is None:
+        msg = "a test read from a file was left without a name"
+        raise RuntimeError(msg)
+    document = await service.create(
+        node_id, loaded.body, title=loaded.title, language=language
+    )
+    await session.commit()
+    logger.info(
+        "written_test_uploaded", document_id=str(document.id), node_id=str(node_id)
+    )
+    return AuthoredDocumentCreateResponse.model_validate(document)
+
+
 @router.post("/nodes/{node_id}/documents", status_code=201)
 async def create_document(
     node_id: uuid.UUID,
@@ -575,7 +714,14 @@ async def create_document(
     Creates an ``AuthoredDocument`` and auto-enqueues an ingestion job
     via ARQ. The ``job_id`` in the response can be used to track
     processing status via ``GET /api/v1/jobs/{job_id}``.
+
+    A YAML file with ``task_type=test`` is a test written in the system (task
+    07b): its draft, no storage write, no job, ``job_id: null``; any other file
+    or a link with that task type is 422 ``TEST_FILE_NOT_YAML``. A request
+    naming ``source_type=test_object`` is 422 ``TEST_OBJECT_SOURCE_RESERVED``.
     """
+    if source_type == SourceType.TEST_OBJECT:
+        raise _test_object_source_reserved()
     if source_url is None and file is None:
         raise HTTPException(
             status_code=422,
@@ -591,6 +737,18 @@ async def create_document(
             language = normalize_and_validate(language)
         except (InvalidLanguageError, LanguageNotAllowedError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # A test is written in the system: a YAML file becomes one, and nothing
+    # else is a test — before the kind's own checks, since the interface sends
+    # a test's YAML as ``code`` (task 07b, decision 18).
+    if task_type == AssignmentType.TEST:
+        return await _create_written_test_from_file(
+            session=session,
+            tenant=tenant,
+            node_id=node_id,
+            file=file,
+            filename=filename,
+        )
 
     if source_type == SourceType.CODE and file is None:
         raise HTTPException(
@@ -771,8 +929,11 @@ async def get_upload_url(
 
     The client should PUT the file content to the returned URL,
     then call ``POST /nodes/{nid}/documents/confirm-upload`` with
-    the returned key.
+    the returned key. ``source_type=test_object`` is 422
+    ``TEST_OBJECT_SOURCE_RESERVED`` (task 07b).
     """
+    if body.source_type == SourceType.TEST_OBJECT:
+        raise _test_object_source_reserved()
     if body.source_type == SourceType.WEB:
         raise HTTPException(
             status_code=422,
@@ -833,9 +994,16 @@ async def confirm_upload(
     """Confirm a presigned upload and create the AuthoredDocument.
 
     Verifies the file exists in S3, creates the database entry,
-    and enqueues ingestion.
+    and enqueues ingestion. A test is not confirmed here (task 07b): the
+    upload is already stored, and a test's YAML is not — 422
+    ``TEST_FILE_NOT_YAML``, and ``TEST_OBJECT_SOURCE_RESERVED`` for a request
+    naming ``source_type=test_object``, both before storage is read.
     """
     await _require_node_for_tenant(session, tenant.tenant_id, node_id)
+    if body.source_type == SourceType.TEST_OBJECT:
+        raise _test_object_source_reserved()
+    if body.task_type == AssignmentType.TEST:
+        raise _test_file_not_yaml()
 
     # Verify key belongs to this tenant and node
     expected_prefix = f"tenants/{tenant.tenant_id}/nodes/{node_id}/"
@@ -1271,6 +1439,23 @@ async def update_document(
         )
 
     if "task_type" in fields_set:
+        # A written test stays a test, and nothing else becomes one by a flag:
+        # a test is written in the system (task 07b, PRE-FLIGHT 7.3).
+        if document.source_type == SourceType.TEST_OBJECT.value:
+            if body.task_type != AssignmentType.TEST:
+                raise _test_object_refusal(
+                    "TEST_OBJECT_TYPE_FIXED",
+                    "a test written in the system stays a test; hide it instead",
+                )
+        elif (
+            body.task_type == AssignmentType.TEST
+            and document.task_type != AssignmentType.TEST.value
+        ):
+            raise _test_object_refusal(
+                "TEST_IS_AN_OBJECT",
+                "a test is written in the system — by its route or a YAML file "
+                "— not made one by a flag on another material",
+            )
         document = await document_repo.update_task_type(
             document, task_type=body.task_type
         )
@@ -1457,6 +1642,12 @@ async def retry_document(
             status_code=status.HTTP_410_GONE,
             detail="Document has been deleted; retry is no longer available.",
         )
+    if document.source_type == SourceType.TEST_OBJECT.value:
+        raise _test_object_refusal(
+            "TEST_OBJECT_NOT_PROCESSED",
+            "a test written in the system is never processed: there is nothing "
+            "to retry",
+        )
 
     if not force and document.state != "error":
         raise HTTPException(
@@ -1565,6 +1756,12 @@ async def confirm_file_roles(
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Document has been deleted; confirmation is no longer available.",
+        )
+    if document.source_type == SourceType.TEST_OBJECT.value:
+        raise _test_object_refusal(
+            "TEST_OBJECT_NOT_PROCESSED",
+            "a test written in the system is never processed: it has no file "
+            "roles to confirm",
         )
 
     proposal = (document.file_roles or {}).get("proposal") or {}

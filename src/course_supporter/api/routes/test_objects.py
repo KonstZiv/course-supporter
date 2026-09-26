@@ -39,7 +39,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
-from course_supporter.api.routes._author_shared import generation_in_progress
+from course_supporter.api.routes._author_shared import (
+    draft_refused,
+    generation_in_progress,
+    security_rejected,
+    too_large_a_test,
+)
 from course_supporter.api.schemas import (
     WrittenTestDraft,
     WrittenTestOption,
@@ -60,10 +65,8 @@ from course_supporter.homework.test_object import DraftBody, published_form
 from course_supporter.homework.test_object_service import TestObjectService
 from course_supporter.homework.test_yaml import (
     MAX_BODY_BYTES,
-    DraftRefusalCode,
     DraftRefusedError,
     LoadedDraft,
-    RefusalPlace,
     dump_test_yaml,
     load_test_json,
     load_test_yaml,
@@ -179,9 +182,9 @@ async def _read_draft(
             title_required=title_required,
         )
     except DraftRefusedError as exc:
-        raise _draft_refused(exc) from exc
+        raise draft_refused(exc) from exc
     except SecurityRejectedError as exc:
-        raise _security_rejected(exc) from exc
+        raise security_rejected(exc) from exc
 
 
 async def _read_capped(request: Request) -> bytes:
@@ -193,47 +196,15 @@ async def _read_capped(request: Request) -> bytes:
     """
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
-        raise _draft_refused(_too_large())
+        raise draft_refused(too_large_a_test())
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
         total += len(chunk)
         if total > MAX_BODY_BYTES:
-            raise _draft_refused(_too_large())
+            raise draft_refused(too_large_a_test())
         chunks.append(chunk)
     return b"".join(chunks)
-
-
-def _too_large() -> DraftRefusedError:
-    return DraftRefusedError(
-        DraftRefusalCode.TEST_TOO_LARGE,
-        f"the test is over {MAX_BODY_BYTES} bytes; a test may have {MAX_BODY_BYTES}",
-        RefusalPlace(),
-    )
-
-
-def _draft_refused(exc: DraftRefusedError) -> HTTPException:
-    """A draft the format refuses: its code, what is wrong, and where (section 6.3)."""
-    return HTTPException(
-        status_code=413 if exc.code is DraftRefusalCode.TEST_TOO_LARGE else 422,
-        detail={
-            "code": exc.code.value,
-            "details": exc.details,
-            "place": exc.place.to_json(),
-        },
-    )
-
-
-def _security_rejected(exc: SecurityRejectedError) -> HTTPException:
-    """A text a Stage 1 screen refused, answered as a refused upload is."""
-    return HTTPException(
-        status_code=400,
-        detail={
-            "code": "SECURITY_REJECTED",
-            "category": exc.category.value,
-            "details": exc.detail,
-        },
-    )
 
 
 async def _view(

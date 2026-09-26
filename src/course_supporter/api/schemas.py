@@ -1778,8 +1778,9 @@ class TestStructureResponse(BaseModel):
     )
     accepting_answers: bool = Field(
         description="True when answers are taken now: tests are answered on the "
-        "new path and the author's key applies to this version. While false, "
-        "answers are refused (``TEST_FORM_UNAVAILABLE`` or ``TEST_NOT_READY``)."
+        "new path. A published version always carries its key, so nothing else "
+        "holds answers back. While false, answers are refused "
+        "(``TEST_FORM_UNAVAILABLE``)."
     )
     questions: list[TestStructureQuestion] = Field(
         description="Every question of the test, in the order it asks them."

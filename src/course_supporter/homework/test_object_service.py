@@ -9,8 +9,9 @@ Purpose:
 
 Interface:
     :class:`TestObjectService` — create a test with its draft, save the draft,
-        publish it, read the version in force, and ask for a version's
-        explanations as a submission does.
+        publish it, read the version in force, ask for a version's
+        explanations as a submission does, and tell the explanation work which
+        body a version of explanations was asked for (task 07c).
     :data:`WRITTEN_TEST_URL` — the source URL every test written in the
         system carries.
     :class:`Publication` — the version a publication gave, and whether it is
@@ -66,6 +67,7 @@ from course_supporter.homework.reference_service import (
 from course_supporter.homework.test_completeness import require_complete
 from course_supporter.homework.test_object import (
     DraftBody,
+    PublishedBody,
     published_form,
     version_digests,
 )
@@ -240,6 +242,52 @@ class TestObjectService:
         await self._references.order_explanations(
             document, published, language, retry_failed=False
         )
+
+    async def body_with_axes(
+        self,
+        document: AuthoredDocument,
+        *,
+        content_digest: str,
+        answers_digest: str,
+        language: str | None,
+    ) -> PublishedBody | None:
+        """The test a version of explanations was asked for, found by its axes.
+
+        The explanation work's question: which body of this test has this
+        visible digest and this key's digest (task 07b), asked in ``language``?
+
+        1. A published version with both digests — the newest; every version
+           with the same two has the same text and the same key.
+        2. Else the draft, which a check asks explanations for before it is
+           published (task 07c): lettered in the course's language as it
+           stands now, with both digests, and only when the explanations were
+           asked for in that very language. A draft changed since, or a course
+           whose language changed since, has no body here — explanations nobody
+           would read are not paid for.
+
+        Returns:
+            The body — its text and its key — or ``None`` when the axes
+            describe nothing current.
+        """
+        published = await self._repo.version_with_digests(
+            document.id, content_digest=content_digest, answers_digest=answers_digest
+        )
+        if published is not None:
+            return PublishedBody.from_jsonb(published.body)
+        course_language = await self.course_language(document.course_root_id)
+        if language != course_language:
+            return None
+        draft = await self._repo.get_draft(document.id)
+        if draft is None:
+            return None
+        body = published_form(DraftBody.from_jsonb(draft.body), course_language)
+        digests = version_digests(body, course_language)
+        if (digests.content_digest, digests.answers_digest) != (
+            content_digest,
+            answers_digest,
+        ):
+            return None
+        return body
 
     async def _require_test_object(
         self, authored_document_id: uuid.UUID

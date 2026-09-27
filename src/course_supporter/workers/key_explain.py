@@ -15,14 +15,16 @@ Order of the body, and why each step is where it is:
    compared once more here, inside the job, and a mismatch fails the version
    without calling a model. A test written as a file is checked against the
    author's layer; a test written in the system (task 07b) has none and never
-   reads one — its key is the published version with this row's axes.
+   reads one — its key is the published version with this row's axes or,
+   when no publication has them, its draft checked before publication (task
+   07c), while that draft still has them in the course's language.
 3. **Ask the funds port**, before the first paid call, with this stage's
    ceiling. A refusal is an answer: the version fails with it as its reason,
    and the author reads why nothing was written.
 4. **Generate**, from the test's source text — the text its questions are
    parsed from, not the stitched one (task 07, decision 25) — or, for a test
-   written in the system, from its published version rendered with that
-   version's letters (task 07b, PRE-FLIGHT section 5.3). The agent's
+   written in the system, from the body with this row's axes rendered with
+   its own letters (task 07b, PRE-FLIGHT section 5.3). The agent's
    validator is what guarantees one non-empty explanation and one doubt flag
    per question. ANY failure here — the ladder running out, or a defect nobody
    foresaw — fails the version with a reason and re-raises, so the author
@@ -58,7 +60,9 @@ from course_supporter.funds_port import (
     VersionWorkKind,
 )
 from course_supporter.homework.reference_key import AnswerKey, answers_digest
-from course_supporter.homework.test_object import PublishedBody, render_for_prompt
+from course_supporter.homework.reference_service import ReadOnlyQueue
+from course_supporter.homework.test_object import render_for_prompt
+from course_supporter.homework.test_object_service import TestObjectService
 from course_supporter.jobs.execution_seam import through_seam
 from course_supporter.language import display_name
 from course_supporter.llm.error_categories import LadderExhaustedError
@@ -71,7 +75,6 @@ from course_supporter.storage.orm import (
     TaskReferenceOverride,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
-from course_supporter.storage.test_object_repository import TestObjectRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -226,25 +229,27 @@ async def _what_to_explain(
     describe the task and the key (:func:`_still_current`).
 
     A test written in the system (task 07b) has no author's layer and never
-    reads one: its key is the options its published version marks, and its
-    text is that version rendered with the version's own letters
+    reads one: its key is the options marked in the body with this row's
+    axes, and its text is that body rendered with its own letters
     (:func:`~course_supporter.homework.test_object.render_for_prompt`). The
-    version is the one with this row's axes, whatever was published since:
-    these explanations were asked for it, not for the newest. Versions are
-    never deleted, so it is there while the test is; a row whose axes no
-    publication had fails as a key that moved.
+    body is a published version with these axes, whatever was published
+    since — these explanations were asked for it, not for the newest — or,
+    when no publication has them, the draft a check asked for them (task
+    07c), while the draft still has them in the course's language
+    (:meth:`~course_supporter.homework.test_object_service.TestObjectService.body_with_axes`).
+    A row whose axes nothing current has fails as a key that moved.
     """
     if document is None or document.deleted_at is not None:
         return None
     if document.source_type == SourceType.TEST_OBJECT.value:
-        published = await TestObjectRepository(session).version_with_digests(
-            document.id,
+        body = await TestObjectService(session, ReadOnlyQueue()).body_with_axes(
+            document,
             content_digest=version.source_content_hash,
             answers_digest=version.answers_hash,
+            language=version.language,
         )
-        if published is None:
+        if body is None:
             return None
-        body = PublishedBody.from_jsonb(published.body)
         return _Key(answers=body.answer_key(), written_text=render_for_prompt(body))
     override = await repo.get_override(
         version.authored_document_id, ReferenceKind(version.kind)

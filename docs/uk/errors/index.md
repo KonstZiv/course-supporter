@@ -16,17 +16,21 @@ error_codes:
   - TEST_YAML_ALIAS
   - TEST_FIELD_INVALID
   - TEST_OPTIONS_COUNT
-  - TEST_NO_CORRECT_OPTION
   - TEST_TOO_LARGE
   - SECURITY_REJECTED
   - NOT_A_TEST_OBJECT
+  - TEST_DRAFT_INCOMPLETE
   - GENERATION_IN_PROGRESS
   - TEST_FILE_NOT_YAML
   - TEST_OBJECT_SOURCE_RESERVED
   - TEST_OBJECT_TYPE_FIXED
+  - TEST_OBJECT_ROLE_FIXED
   - TEST_IS_AN_OBJECT
   - TEST_OBJECT_NOT_PROCESSED
   - KEY_LIVES_IN_TEST
+  - TEST_NO_QUESTIONS
+  - TEST_TEXT_EMPTY
+  - TEST_NO_CORRECT_OPTION
   - TASK_NOT_READY
   - TASK_LANGUAGE_UNSET
   - TASK_TEXT_TRUNCATED
@@ -37,7 +41,7 @@ keywords:
   - коди помилок
   - тест
   - YAML
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 ---
 
 # Коди помилок
@@ -71,28 +75,40 @@ last_updated: 2026-09-26
 
 ## Тест, створений у системі
 
-Коди, які отримує автор, створюючи, змінюючи й публікуючи тест. Нічого з відмовленого запиту не
-зберігається. Відмови формату несуть ще й `place` — місце помилки (див.
-[Коли тест відмовлено](../authors/index.md#refusals)).
+Коди, які отримує автор, створюючи, змінюючи, перевіряючи й публікуючи тест. Нічого з відмовленого
+запиту не зберігається. Відмови формату несуть ще й `place` — місце помилки, а відмова незавершеної
+чернетки — перелік `incomplete` (див. [Коли тест відмовлено](../authors/index.md#refusals)).
 
 | код | стан | причина | що робити |
 |---|---|---|---|
 | [`TEST_YAML_UNREADABLE`](../authors/index.md#TEST_YAML_UNREADABLE) | 422 | YAML чи JSON не читається | виправити запис у місці, яке називає `place` |
 | [`TEST_YAML_DUPLICATE_KEY`](../authors/index.md#TEST_YAML_DUPLICATE_KEY) | 422 | те саме поле двічі в одному місці | лишити одне |
 | [`TEST_YAML_ALIAS`](../authors/index.md#TEST_YAML_ALIAS) | 422 | якір чи посилання YAML (`&`, `*`) | записати текст повністю |
-| [`TEST_FIELD_INVALID`](../authors/index.md#TEST_FIELD_INVALID) | 422 | поле невідоме, відсутнє, порожнє, не того виду чи задовге | виправити поле за `details` і таблицею формату |
-| [`TEST_OPTIONS_COUNT`](../authors/index.md#TEST_OPTIONS_COUNT) | 422 | у питанні менше 2 чи більше 26 варіантів | змінити кількість варіантів |
-| [`TEST_NO_CORRECT_OPTION`](../authors/index.md#TEST_NO_CORRECT_OPTION) | 422 | у питанні жодного правильного варіанта | позначити хоча б один `correct: true` |
+| [`TEST_FIELD_INVALID`](../authors/index.md#TEST_FIELD_INVALID) | 422 | поле невідоме чи відсутнє, назва порожня, поле не того виду чи задовге | виправити поле за `details` і таблицею формату |
+| [`TEST_OPTIONS_COUNT`](../authors/index.md#TEST_OPTIONS_COUNT) | 422 | у питанні понад 26 варіантів | розділити питання на кілька |
 | [`TEST_TOO_LARGE`](../authors/index.md#TEST_TOO_LARGE) | 413 | файл чи запит понад 256 КБ | розділити тест на кілька |
 | [`SECURITY_REJECTED`](../authors/index.md#SECURITY_REJECTED) | 400 | невидимі символи, фрази, схожі на вказівки, чи файл, який не вдалося прочитати як текст | набрати текст заново чи зберегти файл в UTF-8 |
 | [`NOT_A_TEST_OBJECT`](../authors/index.md#NOT_A_TEST_OBJECT) | 422 | ідентифікатор веде не до тесту, створеного в системі | перевірити ідентифікатор; старий текстовий тест створити заново з YAML |
-| [`GENERATION_IN_PROGRESS`](../authors/index.md#GENERATION_IN_PROGRESS) | 409 | система саме пише пояснення до тесту | дочекатися, доки вона закінчить, і опублікувати ще раз |
+| [`TEST_DRAFT_INCOMPLETE`](../authors/index.md#TEST_DRAFT_INCOMPLETE) | 422 | перевірка чи публікація незавершеної чернетки; `incomplete` називає кожне місце, яке лишилось завершити | завершити кожне місце з переліку, зберегти чернетку й повторити |
+| [`GENERATION_IN_PROGRESS`](../authors/index.md#GENERATION_IN_PROGRESS) | 409 | система саме пише пояснення до тесту | дочекатися, доки вона закінчить, і повторити перевірку чи публікацію |
 | [`TEST_FILE_NOT_YAML`](../authors/index.md#TEST_FILE_NOT_YAML) | 422 | матеріал із видом «Тест» — не YAML-файл | записати тест у YAML і завантажити файлом |
 | [`TEST_OBJECT_SOURCE_RESERVED`](../authors/index.md#TEST_OBJECT_SOURCE_RESERVED) | 422 | запит сам вказав вид джерела `test_object` | не вказувати його: завантажити YAML-файл або створити тест запитом |
 | [`TEST_OBJECT_TYPE_FIXED`](../authors/index.md#TEST_OBJECT_TYPE_FIXED) | 422 | спроба змінити вид завдання тесту | створити новий матеріал |
+| [`TEST_OBJECT_ROLE_FIXED`](../authors/index.md#TEST_OBJECT_ROLE_FIXED) | 422 | спроба зробити тест методичним матеріалом: тест завжди навчальний | лишити роль навчальною; щоб прибрати тест від студентів — приховати його |
 | [`TEST_IS_AN_OBJECT`](../authors/index.md#TEST_IS_AN_OBJECT) | 422 | спроба зробити тестом наявний матеріал | створити тест із YAML |
 | [`TEST_OBJECT_NOT_PROCESSED`](../authors/index.md#TEST_OBJECT_NOT_PROCESSED) | 422 | повторна обробка чи ролі файлів для тесту | змінити чернетку й опублікувати |
 | [`KEY_LIVES_IN_TEST`](../authors/index.md#KEY_LIVES_IN_TEST) | 422 | заміна чи скидання ключа відповідей для тесту | змінити позначки в чернетці й опублікувати |
+
+Незавершену чернетку система зберігає, а місця, які лишилось завершити, називає переліком
+`incomplete` — у читанні чернетки й у відмові `TEST_DRAFT_INCOMPLETE`. Кожне місце — код, номер
+питання й номер варіанта (див. [Незавершена чернетка](../authors/index.md#incomplete)).
+
+| код | місце | що не так | що робити |
+|---|---|---|---|
+| [`TEST_NO_QUESTIONS`](../authors/index.md#TEST_NO_QUESTIONS) | тест | питань немає | додати питання |
+| [`TEST_TEXT_EMPTY`](../authors/index.md#TEST_TEXT_EMPTY) | питання чи варіант | порожній текст | написати текст |
+| [`TEST_OPTIONS_COUNT`](../authors/index.md#TEST_OPTIONS_COUNT) | питання | менше двох варіантів | додати варіанти |
+| [`TEST_NO_CORRECT_OPTION`](../authors/index.md#TEST_NO_CORRECT_OPTION) | питання | жоден варіант не позначено правильним | позначити хоча б один `correct: true` |
 
 ## Запити ключа відповідей
 

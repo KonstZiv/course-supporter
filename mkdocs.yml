@@ -16,6 +16,13 @@ plugins:
   - mermaid2              # diagram content (Phase 2)
   - panzoom               # zoomable diagrams/images (Phase 2)
 
+# A link to an anchor its page does not have fails `mkdocs build --strict`
+# (the default only logs it): the errors page links every code to its section
+# on the authors' page.
+validation:
+  links:
+    anchors: warn
+
 # Root docs/index.md is a redirect / -> /uk/, intentionally kept out of nav.
 not_in_nav: |
   /index.md

@@ -1419,6 +1419,12 @@ async def update_document(
     Only fields explicitly sent in the request body are updated.
     Pass ``task_type: null`` to clear the task flag; omit the field
     to keep the current value.
+
+    A test written in the system keeps its kind and its role, and a refused
+    request changes nothing: a ``task_type`` other than ``test`` is 422
+    ``TEST_OBJECT_TYPE_FIXED``, a ``material_role`` other than
+    ``educational`` is 422 ``TEST_OBJECT_ROLE_FIXED`` (task 07c). No other
+    material becomes a test by ``task_type: test`` — 422 ``TEST_IS_AN_OBJECT``.
     """
     document_repo = AuthoredDocumentRepository(session)
     node_repo = CourseNodeRepository(session)
@@ -1434,6 +1440,17 @@ async def update_document(
         )
 
     if "material_role" in fields_set and body.material_role is not None:
+        # A written test is always taught: a student does not see a
+        # methodological material, so the test would quietly leave the
+        # students' course (task 07c, decision 19).
+        if (
+            document.source_type == SourceType.TEST_OBJECT.value
+            and body.material_role != MaterialRole.EDUCATIONAL
+        ):
+            raise _test_object_refusal(
+                "TEST_OBJECT_ROLE_FIXED",
+                "a test written in the system is always educational; hide it instead",
+            )
         document = await document_repo.update_material_role(
             document, material_role=body.material_role
         )

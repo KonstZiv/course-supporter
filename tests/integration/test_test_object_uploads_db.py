@@ -13,7 +13,8 @@ document routes learn that here, one class per lock:
   so is a presigned upload confirmed with it;
 - a client naming ``source_type=test_object`` is refused on the three routes
   that create a document;
-- a written test keeps its kind, a material is not made a test by a flag, and
+- a written test keeps its kind and its role (task 07c, decision 19) — a
+  refused change writes nothing — a material is not made a test by a flag, and
   a written test is neither retried nor given file roles.
 
 The storage and the queue are doubles; the database is real.
@@ -571,6 +572,63 @@ class TestAWrittenTestKeepsItsKind:
             document = await session.get(AuthoredDocument, world.test)
         assert document is not None
         assert document.task_type == "test"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"material_role": "methodological"},
+            {"material_role": "methodological", "task_type": "test"},
+        ],
+        ids=["alone", "with-its-task-type"],
+    )
+    async def test_its_role_is_fixed(
+        self,
+        client: tuple[AsyncClient, Doubles, Callable[[TenantContext], None]],
+        world: World,
+        session_factory: async_sessionmaker[AsyncSession],
+        body: dict[str, str],
+    ) -> None:
+        """A methodological test would quietly leave the students' course.
+
+        Refused with its code, and nothing is written — also when the request
+        carries the task type the test already has (task 07c, decision 19).
+        """
+        ac, _, _ = client
+        async with session_factory() as session:
+            before = await session.get(AuthoredDocument, world.test)
+        assert before is not None
+        assert (before.material_role, before.task_type) == ("educational", "test")
+        state = await _state(session_factory, world)
+
+        refused = await ac.patch(f"/api/v1/documents/{world.test}", json=body)
+
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"]["code"] == "TEST_OBJECT_ROLE_FIXED"
+        async with session_factory() as session:
+            document = await session.get(AuthoredDocument, world.test)
+        assert document is not None
+        assert (document.material_role, document.task_type) == ("educational", "test")
+        assert await _state(session_factory, world) == state
+
+    async def test_the_role_it_has_is_taken_as_it_is(
+        self,
+        client: tuple[AsyncClient, Doubles, Callable[[TenantContext], None]],
+        world: World,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``educational`` is what a written test is: 200, and it stays one."""
+        ac, _, _ = client
+
+        taken = await ac.patch(
+            f"/api/v1/documents/{world.test}", json={"material_role": "educational"}
+        )
+
+        assert taken.status_code == 200, taken.text
+        assert taken.json()["material_role"] == "educational"
+        async with session_factory() as session:
+            document = await session.get(AuthoredDocument, world.test)
+        assert document is not None
+        assert (document.material_role, document.task_type) == ("educational", "test")
 
     async def test_a_material_is_not_made_a_test(
         self,

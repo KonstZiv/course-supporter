@@ -732,6 +732,7 @@ curl -H "X-API-Key: $PREP_KEY" https://api/api/v1/tests/$DOC_ID/yaml
 | `TEST_FILE_NOT_YAML` | 422 | вид «тест» у завантаженні не YAML-файла, посилання чи `confirm-upload` |
 | `TEST_OBJECT_SOURCE_RESERVED` | 422 | клієнт сам назвав `source_type = test_object` у `create_document`, `upload-url` чи `confirm-upload` |
 | `TEST_OBJECT_TYPE_FIXED` | 422 | `PATCH` міняє `task_type` тесту, написаного в системі |
+| `TEST_OBJECT_ROLE_FIXED` | 422 | `PATCH` ставить тесту, написаному в системі, роль, відмінну від `educational`: тест завжди навчальний, а методичний матеріал студент не бачить (задача 07в) |
 | `TEST_IS_AN_OBJECT` | 422 | `PATCH` ставить `task_type = test` іншому документу |
 | `TEST_OBJECT_NOT_PROCESSED` | 422 | `retry` чи `file-roles` для тесту, написаного в системі: його не обробляють |
 

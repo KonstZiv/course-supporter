@@ -30,6 +30,9 @@ How a file is read (section 6.2):
        attempts to steer a model — because the text of a test reaches the
        explanation prompt. Their refusal stays theirs:
        :class:`~course_supporter.security.exceptions.SecurityRejectedError`.
+       The body of a request is text, not a file, and meets these screens
+       alone; an uploaded YAML file passes the whole of Stage 1, as any file
+       does (task 07c).
     3. ``yaml.compose`` builds a tree of nodes with a safe loader that
        constructs nothing, refuses an anchor or an alias at the place it is
        written (``TEST_YAML_ALIAS``) — a test repeats nothing, and a tree
@@ -45,6 +48,12 @@ How a file is read (section 6.2):
        ``\\u200b``, ``\\x49`` — only in step 3, after the screens of step 2
        have read the file. What the screens refuse in a text written plainly,
        they refuse written as escapes too.
+
+    What is not refused (task 07c, decision 11) is a draft not finished yet —
+    no questions, a question with fewer than two options or none marked right,
+    an empty text. It is read as it is: an empty text as ``""``, an empty
+    explanation as none at all. Whether a draft is finished is asked before it
+    is published (:mod:`course_supporter.homework.test_completeness`).
 
     >>> source = b'''questions:
     ... - text: Is 1 odd?
@@ -106,7 +115,7 @@ from course_supporter.homework.test_object import (
     DraftOption,
     DraftQuestion,
 )
-from course_supporter.security.stage1 import run_stage1
+from course_supporter.security.stage1 import run_stage1, screen_text
 
 __all__ = [
     "MAX_BODY_BYTES",
@@ -116,7 +125,6 @@ __all__ = [
     "MAX_QUESTIONS",
     "MAX_QUESTION_CHARS",
     "MAX_TITLE_CHARS",
-    "MIN_OPTIONS",
     "MIN_PASS_THRESHOLD",
     "DraftRefusalCode",
     "DraftRefusedError",
@@ -134,14 +142,16 @@ MAX_BODY_BYTES: Final[int] = 256 * 1024
 MAX_TITLE_CHARS: Final[int] = 200
 MAX_QUESTIONS: Final[int] = 200
 MAX_QUESTION_CHARS: Final[int] = 2_000
-MIN_OPTIONS: Final[int] = 2
 MAX_OPTION_CHARS: Final[int] = 500
 MAX_EXPLANATION_CHARS: Final[int] = 2_000
 MIN_PASS_THRESHOLD: Final[int] = 1
 MAX_PASS_THRESHOLD: Final[int] = 100
 
-_FIELDS_FILENAME: Final = "test-fields.txt"
-"""The name a draft's texts are screened under: plain text, whatever the format."""
+_FIELDS_NAME: Final = "test-fields"
+"""The name a draft's texts are screened and logged under, whatever the format."""
+
+_BODY_NAME: Final = "test-body"
+"""The name a request's body is screened and logged under: it has none of its own."""
 
 _TEST_FIELDS: Final = ("title", "pass_threshold", "questions")
 _QUESTION_FIELDS: Final = ("text", "options", "explanation")
@@ -167,14 +177,19 @@ level, is walked into the recursion limit.
 
 
 class DraftRefusalCode(StrEnum):
-    """Why a test's draft was refused — one code per reason (section 6.3)."""
+    """Why a test's draft was refused — one code per reason (section 6.3).
+
+    ``TEST_OPTIONS_COUNT`` here is a question over the letters there are. A
+    question short of options, or of a right one, is not refused: it is an
+    unfinished place (task 07c,
+    :class:`~course_supporter.homework.test_completeness.IncompleteCode`).
+    """
 
     TEST_YAML_UNREADABLE = "TEST_YAML_UNREADABLE"
     TEST_YAML_DUPLICATE_KEY = "TEST_YAML_DUPLICATE_KEY"
     TEST_YAML_ALIAS = "TEST_YAML_ALIAS"
     TEST_FIELD_INVALID = "TEST_FIELD_INVALID"
     TEST_OPTIONS_COUNT = "TEST_OPTIONS_COUNT"
-    TEST_NO_CORRECT_OPTION = "TEST_NO_CORRECT_OPTION"
     TEST_TOO_LARGE = "TEST_TOO_LARGE"
 
 
@@ -260,7 +275,7 @@ def load_test_yaml(
     content: bytes,
     *,
     language: str | None,
-    filename: str = "test.yaml",
+    filename: str | None = None,
     title_required: bool = False,
 ) -> LoadedDraft:
     """Read a YAML test into its title and its draft, or refuse it with a place.
@@ -270,20 +285,22 @@ def load_test_yaml(
         language: The course language, ISO 639-3: Stage 1 checks a file that is
             not UTF-8 against it. ``None`` checks nothing, and such a file is
             then refused rather than guessed at.
-        filename: The name Stage 1 screens the text under. A request body has
-            none, so a YAML name stands in for it.
+        filename: The name of an uploaded file: the whole of Stage 1 screens
+            it, as any file. ``None`` — the body of a request: text, not a
+            file, read by the text screens alone (task 07c).
         title_required: Whether the test must name itself. A test created by
             its route must (operator's decision at the show of commit E1,
             2026-09-25): without a ``title`` it is refused as any missing field
             is. A replaced draft keeps the name the test has.
 
     Returns:
-        The title, when the file gives one, and the checked draft.
+        The title, when the file gives one, and the draft as the format's
+        rules read it — finished or not (task 07c).
 
     Raises:
         DraftRefusedError: The file breaks a rule of the format.
-        SecurityRejectedError: A Stage 1 screen refused the file, or a text
-            read out of it (:func:`screen_texts`).
+        SecurityRejectedError: A Stage 1 screen refused the file or the body,
+            or a text read out of it (:func:`screen_texts`).
     """
     if len(content) > MAX_BODY_BYTES:
         raise DraftRefusedError(
@@ -291,17 +308,26 @@ def load_test_yaml(
             f"the test is {len(content)} bytes; a test may have {MAX_BODY_BYTES}",
             RefusalPlace(),
         )
-    screened = run_stage1(
-        filename=filename,
-        content=content,
-        context="authored",
-        languages=(language,) if language else (),
-    )
-    if screened.nfc_text is None:
-        msg = f"{filename!r} is not screened as text; name a YAML test .yaml or .yml"
-        raise ValueError(msg)
+    languages = (language,) if language else ()
+    if filename is None:
+        text = screen_text(
+            name=_BODY_NAME, content=content, context="authored", languages=languages
+        )
+    else:
+        screened = run_stage1(
+            filename=filename,
+            content=content,
+            context="authored",
+            languages=languages,
+        )
+        if screened.nfc_text is None:
+            msg = (
+                f"{filename!r} is not screened as text; name a YAML test .yaml or .yml"
+            )
+            raise ValueError(msg)
+        text = screened.nfc_text
     try:
-        root: Node | None = yaml.compose(screened.nfc_text, Loader=_Loader)
+        root: Node | None = yaml.compose(text, Loader=_Loader)
     except yaml.MarkedYAMLError as exc:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_YAML_UNREADABLE,
@@ -339,7 +365,8 @@ def load_test_json(
             :func:`load_test_yaml`.
 
     Returns:
-        The title, when the body gives one, and the checked draft.
+        The title, when the body gives one, and the draft as the format's
+        rules read it — finished or not (task 07c).
 
     Raises:
         DraftRefusedError: The body breaks a rule of the format. A body that is
@@ -383,7 +410,10 @@ def screen_texts(loaded: LoadedDraft, *, language: str | None) -> LoadedDraft:
     is parsed, after those screens. A JSON body decodes its own the same way.
     So the texts are screened again, as they will be stored and read: each in
     NFC, all of them one text, a field per line — the title, then each
-    question's text, its options' texts and its explanation.
+    question's text, its options' texts and its explanation. The text screens
+    read them alone (task 07c): the fields are no file, and the checks of a
+    file would refuse an empty draft, or one of a single letter, as no kind of
+    file at all.
 
     Only the texts are read, never the format, so a draft read out of a JSON
     body takes the same call (task 07b, commit E1).
@@ -420,8 +450,8 @@ def screen_texts(loaded: LoadedDraft, *, language: str | None) -> LoadedDraft:
             ),
         ),
     )
-    run_stage1(
-        filename=_FIELDS_FILENAME,
+    screen_text(
+        name=_FIELDS_NAME,
         content="\n".join(_texts(normalized)).encode("utf-8"),
         context="authored",
         languages=(language,) if language else (),
@@ -530,7 +560,7 @@ def _read_test(root: Node | None, *, title_required: bool) -> LoadedDraft:
     if root is None:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_FIELD_INVALID,
-            "the file holds no test: a test needs questions",
+            "the file holds no test: the fields of a test are missing",
             RefusalPlace(),
         )
     fields = _fields(
@@ -548,10 +578,10 @@ def _read_test(root: Node | None, *, title_required: bool) -> LoadedDraft:
     )
     listed = fields["questions"]
     items = _items(listed, "questions")
-    if not 1 <= len(items) <= MAX_QUESTIONS:
+    if len(items) > MAX_QUESTIONS:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_FIELD_INVALID,
-            f"a test has 1 to {MAX_QUESTIONS} questions; this one has {len(items)}",
+            f"a test has at most {MAX_QUESTIONS} questions; this one has {len(items)}",
             _place(listed.start_mark),
         )
     questions = tuple(
@@ -566,29 +596,32 @@ def _question(node: Node, number: int) -> DraftQuestion:
     fields = _fields(
         node, _QUESTION_FIELDS, required=("text", "options"), question=number
     )
-    text = _text(fields["text"], "text", MAX_QUESTION_CHARS, question=number)
+    text = _text(
+        fields["text"], "text", MAX_QUESTION_CHARS, question=number, may_be_empty=True
+    )
     listed = fields["options"]
     items = _items(listed, "options", question=number)
-    if not MIN_OPTIONS <= len(items) <= MAX_OPTIONS:
+    if len(items) > MAX_OPTIONS:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_OPTIONS_COUNT,
-            f"question {number} lists {len(items)}; a question has "
-            f"{MIN_OPTIONS} to {MAX_OPTIONS} options",
+            f"question {number} lists {len(items)} options; a question has at "
+            f"most {MAX_OPTIONS}",
             _place(listed.start_mark, question=number),
         )
     options = tuple(
         _option(item, number, position) for position, item in enumerate(items, start=1)
     )
-    if not any(option.correct for option in options):
-        raise DraftRefusedError(
-            DraftRefusalCode.TEST_NO_CORRECT_OPTION,
-            f"question {number} marks no option as correct",
-            _place(listed.start_mark, question=number),
-        )
+    # An empty explanation is none at all: as an empty string of the author's
+    # own it would win over the model's and show the student nothing.
     explanation = (
         _text(
-            fields["explanation"], "explanation", MAX_EXPLANATION_CHARS, question=number
+            fields["explanation"],
+            "explanation",
+            MAX_EXPLANATION_CHARS,
+            question=number,
+            may_be_empty=True,
         )
+        or None
         if "explanation" in fields
         else None
     )
@@ -605,7 +638,12 @@ def _option(node: Node, question: int, option: int) -> DraftOption:
     )
     return DraftOption(
         text=_text(
-            fields["text"], "text", MAX_OPTION_CHARS, question=question, option=option
+            fields["text"],
+            "text",
+            MAX_OPTION_CHARS,
+            question=question,
+            option=option,
+            may_be_empty=True,
         ),
         correct=_mark(fields["correct"], question, option),
     )
@@ -677,8 +715,14 @@ def _text(
     *,
     question: int | None = None,
     option: int | None = None,
+    may_be_empty: bool = False,
 ) -> str:
-    """A text as written, trimmed: never what its tag would make of it."""
+    """A text as written, trimmed: never what its tag would make of it.
+
+    Empty is refused only where ``may_be_empty`` is false — the title, the
+    name of the document. A draft's own texts may be left empty (task 07c):
+    whether it is finished is asked before it is published.
+    """
     where = _where(question, option)
     if not isinstance(node, ScalarNode):
         raise DraftRefusedError(
@@ -688,7 +732,7 @@ def _text(
         )
     raw: str = node.value
     text = raw.strip()
-    if not text:
+    if not text and not may_be_empty:
         raise DraftRefusedError(
             DraftRefusalCode.TEST_FIELD_INVALID,
             f"{where}{name} is empty",

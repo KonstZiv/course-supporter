@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
+from course_supporter.homework.test_completeness import IncompleteCode
 from course_supporter.language import (
     InvalidLanguageError,
     LanguageEntry,
@@ -1883,6 +1884,27 @@ class WrittenTestDraft(BaseModel):
     )
 
 
+class WrittenTestIncompletePlace(BaseModel):
+    """A place where a draft is not finished yet (task 07c).
+
+    A draft is saved unfinished; a publication of one is refused, and the
+    draft's reading lists every such place — the same entries as the
+    refusal's ``incomplete``.
+    """
+
+    code: IncompleteCode = Field(
+        description="What is unfinished: no questions, an empty text, fewer than "
+        "two options, or no option marked right."
+    )
+    question: int | None = Field(
+        description="The question's place, from 1; null for a test with no questions."
+    )
+    option: int | None = Field(
+        description="The option's place, from 1, for an option's own empty text; "
+        "null otherwise."
+    )
+
+
 class WrittenTestVersion(BaseModel):
     """A published version of a test written in the system."""
 
@@ -1900,7 +1922,8 @@ class WrittenTestResponse(BaseModel):
     Returned by ``POST /nodes/{node_id}/tests`` and by the ``/tests/{id}/draft``
     routes. The draft carries the marks the author set and the letters a
     publication would give its options now; ``published`` is the version in
-    force, or ``null`` before the first publication.
+    force, or ``null`` before the first publication; ``incomplete`` is what is
+    left to finish before the draft can be published (task 07c).
     """
 
     id: uuid.UUID = Field(description="The test's document id.")
@@ -1914,6 +1937,11 @@ class WrittenTestResponse(BaseModel):
     )
     published: WrittenTestVersion | None = Field(
         description="The version in force, or null before the first publication."
+    )
+    incomplete: list[WrittenTestIncompletePlace] = Field(
+        description="Every place the draft is not finished at, in reading order; "
+        "empty for a finished draft. A publication of an unfinished draft is "
+        "refused with the same list."
     )
 
 

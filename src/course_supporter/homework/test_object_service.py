@@ -19,6 +19,11 @@ Interface:
         system, or it is gone.
 
 Publishing (section 8.1):
+    A draft is saved unfinished (task 07c, decision 11); a publication refuses
+    one before it writes anything —
+    :class:`~course_supporter.homework.test_completeness.DraftIncompleteError`
+    with every unfinished place. A finished draft is published so:
+
     1. The language is the course root's ``default_language``, read at the
        moment of publishing — not the copy on the document, which is made when
        the test is created and stays behind a course whose language was changed
@@ -58,6 +63,7 @@ from course_supporter.homework.reference_service import (
     ExplanationQueue,
     ReferenceService,
 )
+from course_supporter.homework.test_completeness import require_complete
 from course_supporter.homework.test_object import (
     DraftBody,
     published_form,
@@ -156,8 +162,10 @@ class TestObjectService:
     ) -> TestDraft:
         """Replace the draft whole; a title, when given, renames the test at once.
 
-        The body arrives checked. The title is a column of the document, so it
-        changes now and no publication carries it (answer 2 of section 13).
+        The body arrives read by the format's rules — finished or not (task
+        07c): an unfinished one is a publication's to refuse. The title is a
+        column of the document, so it changes now and no publication carries it
+        (answer 2 of section 13).
         """
         document = await self._require_test_object(authored_document_id)
         if title is not None:
@@ -168,6 +176,7 @@ class TestObjectService:
         """Publish the draft (section 8.1) — see the module docstring.
 
         Raises:
+            DraftIncompleteError: the draft is not finished; nothing is written.
             GenerationInProgressError: another job of the task is in flight; the
                 caller rolls back.
             RuntimeError: a broken invariant of the database — the course root
@@ -180,7 +189,11 @@ class TestObjectService:
             msg = f"test {document.id} has no draft; a test is created with one"
             raise RuntimeError(msg)
 
-        published = published_form(DraftBody.from_jsonb(draft.body), language)
+        body = DraftBody.from_jsonb(draft.body)
+        # Before the first write, the language the course moved to included:
+        # a refused publication leaves nothing a caller could commit by mistake.
+        require_complete(body)
+        published = published_form(body, language)
         digests = version_digests(published, language)
         if document.language != language:
             document.language = language

@@ -48,7 +48,7 @@ from course_supporter.security.schemas import (
     Stage1RejectionResult,
     ViolationCategory,
 )
-from course_supporter.security.stage1 import Stage1Result, run_stage1
+from course_supporter.security.stage1 import Stage1Result, run_stage1, screen_text
 from course_supporter.security.stage2 import run_stage2_safety_check
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
@@ -83,5 +83,6 @@ __all__ = [
     "policy_for",
     "run_stage1",
     "run_stage2_safety_check",
+    "screen_text",
     "verify_extension_matches_content",
 ]

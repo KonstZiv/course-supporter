@@ -1,11 +1,15 @@
 """Stage 1 synchronous orchestrator (vision §KD14).
 
-Single entry point for the security layer's pre-LLM gate. Composes
+Single entry point for the security layer's pre-LLM gate on a file. Composes
 the per-concern modules (size cap, magic detection, whitelist,
 archive extraction, document text extraction, charset, unicode
 hard-reject, regex pre-screen) behind one call:
 
     >>> result = run_stage1(filename="hw.txt", content=b"...", context="homework")
+
+Text that is not a file — a test's fields, the body of a request that carries
+a test (task 07c) — meets the text screens alone, through
+:func:`screen_text`: the file checks have nothing to judge in it.
 
 The orchestrator is **synchronous and pre-ESC**: every rejection
 raises before any LLM is invoked, so a malformed upload never
@@ -332,6 +336,53 @@ def run_stage1(
             detail=exc.detail,
         )
         raise
+
+
+def screen_text(
+    *,
+    name: str,
+    content: bytes,
+    context: Literal["authored", "homework"],
+    languages: Sequence[str] = (),
+) -> str:
+    """The text screens of Stage 1 alone, for text that is not a file.
+
+    A test's fields and the body of a request that carries a test (task 07c)
+    are text: what can be wrong with them is what can be wrong with text — an
+    encoding that cannot be read in ``languages``, hidden or suspicious
+    Unicode, an attempt to steer a model. These are the screens
+    :func:`run_stage1` runs on a text file, in the same order. The checks of a
+    file — its extension, its size cap, whether its bytes look like that kind
+    of file — have nothing to judge here, and the last of them refuses empty
+    or very short content, which a test's text may lawfully be.
+
+    Args:
+        name: What the text is, for the log and the detail of a refusal.
+        content: The text as bytes; bounding its size is the caller's.
+        context: Whose text it is, for the log only: no policy applies.
+        languages: As for :func:`run_stage1`.
+
+    Returns:
+        The text in NFC, as :attr:`Stage1Result.nfc_text` would carry it.
+
+    Raises:
+        SecurityRejectedError: ``CHARSET_VIOLATION``, ``SUSPICIOUS_UNICODE``
+            or ``PROMPT_INJECTION``, logged as :func:`run_stage1` logs one.
+    """
+    try:
+        text, _ = _run_text_content_checks(
+            content=content, filename=name, languages=languages
+        )
+    except SecurityRejectedError as exc:
+        logger.warning(
+            "stage1.rejected",
+            category=exc.category.value,
+            filename=name,
+            context=context,
+            detail=exc.detail,
+        )
+        raise
+    return text
 
 
 # ── Archive handling ───────────────────────────────────────────────

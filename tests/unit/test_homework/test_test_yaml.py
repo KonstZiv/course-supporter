@@ -10,13 +10,19 @@ What is pinned here:
   would make of it.
 * **Every limit** of sections 6.1 and 6.2 loads at the limit and is refused
   one step past it.
+* **An unfinished draft is read** (task 07c, decision 11): no questions, a
+  question with no options or one, none marked right, an empty text — and
+  every limit, rule of the format and screen still holds for it. An empty
+  explanation is none at all.
 * **Load, dump, load** gives the same structure, on strings that YAML would
   otherwise read as something else.
 * **The Stage 1 screens** read the text of the file before the parser does:
   forbidden Unicode and attempts to steer a model are refused by them. And
   they read the texts again once decoded (commit B3): what they refuse in a
   text written plainly is refused written as escapes, and the same call
-  screens a draft built by hand.
+  screens a draft built by hand. A body and the fields are text, not a file
+  (task 07c): the text screens alone read them, so an empty or a one-letter
+  draft is not refused as no kind of file.
 * **The same test as JSON** (commit E1) reads as its YAML twin, by the same
   walk and the same screens, and is placed by question and option only.
 * **The module's examples run** — explicitly, because the gate collects no
@@ -46,7 +52,6 @@ from course_supporter.homework.test_yaml import (
     MAX_QUESTION_CHARS,
     MAX_QUESTIONS,
     MAX_TITLE_CHARS,
-    MIN_OPTIONS,
     MIN_PASS_THRESHOLD,
     DraftRefusalCode,
     DraftRefusedError,
@@ -65,7 +70,6 @@ _DUPLICATE = DraftRefusalCode.TEST_YAML_DUPLICATE_KEY
 _ALIAS = DraftRefusalCode.TEST_YAML_ALIAS
 _INVALID = DraftRefusalCode.TEST_FIELD_INVALID
 _COUNT = DraftRefusalCode.TEST_OPTIONS_COUNT
-_NO_CORRECT = DraftRefusalCode.TEST_NO_CORRECT_OPTION
 
 _LETTER = "я"
 """A letter of two bytes, so a limit counted in bytes would show."""
@@ -201,6 +205,73 @@ class TestReading:
         assert question.explanation == "no"
 
 
+class TestAnUnfinishedDraftIsRead:
+    """A draft is saved in any state (task 07c, decision 11): read, not refused."""
+
+    def test_a_test_without_questions(self) -> None:
+        assert _load(_yaml("questions: []")).body.questions == ()
+
+    def test_a_question_without_options_or_with_one(self) -> None:
+        for options in ([], [_option()]):
+            loaded = _load(_test(questions=[_question(options=options)]))
+            assert len(loaded.body.questions[0].options) == len(options)
+
+    def test_a_question_without_a_mark(self) -> None:
+        unmarked = [_option("так", False), _option("ні", False)]
+
+        loaded = _load(_test(questions=[_question(options=unmarked)]))
+
+        assert [o.correct for o in loaded.body.questions[0].options] == [False, False]
+
+    def test_an_empty_text_is_kept_empty(self) -> None:
+        """Blanks, an empty string and no value at all — each is an empty text."""
+        loaded = _load(
+            _yaml(
+                "questions:",
+                "  - text: '   '",
+                "    options:",
+                "      - text: ''",
+                "        correct: true",
+                "      - text:",
+                "        correct: false",
+            )
+        )
+
+        question = loaded.body.questions[0]
+        assert (question.text, [o.text for o in question.options]) == ("", ["", ""])
+
+    @pytest.mark.parametrize(
+        "written", ["''", "'   '", ""], ids=["empty", "blanks", "no-value"]
+    )
+    def test_an_empty_explanation_is_no_explanation(self, written: str) -> None:
+        source = _yaml(
+            "questions:",
+            "  - text: Що?",
+            *_OPTIONS,
+            f"    explanation: {written}".rstrip(),
+        )
+
+        assert _load(source).body.questions[0].explanation is None
+
+    def test_it_is_written_back_as_it_was(self) -> None:
+        unfinished = _load(
+            _yaml(
+                "title: Чернетка",
+                "questions:",
+                "  - text: ''",
+                "    options: []",
+                "  - text: Що?",
+                "    options:",
+                "      - text: ''",
+                "        correct: false",
+            )
+        )
+
+        written = dump_test_yaml(unfinished.body, title=unfinished.title)
+
+        assert _load(written.encode()) == unfinished
+
+
 @pytest.mark.parametrize(
     ("source", "code", "place"),
     [
@@ -332,22 +403,10 @@ class TestReading:
             id="questions-not-a-list",
         ),
         pytest.param(
-            _yaml("questions: []"),
-            _INVALID,
-            RefusalPlace(1, 12),
-            id="no-questions",
-        ),
-        pytest.param(
             _yaml("questions:", "  - text: [a, b]", *_OPTIONS),
             _INVALID,
             RefusalPlace(2, 11, question=1),
             id="text-not-plain",
-        ),
-        pytest.param(
-            _yaml("questions:", "  - text: '   '", *_OPTIONS),
-            _INVALID,
-            RefusalPlace(2, 11, question=1),
-            id="text-empty-once-trimmed",
         ),
         pytest.param(
             _yaml(
@@ -396,32 +455,6 @@ class TestReading:
             id="pass-mark-fraction",
         ),
         pytest.param(
-            _yaml(
-                "questions:",
-                "  - text: Що?",
-                "    options:",
-                "      - text: так",
-                "        correct: true",
-            ),
-            _COUNT,
-            RefusalPlace(4, 7, question=1),
-            id="one-option",
-        ),
-        pytest.param(
-            _yaml(
-                "questions:",
-                "  - text: Що?",
-                "    options:",
-                "      - text: так",
-                "        correct: false",
-                "      - text: ні",
-                "        correct: false",
-            ),
-            _NO_CORRECT,
-            RefusalPlace(4, 7, question=1),
-            id="no-correct-option",
-        ),
-        pytest.param(
             ("questions: " + "[" * 5_000 + "]" * 5_000 + "\n").encode(),
             _INVALID,
             RefusalPlace(1, 43),
@@ -465,17 +498,151 @@ class TestLimits:
         )
 
     def test_the_number_of_options(self) -> None:
+        """Up to the letters there are; fewer than two is unfinished, not refused."""
         widest = [_option(f"варіант {n}", n == 1) for n in range(MAX_OPTIONS)]
-        narrowest = widest[:MIN_OPTIONS]
 
-        for options in (narrowest, widest):
+        for options in ([], widest[:1], widest):
             loaded = _load(_test(questions=[_question(options=options)]))
             assert len(loaded.body.questions[0].options) == len(options)
-        for options in (narrowest[:1], [*widest, _option("зайвий", False)]):
-            assert _refusal(_test(questions=[_question(options=options)])) == (
+        assert _refusal(
+            _test(questions=[_question(options=[*widest, _option("зайвий", False)])])
+        ) == (_COUNT, RefusalPlace(4, 3, question=1))
+
+    @pytest.mark.parametrize(
+        ("source", "code", "question", "option"),
+        [
+            pytest.param(
+                _test(
+                    questions=[
+                        _question(
+                            options=[
+                                _option(f"{n}", False) for n in range(MAX_OPTIONS + 1)
+                            ]
+                        )
+                    ]
+                ),
                 _COUNT,
-                RefusalPlace(4, 3, question=1),
-            )
+                1,
+                None,
+                id="options",
+            ),
+            pytest.param(
+                _test(
+                    questions=[_question(options=[]) for _ in range(MAX_QUESTIONS + 1)]
+                ),
+                _INVALID,
+                None,
+                None,
+                id="questions",
+            ),
+            pytest.param(
+                _test(
+                    questions=[
+                        _question(_LETTER * (MAX_QUESTION_CHARS + 1), options=[])
+                    ]
+                ),
+                _INVALID,
+                1,
+                None,
+                id="question-text",
+            ),
+            pytest.param(
+                _test(
+                    questions=[
+                        _question(
+                            options=[_option(_LETTER * (MAX_OPTION_CHARS + 1), False)]
+                        )
+                    ]
+                ),
+                _INVALID,
+                1,
+                1,
+                id="option-text",
+            ),
+            pytest.param(
+                _test(
+                    questions=[
+                        _question(
+                            options=[],
+                            explanation=_LETTER * (MAX_EXPLANATION_CHARS + 1),
+                        )
+                    ]
+                ),
+                _INVALID,
+                1,
+                None,
+                id="explanation",
+            ),
+            pytest.param(
+                _yaml(
+                    "questions:", "  - text: Що?", "    text: Знову?", "    options: []"
+                ),
+                _DUPLICATE,
+                1,
+                None,
+                id="key-twice",
+            ),
+            pytest.param(
+                _yaml("questions:", "  - text: &a Що?", "    options: []"),
+                _ALIAS,
+                None,
+                None,
+                id="anchor",
+            ),
+            pytest.param(
+                _yaml("questions:", "  - text: Що?", "    options: []", "    hint: ні"),
+                _INVALID,
+                1,
+                None,
+                id="unknown-field",
+            ),
+            pytest.param(
+                _yaml(
+                    "questions:",
+                    "  - text: Що?",
+                    "    options:",
+                    "      - text: так",
+                    "        correct: так",
+                ),
+                _INVALID,
+                1,
+                1,
+                id="mark-not-a-boolean",
+            ),
+            pytest.param(
+                _yaml("pass_threshold: 0", "questions: []"),
+                _INVALID,
+                None,
+                None,
+                id="pass-mark-0",
+            ),
+            pytest.param(
+                _yaml("pass_threshold: 101", "questions: []"),
+                _INVALID,
+                None,
+                None,
+                id="pass-mark-101",
+            ),
+            pytest.param(
+                _yaml("questions: []") + b"#" * MAX_BODY_BYTES,
+                DraftRefusalCode.TEST_TOO_LARGE,
+                None,
+                None,
+                id="too-large",
+            ),
+        ],
+    )
+    def test_the_limits_hold_for_an_unfinished_draft(
+        self,
+        source: bytes,
+        code: DraftRefusalCode,
+        question: int | None,
+        option: int | None,
+    ) -> None:
+        """Task 07c: an unfinished draft is saved — an unlimited one never is."""
+        refused, place = _refusal(source)
+
+        assert (refused, place.question, place.option) == (code, question, option)
 
     def test_the_text_of_an_option(self) -> None:
         at_limit = _LETTER * MAX_OPTION_CHARS
@@ -591,6 +758,17 @@ class TestScreens:
             _load(source)
         assert rejected.value.category is ErrorCategory.PROMPT_INJECTION
 
+    def test_an_unfinished_draft_is_screened_too(self) -> None:
+        """Task 07c: a draft saved unfinished passes the same screens, decoded too."""
+        source = _yaml(
+            "questions:", '  - text: "Що\\u200bтаке тест?"', "    options: []"
+        )
+        _passes_the_files_screen(source)
+
+        with pytest.raises(SecurityRejectedError) as rejected:
+            _load(source)
+        assert rejected.value.category is ErrorCategory.SUSPICIOUS_UNICODE
+
     @pytest.mark.parametrize(
         ("written", "read"),
         [
@@ -646,6 +824,24 @@ class TestScreeningTheTexts:
         with pytest.raises(SecurityRejectedError) as rejected:
             screen_texts(loaded, language="ukr")
         assert rejected.value.category is ErrorCategory.SUSPICIOUS_UNICODE
+
+    @pytest.mark.parametrize(
+        "loaded",
+        [
+            LoadedDraft(title=None, body=DraftBody(questions=())),
+            LoadedDraft(title="T", body=DraftBody(questions=())),
+            LoadedDraft(
+                title=None,
+                body=DraftBody(questions=(DraftQuestion(text="", options=()),)),
+            ),
+        ],
+        ids=["empty", "one-letter", "one-empty-question"],
+    )
+    def test_an_empty_or_one_letter_draft_is_not_refused(
+        self, loaded: LoadedDraft
+    ) -> None:
+        """Task 07c: the fields are text — no check of a file refuses them as short."""
+        assert screen_texts(loaded, language="ukr") == loaded
 
     def test_the_texts_come_back_in_nfc_and_the_rest_as_it_was(self) -> None:
         loaded = self._draft(title="Cafe\u0301", explanation="Cafe\u0301 закрите.")
@@ -812,9 +1008,15 @@ class TestTheSameTestAsJson:
 
     def test_a_refusal_names_the_question_and_the_option_only(self) -> None:
         """JSON leaves no marks in a file, so there is no line and no column."""
-        one_option: dict[str, object] = {
+        too_many: dict[str, object] = {
             "questions": [
-                {"text": "Що?", "options": [{"text": "так", "correct": True}]}
+                {
+                    "text": "Що?",
+                    "options": [
+                        {"text": f"{n}", "correct": n == 0}
+                        for n in range(MAX_OPTIONS + 1)
+                    ],
+                }
             ]
         }
         a_mark_as_a_number: dict[str, object] = {
@@ -829,7 +1031,7 @@ class TestTheSameTestAsJson:
             ]
         }
 
-        assert self._refused(self._json(one_option))[:2] == (
+        assert self._refused(self._json(too_many))[:2] == (
             _COUNT,
             RefusalPlace(question=1),
         )
@@ -851,7 +1053,8 @@ class TestTheSameTestAsJson:
 
         assert (code, place) == (_UNREADABLE, RefusalPlace(line=2, column=15))
 
-    def test_null_is_an_empty_field(self) -> None:
+    def test_null_is_an_empty_text(self) -> None:
+        """As its YAML twin ``text:`` is: kept empty (task 07c), not a mark."""
         body = self._json(
             {
                 "questions": [
@@ -859,14 +1062,20 @@ class TestTheSameTestAsJson:
                         "text": None,
                         "options": [
                             {"text": "так", "correct": True},
-                            {"text": "ні", "correct": False},
+                            {"text": "ні", "correct": None},
                         ],
                     }
                 ]
             }
         )
+        a_text_only = body.replace(b'"correct": null', b'"correct": false')
 
-        assert self._refused(body)[:2] == (_INVALID, RefusalPlace(question=1))
+        loaded = load_test_json(a_text_only, language="ukr")
+        assert loaded.body.questions[0].text == ""
+        assert self._refused(body)[:2] == (
+            _INVALID,
+            RefusalPlace(question=1, option=2),
+        )
 
     @pytest.mark.parametrize("depth", [40, 100_000])
     def test_nesting_deeper_than_a_test_is_refused(self, depth: int) -> None:

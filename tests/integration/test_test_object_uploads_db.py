@@ -7,7 +7,8 @@ document routes learn that here, one class per lock:
 - a YAML file with the test kind becomes a test written in the system — its
   draft, and nothing else: no storage write, no job, no register row — named by
   its ``title`` or else by its file; the format's refusals carry their place,
-  and a screen's refusal is its own;
+  and a screen's refusal is its own; an unfinished draft in it is saved as it
+  is (task 07c, decision 11);
 - any other file, or a link, with the test kind is ``TEST_FILE_NOT_YAML``, and
   so is a presigned upload confirmed with it;
 - a client naming ``source_type=test_object`` is refused on the three routes
@@ -56,6 +57,7 @@ from course_supporter.storage.orm import (
     TestVersion,
 )
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.unfinished_drafts import UNFINISHED
 
 pytestmark = pytest.mark.requires_db
 
@@ -322,6 +324,61 @@ class TestAYamlFileWithTheTestKind:
 
         assert response.status_code == 201, response.text
         assert response.json()["title"] == "lecture 3"
+
+    @pytest.mark.parametrize("form", list(UNFINISHED))
+    async def test_an_unfinished_yaml_file_is_a_test(
+        self,
+        client: tuple[AsyncClient, Doubles, Callable[[TenantContext], None]],
+        world: World,
+        form: str,
+    ) -> None:
+        """Task 07c: the file's draft is saved as it is.
+
+        Its reading lists what is left to finish.
+        """
+        ac, _, _ = client
+        unfinished = UNFINISHED[form]
+
+        response = await _upload(
+            ac, world.course, content=unfinished.as_yaml(title=_TITLE)
+        )
+        read = await ac.get(f"/api/v1/tests/{response.json()['id']}/draft")
+
+        assert response.status_code == 201, response.text
+        assert read.status_code == 200, read.text
+        assert read.json()["incomplete"] == unfinished.incomplete
+
+    @pytest.mark.parametrize(
+        ("content", "status", "title"),
+        [
+            pytest.param(b"title: T\n", 422, None, id="only-a-title"),
+            pytest.param(
+                b"questions: []\n", 201, "lecture 3", id="no-questions-named-by-file"
+            ),
+        ],
+    )
+    async def test_the_smallest_yaml_files(
+        self,
+        client: tuple[AsyncClient, Doubles, Callable[[TenantContext], None]],
+        world: World,
+        content: bytes,
+        status: int,
+        title: str | None,
+    ) -> None:
+        """Task 07c: a file passes the whole of Stage 1 — and these pass it.
+
+        Only a title is no test: ``questions`` is missing. No questions at all
+        is an unfinished test, named after its file.
+        """
+        ac, _, _ = client
+
+        response = await _upload(ac, world.course, content=content)
+
+        assert response.status_code == status, response.text
+        if title is None:
+            assert response.json()["detail"]["code"] == "TEST_FIELD_INVALID"
+        else:
+            assert response.json()["title"] == title
 
     async def test_a_yaml_the_format_refuses_is_refused_with_its_place(
         self,

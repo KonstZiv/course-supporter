@@ -50,6 +50,10 @@ from course_supporter.homework.reference_service import (
     GenerationInProgressError,
     RefusalCode,
 )
+from course_supporter.homework.test_completeness import (
+    DraftIncompleteError,
+    IncompleteCode,
+)
 from course_supporter.homework.test_doors import DoorCode
 from course_supporter.homework.test_result import (
     TEST_NOT_READY as TEST_NOT_READY_FAILURE,
@@ -484,14 +488,23 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
         The format's codes have a vocabulary; the routes spell theirs out as
         string constants, so those are read from the modules' source. Of the
         document routes' codes only the ``TEST_`` ones are a written test's:
-        the others there are other tasks' and are documented with them.
+        the others there are other tasks' and are documented with them. Task
+        07c adds a draft's unfinished places — a vocabulary of their own — and
+        the refusal of an unfinished draft, a constant of its error class: no
+        route spells either out.
         """
         text = self._README.read_text(encoding="utf-8")
         authors = _codes_in(test_objects_routes)
         documents = {
             code for code in _codes_in(documents_routes) if code.startswith("TEST_")
         }
-        real = {code.value for code in DraftRefusalCode} | authors | documents
+        real = (
+            {code.value for code in DraftRefusalCode}
+            | {code.value for code in IncompleteCode}
+            | {DraftIncompleteError.code}
+            | authors
+            | documents
+        )
 
         assert authors, "the author's routes refuse with some codes"
         assert documents, "the document routes refuse a written test with some codes"

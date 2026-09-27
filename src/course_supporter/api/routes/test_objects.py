@@ -21,6 +21,10 @@ Refusals:
     answers 422 ``NOT_A_TEST_OBJECT``. A publication that meets another job of
     the test answers 409 ``GENERATION_IN_PROGRESS`` and keeps nothing.
 
+    A draft not finished yet is no refusal: it is saved as it is, and its
+    reading lists every unfinished place (task 07c, decision 11). Its
+    publication answers 422 ``TEST_DRAFT_INCOMPLETE`` with the same list.
+
 What costs money:
     Only a publication, and only when it asks for explanations (section 8).
     Creating, reading and replacing a draft ask for no work — their service
@@ -40,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_session
 from course_supporter.api.routes._author_shared import (
+    draft_incomplete,
     draft_refused,
     generation_in_progress,
     security_rejected,
@@ -47,6 +52,7 @@ from course_supporter.api.routes._author_shared import (
 )
 from course_supporter.api.schemas import (
     WrittenTestDraft,
+    WrittenTestIncompletePlace,
     WrittenTestOption,
     WrittenTestPublicationResponse,
     WrittenTestQuestion,
@@ -60,6 +66,10 @@ from course_supporter.homework.explanation_queue import ArqExplanationQueue
 from course_supporter.homework.reference_service import (
     GenerationInProgressError,
     ReadOnlyQueue,
+)
+from course_supporter.homework.test_completeness import (
+    DraftIncompleteError,
+    incomplete_places,
 )
 from course_supporter.homework.test_object import DraftBody, published_form
 from course_supporter.homework.test_object_service import TestObjectService
@@ -103,8 +113,6 @@ _NOT_A_TEST_OBJECT: Final[str] = "NOT_A_TEST_OBJECT"
 
 _JSON_TYPES: Final = frozenset({"application/json"})
 _YAML_TYPES: Final = frozenset({"application/yaml", "text/yaml"})
-_YAML_FILENAME: Final = "test.yaml"
-"""The name a YAML body is screened under: a request body has none of its own."""
 
 
 async def _require_node(
@@ -161,7 +169,11 @@ async def _course_root_id(
 async def _read_draft(
     request: Request, language: str, *, title_required: bool
 ) -> LoadedDraft:
-    """The draft a request carries, as JSON or as YAML, or the refusal it earns."""
+    """The draft a request carries, as JSON or as YAML, or the refusal it earns.
+
+    A body is text, not a file: the text screens of Stage 1 read it, never the
+    checks of a file (task 07c).
+    """
     media_type = request.headers.get("content-type", "").split(";")[0].strip()
     media_type = media_type.lower()
     if media_type not in _JSON_TYPES | _YAML_TYPES:
@@ -175,12 +187,7 @@ async def _read_draft(
             return load_test_json(
                 content, language=language, title_required=title_required
             )
-        return load_test_yaml(
-            content,
-            language=language,
-            filename=_YAML_FILENAME,
-            title_required=title_required,
-        )
+        return load_test_yaml(content, language=language, title_required=title_required)
     except DraftRefusedError as exc:
         raise draft_refused(exc) from exc
     except SecurityRejectedError as exc:
@@ -210,13 +217,17 @@ async def _read_capped(request: Request) -> bytes:
 async def _view(
     session: AsyncSession, document: AuthoredDocument, language: str
 ) -> WrittenTestResponse:
-    """The test as its author reads it: the draft with its letters, the version."""
+    """The test as its author reads it: the draft with its letters, the version.
+
+    And what is left to finish before it can be published (task 07c).
+    """
     repo = TestObjectRepository(session)
     draft = await repo.get_draft(document.id)
     if draft is None:
         msg = f"test {document.id} has no draft; a test is created with one"
         raise RuntimeError(msg)
-    shown = published_form(DraftBody.from_jsonb(draft.body), language)
+    body = DraftBody.from_jsonb(draft.body)
+    shown = published_form(body, language)
     published = await repo.latest_version(document.id)
     return WrittenTestResponse(
         id=document.id,
@@ -241,6 +252,12 @@ async def _view(
             ],
         ),
         published=None if published is None else _version(published),
+        incomplete=[
+            WrittenTestIncompletePlace(
+                code=place.code, question=place.question, option=place.option
+            )
+            for place in incomplete_places(body)
+        ],
     )
 
 
@@ -264,10 +281,13 @@ async def create_written_test(
     The body is the test of PRE-FLIGHT section 6.1: ``application/json`` for
     the structure, ``application/yaml`` or ``text/yaml`` for its YAML, at most
     256 KiB, and it names the test: without a ``title`` it is refused, 422
-    ``TEST_FIELD_INVALID`` at the place the field is missing. **201** with the
-    test — its document, its title, its draft with the letters a publication
-    would give it, and ``published: null``. Nothing is published and nothing
-    is asked for; no student sees the test before its first publication.
+    ``TEST_FIELD_INVALID`` at the place the field is missing. The draft may be
+    unfinished — no questions yet, a question short of options or of a right
+    one, an empty text (task 07c). **201** with the test — its document, its
+    title, its draft with the letters a publication would give it,
+    ``published: null`` and ``incomplete``, what is left to finish. Nothing is
+    published and nothing is asked for; no student sees the test before its
+    first publication.
 
     **404** ``Node not found`` for a node that is not there or not this
     tenant's — one body for both. **422** or **413** with
@@ -303,7 +323,8 @@ async def read_written_test(
     The draft carries the marks the author set and the letters a publication
     would give its options now, in the course's alphabet; ``published`` is the
     version in force — its number, its ``version`` as a student is shown it,
-    when it was published — or ``null`` before the first publication.
+    when it was published — or ``null`` before the first publication;
+    ``incomplete`` lists every place the draft is not finished at (task 07c).
 
     **404** ``Document not found`` for a test that is not there or not this
     tenant's — one body for both; **422** ``NOT_A_TEST_OBJECT`` for another
@@ -325,10 +346,11 @@ async def replace_written_test_draft(
 ) -> WrittenTestResponse:
     """Replace the draft whole, from JSON or YAML; a title given renames the test.
 
-    The draft is always a checked one: a body the format refuses leaves the
-    draft as it was. A title is the document's, not the draft's, so it changes
-    at once and no publication carries it; a body without one keeps the title.
-    Nothing is published and nothing is asked for.
+    A body the format refuses leaves the draft as it was; an unfinished one is
+    saved as it is (task 07c), and ``incomplete`` says what is left. A title
+    is the document's, not the draft's, so it changes at once and no
+    publication carries it; a body without one keeps the title. Nothing is
+    published and nothing is asked for.
 
     The refusals of creating a test, and **404** / **422** as for reading one.
     """
@@ -358,7 +380,9 @@ async def publish_written_test(
 
     **409** ``GENERATION_IN_PROGRESS`` when another job of the test is in
     flight: nothing of the publication is kept, and the author publishes again
-    once it ends (decision 12). **404** / **422** as for reading a test.
+    once it ends (decision 12). **422** ``TEST_DRAFT_INCOMPLETE`` for a draft
+    not finished yet, with every unfinished place; nothing is written (task
+    07c). **404** / **422** as for reading a test.
     """
     await _require_written_test(session, document_id, tenant.tenant_id)
     service = TestObjectService(
@@ -371,6 +395,8 @@ async def publish_written_test(
     except GenerationInProgressError as exc:
         await session.rollback()
         raise generation_in_progress(exc) from exc
+    except DraftIncompleteError as exc:
+        raise draft_incomplete(exc) from exc
     response.status_code = 201 if publication.created else 200
     return WrittenTestPublicationResponse(
         created=publication.created, published=_version(publication.version)

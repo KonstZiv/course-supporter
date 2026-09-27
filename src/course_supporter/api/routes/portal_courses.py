@@ -20,6 +20,11 @@ enroll a student, not by a flag on the node (CourseNode carries no publish
 column). Course-scoped access failures collapse to a single generic 404
 (rule #12) so the portal never leaks which courses/materials exist outside the
 student's access.
+
+A test is shown only once it is written in the system and published (task 07b,
+decision 8): before its first publication every test route answers it as a
+missing task, and so they answer a test written as a file (decision 11). A
+written test is labelled by its title (decision 7).
 """
 
 from __future__ import annotations
@@ -49,7 +54,7 @@ from course_supporter.api.schemas import (
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.homework.test_doors import new_path_serves_tests
-from course_supporter.models.source import AssignmentType
+from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
@@ -63,6 +68,7 @@ from course_supporter.storage.project_base_repository import ProjectBaseReposito
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 logger = structlog.get_logger()
 
@@ -207,6 +213,34 @@ def _project_task_ids(node: CourseNode) -> set[uuid.UUID]:
     return ids
 
 
+def _written_test_ids(node: CourseNode) -> set[uuid.UUID]:
+    """Ids of the non-deleted tests written in the system in a subtree (task 07b).
+
+    Drives the single query for which of them are published; every other
+    document is shown or hidden without one.
+    """
+    ids: set[uuid.UUID] = set()
+    for doc in node.documents:
+        if doc.deleted_at is None and doc.source_type == SourceType.TEST_OBJECT.value:
+            ids.add(doc.id)
+    for child in node.children:
+        if child.deleted_at is None:
+            ids |= _written_test_ids(child)
+    return ids
+
+
+def _shown_to_student(doc: AuthoredDocument, published: set[uuid.UUID]) -> bool:
+    """A test only once it is written in the system and published (task 07b).
+
+    ``published`` holds the tests with a published version, and only tests
+    written in the system can have one. So a draft is not shown — the test
+    routes answer it as a missing task (decision 8) — and neither is a test
+    written as a file, which they answer the same way (decision 11). Any
+    document that is not a test is shown as before.
+    """
+    return doc.task_type != AssignmentType.TEST.value or doc.id in published
+
+
 def _project_document(
     doc: AuthoredDocument,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
@@ -225,6 +259,7 @@ def _project_document(
         id=doc.id,
         kind="task" if is_task else "material",
         label=material_label(
+            title=doc.title,
             filename=doc.filename,
             source_type=doc.source_type,
             order=doc.order,
@@ -246,6 +281,7 @@ def _project_node(
     node: CourseNode,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
     bases: dict[uuid.UUID, PortalTaskBase | None],
+    published: set[uuid.UUID],
     *,
     course_language: str | None = None,
 ) -> PortalMaterialTreeNode:
@@ -262,7 +298,8 @@ def _project_node(
     Soft-deleted, non-READY, and methodological documents are dropped
     (publish-gate A + READY-only: a non-READY material has no presentable media
     yet; role allowlist: a methodological document is never shown to a student —
-    :func:`role_visible_to_student`). A node left with no visible documents is
+    :func:`role_visible_to_student`), and so is a test not in ``published``
+    (:func:`_shown_to_student`). A node left with no visible documents is
     kept as an empty node, not pruned (P4: existence is not content, and pruning
     would also hide legitimately-empty sections under construction). Children
     are already ordered by ``get_subtree``; soft-deleted children (and thus
@@ -277,12 +314,13 @@ def _project_node(
                 if d.deleted_at is None
                 and d.state == MaterialState.READY
                 and role_visible_to_student(d.material_role)
+                and _shown_to_student(d, published)
             ),
             key=lambda d: (d.order, d.created_at),
         )
     ]
     children = [
-        _project_node(child, overlays, bases)
+        _project_node(child, overlays, bases, published)
         for child in node.children
         if child.deleted_at is None
     ]
@@ -313,11 +351,12 @@ async def get_portal_course_materials(
     Enrollment-gated (publish-gate A); any access failure — unknown root, a
     non-root id, a foreign tenant, soft-deleted, or not enrolled — collapses to
     one generic 404 (rule #12). The tree is curated: soft-deleted nodes /
-    documents, non-READY documents, and methodological documents (role
-    allowlist) are filtered out, each document carries only its
-    task-vs-material ``kind`` + (for tasks) a submission overlay, and the
-    internal trace never leaks. The overlay is one query per course (no N+1),
-    grouped by the task anchor in Python.
+    documents, non-READY documents, methodological documents (role allowlist)
+    and every test but a published one written in the system (task 07b) are
+    filtered out, each document carries only its task-vs-material ``kind`` +
+    (for tasks) a submission overlay, and the internal trace never leaks. The
+    overlay is one query per course (no N+1), grouped by the task anchor in
+    Python.
     """
     node_repo = CourseNodeRepository(session)
     root = await node_repo.get_by_id(root_id)
@@ -362,9 +401,17 @@ async def get_portal_course_materials(
         doc_id: _base_block(versions_by_doc.get(doc_id, [])) for doc_id in project_ids
     }
 
+    # Which of the tree's tests written in the system are published — one
+    # query, the same no-N+1 shape (task 07b, decision 8).
+    published = await TestObjectRepository(session).published_among(
+        _written_test_ids(subtree[0])
+    )
+
     # get_subtree returns the roots of the loaded set; for a single course root
     # there is exactly one — the requested root. Its language rides along on
     # that root node: the submission form reads it there to say what its
     # "course language" option actually offers (step Д).
     root = subtree[0]
-    return _project_node(root, overlays, bases, course_language=root.default_language)
+    return _project_node(
+        root, overlays, bases, published, course_language=root.default_language
+    )

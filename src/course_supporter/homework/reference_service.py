@@ -40,13 +40,28 @@ The lazy path, and why the reader writes:
     :meth:`ReferenceService.request_explanations`, after delivery.
 
 Replacing the generation seam:
-    :class:`ExplanationQueue` is the whole contract: one method, one pair of
+    :class:`ExplanationQueue` is the whole contract: a request, with one pair of
     identifiers, no return value, and one error — :class:`GenerationInProgressError`
-    when another job of the task is in flight. The shipped implementation
-    (block G) enqueues an ARQ job; a test passes a counter; a future
-    implementation could run it inline. Nothing in this module names
+    when another job of the task is in flight — and the question whether one
+    is, asked before a stuck version is asked for again. The shipped
+    implementation (block G) enqueues an ARQ job; a test passes a counter; a
+    future implementation could run it inline. Nothing in this module names
     ``JobType``, ARQ or Redis — a service that knew how the work is scheduled
     would have to change when that changes.
+
+A test written in the system (task 07b):
+    Its key is the marked options of a published version, not an author's
+    layer, so :meth:`ReferenceService.replace_key` and
+    :meth:`ReferenceService.clear_key` refuse it (``KEY_LIVES_IN_TEST``). Its
+    explanations are asked for by the axes of a published version —
+    :meth:`ReferenceService.order_explanations` — by a publication in the
+    course language and by a submission in the student's, for the version it
+    was taken for (``TestObjectService.request_explanations``). A review reads
+    them for that version (:meth:`ReferenceService.explanations_of`). A
+    version left ``pending`` with no job of the task in flight is stuck, and
+    both ask for it again; a ``failed`` one only a publication does (task 07b,
+    decision 13). The author reads its state (:meth:`ReferenceService.read`)
+    from its version in force, and that read writes nothing.
 """
 
 from __future__ import annotations
@@ -54,7 +69,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import ClassVar, Protocol
+from typing import ClassVar, Final, Protocol
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,16 +83,29 @@ from course_supporter.homework.reference_key import (
 )
 from course_supporter.homework.task_context import load_task_source_text
 from course_supporter.homework.task_text import MENTOR_TASK_TEXT_MAX_BYTES
-from course_supporter.models.source import AssignmentType
+from course_supporter.homework.test_object import PublishedBody
+from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.storage.orm import (
     AuthoredDocument,
     TaskReference,
     TaskReferenceOverride,
+    TestVersion,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 logger = structlog.get_logger(__name__)
+
+_STUCK_REASON: Final[str] = (
+    "stuck: pending with no job of the task in flight, so it was asked for again"
+)
+"""The reason a stuck version is closed with before it is asked for again."""
+
+
+def _is_test_object(document: AuthoredDocument) -> bool:
+    """Whether the task is a test written in the system (task 07b)."""
+    return document.source_type == SourceType.TEST_OBJECT.value
 
 
 class ReferenceStatus(StrEnum):
@@ -98,13 +126,21 @@ class ReferenceStatus(StrEnum):
     FAILED = "failed"
 
 
+_STATUS_OF_STATE: Final[dict[str, ReferenceStatus]] = {
+    ReferenceState.PENDING.value: ReferenceStatus.GENERATING,
+    ReferenceState.READY.value: ReferenceStatus.READY,
+    ReferenceState.FAILED.value: ReferenceStatus.FAILED,
+}
+"""What the author reads for the stored state of a version."""
+
+
 class RefusalCode(StrEnum):
     """Why a key could not be accepted — one code per reason, never one for all.
 
-    Four of these are about the TASK and one is about the key. Keeping them
-    apart is the point: "your key is wrong" and "this task cannot carry a key
-    yet" send the author to different places, and a single code would send both
-    to the wrong one.
+    Most of these are about the TASK, one is about the key, and one about
+    where the key lives. Keeping them apart is the point: "your key is wrong"
+    and "this task cannot carry a key yet" send the author to different places,
+    and a single code would send both to the wrong one.
     """
 
     NOT_A_TEST_TASK = "NOT_A_TEST_TASK"
@@ -113,6 +149,7 @@ class RefusalCode(StrEnum):
     TASK_TEXT_TRUNCATED = "TASK_TEXT_TRUNCATED"
     NO_QUESTION_NUMBERS = "NO_QUESTION_NUMBERS"
     KEY_DOES_NOT_MATCH_QUESTIONS = "KEY_DOES_NOT_MATCH_QUESTIONS"
+    KEY_LIVES_IN_TEST = "KEY_LIVES_IN_TEST"
 
 
 class ReferenceRefusedError(Exception):
@@ -205,11 +242,17 @@ class ExplanationQueue(Protocol):
     An implementation that cannot ask because another job of the task is in
     flight raises :class:`GenerationInProgressError`, whatever told it so — a
     refused insert, or a look before one.
+
+    :meth:`in_flight` is the question behind that refusal, asked before a
+    version left ``pending`` is asked for again: while no job of its task is
+    in flight, nothing will ever write it (task 07b, decision 13).
     """
 
     async def request(
         self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
     ) -> None: ...
+
+    async def in_flight(self, *, authored_document_id: uuid.UUID) -> bool: ...
 
 
 class ReadOnlyQueue:
@@ -226,6 +269,14 @@ class ReadOnlyQueue:
     ) -> None:
         msg = (
             f"a read-only use of the reference asked for work on task "
+            f"{authored_document_id}"
+        )
+        raise RuntimeError(msg)
+
+    async def in_flight(self, *, authored_document_id: uuid.UUID) -> bool:
+        """Never asked by a read: only asking for work looks for a job in flight."""
+        msg = (
+            f"a read-only use of the reference looked for work in flight on task "
             f"{authored_document_id}"
         )
         raise RuntimeError(msg)
@@ -262,8 +313,14 @@ class ReferenceService:
         a shape to carry a key (no language yet, truncated text, no numbered
         questions) the carry is skipped rather than refused: the author asked
         what the state is, and "awaiting key" IS the answer.
+
+        A test written in the system is read from its version in force and
+        nothing is written: its explanations are asked for when it is
+        published, not when anyone looks (task 07b).
         """
         document = await self._require_test_task(authored_document_id)
+        if _is_test_object(document):
+            return await self._read_a_written_test(document)
         override = await self._applicable_override(document)
         if override is None:
             return ReferenceView(
@@ -304,6 +361,29 @@ class ReferenceService:
             doubts=dict(version.doubts or {}) if version is not None else {},
         )
 
+    async def explanations_of(
+        self, document: AuthoredDocument, published: TestVersion, language: str
+    ) -> ExplanationsView:
+        """A published version's key and its explanations in ``language`` — read-only.
+
+        What the review of a submission reads for the version the submission
+        was taken for (task 07b, decision 14): the key, the pass mark and the
+        author's own explanations are the version's; the model's explanations
+        and doubts are the machine layer's for the version's axes, and empty
+        until they are written. Nothing is written and nothing is asked for:
+        the review is built inside the submission's own transaction.
+        """
+        body = PublishedBody.from_jsonb(published.body)
+        explanation = await self._explanation_version(document, published, language)
+        return ExplanationsView(
+            language=language,
+            answers=body.answer_key(),
+            pass_threshold=body.pass_threshold,
+            author=body.explanations(),
+            model=dict(explanation.explanations or {}) if explanation else {},
+            doubts=dict(explanation.doubts or {}) if explanation else {},
+        )
+
     async def request_explanations(
         self, authored_document_id: uuid.UUID, language: str
     ) -> None:
@@ -316,6 +396,11 @@ class ReferenceService:
         made and its generation asked for. A version that exists asks for
         nothing, whatever its state: a failed one is not retried from here, so
         a generation that keeps failing is not paid for once per submission.
+
+        A test written in the system has no layer to carry, and nothing is
+        asked here: its submission asks by the version it was taken for,
+        through the object's service (task 07b, decision 14;
+        ``TestObjectService.request_explanations``).
 
         Raises:
             GenerationInProgressError: another job of the task is in flight. The
@@ -365,8 +450,12 @@ class ReferenceService:
         (``TASK.md`` invariant 4). The pass mark is replaced with the rest of
         the layer, so a replacement without one clears it; it is outside the
         version key, and changing it alone asks for nothing.
+
+        A test written in the system is refused before anything is checked: its
+        key is the marked options of its published version (task 07b).
         """
         document = await self._require_test_task(authored_document_id)
+        self._refuse_a_test_object(document)
         language = self._require_language(document)
         questions = self._require_questions(await self._task_text(document))
 
@@ -396,9 +485,59 @@ class ReferenceService:
         The generated versions stay. They cost money, they belong to the keys
         that produced them, and a key sent again finds its version waiting
         rather than paying for it twice.
+
+        A test written in the system has no layer to drop, and is refused.
         """
-        await self._require_test_task(authored_document_id)
+        self._refuse_a_test_object(await self._require_test_task(authored_document_id))
         return await self._repo.clear_override(authored_document_id, self._kind)
+
+    async def order_explanations(
+        self,
+        document: AuthoredDocument,
+        published: TestVersion,
+        language: str,
+        *,
+        retry_failed: bool,
+    ) -> TaskReference:
+        """Ask for the explanations of a published test in ``language``, when due.
+
+        The axes are the version's visible digest and its key's digest, never
+        its number: a publication that moves neither — a new pass mark, the
+        author's own explanations, a return to an earlier state — finds its
+        explanations already there (task 07b, decision 9).
+
+        The asking is task 06's step: a generation is asked for only when a
+        version is created, so a ``ready`` version, or a ``pending`` one whose
+        job is in flight, comes back as it is. Two rules of decision 13
+        (PRE-FLIGHT section 8.5) come first:
+
+        * ``pending`` with no job of the task in flight is stuck — nothing will
+          ever write it. It is marked ``failed`` with that reason, and the step
+          then creates its successor and asks for it.
+        * ``failed`` is asked for again only when ``retry_failed``: a
+          publication in the course language retries it, a submission does
+          not, so a generation that keeps failing is not paid for once per
+          submission.
+
+        Raises:
+            GenerationInProgressError: another job of the task is in flight.
+        """
+        axes = {
+            "source_content_hash": published.content_digest,
+            "source_task_type": document.task_type or "",
+            "answers_hash": published.answers_digest,
+            "language": language,
+        }
+        latest = await self._repo.latest_for_key(
+            authored_document_id=document.id, kind=self._kind, **axes
+        )
+        if latest is not None:
+            if latest.state == ReferenceState.PENDING.value:
+                if not await self._queue.in_flight(authored_document_id=document.id):
+                    await self._repo.mark_failed(latest.id, _STUCK_REASON)
+            elif latest.state == ReferenceState.FAILED.value and not retry_failed:
+                return latest
+        return await self._order(document.id, **axes)
 
     # ── internals ────────────────────────────────────────────────────────
 
@@ -561,25 +700,112 @@ class ReferenceService:
         language: str,
     ) -> TaskReference:
         """The version for this key, requesting a generation only if it is new."""
-        version, created = await self._repo.create_version(
-            authored_document_id=document.id,
-            kind=self._kind,
+        return await self._order(
+            document.id,
             source_content_hash=document.content_hash or "",
             source_task_type=document.task_type or "",
             answers_hash=answers_digest(override.answers),
             language=language,
         )
+
+    async def _order(
+        self,
+        authored_document_id: uuid.UUID,
+        *,
+        source_content_hash: str,
+        source_task_type: str,
+        answers_hash: str,
+        language: str,
+    ) -> TaskReference:
+        """The live version for these axes, requesting a generation only if new."""
+        version, created = await self._repo.create_version(
+            authored_document_id=authored_document_id,
+            kind=self._kind,
+            source_content_hash=source_content_hash,
+            source_task_type=source_task_type,
+            answers_hash=answers_hash,
+            language=language,
+        )
         if created:
             await self._queue.request(
-                authored_document_id=document.id, reference_id=version.id
+                authored_document_id=authored_document_id, reference_id=version.id
             )
             logger.info(
                 "reference_generation_requested",
-                authored_document_id=str(document.id),
+                authored_document_id=str(authored_document_id),
                 reference_id=str(version.id),
                 version=version.version,
             )
         return version
+
+    def _refuse_a_test_object(self, document: AuthoredDocument) -> None:
+        """A test written in the system keeps its key in its published version."""
+        if _is_test_object(document):
+            raise ReferenceRefusedError(
+                RefusalCode.KEY_LIVES_IN_TEST,
+                "the key of a test written in the system is the options its "
+                "published version marks; change the draft and publish it",
+            )
+
+    async def _read_a_written_test(self, document: AuthoredDocument) -> ReferenceView:
+        """What the author sees of a written test, from its version in force.
+
+        The key, the pass mark and the author's own explanations are the
+        version's; the model's explanations, its doubts and the state are the
+        machine layer's, for the version's axes in the version's language — and
+        the author's words win per question, as for a key typed in (task 07b,
+        PRE-FLIGHT section 7.3).
+        """
+        published = await TestObjectRepository(self._session).latest_version(
+            document.id
+        )
+        if published is None:
+            return ReferenceView(
+                status=ReferenceStatus.AWAITING_KEY, language=document.language
+            )
+        body = PublishedBody.from_jsonb(published.body)
+        explanation = await self._explanation_version(
+            document, published, published.language
+        )
+        if explanation is None:
+            # A publication asks for these before it commits, so a version
+            # without them is not a state the service leaves behind.
+            return ReferenceView(
+                status=ReferenceStatus.AWAITING_KEY,
+                answers=body.answer_key(),
+                language=published.language,
+                pass_threshold=body.pass_threshold,
+            )
+        explanations = dict(explanation.explanations or {})
+        explanations.update(body.explanations())
+        return ReferenceView(
+            status=_STATUS_OF_STATE[explanation.state],
+            version=explanation.version,
+            answers=body.answer_key(),
+            explanations=explanations,
+            language=explanation.language,
+            failure_reason=explanation.failure_reason,
+            pass_threshold=body.pass_threshold,
+            doubts=dict(explanation.doubts or {}),
+        )
+
+    async def _explanation_version(
+        self, document: AuthoredDocument, published: TestVersion, language: str
+    ) -> TaskReference | None:
+        """The newest version of a published test's explanations in ``language``.
+
+        Found by the published version's axes — its visible digest and its
+        key's digest — a failed one included, as :meth:`_latest_version` finds
+        a typed-in key's.
+        """
+        return await self._repo.latest_for_key(
+            authored_document_id=document.id,
+            kind=self._kind,
+            source_content_hash=published.content_digest,
+            source_task_type=document.task_type or "",
+            answers_hash=published.answers_digest,
+            language=language,
+        )
 
     def _view(
         self,
@@ -597,15 +823,10 @@ class ReferenceService:
                 pass_threshold=override.pass_threshold,
             )
 
-        status = {
-            ReferenceState.PENDING.value: ReferenceStatus.GENERATING,
-            ReferenceState.READY.value: ReferenceStatus.READY,
-            ReferenceState.FAILED.value: ReferenceStatus.FAILED,
-        }[version.state]
         explanations = dict(version.explanations or {})
         explanations.update(override.author_explanations or {})
         return ReferenceView(
-            status=status,
+            status=_STATUS_OF_STATE[version.state],
             version=version.version,
             answers=dict(override.answers),
             explanations=explanations,

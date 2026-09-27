@@ -19,11 +19,18 @@ the real ladder and the real prompt, with a provider double in place of the
 model, because the claims are about that chain: the ladder names prompt v2,
 the router renders it and records it, the work stores it.
 
+Task 07b adds a test written in the system. The model reads its published
+version, rendered with that version's own letters, and its key is the
+options the version marks — never an author's layer, which a written test
+cannot have.
+
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -46,6 +53,13 @@ from course_supporter.funds_port import (
 )
 from course_supporter.homework.reference_key import answers_digest
 from course_supporter.homework.task_text import stitch_task_text
+from course_supporter.homework.test_object import (
+    DraftBody,
+    DraftOption,
+    DraftQuestion,
+    published_form,
+    version_digests,
+)
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.llm.finish_reason import FinishReason
@@ -56,6 +70,7 @@ from course_supporter.llm.schemas import LLMRequest, LLMResponse
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.service_logging import get_current_job_id
+from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.orm import (
     AuthoredDocument,
     DocumentSegment,
@@ -63,8 +78,10 @@ from course_supporter.storage.orm import (
     ExternalServiceCall,
     Job,
     Tenant,
+    TestVersion,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 from course_supporter.workers.key_explain import arq_explain_key
 from tests._helpers.course_node_factory import make_root_course_node
 
@@ -653,3 +670,185 @@ async def _split_the_segment(
             )
         )
         await session.commit()
+
+
+# ── a test written in the system (task 07b) ─────────────────────────────
+
+
+def _written_draft(right: tuple[int, int]) -> DraftBody:
+    """Two questions with the same two options; ``right`` marks one of each."""
+    return DraftBody(
+        questions=tuple(
+            DraftQuestion(
+                text=text,
+                options=(
+                    DraftOption(text="так", correct=mark == 0),
+                    DraftOption(text="ні", correct=mark == 1),
+                ),
+            )
+            for text, mark in zip(("Перше?", "Друге?"), right, strict=True)
+        )
+    )
+
+
+_WRITTEN = _written_draft((1, 0))
+"""Its key, once lettered: question 1 — the second option, question 2 — the first."""
+
+_WRITTEN_SHOWN = "1. Перше?\nа) так\nб) ні\n\n2. Друге?\nа) так\nб) ні"
+"""The version as the model must read it — with the version's own letters."""
+
+
+async def _publish(
+    session: AsyncSession, document_id: uuid.UUID, draft: DraftBody
+) -> TestVersion:
+    """Publish ``draft`` in Ukrainian as the service does: lettered, digested."""
+    published = published_form(draft, "ukr")
+    digests = version_digests(published, "ukr")
+    version, _ = await TestObjectRepository(session).publish(
+        document_id,
+        language="ukr",
+        body=published.to_jsonb(),
+        content_digest=digests.content_digest,
+        answers_digest=digests.answers_digest,
+        publication_digest=digests.publication_digest,
+    )
+    return version
+
+
+@pytest.fixture()
+async def written(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[dict[str, uuid.UUID]]:
+    """A committed written test: a version, its explanations asked for, the Job.
+
+    No author's layer: a written test cannot have one (task 07b refuses it).
+    """
+    async with session_factory() as session:
+        tenant = Tenant(name=f"written-tenant-{uuid.uuid4().hex[:8]}")
+        session.add(tenant)
+        await session.flush()
+        node = make_root_course_node(
+            tenant_id=tenant.id, title="Written course", order=0
+        )
+        session.add(node)
+        await session.flush()
+        document = AuthoredDocument(
+            course_node_id=node.id,
+            course_root_id=node.id,
+            source_type="test_object",
+            source_url="test-object:",
+            task_type="test",
+            language="ukr",
+            content_hash=compute_content_hash(b"", []),
+            title="Тест, написаний у системі",
+        )
+        session.add(document)
+        await session.flush()
+        published = await _publish(session, document.id, _WRITTEN)
+        version, _ = await TaskReferenceRepository(session).create_version(
+            authored_document_id=document.id,
+            kind=ReferenceKind.TEST_KEY,
+            source_content_hash=published.content_digest,
+            source_task_type="test",
+            answers_hash=published.answers_digest,
+            language="ukr",
+        )
+        job = Job(
+            tenant_id=tenant.id,
+            course_node_id=node.id,
+            job_type=JobType.KEY_EXPLANATION.value,
+            subject_type=JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION],
+            subject_id=document.id,
+        )
+        session.add(job)
+        await session.commit()
+        ids = {
+            "tenant_id": tenant.id,
+            "document_id": document.id,
+            "version_id": version.id,
+            "job_id": job.id,
+        }
+
+    yield ids
+
+    async with session_factory() as session:
+        await session.execute(
+            ExternalServiceCall.__table__.delete().where(
+                ExternalServiceCall.job_id == ids["job_id"]
+            )
+        )
+        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
+        await session.execute(
+            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
+        )
+        await session.commit()
+
+
+def _author_answers(prompt: str) -> dict[str, list[str]]:
+    """The key as the prompt hands it to the model."""
+    found = re.search(
+        r"<author_answers>\s*(.*?)\s*</author_answers>", prompt, re.DOTALL
+    )
+    assert found is not None, "the prompt carries the author's answers"
+    answers: dict[str, list[str]] = json.loads(found.group(1))
+    return answers
+
+
+class TestAWrittenTest:
+    """Task 07b: the model reads the published version, never an author's layer."""
+
+    async def test_the_model_is_shown_the_version_with_its_own_letters(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        written: dict[str, uuid.UUID],
+    ) -> None:
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(written["job_id"]),
+            str(written["version_id"]),
+        )
+
+        request: LLMRequest = provider.complete.await_args.args[0]
+        assert _WRITTEN_SHOWN in request.prompt
+
+    async def test_its_key_is_the_options_its_version_marks(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        written: dict[str, uuid.UUID],
+    ) -> None:
+        """A worker that looked for an author's layer would find none, take the
+        key for moved, and explain nothing."""
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(written["job_id"]),
+            str(written["version_id"]),
+        )
+
+        state, reason, _ = await _version_state(session_factory, written["version_id"])
+        assert (state, reason) == (ReferenceState.READY.value, None)
+        request: LLMRequest = provider.complete.await_args.args[0]
+        assert _author_answers(request.prompt) == {"1": ["б"], "2": ["а"]}
+
+    async def test_the_version_explained_is_the_one_asked_for_not_the_newest(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        written: dict[str, uuid.UUID],
+    ) -> None:
+        """A submission bound to an older version is explained by that one."""
+        async with session_factory() as session:
+            await _publish(session, written["document_id"], _written_draft((0, 1)))
+            await session.commit()
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(written["job_id"]),
+            str(written["version_id"]),
+        )
+
+        request: LLMRequest = provider.complete.await_args.args[0]
+        assert _author_answers(request.prompt) == {"1": ["б"], "2": ["а"]}

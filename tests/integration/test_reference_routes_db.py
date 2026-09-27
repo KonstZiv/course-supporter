@@ -31,6 +31,7 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.jobs import JobType
+from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.database import get_session
 from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.orm import (
@@ -123,6 +124,26 @@ async def _make_task(
     return document
 
 
+async def _make_test_object(session: AsyncSession, tenant: Tenant) -> AuthoredDocument:
+    """A test written in the system (task 07b): no file, never processed."""
+    node = make_root_course_node(tenant_id=tenant.id, title="Routes course", order=0)
+    session.add(node)
+    await session.flush()
+    document = AuthoredDocument(
+        course_node_id=node.id,
+        course_root_id=node.id,
+        source_type="test_object",
+        source_url="test-object:",
+        task_type="test",
+        language="ukr",
+        content_hash=compute_content_hash(b"", []),
+        title="Тест, написаний у системі",
+    )
+    session.add(document)
+    await session.flush()
+    return document
+
+
 @pytest.fixture()
 async def world(
     session_factory: async_sessionmaker[AsyncSession],
@@ -139,6 +160,7 @@ async def world(
         unprocessed = await _make_task(session, owner, content_hash=None)
         no_language = await _make_task(session, owner, language=None)
         no_numbers = await _make_task(session, owner, text="Тест\n\nа) так\nб) ні")
+        test_object = await _make_test_object(session, owner)
         await session.commit()
         ids = {
             "owner_id": owner.id,
@@ -148,6 +170,7 @@ async def world(
             "unprocessed": unprocessed.id,
             "no_language": no_language.id,
             "no_numbers": no_numbers.id,
+            "test_object": test_object.id,
         }
 
     yield ids
@@ -375,6 +398,41 @@ class TestEveryRefusalCarriesItsOwnCode:
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"]["code"] == code
         assert resp.json()["detail"]["details"]
+
+    @pytest.mark.parametrize("method", ["put", "delete"])
+    async def test_a_test_written_in_the_system_keeps_its_key_in_its_version(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        queue: _CountingQueue,
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        method: str,
+    ) -> None:
+        """Task 07b: its key is the options its published version marks, so
+        neither route writes a layer or a version, or asks for work."""
+        ac, _ = client
+        path = _write(world["test_object"])
+        if method == "put":
+            resp = await ac.put(path, json={"answers": _KEY})
+        else:
+            resp = await ac.delete(path)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["code"] == "KEY_LIVES_IN_TEST"
+        assert not queue.requests, "a refused key costs nothing"
+        async with session_factory() as session:
+            layers = await session.execute(
+                select(TaskReferenceOverride.id).where(
+                    TaskReferenceOverride.authored_document_id == world["test_object"]
+                )
+            )
+            versions = await session.execute(
+                select(TaskReference.id).where(
+                    TaskReference.authored_document_id == world["test_object"]
+                )
+            )
+            assert layers.all() == []
+            assert versions.all() == []
 
     async def test_a_key_that_misses_and_invents_says_both(
         self,

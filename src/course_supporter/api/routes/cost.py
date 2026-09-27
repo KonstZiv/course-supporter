@@ -345,6 +345,7 @@ async def get_homework_cost_course(
             HomeworkByTaskEntry(
                 authored_document_id=row.authored_document_id,
                 task_label=material_label(
+                    title=row.title,
                     filename=row.filename,
                     source_type=row.source_type,
                     order=row.order,

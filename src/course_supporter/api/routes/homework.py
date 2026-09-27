@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.routes._test_shared import (
-    require_ready,
+    require_published,
     structure_response,
 )
 from course_supporter.api.schemas import (
@@ -49,6 +49,7 @@ from course_supporter.homework.submission_core import (
 from course_supporter.homework.test_doors import (
     answer_sheet,
     refuse_a_file_for_a_test,
+    refuse_a_file_for_a_written_test,
 )
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.authored_document_repository import (
@@ -203,6 +204,11 @@ async def submit_homework(
             "(an AuthoredDocument with task_type set).",
         )
 
+    # --- A test written in the system is never answered with a file (task
+    # 07b): unpublished it is missing, published the file is refused. Before
+    # the readiness gate, which would answer about a summary it never has. ---
+    await refuse_a_file_for_a_written_test(session, task_doc)
+
     # --- Readiness gate (KD15 §1319): the task must be ready (its
     # DocumentSummary formed) before it accepts submissions. ---
     # A submission against an un-ingested task would reach the review graph with
@@ -295,12 +301,12 @@ async def get_test_structure(
     the key is returned.
 
     **404** ``Task not found.`` for a task that is not there, is deleted, or is
-    another tenant's — one body for all three. **422** ``NOT_A_TEST_TASK`` for a
-    document that is not a test. **409** while the task is not ready.
+    another tenant's — one body for all three — and in the same body for a task
+    that is not a published test written in the system (task 07b).
     """
     task_doc = await _tenant_task(session, authored_document_id, tenant.tenant_id)
-    await require_ready(session, authored_document_id)
-    return structure_response(await answer_sheet(session, task_doc))
+    published = await require_published(session, task_doc)
+    return structure_response(answer_sheet(published))
 
 
 @router.post("/homework/submit-test", status_code=202)
@@ -313,14 +319,14 @@ async def submit_test_answers(
 ) -> HomeworkSubmitResponse:
     """Answer a test with its answers, from a channel (task 07).
 
-    The same gates as ``POST /homework/submit`` — the course and the node in
-    this tenant, the task in this course, the task ready — and then the test's
-    own doors, each with its code (``{"code", "details"}``): answers while tests
-    are still answered with a file, to a task that is not a test, to another
-    version of it, before its key applies to this version, or naming what the
-    test does not have. A refused submission stores nothing. The review is
-    delivered by webhook, as for a file; the same answers sent twice are two
-    attempts.
+    The anchor gates of ``POST /homework/submit`` — the course and the node in
+    this tenant, the task in this course — and the test routes' gate: a
+    published test written in the system, or a missing task (task 07b). Then
+    the test's own doors, each with its code (``{"code", "details"}``):
+    answers while tests are still answered with a file, to another version of
+    the test, or naming what the test does not have. A refused submission
+    stores nothing. The review is delivered by webhook, as for a file; the
+    same answers sent twice are two attempts.
     """
     webhook_url = (
         await validate_webhook_url(body.webhook_url)
@@ -334,7 +340,7 @@ async def submit_test_answers(
         node_id=body.node_id,
         authored_document_id=body.authored_document_id,
     )
-    await require_ready(session, body.authored_document_id)
+    published = await require_published(session, task_doc)
 
     student_repo = StudentRepository(session)
 
@@ -353,6 +359,7 @@ async def submit_test_answers(
         course_node_id=body.course_node_id,
         node_id=body.node_id,
         task_doc=task_doc,
+        published=published,
         answers=body.answers,
         test_version=body.test_version,
         delivery_mode="webhook",

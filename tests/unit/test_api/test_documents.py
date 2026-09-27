@@ -72,6 +72,8 @@ def _mock_entry(
     entry.task_type = task_type
     entry.source_url = source_url
     entry.filename = filename
+    # A column since task 07b, None for a document without a name.
+    entry.title = None
     entry.language = None
     entry.order = 0
     entry.state = state

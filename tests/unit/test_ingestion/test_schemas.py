@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import Enum
 
 from course_supporter.ingestion.base import (
     MaterialProcessor,
@@ -23,6 +24,7 @@ from course_supporter.models.source import (
     SourceDocument,
     SourceType,
 )
+from course_supporter.storage.orm import AuthoredDocument
 
 
 class TestSourceType:
@@ -34,10 +36,17 @@ class TestSourceType:
         assert SourceType.WEB == "web"
         assert SourceType.AUDIO == "audio"
         assert SourceType.CODE == "code"
+        assert SourceType.TEST_OBJECT == "test_object"
 
     def test_source_type_matches_orm_enum(self) -> None:
-        """SourceType values match ORM source_type_enum."""
-        assert len(SourceType) == 6
+        """SourceType values match ORM source_type_enum — the list, in order.
+
+        A count said "six" and would have stayed green through a renamed value
+        or a value added to one side only; the two lists are what must agree.
+        """
+        column_type = AuthoredDocument.__table__.c.source_type.type
+        assert isinstance(column_type, Enum)
+        assert [member.value for member in SourceType] == list(column_type.enums)
 
 
 class TestChunkType:

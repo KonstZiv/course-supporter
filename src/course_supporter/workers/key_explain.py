@@ -1,4 +1,4 @@
-"""The work that writes a test key's explanations (mentor-rebuild tasks 06, 07).
+"""The work that writes a test key's explanations (mentor-rebuild tasks 06, 07, 07b).
 
 Runs once per (task version, answers, language), outside any student
 submission — ``TASK.md`` invariant 3. The service decides that a version is
@@ -7,18 +7,22 @@ everything about money and models.
 
 Order of the body, and why each step is where it is:
 
-1. **Read** the version, the author's layer and the task.
+1. **Read** the version and the task.
 2. **Check the key again.** Between the request and the run, the author can
    replace the key or re-author the test. The version's axes are what it was
    asked to explain, and a set of explanations written for answers nobody holds
    any more would be paid for and then never read. So the two hashes are
    compared once more here, inside the job, and a mismatch fails the version
-   without calling a model.
+   without calling a model. A test written as a file is checked against the
+   author's layer; a test written in the system (task 07b) has none and never
+   reads one — its key is the published version with this row's axes.
 3. **Ask the funds port**, before the first paid call, with this stage's
    ceiling. A refusal is an answer: the version fails with it as its reason,
    and the author reads why nothing was written.
 4. **Generate**, from the test's source text — the text its questions are
-   parsed from, not the stitched one (task 07, decision 25). The agent's
+   parsed from, not the stitched one (task 07, decision 25) — or, for a test
+   written in the system, from its published version rendered with that
+   version's letters (task 07b, PRE-FLIGHT section 5.3). The agent's
    validator is what guarantees one non-empty explanation and one doubt flag
    per question. ANY failure here — the ladder running out, or a defect nobody
    foresaw — fails the version with a reason and re-raises, so the author
@@ -34,6 +38,7 @@ Order of the body, and why each step is where it is:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -52,10 +57,12 @@ from course_supporter.funds_port import (
     VersionWorkContext,
     VersionWorkKind,
 )
-from course_supporter.homework.reference_key import answers_digest
+from course_supporter.homework.reference_key import AnswerKey, answers_digest
+from course_supporter.homework.test_object import PublishedBody, render_for_prompt
 from course_supporter.jobs.execution_seam import through_seam
 from course_supporter.language import display_name
 from course_supporter.llm.error_categories import LadderExhaustedError
+from course_supporter.models.source import SourceType
 from course_supporter.reference_kinds import ReferenceKind
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -64,6 +71,7 @@ from course_supporter.storage.orm import (
     TaskReferenceOverride,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -99,20 +107,12 @@ async def arq_explain_key(
             raise RuntimeError(msg)
 
         document = await session.get(AuthoredDocument, version.authored_document_id)
-        override = await repo.get_override(
-            version.authored_document_id, ReferenceKind(version.kind)
-        )
 
-        # (2) The key may have moved while this job waited in the queue. The
-        # two None checks are part of the same question — a task or a key that
-        # is gone is a key that moved — but they are spelled here rather than
-        # inside the predicate so the types narrow for everything below.
-        if (
-            document is None
-            or document.deleted_at is not None
-            or override is None
-            or not _still_current(version, document, override)
-        ):
+        # (2) The key may have moved while this job waited in the queue — a
+        # task or a key that is gone is a key that moved. ``document`` is
+        # checked here too, so its type narrows for everything below.
+        key = await _what_to_explain(session, repo, version, document)
+        if document is None or key is None:
             await repo.mark_failed(version.id, _KEY_MOVED)
             await session.commit()
             log.info("key_explanation.superseded", version=version.version)
@@ -137,11 +137,15 @@ async def arq_explain_key(
             return {"state": "failed", "reason": reason, "calls": 0}
 
         # (4) The only paid step.
-        task_text = await _task_text(session, document.id)
+        task_text = (
+            key.written_text
+            if key.written_text is not None
+            else await _task_text(session, document.id)
+        )
         try:
             written = await KeyExplainerAgent(stage_router).explain(
                 task_text=task_text,
-                answers=override.answers,
+                answers=key.answers,
                 language=display_name(version.language) if version.language else None,
             )
         except Exception as exc:
@@ -196,6 +200,58 @@ async def arq_explain_key(
             "doubted": len(written.doubts),
             "cost_usd": spent,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _Key:
+    """What the model is shown: the answers, and the text of a written test.
+
+    ``written_text`` is ``None`` for a test written as a file: its source text
+    is read only once the money is there (step 4).
+    """
+
+    answers: AnswerKey
+    written_text: str | None
+
+
+async def _what_to_explain(
+    session: AsyncSession,
+    repo: TaskReferenceRepository,
+    version: TaskReference,
+    document: AuthoredDocument | None,
+) -> _Key | None:
+    """The key this version explains, or ``None`` when it moved (step 2).
+
+    A test written as a file: the author's layer, while both axes still
+    describe the task and the key (:func:`_still_current`).
+
+    A test written in the system (task 07b) has no author's layer and never
+    reads one: its key is the options its published version marks, and its
+    text is that version rendered with the version's own letters
+    (:func:`~course_supporter.homework.test_object.render_for_prompt`). The
+    version is the one with this row's axes, whatever was published since:
+    these explanations were asked for it, not for the newest. Versions are
+    never deleted, so it is there while the test is; a row whose axes no
+    publication had fails as a key that moved.
+    """
+    if document is None or document.deleted_at is not None:
+        return None
+    if document.source_type == SourceType.TEST_OBJECT.value:
+        published = await TestObjectRepository(session).version_with_digests(
+            document.id,
+            content_digest=version.source_content_hash,
+            answers_digest=version.answers_hash,
+        )
+        if published is None:
+            return None
+        body = PublishedBody.from_jsonb(published.body)
+        return _Key(answers=body.answer_key(), written_text=render_for_prompt(body))
+    override = await repo.get_override(
+        version.authored_document_id, ReferenceKind(version.kind)
+    )
+    if override is None or not _still_current(version, document, override):
+        return None
+    return _Key(answers=override.answers, written_text=None)
 
 
 def _still_current(

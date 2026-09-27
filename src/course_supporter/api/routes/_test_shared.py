@@ -1,14 +1,14 @@
-"""What the portal's and the channel's test routes share (mentor-rebuild task 07).
+"""What the portal's and the channel's test routes share (mentor-rebuild tasks 07, 07b).
 
-Both entries return a test the same way and gate it on readiness the same way;
-one place each, so the two cannot drift. Their other gates — who may ask, and
-whose task it is — differ by entry and stay in the route modules, beside the
-file routes they mirror.
+Both entries return a test the same way and let in only a published test
+written in the system; one place each, so the two cannot drift. Their other
+gates — who may ask, and whose task it is — differ by entry and stay in the
+route modules, beside the file routes they mirror.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
@@ -17,30 +17,29 @@ from course_supporter.api.schemas import (
     TestStructureQuestion,
     TestStructureResponse,
 )
-from course_supporter.storage.document_summary_repository import (
-    DocumentSummaryRepository,
-)
+from course_supporter.homework.test_doors import MISSING_TASK, published_version
 
 if TYPE_CHECKING:
-    import uuid
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.homework.test_doors import AnswerSheet
-
-TASK_NOT_READY: Final[str] = (
-    "Task is not ready for submissions yet (its summary has not been generated)."
-)
-"""The file routes' own readiness refusal, word for word."""
+    from course_supporter.storage.orm import AuthoredDocument, TestVersion
 
 
-async def require_ready(session: AsyncSession, document_id: uuid.UUID) -> None:
-    """The file routes' readiness gate: 409 until the task's summary is ready."""
-    summary = await DocumentSummaryRepository(session).get_by_authored_document_id(
-        document_id
-    )
-    if summary is None or summary.status != "ready":
-        raise HTTPException(status_code=409, detail=TASK_NOT_READY)
+async def require_published(
+    session: AsyncSession, task_doc: AuthoredDocument
+) -> TestVersion:
+    """The test routes' gate: the version in force of a published written test.
+
+    Anything else is a missing task, in the same bytes as one (task 07b,
+    decisions 8 and 11): a test before its first publication, a test written as
+    a file — no longer answered — and a task that is not a test at all. None of
+    them says it exists.
+    """
+    published = await published_version(session, task_doc)
+    if published is None:
+        raise HTTPException(status_code=404, detail=MISSING_TASK)
+    return published
 
 
 def structure_response(sheet: AnswerSheet) -> TestStructureResponse:

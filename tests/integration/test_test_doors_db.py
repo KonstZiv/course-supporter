@@ -1,9 +1,12 @@
 """The doors of a test, and the core that stores its answers (task 07).
 
-Two halves. The file routes: a file sent to a test is refused — through both
-routes, over HTTP, with a live database — once tests are on the new path, and
-taken exactly as before while they are not. The core: a test's answers go
-through the test's doors and are stored as a file is, with no deduplication.
+Two halves. The file routes: a file sent to a test written as a file is
+refused — through both routes, over HTTP, with a live database — once tests
+are on the new path, and taken exactly as before while they are not; a test
+written in the system (task 07b) never takes one — published, the file is
+refused, and unpublished the test is a missing task. The core: a test's
+answers go through the doors of its published version and are stored as a
+file is, with the version they were taken for and no deduplication.
 
 What every refusal is measured by: the submission rows of the task before and
 after, and the storage double's upload — a refusal writes no row and stores
@@ -43,8 +46,17 @@ from course_supporter.homework.path_config import (
 from course_supporter.homework.submission_core import (
     create_and_dispatch_test_submission,
 )
-from course_supporter.homework.test_text import canonical_answers_json
+from course_supporter.homework.test_doors import stored_answers
+from course_supporter.homework.test_object import (
+    DraftBody,
+    DraftOption,
+    DraftQuestion,
+    published_form,
+    version_digests,
+)
+from course_supporter.homework.test_text import canonical_answers
 from course_supporter.reference_kinds import ReferenceKind
+from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -55,10 +67,11 @@ from course_supporter.storage.orm import (
     Job,
     Student,
     StudentEnrollment,
-    TaskReferenceOverride,
     Tenant,
+    TestVersion,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
@@ -68,6 +81,20 @@ _TEXT = (
 )
 _HASH = "d1" + "0" * 62
 _KEY: dict[str, list[str]] = {"1": ["б"], "2": ["в"], "3": ["а"]}
+"""The key of the test written as a file, whose file door is unchanged."""
+_WRITTEN = DraftBody(
+    questions=tuple(
+        DraftQuestion(
+            text=text,
+            options=(
+                DraftOption(text="так", correct=right == 0),
+                DraftOption(text="ні", correct=right == 1),
+            ),
+        )
+        for text, right in (("Перше?", 1), ("Друге?", 1), ("Третє?", 0))
+    )
+)
+"""The test written in the system: its key is б, б, а."""
 _ANSWERS: dict[str, list[str]] = {"1": ["б"], "2": ["а"], "3": ["а"]}
 _SWITCH = "course_supporter.homework.test_doors.get_path_config"
 
@@ -145,11 +172,45 @@ async def _task(
     return document
 
 
+async def _written(
+    session: AsyncSession, node: CourseNode, *, published: bool
+) -> AuthoredDocument:
+    """A test written in the system, published or not (PRE-FLIGHT section 4.3)."""
+    document = AuthoredDocument(
+        course_node_id=node.id,
+        course_root_id=node.id,
+        source_type="test_object",
+        source_url="test-object:",
+        task_type="test",
+        language="ukr",
+        content_hash=compute_content_hash(b"", []),
+        title="Тест",
+    )
+    session.add(document)
+    await session.flush()
+    if published:
+        body = published_form(_WRITTEN, "ukr")
+        digests = version_digests(body, "ukr")
+        await TestObjectRepository(session).publish(
+            document.id,
+            language="ukr",
+            body=body.to_jsonb(),
+            content_digest=digests.content_digest,
+            answers_digest=digests.answers_digest,
+            publication_digest=digests.publication_digest,
+        )
+    return document
+
+
 @pytest.fixture()
 async def world(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[dict[str, uuid.UUID]]:
-    """A tenant, a course, a test with its key, a plain task, an enrolled student."""
+    """A tenant, a course, its tests, an enrolled student.
+
+    ``test`` is written in the system and published, ``unpublished`` is written
+    and never published, ``text_test`` is written as a file with its key.
+    """
     async with session_factory() as session:
         tenant = Tenant(name=f"doors-{uuid.uuid4().hex[:8]}")
         session.add(tenant)
@@ -157,10 +218,11 @@ async def world(
         node = make_root_course_node(tenant_id=tenant.id, title="Doors", order=0)
         session.add(node)
         await session.flush()
-        test = await _task(session, node)
-        plain = await _task(session, node, task_type="task")
+        test = await _written(session, node, published=True)
+        unpublished = await _written(session, node, published=False)
+        text_test = await _task(session, node)
         await TaskReferenceRepository(session).replace_override(
-            authored_document_id=test.id,
+            authored_document_id=text_test.id,
             kind=ReferenceKind.TEST_KEY,
             answers=_KEY,
             source_content_hash=_HASH,
@@ -174,7 +236,8 @@ async def world(
             "tenant_id": tenant.id,
             "node_id": node.id,
             "test_id": test.id,
-            "plain_id": plain.id,
+            "unpublished_id": unpublished.id,
+            "text_test_id": text_test.id,
             "student_id": student.id,
         }
 
@@ -262,8 +325,8 @@ def routes(
     app.dependency_overrides.clear()
 
 
-async def _send_a_file(route: str, world: dict[str, uuid.UUID]) -> Any:
-    """One text file to the test, through the named route."""
+async def _send_a_file(route: str, world: dict[str, uuid.UUID], task: uuid.UUID) -> Any:
+    """One text file to ``task``, through the named route."""
     file = {"file": ("answers.txt", b"1. b\n2. c\n3. a\n", "text/plain")}
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -275,13 +338,11 @@ async def _send_a_file(route: str, world: dict[str, uuid.UUID]) -> Any:
                     "student_external_id": "ext-doors",
                     "course_node_id": str(world["node_id"]),
                     "node_id": str(world["node_id"]),
-                    "authored_document_id": str(world["test_id"]),
+                    "authored_document_id": str(task),
                 },
                 files=file,
             )
-        return await client.post(
-            f"/api/v1/portal/tasks/{world['test_id']}/submissions", files=file
-        )
+        return await client.post(f"/api/v1/portal/tasks/{task}/submissions", files=file)
 
 
 class TestAFileSentToATest:
@@ -294,14 +355,14 @@ class TestAFileSentToATest:
         route: str,
     ) -> None:
         """422 with its code, before the upload: no row, nothing stored."""
-        before = await _rows(session_factory, world["test_id"])
+        before = await _rows(session_factory, world["text_test_id"])
 
         with patch(_SWITCH, return_value=_config(test_on_new_path=True)):
-            response = await _send_a_file(route, world)
+            response = await _send_a_file(route, world, world["text_test_id"])
 
         assert response.status_code == 422, response.text
         assert response.json()["detail"]["code"] == "TEST_ANSWERS_REQUIRED"
-        assert await _rows(session_factory, world["test_id"]) == before
+        assert await _rows(session_factory, world["text_test_id"]) == before
         routes.upload_smart.assert_not_awaited()
 
     @pytest.mark.parametrize("route", ["homework", "portal"])
@@ -313,17 +374,77 @@ class TestAFileSentToATest:
         route: str,
     ) -> None:
         """The way back: with the switch off, a file is still a test's form."""
-        before = await _rows(session_factory, world["test_id"])
+        before = await _rows(session_factory, world["text_test_id"])
 
         with patch(_SWITCH, return_value=_config(test_on_new_path=False)):
-            response = await _send_a_file(route, world)
+            response = await _send_a_file(route, world, world["text_test_id"])
 
         assert response.status_code == 202, response.text
-        assert await _rows(session_factory, world["test_id"]) == before + 1
+        assert await _rows(session_factory, world["text_test_id"]) == before + 1
         routes.upload_smart.assert_awaited_once()
 
 
+class TestAFileSentToAWrittenTest:
+    """A test written in the system never takes a file (task 07b, section 9)."""
+
+    @pytest.mark.parametrize("switched_on", [True, False])
+    @pytest.mark.parametrize("route", ["homework", "portal"])
+    async def test_published_it_refuses_the_file_whatever_the_switch(
+        self,
+        routes: AsyncMock,
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        route: str,
+        switched_on: bool,
+    ) -> None:
+        """422 with its code, before the upload: no row, nothing stored.
+
+        With the switch off too: no reviewer but the new path reads a written
+        test, so there is no way back through a file.
+        """
+        before = await _rows(session_factory, world["test_id"])
+
+        with patch(_SWITCH, return_value=_config(test_on_new_path=switched_on)):
+            response = await _send_a_file(route, world, world["test_id"])
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "TEST_ANSWERS_REQUIRED"
+        assert await _rows(session_factory, world["test_id"]) == before
+        routes.upload_smart.assert_not_awaited()
+
+    @pytest.mark.parametrize("switched_on", [True, False])
+    @pytest.mark.parametrize("route", ["homework", "portal"])
+    async def test_unpublished_it_is_a_missing_task(
+        self,
+        routes: AsyncMock,
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        route: str,
+        switched_on: bool,
+    ) -> None:
+        """The bytes of a task that is not there — not the readiness gate's 409."""
+        before = await _rows(session_factory, world["unpublished_id"])
+
+        with patch(_SWITCH, return_value=_config(test_on_new_path=switched_on)):
+            missing = await _send_a_file(route, world, uuid.uuid4())
+            response = await _send_a_file(route, world, world["unpublished_id"])
+
+        assert missing.status_code == 404, missing.text
+        assert (response.status_code, response.content) == (404, missing.content)
+        assert await _rows(session_factory, world["unpublished_id"]) == before
+        routes.upload_smart.assert_not_awaited()
+
+
 # ── The core ────────────────────────────────────────────────────────────
+
+
+async def _version(
+    session_factory: async_sessionmaker[AsyncSession], task_id: uuid.UUID
+) -> TestVersion:
+    async with session_factory() as session:
+        published = await TestObjectRepository(session).latest_version(task_id)
+    assert published is not None
+    return published
 
 
 async def _submit(
@@ -331,15 +452,16 @@ async def _submit(
     world: dict[str, uuid.UUID],
     *,
     answers: dict[str, list[str]],
-    task_id: uuid.UUID | None = None,
     test_version: str | None = None,
     s3: AsyncMock | None = None,
     resolve_student: AsyncMock | None = None,
 ) -> Any:
-    """One call of the core, as a route would make it."""
+    """One call of the core, as a route would make it: with the version in force."""
     async with session_factory() as session:
-        task = await session.get(AuthoredDocument, task_id or world["test_id"])
+        task = await session.get(AuthoredDocument, world["test_id"])
         assert task is not None
+        published = await TestObjectRepository(session).latest_version(task.id)
+        assert published is not None
         student = await session.get(Student, world["student_id"])
         assert student is not None
         return await create_and_dispatch_test_submission(
@@ -351,6 +473,7 @@ async def _submit(
             course_node_id=world["node_id"],
             node_id=world["node_id"],
             task_doc=task,
+            published=published,
             answers=answers,
             test_version=test_version,
             delivery_mode="in_app",
@@ -390,17 +513,28 @@ class TestTheAnswersOfATest:
         world: dict[str, uuid.UUID],
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        """Stored as a file is — and exactly the bytes the builder will read."""
+        """Stored as a file is — exactly the bytes the builder will read.
+
+        The canonical answers and the version the doors took them for
+        (task 07b, decision 14): the builder scores by that version.
+        """
         s3 = _storage()
         typed = {" 2 ": ["а)"], "1": ["Б"], "3": ["A"]}
+        version = await _version(session_factory, world["test_id"])
 
         with patch(_SWITCH, return_value=_config(test_on_new_path=True)):
             result = await _submit(session_factory, world, answers=typed, s3=s3)
 
         call = s3.upload_smart.await_args.kwargs
         stored = b"".join([chunk async for chunk in call["stream"]])
-        assert stored == canonical_answers_json(typed).encode("utf-8")
-        assert stored == '{"1":["б"],"2":["а"],"3":["а"]}'.encode()
+        assert stored == stored_answers(version.id, canonical_answers(typed)).encode()
+        assert (
+            stored
+            == (
+                '{"answers":{"1":["б"],"2":["а"],"3":["а"]},'
+                f'"version_id":"{version.id}"}}'
+            ).encode()
+        )
         assert call["content_type"] == "application/json"
         assert call["key"].endswith("/answers.json")
         submission = result.submission
@@ -428,11 +562,9 @@ class TestEveryRefusalAtTheDoors:
         ("case", "status", "code"),
         [
             ("another-version", 409, "TEST_VERSION_CHANGED"),
-            ("no-key", 409, "TEST_NOT_READY"),
             ("a-question-the-test-lacks", 422, "ANSWERS_DO_NOT_MATCH_TEST"),
             ("an-option-the-question-lacks", 422, "ANSWERS_DO_NOT_MATCH_TEST"),
             ("tests-still-on-todays-mentor", 409, "TEST_FORM_UNAVAILABLE"),
-            ("not-a-test", 422, "NOT_A_TEST_TASK"),
         ],
     )
     async def test_it_leaves_no_trace(
@@ -449,22 +581,12 @@ class TestEveryRefusalAtTheDoors:
         switched_on = True
         if case == "another-version":
             test_version = "e" * 64
-        elif case == "no-key":
-            async with session_factory() as session:
-                await session.execute(
-                    delete(TaskReferenceOverride).where(
-                        TaskReferenceOverride.authored_document_id == task_id
-                    )
-                )
-                await session.commit()
         elif case == "a-question-the-test-lacks":
             answers = {"9": ["а"]}
         elif case == "an-option-the-question-lacks":
             answers = {"1": ["г"]}
-        elif case == "tests-still-on-todays-mentor":
-            switched_on = False
         else:
-            task_id = world["plain_id"]
+            switched_on = False
         s3 = _storage()
         student = AsyncMock()
         before = await _rows(session_factory, task_id)
@@ -477,7 +599,6 @@ class TestEveryRefusalAtTheDoors:
                 session_factory,
                 world,
                 answers=answers,
-                task_id=task_id,
                 test_version=test_version,
                 s3=s3,
                 resolve_student=student,
@@ -488,3 +609,25 @@ class TestEveryRefusalAtTheDoors:
         assert await _rows(session_factory, task_id) == before
         s3.upload_smart.assert_not_awaited()
         student.assert_not_awaited()
+
+    async def test_a_test_that_takes_no_answers_yet_sends_no_one_to_a_file(
+        self,
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The text a channel shows for a code it does not know yet (task 07b).
+
+        A test written in the system refuses a file whatever the switch, so
+        the text of ``TEST_FORM_UNAVAILABLE`` must not send the student to one:
+        the one thing left to do is to come back later.
+        """
+        with (
+            patch(_SWITCH, return_value=_config(test_on_new_path=False)),
+            pytest.raises(HTTPException) as refused,
+        ):
+            await _submit(session_factory, world, answers=dict(_ANSWERS))
+
+        assert refused.value.detail["code"] == "TEST_FORM_UNAVAILABLE"
+        details = refused.value.detail["details"].lower()
+        assert "file" not in details, details
+        assert "later" in details, details

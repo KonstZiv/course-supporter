@@ -407,6 +407,7 @@ class AuthoredDocument(SoftDeleteMixin, Base):
             "web",
             "audio",
             "code",
+            "test_object",
             name="source_type_enum",
             create_type=False,
         )
@@ -450,6 +451,11 @@ class AuthoredDocument(SoftDeleteMixin, Base):
         comment="External URL or S3 object path for the raw material",
     )
     filename: Mapped[str | None] = mapped_column(String(500))
+    title: Mapped[str | None] = mapped_column(
+        String(200),
+        comment="The name both trees show (task 07b). NULL — a material with no "
+        "name of its own: its label is the file name.",
+    )
     raw_hash: Mapped[str | None] = mapped_column(
         String(64),
         comment="SHA-256 of uploaded raw file for integrity detection",
@@ -2667,7 +2673,8 @@ class TaskReference(Base):
     source_content_hash: Mapped[str] = mapped_column(
         String(64),
         comment="Content-axis version key = AuthoredDocument.content_hash at "
-        "generation time (mirrors TaskCriteria.source_content_hash).",
+        "generation time (mirrors TaskCriteria.source_content_hash); for a test "
+        "object (task 07b), the visible digest of its published version.",
     )
     source_task_type: Mapped[str] = mapped_column(
         String(32),
@@ -2866,6 +2873,161 @@ class TaskReferenceOverride(Base):
             f"TaskReferenceOverride(id={self.id!r}, "
             f"authored_document_id={self.authored_document_id!r}, "
             f"kind={self.kind!r}, carried_over={self.carried_over!r})"
+        )
+
+
+class TestDraft(Base):
+    """The draft of a test the author writes in the system (task 07b).
+
+    One row per test, replaced whole; students never read it. What is saved here
+    has already passed the checks a publication needs, so publishing never fails
+    on the shape of a draft. The body carries no option letters: the system
+    sets them at publication, from the course language.
+
+    Plain ``Base``, no ``SoftDeleteMixin``: a draft goes only with its test (FK
+    CASCADE), and "hiding" a test is the soft delete of its document.
+    """
+
+    __test__ = False  # a model, not a pytest class, whatever its name says
+
+    __tablename__ = "test_drafts"
+    __table_args__ = (
+        Index("uq_test_draft_document", "authored_document_id", unique=True),
+        {
+            "comment": "The draft of a test written in the system (mentor-rebuild "
+            "task 07b): one row per test, replaced whole, never read by students."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        comment="FK → AuthoredDocument (the test). CASCADE. One draft per test "
+        "(uq_test_draft_document, which also covers this FK).",
+    )
+    body: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        comment="The checked draft: pass_threshold, and questions — each with its "
+        "text, its options (text and correct) and an optional explanation. No "
+        "option letters: those are set at publication.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TestDraft(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r})"
+        )
+
+
+class TestVersion(Base):
+    """One published version of a test (task 07b): frozen, append-only.
+
+    What a student is shown and graded against. The body is frozen with its
+    option letters; a submission names the version it was accepted against, so
+    a review written for version 2 keeps meaning what it meant after version 3
+    is published.
+
+    Three digests (``homework.test_object``):
+
+    * ``content_digest`` — what the student sees: numbers, texts, letters. It is
+      the ``version`` of the structure route and the content axis of the
+      explanations' work (``TaskReference.source_content_hash``);
+    * ``answers_digest`` — the key; the answers axis of that work;
+    * ``publication_digest`` — everything published, the pass mark and the
+      author's own explanations included.
+
+    A publication is compared with the LATEST version only: identical to it —
+    no new version; anything else — a new version, current from then on, even
+    when it repeats an earlier one (task 07b, decision 6, clarified
+    2026-09-25). So ``publication_digest`` is not unique: returning to an
+    earlier state must stay possible. Two publications racing for one number
+    are settled by ``uq_test_version_document_version``.
+
+    Plain ``Base``, like ``TaskReference``: versions go only with their test
+    (FK CASCADE) and enter no ``content_hash`` formula (task 07b, decision 10).
+    """
+
+    __test__ = False  # a model, not a pytest class, whatever its name says
+
+    __tablename__ = "test_versions"
+    __table_args__ = (
+        Index(
+            "uq_test_version_document_version",
+            "authored_document_id",
+            "version",
+            unique=True,
+        ),
+        Index(
+            "ix_test_versions_document_content",
+            "authored_document_id",
+            "content_digest",
+        ),
+        {
+            "comment": "Published versions of a test written in the system "
+            "(mentor-rebuild task 07b): frozen, append-only; a new one whenever "
+            "a publication differs from the latest."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        comment="FK → AuthoredDocument (the test). CASCADE. Covered by the "
+        "composite indexes (leftmost prefix), so no standalone index.",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        comment="Monotonic 1-based version per test. A publication that differs "
+        "is a new version; an existing one is never rewritten.",
+    )
+    language: Mapped[str] = mapped_column(
+        String(10),
+        comment="The language the option letters were set by, ISO 639-3 (the "
+        "course language at publication).",
+    )
+    body: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        comment="The published test, frozen: pass_threshold, and questions — each "
+        "with its number, text, options (letter, text, correct) and optional "
+        "explanation.",
+    )
+    content_digest: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 of what the student sees: numbers, texts, letters. The "
+        "structure route's version; the content axis of the explanations.",
+    )
+    answers_digest: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 of the key in canonical form — the answers axis of the "
+        "explanations (reference_key.answers_digest).",
+    )
+    publication_digest: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 of everything published — the pass mark and the "
+        "author's own explanations included. Compared with the latest "
+        "version's at publication; equal — no new version.",
+    )
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TestVersion(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"version={self.version!r})"
         )
 
 

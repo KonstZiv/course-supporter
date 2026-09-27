@@ -8,11 +8,13 @@ switch on today's Mentor the new path is not entered at all.
 
 Since task 07 the walk ends with a review: the test's result builder scores the
 answers against the author's key and writes the review before delivery — still
-without a model call. So the seed carries what a test needs (its text, a key, a
-ready version of explanations) and the submission's file is the canonical
-answers the core stores. What happens after delivery (the request for
-explanations in the student's language) and when building fails (decision 15)
-is here too.
+without a model call. So the seed carries what a test needs — since task 07b a
+published version of a test written in the system, and ready explanations for
+its axes — and the submission's file is what the core stores: the canonical
+answers and the version the doors took them for. What happens after delivery
+(the request for explanations in the student's language), when building fails
+(decision 15) and when a version is published after the doors (task 07b,
+decision 14) is here too.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -38,16 +40,22 @@ from course_supporter.homework.path_config import (
     ServedBy,
     SubmissionState,
 )
-from course_supporter.homework.reference_key import answers_digest
+from course_supporter.homework.test_doors import stored_answers
+from course_supporter.homework.test_object import (
+    DraftBody,
+    DraftOption,
+    DraftQuestion,
+    published_form,
+    version_digests,
+)
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.webhook import ReviewSummary
 from course_supporter.reference_kinds import ReferenceKind
 from course_supporter.security.schemas import SafetyResult
+from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
-    DocumentSegment,
-    DocumentSummary,
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
@@ -55,26 +63,46 @@ from course_supporter.storage.orm import (
     TaskReference,
     TaskReferenceOverride,
     Tenant,
+    TestVersion,
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 pytestmark = pytest.mark.requires_db
 
 _WEBHOOK_URL = "https://example.com/hook"
-_TEST_TEXT = (
-    "1. Перше?\nа) так\nб) ні\n\n2. Друге?\nа) так\nв) ні\n\n3. Третє?\nа) так\nб) ні"
-)
-_TEXT_HASH = "c1" + "0" * 62
-_KEY: dict[str, list[str]] = {"1": ["б"], "2": ["в"], "3": ["а"]}
 _PASS_MARK = 60
 # The canonical answers the core stores: question 2 answered wrong — 2 of 3,
 # a score of 66, above the pass mark.
-_ANSWERS = '{"1":["б"],"2":["а"],"3":["а"]}'
+_ANSWERS: dict[str, list[str]] = {"1": ["б"], "2": ["а"], "3": ["а"]}
 _EXPLANATIONS = {
     "1": "Перше пояснення моделі.",
     "2": "Друге пояснення моделі.",
     "3": "Третє пояснення моделі.",
 }
+
+
+def _draft(*, rights: tuple[int, int, int], pass_threshold: int | None) -> DraftBody:
+    """Three questions, options «так» and «ні»; ``rights`` are the right places."""
+    return DraftBody(
+        pass_threshold=pass_threshold,
+        questions=tuple(
+            DraftQuestion(
+                text=text,
+                options=(
+                    DraftOption(text="так", correct=right == 0),
+                    DraftOption(text="ні", correct=right == 1),
+                ),
+            )
+            for text, right in zip(("Перше?", "Друге?", "Третє?"), rights, strict=True)
+        ),
+    )
+
+
+_TAKEN_FOR = _draft(rights=(1, 1, 0), pass_threshold=_PASS_MARK)
+"""The version the answers are taken for: its key is б, б, а."""
+_PUBLISHED_LATER = _draft(rights=(0, 1, 0), pass_threshold=90)
+"""Another key and pass mark: by it the same answers score 33 and fail."""
 
 
 def _config(*, test_on_new_path: bool) -> PathConfig:
@@ -132,15 +160,16 @@ async def seed(
         task = AuthoredDocument(
             course_node_id=node.id,
             course_root_id=node.id,
-            source_type="text",
-            source_url="https://example.com/t",
+            source_type="test_object",
+            source_url="test-object:",
             task_type="test",
             language="ukr",
-            content_hash=_TEXT_HASH,
+            content_hash=compute_content_hash(b"", []),
+            title="Тест",
         )
         session.add(task)
         await session.flush()
-        await _give_the_test_a_text_and_a_key(session, task)
+        version = await _give_the_test_a_version_and_explanations(session, task)
         student = Student(
             tenant_id=tenant.id, external_id=f"stu-{uuid.uuid4().hex[:6]}"
         )
@@ -178,6 +207,7 @@ async def seed(
             "job_id": job.id,
             "task_id": task.id,
             "tenant_id": tenant.id,
+            "version_id": version.id,
         }
 
     yield ids
@@ -201,46 +231,43 @@ async def seed(
         await session.commit()
 
 
-async def _give_the_test_a_text_and_a_key(
+async def _publish(
+    session: AsyncSession, task_id: uuid.UUID, draft: DraftBody
+) -> TestVersion:
+    """A publication as the service makes it, without asking for explanations."""
+    body = published_form(draft, "ukr")
+    digests = version_digests(body, "ukr")
+    version, _ = await TestObjectRepository(session).publish(
+        task_id,
+        language="ukr",
+        body=body.to_jsonb(),
+        content_digest=digests.content_digest,
+        answers_digest=digests.answers_digest,
+        publication_digest=digests.publication_digest,
+    )
+    return version
+
+
+async def _give_the_test_a_version_and_explanations(
     session: AsyncSession, task: AuthoredDocument
-) -> None:
-    """What a test needs to be reviewed: its text, a key, ready explanations."""
-    summary = DocumentSummary(
-        authored_document_id=task.id,
-        course_root_id=task.course_root_id,
-        title="Тест",
-        status="ready",
-    )
-    session.add(summary)
-    await session.flush()
-    session.add(
-        DocumentSegment(
-            document_summary_id=summary.id,
-            course_root_id=task.course_root_id,
-            order=0,
-            content=_TEST_TEXT,
-            description="the test",
-            start_pos=0,
-            end_pos=len(_TEST_TEXT),
-        )
-    )
+) -> TestVersion:
+    """What a test needs to be reviewed: a published version, ready explanations.
+
+    The explanations are written for the version's axes in the course language,
+    as its publication asks for them (PRE-FLIGHT section 8).
+    """
+    published = await _publish(session, task.id, _TAKEN_FOR)
     repo = TaskReferenceRepository(session)
-    await repo.replace_override(
-        authored_document_id=task.id,
-        kind=ReferenceKind.TEST_KEY,
-        answers=_KEY,
-        source_content_hash=_TEXT_HASH,
-        pass_threshold=_PASS_MARK,
-    )
     version, _ = await repo.create_version(
         authored_document_id=task.id,
         kind=ReferenceKind.TEST_KEY,
-        source_content_hash=_TEXT_HASH,
+        source_content_hash=published.content_digest,
         source_task_type="test",
-        answers_hash=answers_digest(_KEY),
+        answers_hash=published.answers_digest,
         language="ukr",
     )
     await repo.mark_ready(version.id, dict(_EXPLANATIONS), doubts={})
+    return published
 
 
 def _ctx(
@@ -262,10 +289,10 @@ def _ctx(
     return ctx
 
 
-def _answers_file(tmp_path: Path) -> Path:
-    """The file the core stored for this submission: its canonical answers."""
+def _answers_file(tmp_path: Path, version_id: uuid.UUID) -> Path:
+    """The file the core stored for this submission: its answers and their version."""
     answers = tmp_path / "answers.json"
-    answers.write_text(_ANSWERS, encoding="utf-8")
+    answers.write_text(stored_answers(version_id, _ANSWERS), encoding="utf-8")
     return answers
 
 
@@ -276,7 +303,7 @@ class TestTestTypeEndToEnd:
         seed: dict[str, uuid.UUID],
         tmp_path: Path,
     ) -> None:
-        answers = _answers_file(tmp_path)
+        answers = _answers_file(tmp_path, seed["version_id"])
 
         with (
             patch(
@@ -344,7 +371,7 @@ class TestTestTypeEndToEnd:
         tmp_path: Path,
     ) -> None:
         """The same fields as ever, now carrying the test's review (task 07)."""
-        answers = _answers_file(tmp_path)
+        answers = _answers_file(tmp_path, seed["version_id"])
         delivered = AsyncMock(return_value=True)
 
         with (
@@ -453,7 +480,7 @@ class TestWhenTheResultCannotBeBuilt:
             ),
         ):
             await arq_process_homework(
-                _ctx(session_factory, _answers_file(tmp_path)),
+                _ctx(session_factory, _answers_file(tmp_path, seed["version_id"])),
                 str(seed["job_id"]),
                 str(seed["submission_id"]),
             )
@@ -468,33 +495,54 @@ class TestWhenTheResultCannotBeBuilt:
         assert job.status == "failed", "the seam failed the job on the re-raise"
         broken.after_delivery.assert_not_awaited()
 
-    async def test_a_key_cleared_before_the_work_ran_fails_as_test_not_ready(
+
+class TestTheVersionTheAnswersWereTakenFor:
+    """Task 07b, decision 14: a submission is scored by the version it was taken for."""
+
+    async def test_a_version_published_after_the_doors_does_not_re_score_it(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         seed: dict[str, uuid.UUID],
         tmp_path: Path,
     ) -> None:
-        """The doors let it in; the author cleared the key before the work ran."""
+        """Published while the submission waited: another key, another pass mark.
+
+        By the newer version the same answers would score 33 and fail. By the
+        one they were taken for they score 66 and pass, and the wrong answer is
+        shown and explained as that version has it.
+        """
         async with session_factory() as session:
-            await session.execute(
-                TaskReferenceOverride.__table__.delete().where(
-                    TaskReferenceOverride.authored_document_id == seed["task_id"]
-                )
-            )
+            newer = await _publish(session, seed["task_id"], _PUBLISHED_LATER)
             await session.commit()
+        async with session_factory() as session:
+            in_force = await TestObjectRepository(session).latest_version(
+                seed["task_id"]
+            )
+        assert in_force is not None
+        assert in_force.id == newer.id, "the premise: a newer version is in force"
+        assert newer.id != seed["version_id"]
 
         with _on_the_new_path(AsyncMock(return_value=True)):
             await arq_process_homework(
-                _ctx(session_factory, _answers_file(tmp_path)),
+                _ctx(session_factory, _answers_file(tmp_path, seed["version_id"])),
                 str(seed["job_id"]),
                 str(seed["submission_id"]),
             )
 
         submission, _ = await _read_back(session_factory, seed)
-        assert (submission.status, submission.error_message) == (
-            "failed",
-            "test_not_ready",
-        )
+        assert submission.status == "delivered"
+        assert submission.review_result is not None
+        assert submission.score == 66
+        assert submission.review_result["test"]["score"] == 66
+        assert submission.review_result["verdict"] == {"passed": True, "why": None}
+        wrong = [
+            question
+            for question in submission.review_result["test"]["questions"]
+            if not question["correct"]
+        ]
+        assert [question["number"] for question in wrong] == ["2"]
+        assert wrong[0]["correct_answer"] == [{"label": "б", "text": "ні"}]
+        assert wrong[0]["explanation"] == _EXPLANATIONS["2"]
 
 
 class TestAfterDelivery:
@@ -517,7 +565,11 @@ class TestAfterDelivery:
 
         with _on_the_new_path(AsyncMock(return_value=True)):
             await arq_process_homework(
-                _ctx(session_factory, _answers_file(tmp_path), redis=redis),
+                _ctx(
+                    session_factory,
+                    _answers_file(tmp_path, seed["version_id"]),
+                    redis=redis,
+                ),
                 str(seed["job_id"]),
                 str(seed["submission_id"]),
             )
@@ -546,22 +598,63 @@ class TestAfterDelivery:
             )
         assert [(r.action, r.cost_usd) for r in rows] == [(FUNDS_PORT_ACTION, None)]
 
+    async def test_it_asks_for_the_version_the_answers_were_taken_for(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        """Not the version in force: the one the review was scored by (decision 14)."""
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, seed["submission_id"])
+            assert submission is not None
+            submission.response_language = "en"
+            newer = await _publish(session, seed["task_id"], _PUBLISHED_LATER)
+            await session.commit()
+        async with session_factory() as session:
+            taken_for = await TestObjectRepository(session).get_version(
+                seed["version_id"]
+            )
+        assert taken_for is not None
+        assert newer.answers_digest != taken_for.answers_digest, "the premise"
+        redis = AsyncMock(enqueue_job=AsyncMock(return_value=None))
+
+        with _on_the_new_path(AsyncMock(return_value=True)):
+            await arq_process_homework(
+                _ctx(
+                    session_factory,
+                    _answers_file(tmp_path, seed["version_id"]),
+                    redis=redis,
+                ),
+                str(seed["job_id"]),
+                str(seed["submission_id"]),
+            )
+
+        (english,) = await _versions(session_factory, seed["task_id"], language="eng")
+        assert (english.source_content_hash, english.answers_hash) == (
+            taken_for.content_digest,
+            taken_for.answers_digest,
+        )
+        (asked,) = await _explanation_jobs(session_factory, seed["task_id"])
+        assert asked.input_params == {"reference_id": str(english.id)}
+
     async def test_another_job_in_the_way_leaves_the_delivered_review_alone(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         seed: dict[str, uuid.UUID],
         tmp_path: Path,
     ) -> None:
-        """The text moved and a job of the task is in flight.
+        """A job of the task is in flight when the review asks for another language.
 
-        The review reads the key as it will stand and goes out without model
-        explanations for the new text; the carrying after delivery is refused
-        by the database, rolled back — no version without its job — and logged.
+        The review goes out in the student's language with the explanations it
+        can read — its version's, in the course language. The asking after
+        delivery is refused by the database, rolled back — no version without
+        its job — and logged.
         """
         async with session_factory() as session:
-            task = await session.get(AuthoredDocument, seed["task_id"])
-            assert task is not None
-            task.content_hash = "c2" + "0" * 62
+            submission = await session.get(HomeworkSubmission, seed["submission_id"])
+            assert submission is not None
+            submission.response_language = "en"
             session.add(
                 Job(
                     tenant_id=seed["tenant_id"],
@@ -578,7 +671,11 @@ class TestAfterDelivery:
 
         with capture_logs() as logs, _on_the_new_path(AsyncMock(return_value=True)):
             await arq_process_homework(
-                _ctx(session_factory, _answers_file(tmp_path), redis=redis),
+                _ctx(
+                    session_factory,
+                    _answers_file(tmp_path, seed["version_id"]),
+                    redis=redis,
+                ),
                 str(seed["job_id"]),
                 str(seed["submission_id"]),
             )
@@ -586,13 +683,11 @@ class TestAfterDelivery:
         submission, job = await _read_back(session_factory, seed)
         assert submission.status == "delivered"
         assert job.status == "complete", "a collision is not the submission's failure"
-        assert submission.review_markdown is not None
-        assert "Пояснення до цього питання немає." in submission.review_markdown
+        assert submission.review_result is not None
+        assert submission.review_result["language"] == "eng"
+        assert submission.review_result["test"]["explanations_in_course_language"]
         assert (
-            await _versions(
-                session_factory, seed["task_id"], source_content_hash="c2" + "0" * 62
-            )
-            == []
+            await _versions(session_factory, seed["task_id"], language="eng") == []
         ), "no version without its job"
         async with session_factory() as session:
             layer = await session.scalar(
@@ -600,8 +695,7 @@ class TestAfterDelivery:
                     TaskReferenceOverride.authored_document_id == seed["task_id"]
                 )
             )
-        assert layer is not None
-        assert (layer.source_content_hash, layer.carried_over) == (_TEXT_HASH, False)
+        assert layer is None, "a written test's key is its version's: nothing carried"
         assert [
             job.id for job in await _explanation_jobs(session_factory, seed["task_id"])
         ] == [in_the_way.id]
@@ -622,12 +716,16 @@ class TestAfterDelivery:
             capture_logs() as logs,
             _on_the_new_path(AsyncMock(return_value=True)),
             patch(
-                "course_supporter.homework.test_result.ReferenceService.request_explanations",
+                "course_supporter.homework.test_result.TestObjectService.request_explanations",
                 new=failing,
             ),
         ):
             await arq_process_homework(
-                _ctx(session_factory, _answers_file(tmp_path), redis=redis),
+                _ctx(
+                    session_factory,
+                    _answers_file(tmp_path, seed["version_id"]),
+                    redis=redis,
+                ),
                 str(seed["job_id"]),
                 str(seed["submission_id"]),
             )

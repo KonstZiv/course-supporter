@@ -44,7 +44,7 @@ from course_supporter.api.routes._portal_shared import (
     role_visible_to_student,
 )
 from course_supporter.api.routes._test_shared import (
-    require_ready,
+    require_published,
     structure_response,
 )
 from course_supporter.api.schemas import (
@@ -73,6 +73,7 @@ from course_supporter.homework.submission_core import (
 from course_supporter.homework.test_doors import (
     answer_sheet,
     refuse_a_file_for_a_test,
+    refuse_a_file_for_a_written_test,
 )
 from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import compute_delta, manifest_from_jsonb
@@ -209,6 +210,11 @@ async def submit_portal_homework(
     if not enrolled:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
+    # --- A test written in the system is never answered with a file (task
+    # 07b): unpublished it is missing, published the file is refused. Before
+    # the readiness gate, which would answer about a summary it never has. ---
+    await refuse_a_file_for_a_written_test(session, task_doc)
+
     # --- Readiness gate (KD15 §1319): the task must be ready before submit ---
     summary = await DocumentSummaryRepository(session).get_by_authored_document_id(
         authored_document_id
@@ -289,12 +295,12 @@ async def get_portal_test(
 
     The same access gates as a file submission: the task visible to students,
     in the student's tenant, in a course they are enrolled in — one 404 for
-    every way of failing them. **422** ``NOT_A_TEST_TASK`` for a task of another
-    type; **409** while the task is not ready.
+    every way of failing them. The same 404 for a task that is not a published
+    test written in the system (task 07b): the form is its version in force.
     """
     task_doc = await _answerable_task(session, student, authored_document_id)
-    await require_ready(session, authored_document_id)
-    return structure_response(await answer_sheet(session, task_doc))
+    published = await require_published(session, task_doc)
+    return structure_response(answer_sheet(published))
 
 
 @router.post(
@@ -312,13 +318,14 @@ async def submit_portal_test(
 ) -> PortalSubmitResponse:
     """Answer a test with its answers, from the student's session (task 07).
 
-    The access and readiness gates of a file submission, then the test's own
-    doors, each with its code (``{"code", "details"}``). A refused submission
+    The access gates of a file submission and the test routes' gate — a
+    published test written in the system, or a missing task — then the test's
+    own doors, each with its code (``{"code", "details"}``). A refused submission
     stores nothing; the review is read in the portal, as for a file; the same
     answers sent twice are two attempts.
     """
     task_doc = await _answerable_task(session, student, authored_document_id)
-    await require_ready(session, authored_document_id)
+    published = await require_published(session, task_doc)
     student_obj = await session.get(Student, student.student_id)
     if student_obj is None:
         raise HTTPException(status_code=401, detail="Session is no longer valid")
@@ -336,6 +343,7 @@ async def submit_portal_test(
         course_node_id=task_doc.course_root_id,
         node_id=task_doc.course_node_id,
         task_doc=task_doc,
+        published=published,
         answers=body.answers,
         test_version=body.test_version,
         delivery_mode="in_app",

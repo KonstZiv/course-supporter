@@ -18,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_student, get_session
+from course_supporter.api.routes._portal_shared import material_label
 from course_supporter.api.routes.portal_courses import _base_block
 from course_supporter.auth.context import StudentContext
 from course_supporter.models.source import MaterialRole
@@ -113,6 +114,7 @@ def _doc(
     *,
     task_type: str | None = None,
     filename: str | None = "f.pdf",
+    title: str | None = None,
     source_type: str = "text",
     order: int = 0,
     state: MaterialState = MaterialState.READY,
@@ -124,6 +126,8 @@ def _doc(
     doc.id = doc_id or uuid.uuid4()
     doc.task_type = task_type
     doc.filename = filename
+    # A real column since task 07b; a bare MagicMock would hand out a mock.
+    doc.title = title
     doc.source_type = source_type
     doc.order = order
     doc.state = state
@@ -742,3 +746,25 @@ class TestBaseBlockHelper:
         )
         assert block is not None
         assert (block.version, block.snapshot_hash, block.state) == (5, None, state)
+
+
+class TestMaterialLabel:
+    """The label both trees and both breakdowns show (task 07b, decision 7)."""
+
+    @pytest.mark.parametrize(
+        ("title", "filename", "expected"),
+        [
+            ("Тест до лекції 3", None, "Тест до лекції 3"),
+            ("Тест до лекції 3", "test.yaml", "Тест до лекції 3"),
+            (None, "lecture.pdf", "lecture.pdf"),
+            (None, None, "web #4"),
+        ],
+        ids=["title", "title-over-filename", "filename", "derived"],
+    )
+    def test_the_title_then_the_filename_then_the_derived_label(
+        self, title: str | None, filename: str | None, expected: str
+    ) -> None:
+        label = material_label(
+            title=title, filename=filename, source_type="web", order=4
+        )
+        assert label == expected

@@ -20,10 +20,13 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import pathlib
 import re
 import uuid
 from collections.abc import AsyncGenerator
+from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -39,6 +42,8 @@ from course_supporter.api.deps import (
     get_arq_redis,
     get_current_tenant,
 )
+from course_supporter.api.routes import documents as documents_routes
+from course_supporter.api.routes import test_objects as test_objects_routes
 from course_supporter.auth.context import TenantContext
 from course_supporter.homework.path_runner import PATH_FAILED
 from course_supporter.homework.reference_service import (
@@ -49,6 +54,7 @@ from course_supporter.homework.test_doors import DoorCode
 from course_supporter.homework.test_result import (
     TEST_NOT_READY as TEST_NOT_READY_FAILURE,
 )
+from course_supporter.homework.test_yaml import DraftRefusalCode
 from course_supporter.jobs import JobType
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
@@ -472,6 +478,52 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
         assert real, "the application serves some test routes"
         assert documented == real, f"documented {documented}, served {real}"
 
+    def test_every_code_of_a_written_test_is_documented(self) -> None:
+        """Task 07b: the format's codes, the author's routes' and the document routes'.
+
+        The format's codes have a vocabulary; the routes spell theirs out as
+        string constants, so those are read from the modules' source. Of the
+        document routes' codes only the ``TEST_`` ones are a written test's:
+        the others there are other tasks' and are documented with them.
+        """
+        text = self._README.read_text(encoding="utf-8")
+        authors = _codes_in(test_objects_routes)
+        documents = {
+            code for code in _codes_in(documents_routes) if code.startswith("TEST_")
+        }
+        real = {code.value for code in DraftRefusalCode} | authors | documents
+
+        assert authors, "the author's routes refuse with some codes"
+        assert documents, "the document routes refuse a written test with some codes"
+        undocumented = sorted(code for code in real if f"`{code}`" not in text)
+        assert not undocumented, f"undocumented: {undocumented}"
+
+    def test_the_documented_routes_of_a_written_test_exist(self) -> None:
+        """Task 07b: the author's routes of a written test — documented exactly."""
+        text = self._README.read_text(encoding="utf-8")
+        shown = {
+            path.rstrip(".")
+            .replace("$DOC_ID", "{document_id}")
+            .replace("$NODE_ID", "{node_id}")
+            for path in re.findall(r"/api/v1/(?:tests|nodes)/[\w{}$/.-]+", text)
+        }
+        documented = {
+            path
+            for path in shown
+            if path.startswith("/api/v1/tests/") or path.endswith("/tests")
+        }
+        real = {
+            route.path
+            for route in app.routes
+            if re.fullmatch(
+                r"/api/v1/(?:tests/.+|nodes/[^/]+/tests)", getattr(route, "path", "")
+            )
+        }
+
+        assert documented, "the document shows some routes of a written test"
+        assert real, "the application serves some routes of a written test"
+        assert documented == real, f"documented {documented}, served {real}"
+
     def test_a_tenant_key_travels_in_the_header_the_code_reads(self) -> None:
         """``Bearer`` is the portal's session; a tenant key is ``X-API-Key``."""
         text = self._README.read_text(encoding="utf-8")
@@ -482,6 +534,17 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
         assert used, "the document shows requests with a tenant key"
         assert set(used) == {header}, f"headers used with a tenant key: {set(used)}"
         assert not re.search(r"Bearer \$(?:PREP|CHECK)_KEY", text)
+
+
+def _codes_in(module: ModuleType) -> set[str]:
+    """The refusal codes a module spells out: its string constants shaped like one."""
+    return {
+        node.value
+        for node in ast.walk(ast.parse(inspect.getsource(module)))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.fullmatch(r"[A-Z]+(?:_[A-Z0-9]+)+", node.value)
+    }
 
 
 async def _finished_jobs(

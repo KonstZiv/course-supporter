@@ -13,7 +13,8 @@ API key, no scope. Course-scoped access is gated by enrollment — the same
 ``is_enrolled`` split ratified in T2: the course root is derived from the
 material's anchor, and any access failure (unknown / soft-deleted / foreign
 tenant / not enrolled) collapses to a single generic 404 so the portal never
-leaks which materials exist outside the student's access.
+leaks which materials exist outside the student's access. A test written in the
+system is no material to render and answers the same way (task 07b).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._portal_shared import role_visible_to_student
 from course_supporter.api.schemas import PortalMediaResponse
 from course_supporter.auth.context import StudentContext
+from course_supporter.models.source import SourceType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -102,12 +104,18 @@ async def _resolve_enrolled_material(
     soft-deleted / foreign material (role allowlist, :func:`role_visible_to_student`):
     the student cannot tell a methodological material apart from one that does
     not exist. No new refusal text — indistinguishability is the point (rule #12).
+
+    A test written in the system collapses into the same 404 (task 07b,
+    decision 7): it is answered through its own routes, not rendered, and its
+    ``source_url`` is a placeholder that would otherwise go out as an external
+    link.
     """
     material = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
     if (
         material is None
         or material.deleted_at is not None
         or not role_visible_to_student(material.material_role)
+        or material.source_type == SourceType.TEST_OBJECT.value
     ):
         raise HTTPException(status_code=404, detail=_MATERIAL_NOT_FOUND)
 

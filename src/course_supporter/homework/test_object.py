@@ -25,11 +25,15 @@ Interface:
 What the models check, and what they do not:
     Types and shape: an unknown field, a string where a boolean belongs, a
     letter in a draft. Not the limits of the format — how many questions and
-    options, how long a text, at least one right option. Those are checked
-    where a body enters, with a code and a place the author can act on (task
-    07b, PRE-FLIGHT section 6), and a body that reaches this module has passed
-    them. The one limit enforced here is the letters' own: a question cannot
-    have more options than there are letters (:data:`MAX_OPTIONS`).
+    options, how long a text. Those are checked where a body enters, with a
+    code and a place the author can act on (task 07b, PRE-FLIGHT section 6),
+    and a body that reaches this module has passed them. Nor whether a draft is
+    finished: from task 07c a draft is saved unfinished — no questions yet, a
+    question short of options or of a right one, an empty text — and a check
+    and a publication ask :mod:`course_supporter.homework.test_completeness`
+    first.
+    The one limit enforced here is the letters' own: a question cannot have
+    more options than there are letters (:data:`MAX_OPTIONS`).
 
 Letters (task 07b, decision 16):
     The system letters the options, never the author. A course in Ukrainian

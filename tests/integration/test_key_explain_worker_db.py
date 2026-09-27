@@ -24,6 +24,13 @@ version, rendered with that version's own letters, and its key is the
 options the version marks — never an author's layer, which a written test
 cannot have.
 
+Task 07c adds a draft checked before it is published: when no publication
+has the row's axes, the model reads the draft, lettered in the course's
+language, while the draft still has those axes in that very language. A draft
+changed since, a course whose language changed since, and axes that nothing
+has all fail the row as a key that moved, without a call; a hidden test's work
+ends obsolete at the seam, before the body runs.
+
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
 
@@ -32,7 +39,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -852,3 +860,209 @@ class TestAWrittenTest:
 
         request: LLMRequest = provider.complete.await_args.args[0]
         assert _author_answers(request.prompt) == {"1": ["б"], "2": ["а"]}
+
+    async def test_a_draft_checked_before_publication_is_explained(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        check: Callable[..., Awaitable[dict[str, uuid.UUID]]],
+    ) -> None:
+        """Task 07c: no publication has the axes, the draft does — it is read."""
+        checked = await check()
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(checked["job_id"]),
+            str(checked["version_id"]),
+        )
+
+        state, reason, _ = await _version_state(session_factory, checked["version_id"])
+        assert (state, reason) == (ReferenceState.READY.value, None)
+        assert provider.complete.await_count == 1
+        request: LLMRequest = provider.complete.await_args.args[0]
+        assert _WRITTEN_SHOWN in request.prompt
+        assert _author_answers(request.prompt) == {"1": ["б"], "2": ["а"]}
+
+    async def test_a_draft_changed_after_the_check_fails_without_a_call(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        check: Callable[..., Awaitable[dict[str, uuid.UUID]]],
+    ) -> None:
+        """Another key saved while the work waited: nothing current has the axes."""
+        checked = await check()
+        async with session_factory() as session:
+            await TestObjectRepository(session).replace_draft(
+                checked["document_id"], _written_draft((0, 1)).to_jsonb()
+            )
+            await session.commit()
+
+        await _explains_nothing(session_factory, checked)
+
+    async def test_a_draft_checked_in_another_language_fails_without_a_call(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        check: Callable[..., Awaitable[dict[str, uuid.UUID]]],
+    ) -> None:
+        """Checked in German, the course English now: the same letters, no reader.
+
+        The premise: both languages letter in Latin, so the axes still match —
+        only the language tells the explanations would never be read.
+        """
+        checked = await check(course="eng", asked_in="deu")
+
+        await _explains_nothing(session_factory, checked)
+
+    async def test_axes_of_no_version_and_no_draft_fail_without_a_call(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        written: dict[str, uuid.UUID],
+    ) -> None:
+        """The same questions with another key: the text matches, the key does not."""
+        other = version_digests(published_form(_written_draft((0, 1)), "ukr"), "ukr")
+        async with session_factory() as session:
+            row, _ = await TaskReferenceRepository(session).create_version(
+                authored_document_id=written["document_id"],
+                kind=ReferenceKind.TEST_KEY,
+                source_content_hash=other.content_digest,
+                source_task_type="test",
+                answers_hash=other.answers_digest,
+                language="ukr",
+            )
+            await session.commit()
+
+        await _explains_nothing(session_factory, {**written, "version_id": row.id})
+
+    async def test_a_hidden_test_is_not_explained(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        check: Callable[..., Awaitable[dict[str, uuid.UUID]]],
+    ) -> None:
+        """Its work ends obsolete at the seam: no call, no register row.
+
+        The seam ends a job whose subject is soft-deleted before the body runs
+        (KD13), so the row of explanations is left as it was — ``pending`` — and
+        the body's own check of a hidden document is never reached this way.
+        """
+        checked = await check()
+        async with session_factory() as session:
+            document = await session.get(AuthoredDocument, checked["document_id"])
+            assert document is not None
+            document.deleted_at = datetime.now(UTC)
+            await session.commit()
+        provider = _provider_answering(_GOOD)
+
+        await arq_explain_key(
+            _ctx(session_factory, _real_router(session_factory, provider), None),
+            str(checked["job_id"]),
+            str(checked["version_id"]),
+        )
+
+        state, reason, _ = await _version_state(session_factory, checked["version_id"])
+        assert (state, reason) == (ReferenceState.PENDING.value, None)
+        assert await _job_status(session_factory, checked["job_id"]) == "obsolete"
+        provider.complete.assert_not_awaited()
+        assert await _stage_rows(session_factory, checked["job_id"]) == []
+
+
+async def _explains_nothing(
+    session_factory: async_sessionmaker[AsyncSession], ids: dict[str, uuid.UUID]
+) -> None:
+    """The row fails as a key that moved, before any call and any register row."""
+    provider = _provider_answering(_GOOD)
+
+    await arq_explain_key(
+        _ctx(session_factory, _real_router(session_factory, provider), None),
+        str(ids["job_id"]),
+        str(ids["version_id"]),
+    )
+
+    state, reason, _ = await _version_state(session_factory, ids["version_id"])
+    assert state == ReferenceState.FAILED.value
+    assert reason is not None and "changed" in reason
+    provider.complete.assert_not_awaited()
+    assert await _stage_rows(session_factory, ids["job_id"]) == []
+
+
+@pytest.fixture()
+async def check(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[Callable[..., Awaitable[dict[str, uuid.UUID]]]]:
+    """Seed a written test a check asked explanations for (task 07c), committed.
+
+    A draft and no published version: a row of explanations for the draft's
+    axes, lettered in the course's language, and its Job. ``asked_in`` is the
+    language the row was asked in — the course's unless a test says otherwise.
+    """
+    made: list[dict[str, uuid.UUID]] = []
+
+    async def seed(
+        *, course: str = "ukr", asked_in: str | None = None
+    ) -> dict[str, uuid.UUID]:
+        async with session_factory() as session:
+            tenant = Tenant(name=f"checked-tenant-{uuid.uuid4().hex[:8]}")
+            session.add(tenant)
+            await session.flush()
+            node = make_root_course_node(
+                tenant_id=tenant.id,
+                default_language=course,
+                title="Checked course",
+                order=0,
+            )
+            session.add(node)
+            await session.flush()
+            document = AuthoredDocument(
+                course_node_id=node.id,
+                course_root_id=node.id,
+                source_type="test_object",
+                source_url="test-object:",
+                task_type="test",
+                language=course,
+                content_hash=compute_content_hash(b"", []),
+                title="Тест, перевірений до публікації",
+            )
+            session.add(document)
+            await session.flush()
+            await TestObjectRepository(session).replace_draft(
+                document.id, _WRITTEN.to_jsonb()
+            )
+            axes = version_digests(published_form(_WRITTEN, course), course)
+            row, _ = await TaskReferenceRepository(session).create_version(
+                authored_document_id=document.id,
+                kind=ReferenceKind.TEST_KEY,
+                source_content_hash=axes.content_digest,
+                source_task_type="test",
+                answers_hash=axes.answers_digest,
+                language=asked_in or course,
+            )
+            job = Job(
+                tenant_id=tenant.id,
+                course_node_id=node.id,
+                job_type=JobType.KEY_EXPLANATION.value,
+                subject_type=JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION],
+                subject_id=document.id,
+            )
+            session.add(job)
+            await session.commit()
+            ids = {
+                "tenant_id": tenant.id,
+                "document_id": document.id,
+                "version_id": row.id,
+                "job_id": job.id,
+            }
+        made.append(ids)
+        return ids
+
+    yield seed
+
+    async with session_factory() as session:
+        for ids in made:
+            await session.execute(
+                ExternalServiceCall.__table__.delete().where(
+                    ExternalServiceCall.job_id == ids["job_id"]
+                )
+            )
+            await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
+            await session.execute(
+                Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
+            )
+        await session.commit()

@@ -4,7 +4,9 @@ The answers several author routes give alike, from one place so they cannot
 drift: a job collision, met by the routes of a test's answer key and by the
 routes of a test written in the system; and the refusals of a test's draft —
 the format's, with its place, and a Stage 1 screen's — given by the test
-routes and by a YAML file uploaded as a test through the document route.
+routes and by a YAML file uploaded as a test through the document route; and
+the refusal of a draft that is not finished yet, with every unfinished place
+(task 07c).
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from course_supporter.homework.reference_service import GenerationInProgressError
+from course_supporter.homework.test_completeness import DraftIncompleteError
 from course_supporter.homework.test_yaml import (
     MAX_BODY_BYTES,
     DraftRefusalCode,
@@ -61,6 +64,24 @@ def draft_refused(exc: DraftRefusedError) -> HTTPException:
             "code": exc.code.value,
             "details": exc.details,
             "place": exc.place.to_json(),
+        },
+    )
+
+
+def draft_incomplete(exc: DraftIncompleteError) -> HTTPException:
+    """A draft not finished yet: every place it is unfinished at (task 07c).
+
+    ``incomplete`` is the very list the draft's reading shows, so the author's
+    interface reads the refusal and the reading with one parser.
+    """
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": exc.code,
+            "details": (
+                "the draft is not finished: every place listed must be completed first"
+            ),
+            "incomplete": [place.to_json() for place in exc.places],
         },
     )
 

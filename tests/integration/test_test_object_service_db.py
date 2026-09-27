@@ -15,6 +15,8 @@ and about money, and both are decided by indexes and by rows of jobs:
   a publication only (decision 13).
 * The language is the course's as it stands at publication (operator's
   decision at the stop of V1, 2026-09-25).
+* An unfinished draft is refused before anything is written — not even the
+  language the course moved to (task 07c, decision 11).
 
 The queue is the shipped one, writing real ``Job`` rows: whether a job of the
 task is in flight is the question under test, and a counter would answer it
@@ -40,6 +42,10 @@ from course_supporter.homework.reference_service import (
     GenerationInProgressError,
     ReferenceService,
     ReferenceStatus,
+)
+from course_supporter.homework.test_completeness import (
+    DraftIncompleteError,
+    IncompleteCode,
 )
 from course_supporter.homework.test_object import (
     DraftBody,
@@ -274,6 +280,36 @@ class TestPublication:
             "ukr",
         )
         assert job.input_params == {"reference_id": str(explanation.id)}
+
+    async def test_an_unfinished_draft_is_not_published(
+        self, db_session: AsyncSession, seed_root_node: CourseNode
+    ) -> None:
+        """Refused before the first write, the language the course moved to included.
+
+        The route answers a refusal without committing, so only this session
+        shows the order: a language written before the refusal would be here.
+        """
+        unfinished = DraftBody(
+            questions=(
+                DraftQuestion(
+                    text="Що?", options=(DraftOption(text="так", correct=False),)
+                ),
+            )
+        )
+        document = await _written_test(db_session, seed_root_node, unfinished)
+        seed_root_node.default_language = "eng"
+        await db_session.flush()
+
+        with pytest.raises(DraftIncompleteError) as refused:
+            await _service(db_session, seed_root_node.tenant_id).publish(document.id)
+
+        assert [place.code for place in refused.value.places] == [
+            IncompleteCode.TEST_OPTIONS_COUNT,
+            IncompleteCode.TEST_NO_CORRECT_OPTION,
+        ]
+        assert document.language == "ukr", "nothing is written before the refusal"
+        assert await _versions(db_session, document.id) == []
+        assert await _jobs(db_session, document.id) == []
 
 
 @pytest.fixture()

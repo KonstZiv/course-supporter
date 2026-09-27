@@ -1,12 +1,12 @@
-"""Whether a test's draft is finished — asked before it is published (task 07c).
+"""Whether a test's draft is finished — asked by a check and a publication (task 07c).
 
 Purpose:
     From task 07c a draft is saved in any state (decision 11): with no
     questions yet, with a question that has no options or one, with no option
     marked right, with a text left empty. What a student could not answer, or
-    could not be scored on, is not published — so a publication asks here
-    first, and the draft's reading shows the author the same list, place by
-    place, before anything is tried.
+    could not be scored on, is neither published nor explained at a model's
+    cost — so a check and a publication ask here first, and the draft's reading
+    shows the author the same list, place by place, before anything is tried.
 
     The rules of the format — types, upper limits, the Stage 1 screens — stay
     where a body enters (:mod:`course_supporter.homework.test_yaml`): a draft
@@ -104,7 +104,7 @@ class IncompletePlace:
 
 
 class DraftIncompleteError(Exception):
-    """A draft that is not finished yet was asked to be published."""
+    """A draft that is not finished yet was asked to be checked or published."""
 
     code: ClassVar[str] = "TEST_DRAFT_INCOMPLETE"
 

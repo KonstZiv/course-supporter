@@ -721,7 +721,7 @@ def _text(
 
     Empty is refused only where ``may_be_empty`` is false — the title, the
     name of the document. A draft's own texts may be left empty (task 07c):
-    whether it is finished is asked before it is published.
+    whether it is finished is asked before it is checked or published.
     """
     where = _where(question, option)
     if not isinstance(node, ScalarNode):

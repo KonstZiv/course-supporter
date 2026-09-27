@@ -29,8 +29,9 @@ What the models check, and what they do not:
     code and a place the author can act on (task 07b, PRE-FLIGHT section 6),
     and a body that reaches this module has passed them. Nor whether a draft is
     finished: from task 07c a draft is saved unfinished — no questions yet, a
-    question short of options or of a right one, an empty text — and a
-    publication asks :mod:`course_supporter.homework.test_completeness` first.
+    question short of options or of a right one, an empty text — and a check
+    and a publication ask :mod:`course_supporter.homework.test_completeness`
+    first.
     The one limit enforced here is the letters' own: a question cannot have
     more options than there are letters (:data:`MAX_OPTIONS`).
 

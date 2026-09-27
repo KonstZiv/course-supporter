@@ -1,10 +1,11 @@
 """The author's routes of a test written in the system (mentor-rebuild task 07b).
 
 Create a test in a node, read and replace its draft, publish it, and take it out
-as YAML — the five routes of PRE-FLIGHT section 7.1. Hiding a test is the
-document's own ``DELETE`` (decision 17), and reading the state of its
-explanations is the key's own ``GET …/reference`` (section 7.3): neither needs a
-route here.
+as YAML — the five routes of PRE-FLIGHT section 7.1 — and check the draft before
+publishing it (task 07c). Hiding a test is the document's own ``DELETE``
+(decision 17), and reading the state of the version in force's explanations is
+the key's own ``GET …/reference`` (section 7.3): neither needs a route here.
+What the draft's check found is read with the draft.
 
 What lives here is HTTP: who may knock (``PrepDep`` — the author's scope, and
 only it), whose node or test it is (one 404 for what is not there and what is
@@ -18,18 +19,20 @@ Refusals:
     or 413 for ``TEST_TOO_LARGE`` (section 6.3). A text a Stage 1 screen refuses
     answers 400 ``SECURITY_REJECTED`` with its category, as a refused upload
     does. A document of this tenant that is not a test written in the system
-    answers 422 ``NOT_A_TEST_OBJECT``. A publication that meets another job of
-    the test answers 409 ``GENERATION_IN_PROGRESS`` and keeps nothing.
+    answers 422 ``NOT_A_TEST_OBJECT``. A check or a publication that meets
+    another job of the test answers 409 ``GENERATION_IN_PROGRESS`` and keeps
+    nothing.
 
     A draft not finished yet is no refusal: it is saved as it is, and its
-    reading lists every unfinished place (task 07c, decision 11). Its
-    publication answers 422 ``TEST_DRAFT_INCOMPLETE`` with the same list.
+    reading lists every unfinished place (task 07c, decision 11). Its check and
+    its publication answer 422 ``TEST_DRAFT_INCOMPLETE`` with the same list.
 
 What costs money:
-    Only a publication, and only when it asks for explanations (section 8).
-    Creating, reading and replacing a draft ask for no work — their service
-    holds a queue that refuses to be asked — and taking it out reads the draft
-    alone.
+    A check and a publication, and only when they ask for explanations the
+    axes do not have yet (section 8; task 07c) — a publication of a checked
+    draft pays nothing more. Creating, reading and replacing a draft ask for no
+    work — their service holds a queue that refuses to be asked — and taking it
+    out reads the draft alone.
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from course_supporter.api.routes._author_shared import (
     too_large_a_test,
 )
 from course_supporter.api.schemas import (
+    WrittenTestCheck,
     WrittenTestDraft,
     WrittenTestIncompletePlace,
     WrittenTestOption,
@@ -71,8 +75,15 @@ from course_supporter.homework.test_completeness import (
     DraftIncompleteError,
     incomplete_places,
 )
-from course_supporter.homework.test_object import DraftBody, published_form
-from course_supporter.homework.test_object_service import TestObjectService
+from course_supporter.homework.test_object import (
+    DraftBody,
+    published_form,
+    version_digests,
+)
+from course_supporter.homework.test_object_service import (
+    DraftCheck,
+    TestObjectService,
+)
 from course_supporter.homework.test_yaml import (
     MAX_BODY_BYTES,
     DraftRefusedError,
@@ -219,7 +230,9 @@ async def _view(
 ) -> WrittenTestResponse:
     """The test as its author reads it: the draft with its letters, the version.
 
-    And what is left to finish before it can be published (task 07c).
+    And, from task 07c, what is left to finish before it can be checked or
+    published, whether it differs from the version in force, and what its
+    check found — read through a queue that refuses to be asked.
     """
     repo = TestObjectRepository(session)
     draft = await repo.get_draft(document.id)
@@ -229,6 +242,9 @@ async def _view(
     body = DraftBody.from_jsonb(draft.body)
     shown = published_form(body, language)
     published = await repo.latest_version(document.id)
+    check = await TestObjectService(session, ReadOnlyQueue()).draft_check(
+        document, body, language
+    )
     return WrittenTestResponse(
         id=document.id,
         course_node_id=document.course_node_id,
@@ -252,12 +268,22 @@ async def _view(
             ],
         ),
         published=None if published is None else _version(published),
+        course_root_id=document.course_root_id,
+        # The full digest, as a publication compares it
+        # (TestObjectRepository.publish): exactly when publishing now would
+        # give a new version.
+        unpublished_changes=(
+            published is None
+            or published.publication_digest
+            != version_digests(shown, language).publication_digest
+        ),
         incomplete=[
             WrittenTestIncompletePlace(
                 code=place.code, question=place.question, option=place.option
             )
             for place in incomplete_places(body)
         ],
+        check=_check(check),
     )
 
 
@@ -266,6 +292,12 @@ def _version(published: TestVersion) -> WrittenTestVersion:
         number=published.version,
         version=published.content_digest,
         published_at=published.published_at,
+    )
+
+
+def _check(check: DraftCheck) -> WrittenTestCheck:
+    return WrittenTestCheck(
+        state=check.state, explanations=check.explanations, doubts=check.doubts
     )
 
 
@@ -323,8 +355,13 @@ async def read_written_test(
     The draft carries the marks the author set and the letters a publication
     would give its options now, in the course's alphabet; ``published`` is the
     version in force — its number, its ``version`` as a student is shown it,
-    when it was published — or ``null`` before the first publication;
-    ``incomplete`` lists every place the draft is not finished at (task 07c).
+    when it was published — or ``null`` before the first publication. From
+    task 07c: ``course_root_id``, the course the test is in;
+    ``unpublished_changes``, whether a publication now would give a new
+    version; ``incomplete``, every place the draft is not finished at; and
+    ``check``, what the check of the draft as it stands found — its state and,
+    once ready, the model's explanations and doubts by question. Reading asks
+    for nothing.
 
     **404** ``Document not found`` for a test that is not there or not this
     tenant's — one body for both; **422** ``NOT_A_TEST_OBJECT`` for another
@@ -363,6 +400,46 @@ async def replace_written_test_draft(
     return await _view(session, document, language)
 
 
+@router.post("/tests/{document_id}/check")
+async def check_written_test(
+    document_id: uuid.UUID,
+    tenant: PrepDep,
+    session: SessionDep,
+    arq: ArqDep,
+) -> WrittenTestCheck:
+    """Have the model explain the draft and name its doubts (task 07c).
+
+    Asks for the explanations of the saved draft in the course language, as a
+    publication of it would, and publishes nothing: no student and no channel
+    sees anything of it. **200** with the check: ``in_progress`` while its
+    explanations are being written — asked for now or earlier, so pressing
+    again costs nothing — or ``ready``, with the model's explanations and
+    doubts, for a draft checked before and unchanged since. A check that
+    failed, or was left with no job to finish it, is asked for again. The
+    draft's reading shows the same.
+
+    **422** ``TEST_DRAFT_INCOMPLETE`` for a draft not finished yet, with every
+    unfinished place; nothing is asked for. **409** ``GENERATION_IN_PROGRESS``
+    when another job of the test is in flight: nothing of the check is kept,
+    and the author checks again once it ends. **404** / **422** as for reading
+    a test.
+    """
+    await _require_written_test(session, document_id, tenant.tenant_id)
+    service = TestObjectService(
+        session,
+        ArqExplanationQueue(redis=arq, session=session, tenant_id=tenant.tenant_id),
+    )
+    try:
+        check = await service.check(document_id)
+        await session.commit()
+    except GenerationInProgressError as exc:
+        await session.rollback()
+        raise generation_in_progress(exc) from exc
+    except DraftIncompleteError as exc:
+        raise draft_incomplete(exc) from exc
+    return _check(check)
+
+
 @router.post("/tests/{document_id}/publish")
 async def publish_written_test(
     document_id: uuid.UUID,
@@ -376,7 +453,9 @@ async def publish_written_test(
     **201** with a new version; **200** when the draft equals the version in
     force — the same version. The explanations in the course language are
     asked for when the version's axes are new, and again only when the ones
-    asked for before failed or were left stuck (section 8.6).
+    asked for before failed or were left stuck (section 8.6). A draft checked
+    before has its axes asked for already: its publication pays nothing more
+    (task 07c).
 
     **409** ``GENERATION_IN_PROGRESS`` when another job of the test is in
     flight: nothing of the publication is kept, and the author publishes again

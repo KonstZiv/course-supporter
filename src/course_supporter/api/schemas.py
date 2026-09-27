@@ -17,6 +17,7 @@ from pydantic import (
 
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.homework.test_completeness import IncompleteCode
+from course_supporter.homework.test_object_service import DraftCheckState
 from course_supporter.language import (
     InvalidLanguageError,
     LanguageEntry,
@@ -1887,8 +1888,8 @@ class WrittenTestDraft(BaseModel):
 class WrittenTestIncompletePlace(BaseModel):
     """A place where a draft is not finished yet (task 07c).
 
-    A draft is saved unfinished; a publication of one is refused, and the
-    draft's reading lists every such place — the same entries as the
+    A draft is saved unfinished; a check or a publication of one is refused,
+    and the draft's reading lists every such place — the same entries as the
     refusal's ``incomplete``.
     """
 
@@ -1916,14 +1917,43 @@ class WrittenTestVersion(BaseModel):
     published_at: datetime = Field(description="When it was published.")
 
 
+class WrittenTestCheck(BaseModel):
+    """What the check of a draft found, and how far it got (task 07c).
+
+    Returned by ``POST /tests/{id}/check`` and carried by every reading of the
+    draft, for the draft as it stands. The explanations and doubts are the
+    model's alone; the author's own explanations are the draft's.
+    """
+
+    state: DraftCheckState = Field(
+        description="not_checked — nothing asked for the draft as it stands: "
+        "never checked, changed since, or unfinished; in_progress — being "
+        "written; ready — the explanations and doubts are here; failed — the "
+        "writing gave up, and a check asks for it again."
+    )
+    explanations: dict[str, str] = Field(
+        description="The model's explanation of each question, by its number; "
+        "empty until ready."
+    )
+    doubts: dict[str, bool] = Field(
+        description="Questions on which the model doubts the author's answer, "
+        "by number. A student is not shown the model's explanation of a "
+        "doubted question; the author's own explanation of it they are. Empty "
+        "until ready."
+    )
+
+
 class WrittenTestResponse(BaseModel):
     """A test written in the system as its author reads it (task 07b).
 
     Returned by ``POST /nodes/{node_id}/tests`` and by the ``/tests/{id}/draft``
     routes. The draft carries the marks the author set and the letters a
     publication would give its options now; ``published`` is the version in
-    force, or ``null`` before the first publication; ``incomplete`` is what is
-    left to finish before the draft can be published (task 07c).
+    force, or ``null`` before the first publication. From task 07c:
+    ``incomplete`` is what is left to finish before the draft can be checked
+    or published, ``unpublished_changes`` whether a publication now would give
+    a new version, and ``check`` what the draft's check found — read, never
+    asked for.
     """
 
     id: uuid.UUID = Field(description="The test's document id.")
@@ -1938,10 +1968,22 @@ class WrittenTestResponse(BaseModel):
     published: WrittenTestVersion | None = Field(
         description="The version in force, or null before the first publication."
     )
+    course_root_id: uuid.UUID = Field(
+        description="The root of the course the test is in."
+    )
+    unpublished_changes: bool = Field(
+        description="Whether the draft differs from the version in force — in a "
+        "question, an option, a mark, the pass mark, an explanation of the "
+        "author's own or the course language; true before the first "
+        "publication. A new title is no change: no version carries it."
+    )
     incomplete: list[WrittenTestIncompletePlace] = Field(
         description="Every place the draft is not finished at, in reading order; "
-        "empty for a finished draft. A publication of an unfinished draft is "
-        "refused with the same list."
+        "empty for a finished draft. A check or a publication of an unfinished "
+        "draft is refused with the same list."
+    )
+    check: WrittenTestCheck = Field(
+        description="What the check of the draft as it stands found."
     )
 
 

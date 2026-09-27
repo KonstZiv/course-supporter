@@ -410,8 +410,12 @@ _TWO_QUESTIONS: dict[str, Any] = {
 """A finished draft of two questions, for what a check finds question by question."""
 
 _MODEL = {"1": "Два в кубі — вісім.", "2": "Список можна змінювати на місці."}
-_DOUBTS = {"1": False, "2": True}
-"""The model doubts the author's answer to the second question of the two."""
+_DOUBTS = {"2": True}
+"""The model doubts the author's answer to the second question of the two.
+
+Written as the work stores it (``agents/key_explainer.py``): only what is
+doubted, ``{number: true}``; ``{}`` when the model doubts nothing.
+"""
 
 _MODEL_OF_ONE = {"1": "Тест перевіряє, чи засвоєно матеріал."}
 """What the model writes for the world's own test of one question."""
@@ -505,6 +509,7 @@ async def _the_work_is_done(
     doubts: dict[str, bool],
 ) -> None:
     """What the explanation work leaves: its job complete, its version written."""
+    assert all(doubts.values()), "the work stores only what is doubted"
     async with session_factory() as session:
         await _the_jobs_end(session, test, "complete")
         repo = TaskReferenceRepository(session)
@@ -550,7 +555,7 @@ async def _a_check_that_came_to(
     elif state == "failed":
         await _the_work_fails(session_factory, test)
     elif state == "ready":
-        await _the_work_is_done(session_factory, test, _MODEL_OF_ONE, {"1": False})
+        await _the_work_is_done(session_factory, test, _MODEL_OF_ONE, {})
 
 
 async def _course_speaks(
@@ -1408,9 +1413,7 @@ class TestChecking:
         jobs, rows = await _costs(session_factory, world.owner)
 
         first = await ac.post(f"/api/v1/tests/{world.test}/check")
-        await _the_work_is_done(
-            session_factory, world.test, _MODEL_OF_ONE, {"1": False}
-        )
+        await _the_work_is_done(session_factory, world.test, _MODEL_OF_ONE, {})
         replaced = await _put(ac, world.test, changed)
         second = await ac.post(f"/api/v1/tests/{world.test}/check")
 
@@ -1459,9 +1462,7 @@ class TestChecking:
         ordered = await _costs(session_factory, world.owner)
 
         running = await ac.post(f"/api/v1/tests/{world.test}/check")
-        await _the_work_is_done(
-            session_factory, world.test, _MODEL_OF_ONE, {"1": False}
-        )
+        await _the_work_is_done(session_factory, world.test, _MODEL_OF_ONE, {})
         written = await ac.post(f"/api/v1/tests/{world.test}/check")
 
         assert first.status_code == 200, first.text
@@ -1474,7 +1475,7 @@ class TestChecking:
         assert written.json() == {
             "state": "ready",
             "explanations": _MODEL_OF_ONE,
-            "doubts": {"1": False},
+            "doubts": {},
         }
         assert await _costs(session_factory, world.owner) == ordered
         assert len(await _explanations(session_factory, world.test)) == 1
@@ -1775,9 +1776,7 @@ class TestWhatTheDraftShows:
         async def publish() -> None:
             answer = await ac.post(f"/api/v1/tests/{world.test}/publish")
             published.append(answer.status_code)
-            await _the_work_is_done(
-                session_factory, world.test, _MODEL_OF_ONE, {"1": False}
-            )
+            await _the_work_is_done(session_factory, world.test, _MODEL_OF_ONE, {})
             await read()
 
         await read()

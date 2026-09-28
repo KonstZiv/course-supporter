@@ -16,6 +16,8 @@ What is pinned here, and to what:
   this module when it was written (2026-09-25) and are pinned from then on.
 * **The prompt text** — to that same file: the polygon's test, published, reads
   to the explanation model exactly as its author typed it.
+* **The tree's mark of a test** — ``publication_state``: a draft, published, or
+  changed since, by the full digest — the rule of ``unpublished_changes``.
 * **The module's examples run** — explicitly, because the gate collects no
   doctests (``DD-SP-BC``).
 """
@@ -25,6 +27,7 @@ from __future__ import annotations
 import doctest
 import hashlib
 import string
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -38,7 +41,9 @@ from course_supporter.homework.test_object import (
     DraftQuestion,
     PublishedBody,
     VersionDigests,
+    has_unpublished_changes,
     option_letters,
+    publication_state,
     published_form,
     render_for_prompt,
     version_digests,
@@ -403,6 +408,70 @@ class TestPromptText:
             "a) b) 1\n"
             "   2\n"
             "b) 1"
+        )
+
+
+class TestPublicationState:
+    """How the author's tree marks a test (by the full digest, as publishing)."""
+
+    def test_never_published_is_a_draft(self) -> None:
+        assert publication_state(_POLYGON, "ukr", None) == "draft"
+
+    def test_the_draft_as_published_is_published(self) -> None:
+        published = _digests(_POLYGON).publication_digest
+
+        assert publication_state(_POLYGON, "ukr", published) == "published"
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param(
+                lambda d: d.model_copy(update={"pass_threshold": 90}),
+                id="the-pass-mark-alone",
+            ),
+            pytest.param(
+                lambda d: _edited(d, 2, explanation="Інакше."),
+                id="an-explanation-of-the-authors-own",
+            ),
+            pytest.param(lambda d: _edited(d, 0, text="Інше?"), id="a-question"),
+            pytest.param(_key_moved, id="the-key"),
+        ],
+    )
+    def test_a_draft_edited_since_is_changed(
+        self, edit: Callable[[DraftBody], DraftBody]
+    ) -> None:
+        """Whatever is edited — the visible digest need not move."""
+        published = _digests(_POLYGON).publication_digest
+
+        assert publication_state(edit(_POLYGON), "ukr", published) == "changed"
+
+    def test_the_pass_mark_alone_moves_no_visible_digest(self) -> None:
+        """The premise of the case above: only the full digest tells it."""
+        stricter = _POLYGON.model_copy(update={"pass_threshold": 90})
+
+        assert _digests(stricter).content_digest == _digests(_POLYGON).content_digest
+
+    def test_a_course_moved_to_another_language_is_changed(self) -> None:
+        """A publication now would letter the test anew: a new version."""
+        published = _digests(_POLYGON, "ukr").publication_digest
+
+        assert publication_state(_POLYGON, "eng", published) == "changed"
+
+    @pytest.mark.parametrize("published", [False, True])
+    @pytest.mark.parametrize("edited", [False, True])
+    def test_agrees_with_unpublished_changes(
+        self, published: bool, edited: bool
+    ) -> None:
+        """``published`` exactly when the draft's read says nothing is unpublished."""
+        latest = _digests(_POLYGON).publication_digest if published else None
+        draft = (
+            _POLYGON.model_copy(update={"pass_threshold": 90}) if edited else _POLYGON
+        )
+
+        state = publication_state(draft, "ukr", latest)
+
+        assert (state == "published") is not has_unpublished_changes(
+            draft, "ukr", latest
         )
 
 

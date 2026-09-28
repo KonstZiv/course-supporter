@@ -77,8 +77,8 @@ from course_supporter.homework.test_completeness import (
 )
 from course_supporter.homework.test_object import (
     DraftBody,
+    has_unpublished_changes,
     published_form,
-    version_digests,
 )
 from course_supporter.homework.test_object_service import (
     DraftCheck,
@@ -269,13 +269,10 @@ async def _view(
         ),
         published=None if published is None else _version(published),
         course_root_id=document.course_root_id,
-        # The full digest, as a publication compares it
-        # (TestObjectRepository.publish): exactly when publishing now would
-        # give a new version.
-        unpublished_changes=(
-            published is None
-            or published.publication_digest
-            != version_digests(shown, language).publication_digest
+        # The full digest, as a publication compares it — the rule the
+        # author's tree marks the test by (publication_state).
+        unpublished_changes=has_unpublished_changes(
+            body, language, None if published is None else published.publication_digest
         ),
         incomplete=[
             WrittenTestIncompletePlace(

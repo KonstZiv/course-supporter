@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Collection
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,6 +27,16 @@ winner's. Three, because the contention is between an author's own requests:
 the second attempt already sees the winner's row, and the third exists only so
 a pathological interleaving is a raised error rather than a silent ``None``.
 """
+
+
+class DraftAndLatest(NamedTuple):
+    """A test's draft body and the full digest of its latest version.
+
+    ``publication_digest`` is ``None`` before the first publication.
+    """
+
+    body: dict[str, Any]
+    publication_digest: str | None
 
 
 class TestObjectRepository:
@@ -161,6 +171,45 @@ class TestObjectRepository:
             .distinct()
         )
         return set((await self._session.execute(stmt)).scalars())
+
+    async def drafts_with_latest_digests(
+        self, authored_document_ids: Collection[uuid.UUID]
+    ) -> dict[uuid.UUID, DraftAndLatest]:
+        """Each test's draft and its latest version's full digest — one query.
+
+        What the author's tree marks its tests by (``publication_state``), for
+        a whole tree at once: the drafts, each joined to the newest version of
+        its test (``DISTINCT ON``, served by
+        ``uq_test_version_document_version``), or to nothing before the first
+        publication. A test without a draft is absent from the result. No ids,
+        no query.
+        """
+        if not authored_document_ids:
+            return {}
+        latest = (
+            select(TestVersion.authored_document_id, TestVersion.publication_digest)
+            .where(TestVersion.authored_document_id.in_(authored_document_ids))
+            .order_by(TestVersion.authored_document_id, TestVersion.version.desc())
+            .distinct(TestVersion.authored_document_id)
+            .subquery()
+        )
+        stmt = (
+            select(
+                TestDraft.authored_document_id,
+                TestDraft.body,
+                latest.c.publication_digest,
+            )
+            .outerjoin(
+                latest,
+                latest.c.authored_document_id == TestDraft.authored_document_id,
+            )
+            .where(TestDraft.authored_document_id.in_(authored_document_ids))
+        )
+        rows = await self._session.execute(stmt)
+        return {
+            document_id: DraftAndLatest(body=body, publication_digest=digest)
+            for document_id, body, digest in rows
+        }
 
     async def version_with_digests(
         self,

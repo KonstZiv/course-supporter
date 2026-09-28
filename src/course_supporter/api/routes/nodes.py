@@ -44,6 +44,9 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.homework.reference_service import ReadOnlyQueue
+from course_supporter.homework.test_object import PublicationState
+from course_supporter.homework.test_object_service import TestObjectService
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 from course_supporter.storage.cascade import CascadeDeleteService, build_cascade_map
@@ -52,7 +55,7 @@ from course_supporter.storage.course_node_repository import (
     CourseNodeRepository,
     SummaryStatus,
 )
-from course_supporter.storage.orm import CourseNode
+from course_supporter.storage.orm import AuthoredDocument, CourseNode
 from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger()
@@ -105,6 +108,30 @@ def _apply_summary_states(
         node.summary_status, node.materials_changed = state
     for child in node.children:
         _apply_summary_states(child, states)
+
+
+def _collect_documents(node: CourseNode) -> list[AuthoredDocument]:
+    """Flatten a loaded subtree to its documents, as the loader filtered them."""
+    documents = list(node.documents)
+    for child in node.children:
+        documents.extend(_collect_documents(child))
+    return documents
+
+
+def _apply_test_states(
+    node: NodeWithDocumentsResponse,
+    states: dict[uuid.UUID, PublicationState],
+) -> None:
+    """Assign the batch-computed test state onto the response tree.
+
+    The shape of :func:`_apply_summary_states`: a pure recursive walk, no
+    query. A document absent from ``states`` — anything but a test written in
+    the system — keeps the schema default, ``null``.
+    """
+    for document in node.authored_documents:
+        document.test_state = states.get(document.id)
+    for child in node.children:
+        _apply_test_states(child, states)
 
 
 async def _require_node_for_tenant(
@@ -287,6 +314,13 @@ async def get_node_detail(
     node_ids = _collect_node_ids(response)
     states = await repo.fetch_summary_states(node_ids)
     _apply_summary_states(response, states)
+
+    # Test state (draft / published / changed): one batch query for the
+    # drafts and latest versions of every test in the subtree, read-only.
+    test_states = await TestObjectService(session, ReadOnlyQueue()).publication_states(
+        _collect_documents(tree_roots[0])
+    )
+    _apply_test_states(response, test_states)
     return response
 
 

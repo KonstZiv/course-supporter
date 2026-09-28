@@ -20,6 +20,10 @@ Interface:
     :func:`option_letters` — the letters options get, in order, in a language.
     :func:`published_form` — a draft numbered and lettered for publication.
     :func:`version_digests` — the three digests of a published version.
+    :func:`has_unpublished_changes` — whether publishing a draft now would give
+        a new version.
+    :func:`publication_state` — a test as the author's tree marks it: a draft,
+        published, or changed since its publication.
     :func:`render_for_prompt` — the test as the explanation model reads it.
 
 What the models check, and what they do not:
@@ -109,7 +113,7 @@ from __future__ import annotations
 import hashlib
 import json
 import string
-from typing import Any, Final, NamedTuple
+from typing import Any, Final, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
@@ -120,11 +124,14 @@ __all__ = [
     "DraftBody",
     "DraftOption",
     "DraftQuestion",
+    "PublicationState",
     "PublishedBody",
     "PublishedOption",
     "PublishedQuestion",
     "VersionDigests",
+    "has_unpublished_changes",
     "option_letters",
+    "publication_state",
     "published_form",
     "render_for_prompt",
     "version_digests",
@@ -389,6 +396,78 @@ def version_digests(body: PublishedBody, language: str) -> VersionDigests:
     return VersionDigests(
         content_digest=content, answers_digest=answers, publication_digest=publication
     )
+
+
+PublicationState = Literal["draft", "published", "changed"]
+"""A test as the author's tree marks it — see :func:`publication_state`."""
+
+
+def has_unpublished_changes(
+    draft: DraftBody, language: str, latest_publication_digest: str | None
+) -> bool:
+    """Whether publishing ``draft`` now would give a new version.
+
+    By the full digest, as a publication compares it
+    (``TestObjectRepository.publish``): a pass mark or an explanation of the
+    author's own changed alone is a change, though the student would see none.
+
+    Args:
+        draft: The draft as it stands.
+        language: The course language as it stands — the one a publication now
+            would letter and digest the draft in.
+        latest_publication_digest: The ``publication_digest`` of the latest
+            version, or ``None`` before the first publication.
+
+    >>> draft = DraftBody(
+    ...     pass_threshold=80,
+    ...     questions=(
+    ...         DraftQuestion(
+    ...             text="2 + 2?",
+    ...             options=(
+    ...                 DraftOption(text="4", correct=True),
+    ...                 DraftOption(text="5", correct=False),
+    ...             ),
+    ...         ),
+    ...     ),
+    ... )
+    >>> published = version_digests(published_form(draft, "eng"), "eng")
+    >>> has_unpublished_changes(draft, "eng", published.publication_digest)
+    False
+    >>> stricter = draft.model_copy(update={"pass_threshold": 90})
+    >>> has_unpublished_changes(stricter, "eng", published.publication_digest)
+    True
+    >>> has_unpublished_changes(draft, "eng", None)
+    True
+    """
+    if latest_publication_digest is None:
+        return True
+    shown = published_form(draft, language)
+    return (
+        version_digests(shown, language).publication_digest != latest_publication_digest
+    )
+
+
+def publication_state(
+    draft: DraftBody, language: str, latest_publication_digest: str | None
+) -> PublicationState:
+    """The test as the author's tree marks it.
+
+    ``draft`` before the first publication; ``published`` when a publication
+    now would give no new version; ``changed`` when it would — by
+    :func:`has_unpublished_changes`, the rule the draft's own
+    ``unpublished_changes`` reads.
+
+    Args:
+        draft: The draft as it stands.
+        language: The course language as it stands.
+        latest_publication_digest: The ``publication_digest`` of the latest
+            version, or ``None`` before the first publication.
+    """
+    if latest_publication_digest is None:
+        return "draft"
+    if has_unpublished_changes(draft, language, latest_publication_digest):
+        return "changed"
+    return "published"
 
 
 def render_for_prompt(body: PublishedBody) -> str:

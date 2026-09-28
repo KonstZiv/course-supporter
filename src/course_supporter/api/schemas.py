@@ -17,6 +17,7 @@ from pydantic import (
 
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.homework.test_completeness import IncompleteCode
+from course_supporter.homework.test_object import PublicationState
 from course_supporter.homework.test_object_service import DraftCheckState
 from course_supporter.language import (
     InvalidLanguageError,
@@ -455,6 +456,18 @@ class AuthoredDocumentSummaryResponse(BaseModel):
     error_category: str | None = Field(
         default=None,
         description="Structural async-error code (F4), if categorised.",
+    )
+    test_state: PublicationState | None = Field(
+        default=None,
+        description=(
+            "Publication state of a test written in the system "
+            "(``source_type`` ``test_object``): ``draft`` (never published), "
+            "``published`` (the draft equals the latest version), ``changed`` "
+            "(published, and the draft differs from the latest version — by "
+            "the full digest, so a pass-mark edit alone counts; the rule of "
+            "the draft's ``unpublished_changes``). ``null`` for any other "
+            "document. Computed for the whole tree in one batch query."
+        ),
     )
     created_at: datetime = Field(description="When this entry was created.")
 

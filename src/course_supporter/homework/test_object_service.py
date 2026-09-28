@@ -12,7 +12,8 @@ Interface:
         check it and read what its check found (task 07c), publish it, read
         the version in force, ask for a version's explanations as a submission
         does, and tell the explanation work which body a version of
-        explanations was asked for (task 07c).
+        explanations was asked for (task 07c); mark the tests of the author's
+        tree as a draft, published, or changed since.
     :data:`WRITTEN_TEST_URL` — the source URL every test written in the
         system carries.
     :class:`Publication` — the version a publication gave, and whether it is
@@ -72,6 +73,7 @@ Transactions:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
@@ -85,7 +87,9 @@ from course_supporter.homework.reference_service import (
 from course_supporter.homework.test_completeness import require_complete
 from course_supporter.homework.test_object import (
     DraftBody,
+    PublicationState,
     PublishedBody,
+    publication_state,
     published_form,
     version_digests,
 )
@@ -333,6 +337,52 @@ class TestObjectService:
             language=language,
         )
         return DraftCheck.of(explanation)
+
+    async def publication_states(
+        self, documents: Iterable[AuthoredDocument]
+    ) -> dict[uuid.UUID, PublicationState]:
+        """How the author's tree marks each of its tests — batched for the tree.
+
+        Only the tests written in the system among ``documents`` are marked;
+        a tree without one asks nothing. For those: one query for their drafts
+        and latest versions
+        (:meth:`~TestObjectRepository.drafts_with_latest_digests`), and the
+        language of each course they are in, as the draft's own read takes it
+        (:meth:`course_language` — a root the tree already loaded is read
+        from the session, not the database). Each test is then marked by
+        :func:`~course_supporter.homework.test_object.publication_state`, the
+        rule of the draft's ``unpublished_changes``.
+
+        Raises:
+            RuntimeError: a test has no draft — a test is created with one —
+                or a broken course root, as for :meth:`course_language`.
+        """
+        tests = [
+            document
+            for document in documents
+            if document.source_type == SourceType.TEST_OBJECT.value
+        ]
+        if not tests:
+            return {}
+        drafts = await self._repo.drafts_with_latest_digests(
+            [document.id for document in tests]
+        )
+        languages = {
+            root_id: await self.course_language(root_id)
+            for root_id in {document.course_root_id for document in tests}
+        }
+        states: dict[uuid.UUID, PublicationState] = {}
+        for document in tests:
+            found = drafts.get(document.id)
+            if found is None:
+                msg = f"test {document.id} has no draft; a test is created with one"
+                raise RuntimeError(msg)
+            states[document.id] = publication_state(
+                DraftBody.from_jsonb(found.body),
+                languages[document.course_root_id],
+                found.publication_digest,
+            )
+        return states
 
     async def current_version(
         self, authored_document_id: uuid.UUID

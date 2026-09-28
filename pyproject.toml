@@ -149,6 +149,9 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.13"
+# The one list of what is type-checked; `make typecheck`, CI and the
+# pre-commit hook all run bare `mypy` and read it from here.
+files = ["src", "tests/unit/security", "tests/integration"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_return_any = true

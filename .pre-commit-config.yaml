@@ -32,9 +32,11 @@ repos:
           - argon2-cffi>=25.1
           - pyjwt>=2.11
           - aiosmtplib>=5.1
+          - httpx>=0.28
+          - alembic>=1.14
         args: [--config-file=pyproject.toml]
         pass_filenames: false
-        entry: mypy src/ tests/unit/security/
+        entry: mypy
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

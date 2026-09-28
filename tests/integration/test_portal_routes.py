@@ -85,9 +85,9 @@ async def portal_seed(
             .scalar_subquery()
         )
         await session.execute(
-            StudentEnrollment.__table__.delete().where(
-                StudentEnrollment.student_id.in_(student_ids)
-            )
+            delete(StudentEnrollment)
+            .where(StudentEnrollment.student_id.in_(student_ids))
+            .execution_options(synchronize_session=False)
         )
         await session.execute(
             delete(StudentCredential).where(

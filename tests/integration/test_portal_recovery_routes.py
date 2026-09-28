@@ -103,9 +103,9 @@ async def seed(
             .scalar_subquery()
         )
         await session.execute(
-            StudentCredentialToken.__table__.delete().where(
-                StudentCredentialToken.credential_id.in_(cred_ids)
-            )
+            delete(StudentCredentialToken)
+            .where(StudentCredentialToken.credential_id.in_(cred_ids))
+            .execution_options(synchronize_session=False)
         )
         await session.execute(
             delete(StudentCredential).where(
@@ -113,7 +113,9 @@ async def seed(
             )
         )
         await session.execute(
-            Student.__table__.delete().where(Student.id.in_(student_ids))
+            delete(Student)
+            .where(Student.id.in_(student_ids))
+            .execution_options(synchronize_session=False)
         )
         await session.execute(delete(Tenant).where(Tenant.id == seed["tenant_id"]))
         await session.commit()

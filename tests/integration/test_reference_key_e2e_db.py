@@ -182,11 +182,13 @@ async def world(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
+            delete(ExternalServiceCall)
+            .where(
                 ExternalServiceCall.job_id.in_(
                     select(Job.id).where(Job.tenant_id == ids["tenant_id"])
                 )
             )
+            .execution_options(synchronize_session=False)
         )
         await session.execute(delete(Job).where(Job.tenant_id == ids["tenant_id"]))
         await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))

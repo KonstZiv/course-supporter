@@ -194,9 +194,9 @@ async def cost_seed(
             .scalar_subquery()
         )
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id.in_(job_ids_subq)
-            )
+            delete(ExternalServiceCall)
+            .where(ExternalServiceCall.job_id.in_(job_ids_subq))
+            .execution_options(synchronize_session=False)
         )
         await session.execute(delete(Job).where(Job.tenant_id == seed["tenant_id"]))
         await session.execute(

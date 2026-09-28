@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -135,25 +135,17 @@ async def homework_seed(
 
     async with session_factory() as session:
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
+        await session.execute(delete(Job).where(Job.id == ids["job_id"]))
+        await session.execute(delete(Student).where(Student.id == ids["student_id"]))
         await session.execute(
-            Student.__table__.delete().where(Student.id == ids["student_id"])
+            delete(AuthoredDocument).where(AuthoredDocument.id == ids["task_id"])
         )
-        await session.execute(
-            AuthoredDocument.__table__.delete().where(
-                AuthoredDocument.id == ids["task_id"]
-            )
-        )
-        await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.id == ids["node_id"])
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(CourseNode).where(CourseNode.id == ids["node_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 
@@ -346,6 +338,7 @@ class TestHappyPath:
 
         # reviewed webhook delivered exactly once.
         assert deliver.await_count == 1
+        assert deliver.await_args is not None
         payload = deliver.await_args.kwargs["payload"]
         assert payload.event == "reviewed"
         assert payload.review.score == 73
@@ -373,6 +366,7 @@ class TestSanityMismatch:
 
         sub = await _status(session_factory, homework_seed["submission_id"])
         assert sub.status == "mismatch"
+        assert sub.sanity_result is not None
         assert sub.sanity_result["verdict"] == "mismatch"
         # The review graph never ran — no score, no review.
         assert sub.score is None
@@ -381,6 +375,7 @@ class TestSanityMismatch:
 
         # mismatch webhook delivered (not reviewed).
         assert deliver.await_count == 1
+        assert deliver.await_args is not None
         payload = deliver.await_args.kwargs["payload"]
         assert payload.event == "mismatch"
         assert payload.reason == "answers a different task"

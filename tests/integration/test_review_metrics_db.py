@@ -11,7 +11,7 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.review_metrics import (
@@ -44,11 +44,9 @@ async def committed_job_id(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id == job_id
-            )
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
         )
-        await session.execute(Job.__table__.delete().where(Job.id == job_id))
+        await session.execute(delete(Job).where(Job.id == job_id))
         await session.commit()
 
 

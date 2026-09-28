@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from course_supporter.homework.path_checkpoint import (
     FreezeReason,
@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_db
 
 _KEY = PathKey(AssignmentType.TASK, SubmissionState.FIRST)
+# Typed here: inside parametrize mypy would read the reasons as ``object``.
+_CONFIGURATION_FREEZES_BY_VALUE: list[FreezeReason] = sorted(
+    CONFIGURATION_FREEZES, key=lambda r: r.value
+)
 
 
 @pytest.fixture()
@@ -108,13 +112,11 @@ async def held(
 
     async with session_factory() as session:
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(
-            Job.__table__.delete().where(Job.subject_id == ids["submission_id"])
-        )
+        await session.execute(delete(Job).where(Job.subject_id == ids["submission_id"]))
         await session.commit()
 
 
@@ -155,7 +157,9 @@ async def _jobs_of(session: AsyncSession, submission_id: uuid.UUID) -> list[Job]
 
 class TestStartContinuationJob:
     async def test_a_finished_job_may_be_followed_by_a_new_one(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         async with session_factory() as session:
             await _freeze(session, held, FreezeReason.STAGE_MONEY_CEILING)
@@ -173,7 +177,9 @@ class TestStartContinuationJob:
             assert len(await _jobs_of(session, held["submission_id"])) == 2
 
     async def test_a_job_in_flight_blocks_a_second_one(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """Asked first, because the database would refuse it anyway.
 
@@ -202,7 +208,9 @@ class TestStartContinuationJob:
 
 class TestTopUp:
     async def test_a_revision_held_for_funds_is_continued(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """Criterion 7's second half: the top-up event starts a new job."""
         async with session_factory() as session:
@@ -225,7 +233,9 @@ class TestTopUp:
             assert repo is not None
 
     async def test_a_revision_not_held_for_funds_is_left_alone(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         async with session_factory() as session:
             await _freeze(session, held, FreezeReason.STAGE_MONEY_CEILING)
@@ -259,13 +269,11 @@ class TestTopUp:
 
 
 class TestSweepFrozenRevisions:
-    @pytest.mark.parametrize(
-        "reason", sorted(CONFIGURATION_FREEZES, key=lambda r: r.value)
-    )
+    @pytest.mark.parametrize("reason", _CONFIGURATION_FREEZES_BY_VALUE)
     async def test_a_configuration_freeze_is_swept(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        held: dict,
+        held: dict[str, uuid.UUID],
         reason: FreezeReason,
     ) -> None:
         """Criterion 9's second half: after the edit, the pass starts a new job."""
@@ -280,7 +288,9 @@ class TestSweepFrozenRevisions:
             assert len(await _jobs_of(session, held["submission_id"])) == 2
 
     async def test_awaiting_funds_is_not_swept(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """Money arrives through an account, not through a file."""
         async with session_factory() as session:
@@ -293,7 +303,9 @@ class TestSweepFrozenRevisions:
             assert len(await _jobs_of(session, held["submission_id"])) == 1
 
     async def test_todays_mentor_jobs_are_invisible_to_it(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """No special case needed: they write no checkpoint at all."""
         async with session_factory() as session:
@@ -309,7 +321,9 @@ class TestSweepFrozenRevisions:
             assert len(await _jobs_of(session, held["submission_id"])) == 1
 
     async def test_a_revision_whose_job_is_in_flight_is_not_doubled(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         async with session_factory() as session:
             await _freeze(
@@ -324,7 +338,9 @@ class TestSweepFrozenRevisions:
 
 class TestOrphanedPathJob:
     async def test_a_job_with_a_checkpoint_is_requeued(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """Criterion 10: it has work behind it, so it is run again from there."""
         async with session_factory() as session:
@@ -342,7 +358,9 @@ class TestOrphanedPathJob:
             assert len(await _jobs_of(session, held["submission_id"])) == 1
 
     async def test_a_job_without_a_checkpoint_is_left_to_the_sweep(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         """Every job of today's Mentor is exactly this case."""
         async with session_factory() as session:
@@ -354,7 +372,9 @@ class TestOrphanedPathJob:
             arq.enqueue_job.assert_not_awaited()
 
     async def test_another_pipelines_job_is_left_to_the_sweep(
-        self, session_factory: async_sessionmaker[AsyncSession], held: dict
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        held: dict[str, uuid.UUID],
     ) -> None:
         async with session_factory() as session:
             job = await JobRepository(session).get_by_id(held["job_id"])

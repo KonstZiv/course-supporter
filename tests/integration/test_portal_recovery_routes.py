@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -103,21 +103,21 @@ async def seed(
             .scalar_subquery()
         )
         await session.execute(
-            StudentCredentialToken.__table__.delete().where(
-                StudentCredentialToken.credential_id.in_(cred_ids)
-            )
+            delete(StudentCredentialToken)
+            .where(StudentCredentialToken.credential_id.in_(cred_ids))
+            .execution_options(synchronize_session=False)
         )
         await session.execute(
-            StudentCredential.__table__.delete().where(
+            delete(StudentCredential).where(
                 StudentCredential.tenant_id == seed["tenant_id"]
             )
         )
         await session.execute(
-            Student.__table__.delete().where(Student.id.in_(student_ids))
+            delete(Student)
+            .where(Student.id.in_(student_ids))
+            .execution_options(synchronize_session=False)
         )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == seed["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == seed["tenant_id"]))
         await session.commit()
 
 
@@ -186,7 +186,8 @@ async def _token(
         json={"tenant_id": str(tenant_id), "login": login, "password": password},
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
+    token: str = resp.json()["access_token"]
+    return token
 
 
 def _auth(token: str) -> dict[str, str]:

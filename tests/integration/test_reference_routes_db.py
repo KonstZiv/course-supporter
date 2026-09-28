@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -179,12 +179,8 @@ async def world(
         for tenant_id in (ids["owner_id"], ids["stranger_id"]):
             # Jobs outlive their tenant (SET NULL), so they go first, while the
             # tenant still names them.
-            await session.execute(
-                Job.__table__.delete().where(Job.tenant_id == tenant_id)
-            )
-            await session.execute(
-                Tenant.__table__.delete().where(Tenant.id == tenant_id)
-            )
+            await session.execute(delete(Job).where(Job.tenant_id == tenant_id))
+            await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
         await session.commit()
 
 
@@ -687,11 +683,12 @@ async def _layer(
     session_factory: async_sessionmaker[AsyncSession], task_id: uuid.UUID
 ) -> TaskReferenceOverride | None:
     async with session_factory() as session:
-        return await session.scalar(
+        layer: TaskReferenceOverride | None = await session.scalar(
             select(TaskReferenceOverride).where(
                 TaskReferenceOverride.authored_document_id == task_id
             )
         )
+        return layer
 
 
 async def _end_jobs(
@@ -720,7 +717,7 @@ async def _revise(
             )
         )
         await session.execute(
-            DocumentSegment.__table__.update()
+            update(DocumentSegment)
             .where(DocumentSegment.document_summary_id == summary_id)
             .values(content=text)
         )

@@ -23,10 +23,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from typing import TypedDict
 
 import pytest
 from arq.connections import ArqRedis
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -45,6 +47,18 @@ from tests._helpers.course_node_factory import make_root_course_node
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
 
+class _CostSeed(TypedDict):
+    """What :func:`cost_seed` yields: the seeded ids and the sums they add up to."""
+
+    tenant_id: uuid.UUID
+    root_id: uuid.UUID
+    lesson_id: uuid.UUID
+    concept_id: uuid.UUID
+    expected_total: float
+    expected_unattributed: float
+    expected_by_course: dict[uuid.UUID, float]
+
+
 PERIOD_FROM = "2026-01-01"
 PERIOD_TO = "2026-12-31"
 SAMPLE_TIMESTAMP = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
@@ -58,7 +72,7 @@ TENANT_CREATED_AT = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 @pytest.fixture()
 async def cost_seed(
     session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncGenerator[dict[str, object]]:
+) -> AsyncGenerator[_CostSeed]:
     """Seed Tenant + 3-node tree + 5 attributed Jobs + 2 unattributed Jobs.
 
     Cost layout (lets every assertion in the suite read against one
@@ -169,7 +183,7 @@ async def cost_seed(
         await session.flush()
         await session.commit()
 
-        seed = {
+        seed: _CostSeed = {
             "tenant_id": tenant.id,
             "root_id": root.id,
             "lesson_id": lesson.id,
@@ -193,33 +207,27 @@ async def cost_seed(
             .scalar_subquery()
         )
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id.in_(job_ids_subq)
-            )
+            delete(ExternalServiceCall)
+            .where(ExternalServiceCall.job_id.in_(job_ids_subq))
+            .execution_options(synchronize_session=False)
         )
+        await session.execute(delete(Job).where(Job.tenant_id == seed["tenant_id"]))
         await session.execute(
-            Job.__table__.delete().where(Job.tenant_id == seed["tenant_id"])
+            delete(CourseNode).where(CourseNode.tenant_id == seed["tenant_id"])
         )
-        await session.execute(
-            CourseNode.__table__.delete().where(
-                CourseNode.tenant_id == seed["tenant_id"]
-            )
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == seed["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == seed["tenant_id"]))
         await session.commit()
 
 
 @pytest.fixture()
 async def cost_client(
-    cost_seed: dict[str, object],
+    cost_seed: _CostSeed,
     session_factory: async_sessionmaker[AsyncSession],
     arq_redis: ArqRedis,
 ) -> AsyncGenerator[AsyncClient]:
     """FastAPI client wired to the test session, real Redis, seeded tenant."""
     tenant_ctx = TenantContext(
-        tenant_id=cost_seed["tenant_id"],  # type: ignore[arg-type]
+        tenant_id=cost_seed["tenant_id"],
         tenant_name="cost-test",
         scopes=["prep", "check"],
         plan_id="basic",
@@ -255,7 +263,7 @@ async def cost_client(
 
 class TestCostSummaryE2E:
     async def test_total_invariant(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         """KD5: ``total_usd == sum(by_course) + unattributed_cost_usd``."""
         response = await cost_client.get(
@@ -275,7 +283,7 @@ class TestCostSummaryE2E:
         )
 
     async def test_by_course_includes_all_attributed_nodes(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         response = await cost_client.get(
             "/api/v1/cost/summary",
@@ -285,14 +293,14 @@ class TestCostSummaryE2E:
         actual = {c["course_node_id"]: c["cost_usd"] for c in data["by_course"]}
         expected = {
             str(node_id): cost
-            for node_id, cost in cost_seed["expected_by_course"].items()  # type: ignore[union-attr]
+            for node_id, cost in cost_seed["expected_by_course"].items()
         }
         assert actual == pytest.approx(expected)
 
     async def test_null_cost_excluded(
         self,
         cost_client: AsyncClient,
-        cost_seed: dict[str, object],
+        cost_seed: _CostSeed,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """NULL ``cost_usd`` rows are excluded entirely (not coalesced to 0).
@@ -303,8 +311,8 @@ class TestCostSummaryE2E:
         """
         async with session_factory() as session:
             job = Job(
-                tenant_id=cost_seed["tenant_id"],  # type: ignore[arg-type]
-                course_node_id=cost_seed["root_id"],  # type: ignore[arg-type]
+                tenant_id=cost_seed["tenant_id"],
+                course_node_id=cost_seed["root_id"],
                 job_type="document_processing",
             )
             session.add(job)
@@ -334,14 +342,14 @@ class TestCostSummaryE2E:
     async def test_by_provider_pagination(
         self,
         cost_client: AsyncClient,
-        cost_seed: dict[str, object],
+        cost_seed: _CostSeed,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """75 distinct (provider, model_id) → limit_providers=50 returns 50."""
         async with session_factory() as session:
             job = Job(
-                tenant_id=cost_seed["tenant_id"],  # type: ignore[arg-type]
-                course_node_id=cost_seed["root_id"],  # type: ignore[arg-type]
+                tenant_id=cost_seed["tenant_id"],
+                course_node_id=cost_seed["root_id"],
                 job_type="document_processing",
             )
             session.add(job)
@@ -406,7 +414,7 @@ class TestCostSummaryE2E:
 
 class TestCostCourseE2E:
     async def test_drill_down_covers_subtree(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         response = await cost_client.get(
             f"/api/v1/cost/course/{cost_seed['root_id']}",
@@ -426,7 +434,7 @@ class TestCostCourseE2E:
         }
 
     async def test_by_action_breakdown(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         response = await cost_client.get(
             f"/api/v1/cost/course/{cost_seed['root_id']}",
@@ -442,7 +450,7 @@ class TestCostCourseE2E:
     async def test_foreign_tenant_returns_404(
         self,
         cost_client: AsyncClient,
-        cost_seed: dict[str, object],
+        cost_seed: _CostSeed,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """Course belongs to another tenant → 404 (existence not leaked)."""
@@ -467,17 +475,17 @@ class TestCostCourseE2E:
         finally:
             async with session_factory() as session:
                 await session.execute(
-                    CourseNode.__table__.delete().where(CourseNode.id == other_node_id)
+                    delete(CourseNode).where(CourseNode.id == other_node_id)
                 )
                 await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == other_tenant_id)
+                    delete(Tenant).where(Tenant.id == other_tenant_id)
                 )
                 await session.commit()
 
     async def test_cross_tenant_subtree_leak_protected(
         self,
         cost_client: AsyncClient,
-        cost_seed: dict[str, object],
+        cost_seed: _CostSeed,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """Defense-in-depth: a stray foreign-tenant node parented inside
@@ -501,7 +509,7 @@ class TestCostCourseE2E:
                 order=0,
                 # Parent points at the caller's lesson — invariant
                 # violation we are explicitly defending against.
-                parent_id=cost_seed["lesson_id"],  # type: ignore[arg-type]
+                parent_id=cost_seed["lesson_id"],
             )
             session.add(intruder_node)
             await session.flush()
@@ -542,20 +550,16 @@ class TestCostCourseE2E:
         finally:
             async with session_factory() as session:
                 await session.execute(
-                    ExternalServiceCall.__table__.delete().where(
+                    delete(ExternalServiceCall).where(
                         ExternalServiceCall.job_id == intruder_job_id
                     )
                 )
+                await session.execute(delete(Job).where(Job.id == intruder_job_id))
                 await session.execute(
-                    Job.__table__.delete().where(Job.id == intruder_job_id)
+                    delete(CourseNode).where(CourseNode.id == intruder_node_id)
                 )
                 await session.execute(
-                    CourseNode.__table__.delete().where(
-                        CourseNode.id == intruder_node_id
-                    )
-                )
-                await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == intruder_tenant_id)
+                    delete(Tenant).where(Tenant.id == intruder_tenant_id)
                 )
                 await session.commit()
 
@@ -576,7 +580,7 @@ class TestCostEndpointsFallbackE2E:
     """
 
     async def test_summary_no_params_returns_full_aggregate(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         response = await cost_client.get(
             "/api/v1/cost/summary",
@@ -595,7 +599,7 @@ class TestCostEndpointsFallbackE2E:
         )
 
     async def test_course_no_params_returns_full_subtree(
-        self, cost_client: AsyncClient, cost_seed: dict[str, object]
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
         response = await cost_client.get(
             f"/api/v1/cost/course/{cost_seed['root_id']}",

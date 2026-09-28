@@ -690,7 +690,11 @@ class TestTheYaml:
         ac, use_key = client
         assert (await ac.post(f"/api/v1/tests/{world.test}/publish")).status_code == 201
         served_yaml = {
-            route.path for route in app.routes if "yaml" in getattr(route, "path", "")
+            # ``app.routes`` is typed ``BaseRoute``, which has no ``path``; the filter
+            # keeps only routes that carry one, and no narrowing reaches the element.
+            route.path  # type: ignore[attr-defined]
+            for route in app.routes
+            if "yaml" in getattr(route, "path", "")
         }
         use_key(_key(world.owner, "check"))
 
@@ -1085,6 +1089,10 @@ class TestAnUnfinishedDraft:
         """
         ac, _ = client
         before = await _written(session_factory, world)
+        bodies: tuple[dict[str, object], ...] = (
+            {"questions": []},
+            {"title": "   ", "questions": []},
+        )
 
         refused = [
             await _call(
@@ -1095,7 +1103,7 @@ class TestAnUnfinishedDraft:
                 body=json.dumps(body).encode(),
                 content_type="application/json",
             )
-            for body in ({"questions": []}, {"title": "   ", "questions": []})
+            for body in bodies
         ]
 
         assert [r.status_code for r in refused] == [422, 422], refused[-1].text
@@ -1371,6 +1379,7 @@ class TestWhatItCosts:
             (job,) = (
                 await session.execute(select(Job).where(Job.subject_id == world.test))
             ).scalars()
+            assert job.input_params is not None
             reference = await session.get(
                 TaskReference, uuid.UUID(str(job.input_params["reference_id"]))
             )
@@ -1440,7 +1449,9 @@ class TestChecking:
         ]
         ordered = await _jobs(session_factory, world.test)
         assert [job.job_type for job in ordered] == [JobType.KEY_EXPLANATION.value] * 2
-        assert [str(job.input_params["reference_id"]) for job in ordered] == [
+        # ``input_params`` is nullable on the model; an explanation job always
+        # carries one, and no narrowing reaches inside the comprehension.
+        assert [str(job.input_params["reference_id"]) for job in ordered] == [  # type: ignore[index]
             str(written.id),
             str(fresh.id),
         ]

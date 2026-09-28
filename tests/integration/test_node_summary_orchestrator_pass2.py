@@ -630,6 +630,8 @@ class TestEnclosingContextSourceHashMaterialised:
                 # Non-root: every node has axis-2 hash materialised.
                 for nid in (ids["a"], ids["b"], ids["c"], ids["a1"], ids["a2"]):
                     assert by_node[nid].enclosing_context_source_hash is not None
-                    assert len(by_node[nid].enclosing_context_source_hash) == 64
+                    # The line above narrows nothing: mypy does not narrow an
+                    # attribute reached through an index expression.
+                    assert len(by_node[nid].enclosing_context_source_hash) == 64  # type: ignore[arg-type]
         finally:
             await _cleanup_course(session_factory, ids["tenant_id"])

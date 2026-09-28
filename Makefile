@@ -16,7 +16,7 @@ format:  ## Форматувати код (ruff)
 	uv run ruff check --fix src/ tests/
 
 typecheck:  ## Перевірити типи (mypy)
-	uv run mypy src/
+	uv run mypy
 
 test:  ## Запустити тести
 	uv run pytest || test $$? -eq 5

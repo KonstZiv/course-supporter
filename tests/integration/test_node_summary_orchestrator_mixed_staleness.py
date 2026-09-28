@@ -137,18 +137,18 @@ class TestMixedStalenessSelectiveMemoSkip:
                 NodeSummaryRaw(course_node_id=b.id, source_content_hash="f" * 64)
             )
 
-            job = Job(
+            new_job = Job(
                 tenant_id=tenant.id,
                 course_node_id=root.id,
                 job_type=JobType.NODE_SUMMARY_REGENERATION,
                 status="active",
             )
-            session.add(job)
+            session.add(new_job)
             await session.flush()
             await session.commit()
 
             tenant_id = tenant.id
-            job_id = job.id
+            job_id = new_job.id
             ids = {
                 "root": root.id,
                 "a": a.id,
@@ -215,18 +215,18 @@ class TestDeeplyNestedTree:
                 chain.append(child)
                 parent = child
 
-            job = Job(
+            new_job = Job(
                 tenant_id=tenant.id,
                 course_node_id=root.id,
                 job_type=JobType.NODE_SUMMARY_REGENERATION,
                 status="active",
             )
-            session.add(job)
+            session.add(new_job)
             await session.flush()
             await session.commit()
 
             tenant_id = tenant.id
-            job_id = job.id
+            job_id = new_job.id
             chain_ids = [n.id for n in chain]
         try:
             methodist = _RecordingMethodist()
@@ -284,17 +284,17 @@ class TestMultipleForceRuns:
             a = CourseNode(tenant_id=tenant.id, parent_id=root.id, title="a", order=0)
             session.add(a)
             await session.flush()
-            job = Job(
+            new_job = Job(
                 tenant_id=tenant.id,
                 course_node_id=root.id,
                 job_type=JobType.NODE_SUMMARY_REGENERATION,
                 status="active",
             )
-            session.add(job)
+            session.add(new_job)
             await session.flush()
             await session.commit()
             tenant_id = tenant.id
-            job_id = job.id
+            job_id = new_job.id
             root_id = root.id
         try:
             # Run 1 — force=True, vertex=root, no uncovered_stale.

@@ -282,6 +282,7 @@ class TestAYamlFileWithTheTestKind:
         assert (body["job_id"], body["title"]) == (None, _TITLE)
         async with session_factory() as session:
             document = await session.get(AuthoredDocument, uuid.UUID(body["id"]))
+            assert document is not None
             draft = await session.scalar(
                 select(TestDraft).where(TestDraft.authored_document_id == document.id)
             )

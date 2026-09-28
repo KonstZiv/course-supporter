@@ -46,9 +46,9 @@ _AUTHORED_TEXT = (
 
 async def test_authored_stage2_accepts_branding_and_links() -> None:
     """Authored deck with branding + external link → is_safe=True."""
-    from course_supporter.llm.stage_router import StageRouter
+    from tests._helpers.stage_router import build_stage_router
 
-    stage_router = StageRouter.from_config()
+    stage_router = build_stage_router()
     set_job_from_arq(uuid.uuid4())
 
     result = await run_stage2_safety_check(

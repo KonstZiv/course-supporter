@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -32,6 +33,9 @@ from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import set_job_from_arq
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import AuthoredDocument
 
 _LOCAL_AUDIO_PATH = Path("/tmp/spike-audio/WxOfZx1OQYc.mp3")
 
@@ -67,8 +71,8 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
     from arq import create_pool
     from arq.connections import RedisSettings
 
-    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.stt.setup import create_stt_router
+    from tests._helpers.stage_router import build_stage_router
 
     settings = get_settings()
     redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
@@ -81,7 +85,7 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     stt_router = create_stt_router(settings, session_factory)
-    stage_router = StageRouter.from_config()
+    stage_router = build_stage_router()
 
     proc = AudioProcessor(stt_router=stt_router, redis=redis)
     set_job_from_arq(uuid.uuid4())
@@ -93,7 +97,8 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
         source_url = str(_LOCAL_AUDIO_PATH)
         filename = _LOCAL_AUDIO_PATH.name
 
-    doc = await proc.process_raw(_SmokeSource())
+    # process_raw reads only the three attributes the stand-in carries.
+    doc = await proc.process_raw(cast("AuthoredDocument", _SmokeSource()))
     assert doc.source_type == SourceType.AUDIO
     assert len(doc.chunks) > 0
 

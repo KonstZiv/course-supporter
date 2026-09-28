@@ -26,6 +26,7 @@ from datetime import datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -53,9 +54,9 @@ async def seeded_tenant_id(
 
     async with session_factory() as session:
         await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.tenant_id == tenant_id)
+            delete(CourseNode).where(CourseNode.tenant_id == tenant_id)
         )
-        await session.execute(Tenant.__table__.delete().where(Tenant.id == tenant_id))
+        await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
         await session.commit()
 
 

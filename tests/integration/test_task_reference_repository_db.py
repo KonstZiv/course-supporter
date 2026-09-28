@@ -238,14 +238,18 @@ class TestTheSameKeyArrivingTwiceIsOneVersion:
         real_next_version = repo._next_version  # the seam under test
         answers: list[int] = []
 
-        async def collide_once(document_id: uuid.UUID) -> int:
+        async def collide_once(authored_document_id: uuid.UUID) -> int:
             """Answer the first call with a number already in use."""
             value = (
-                taken.version if not answers else await real_next_version(document_id)
+                taken.version
+                if not answers
+                else await real_next_version(authored_document_id)
             )
             answers.append(value)
             return value
 
+        # Replacing a method on one instance is the seam this test exists for;
+        # mypy refuses any assignment to a method, whatever its signature.
         repo._next_version = collide_once  # type: ignore[method-assign]
 
         created_row, created = await repo.create_version(**_key(seed_material_entry.id))  # type: ignore[arg-type]

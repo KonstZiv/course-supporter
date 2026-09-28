@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock
 import anthropic
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.call_outcome import CallOutcome, SkipReason
@@ -78,11 +78,9 @@ async def committed_job(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id == job_id
-            )
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
         )
-        await session.execute(Job.__table__.delete().where(Job.id == job_id))
+        await session.execute(delete(Job).where(Job.id == job_id))
         await session.commit()
 
 
@@ -134,7 +132,7 @@ def _provider_with(
     # classify_error is sync on real providers; lambda matches that
     # contract and avoids Mock-as-ErrorCategory leaks.
     p.classify_error = lambda _exc, _cat=classify_as: _cat
-    return p  # type: ignore[return-value]
+    return p
 
 
 def _anthropic_rate_limit() -> Exception:

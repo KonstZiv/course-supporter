@@ -28,7 +28,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -214,20 +214,18 @@ async def seed(
 
     async with session_factory() as session:
         # The jobs a test's explanations were asked for, or stood in the way.
+        await session.execute(delete(Job).where(Job.subject_id == ids["task_id"]))
         await session.execute(
-            Job.__table__.delete().where(Job.subject_id == ids["task_id"])
-        )
-        await session.execute(
-            ExternalServiceCall.__table__.delete().where(
+            delete(ExternalServiceCall).where(
                 ExternalServiceCall.job_id == ids["job_id"]
             )
         )
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
+        await session.execute(delete(Job).where(Job.id == ids["job_id"]))
         await session.commit()
 
 
@@ -387,6 +385,7 @@ class TestTestTypeEndToEnd:
                 str(seed["submission_id"]),
             )
 
+        assert delivered.await_args is not None
         payload = delivered.await_args.kwargs["payload"]
         assert payload.event == "reviewed"
         assert set(payload.review.model_dump()) == set(ReviewSummary.model_fields)
@@ -490,6 +489,7 @@ class TestWhenTheResultCannotBeBuilt:
             "failed",
             "path_failed",
         )
+        assert delivered.await_args is not None
         payload = delivered.await_args.kwargs["payload"]
         assert (payload.event, payload.reason) == ("failed", "path_failed")
         assert job.status == "failed", "the seam failed the job on the re-raise"

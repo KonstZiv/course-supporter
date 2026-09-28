@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.reference_key import answers_digest
@@ -62,6 +62,10 @@ class _CountingQueue:
         self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
     ) -> None:
         self.requests.append((authored_document_id, reference_id))
+
+    async def in_flight(self, *, authored_document_id: uuid.UUID) -> bool:
+        """A task it was asked for stays in flight: nothing here runs the work."""
+        return any(asked == authored_document_id for asked, _ in self.requests)
 
 
 async def _test_task(
@@ -775,7 +779,7 @@ async def _revise_text(
         .where(DocumentSummary.authored_document_id == document.id)
     )
     await session.execute(
-        DocumentSegment.__table__.update()
+        update(DocumentSegment)
         .where(DocumentSegment.document_summary_id == summary_id)
         .values(content=text)
     )

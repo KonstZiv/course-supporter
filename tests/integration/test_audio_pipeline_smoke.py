@@ -67,8 +67,8 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
     from arq import create_pool
     from arq.connections import RedisSettings
 
-    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.stt.setup import create_stt_router
+    from tests._helpers.stage_router import build_stage_router
 
     settings = get_settings()
     redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
@@ -81,7 +81,7 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     stt_router = create_stt_router(settings, session_factory)
-    stage_router = StageRouter.from_config()
+    stage_router = build_stage_router()
 
     proc = AudioProcessor(stt_router=stt_router, redis=redis)
     set_job_from_arq(uuid.uuid4())

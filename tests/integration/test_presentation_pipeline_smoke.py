@@ -57,9 +57,9 @@ async def test_presentation_smoke_real_llm() -> None:
     the required top-level ``description`` whose omission caused the
     deterministic LadderExhaustedError fixed in the companion commit.
     """
-    from course_supporter.llm.stage_router import StageRouter
+    from tests._helpers.stage_router import build_stage_router
 
-    stage_router = StageRouter.from_config()
+    stage_router = build_stage_router()
 
     proc = PresentationProcessor()
     set_job_from_arq(uuid.uuid4())

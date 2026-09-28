@@ -9,6 +9,9 @@
 - ``changed`` when it does not — the pass mark alone included, which the
   visible digest does not see.
 
+A test without a draft — a broken invariant — is ``null`` with one warning,
+and the rest of the tree is marked as before.
+
 The rule is the draft read's ``unpublished_changes``; a tree of tests in every
 state is checked against it test by test. And the state is batched: the route
 asks as many queries of a tree with one test as of a tree with five — one more
@@ -28,6 +31,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import delete, event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_current_tenant
@@ -304,6 +308,44 @@ class TestTheAuthorsTreeMarksItsTests:
             assert draft.status_code == 200, draft.text
             unpublished = draft.json()["unpublished_changes"]
             assert (states[str(test)] == "published") is not unpublished
+
+    async def test_a_test_without_a_draft_is_null_with_one_warning(
+        self,
+        routes: None,
+        course: Course,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Not a 500 for the whole tree: that test unmarked, the rest as before."""
+        published = await _test(session_factory, course, course.root, 0, "published")
+        edited = await _test(
+            session_factory, course, course.module, 1, "pass-mark-edited"
+        )
+        orphan = await _material(
+            session_factory,
+            course,
+            course.module,
+            2,
+            source_type="test_object",
+            source_url="test-object:",
+            task_type="test",
+            language=_LANGUAGE,
+            content_hash=compute_content_hash(b"", []),
+            title="Тест без чернетки",
+        )
+
+        with capture_logs() as logs:
+            states = await _tree(course.root)
+
+        assert states == {
+            str(published): "published",
+            str(edited): "changed",
+            str(orphan): None,
+        }
+        warnings = [log for log in logs if log["event"] == "test_state_draft_missing"]
+        assert len(warnings) == 1, logs
+        assert warnings[0]["log_level"] == "warning"
+        assert warnings[0]["document_id"] == str(orphan)
+        assert "no draft" in warnings[0]["reason"]
 
     async def test_a_subtree_below_the_root_is_marked_too(
         self,

@@ -78,6 +78,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.reference_service import (
@@ -106,6 +107,8 @@ from course_supporter.storage.orm import (
     TestVersion,
 )
 from course_supporter.storage.test_object_repository import TestObjectRepository
+
+logger = structlog.get_logger(__name__)
 
 WRITTEN_TEST_URL: Final[str] = "test-object:"
 """The source URL of a test written in the system: a fixed placeholder.
@@ -354,8 +357,13 @@ class TestObjectService:
         rule of the draft's ``unpublished_changes``.
 
         Raises:
-            RuntimeError: a test has no draft — a test is created with one —
-                or a broken course root, as for :meth:`course_language`.
+            RuntimeError: a broken course root, as for :meth:`course_language`.
+
+        A test without a draft — a broken invariant, since a test is created
+        with one — is not a refusal of the whole tree: it is left unmarked (the
+        tree shows ``null``) and one warning, ``test_state_draft_missing``, names
+        it (operator's decision on the report of task Б2). The draft's own
+        read still raises.
         """
         tests = [
             document
@@ -375,8 +383,13 @@ class TestObjectService:
         for document in tests:
             found = drafts.get(document.id)
             if found is None:
-                msg = f"test {document.id} has no draft; a test is created with one"
-                raise RuntimeError(msg)
+                logger.warning(
+                    "test_state_draft_missing",
+                    document_id=str(document.id),
+                    reason="a test written in the system has no draft; "
+                    "a test is created with one",
+                )
+                continue
             states[document.id] = publication_state(
                 DraftBody.from_jsonb(found.body),
                 languages[document.course_root_id],

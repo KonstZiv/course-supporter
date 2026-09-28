@@ -7,7 +7,8 @@ Both ways a homework submission is created funnel through here:
 - mode-2 — the portal session entry-point (``in_app``, KD17), where the student
   submits from their own session and reads the review via the read-path.
 
-The shared core owns everything from the S3 upload through the ARQ dispatch:
+The shared core owns everything from the student's comment through the ARQ
+dispatch: the comment's door (:func:`check_student_note`, before the upload),
 the durability ordering (DD-3.2.6-A — commit the durable rows BEFORE dispatch)
 and the S3-cleanup guard. Each caller does its OWN mode-specific validation,
 resolves the node-context (mode-1 from Form fields; mode-2 derived from the
@@ -48,9 +49,9 @@ from course_supporter.api.upload_validation import (
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
 from course_supporter.homework.test_doors import check_test_answers, stored_answers
-from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.security.policies import HOMEWORK_POLICY
-from course_supporter.security.stage1 import archive_kind_for_filename
+from course_supporter.security.stage1 import archive_kind_for_filename, screen_text
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import upload_file_chunks
@@ -98,6 +99,17 @@ TEST_ANSWERS_FILENAME = "answers.json"
 
 TEST_ANSWERS_CONTENT_TYPE = "application/json"
 """The content type a test's answers are stored with (task 07, decision 7)."""
+
+STUDENT_NOTE_MAX_CHARS = 2_000
+"""The most a student's comment may hold, in code points (hotfix 6, decision 1)."""
+
+STUDENT_NOTE_TOO_LONG = "STUDENT_NOTE_TOO_LONG"
+"""The comment is longer than :data:`STUDENT_NOTE_MAX_CHARS` (422)."""
+
+STUDENT_NOTE_REJECTED = "STUDENT_NOTE_REJECTED"
+"""A text screen of Stage 1 refused the comment (422); ``details`` opens with
+the screen's category — ``suspicious_unicode``, ``prompt_injection`` or
+``charset_violation``."""
 
 
 def _door_refusal(code: ErrorCategory, details: str) -> dict[str, str]:
@@ -158,6 +170,72 @@ def validate_homework_file(
                 ErrorCategory.SIZE_LIMIT, _too_large_details(max_upload_bytes)
             ),
         )
+
+
+def check_student_note(student_note: str | None) -> str | None:
+    """Refuse a comment the review cannot take; return it as it is stored (hotfix 6).
+
+    The comment reaches the paid prompt of the review as it was written, so
+    it meets what the texts of a test written in the system meet: a length,
+    and the text screens of Stage 1
+    (:func:`~course_supporter.security.stage1.screen_text`) — hidden or
+    look-alike characters, an attempt to steer the model. Both
+    submissions call this before their first write, so a refused comment
+    leaves no submission, no stored file, no job and no student behind.
+
+    Line breaks are brought to ``\\n`` before anything is counted: a browser
+    sends every line break of a multipart field as ``\\r\\n``, so counting them
+    as they arrive would give one comment two lengths — one through the
+    portal's form, another through a JSON body — and refuse what the portal's
+    counter allowed. Then the edges are trimmed and the rest is counted in code
+    points. What is stored is the screened text in NFC, as Stage 1 stores text;
+    a comment of nothing but whitespace is no comment.
+
+    Raises:
+        HTTPException: 422 with ``{code, details}``, the body of the other
+            refusals at the door: :data:`STUDENT_NOTE_TOO_LONG` or
+            :data:`STUDENT_NOTE_REJECTED`.
+    """
+    if student_note is None:
+        return None
+    note = student_note.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not note:
+        return None
+    if len(note) > STUDENT_NOTE_MAX_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": STUDENT_NOTE_TOO_LONG,
+                "details": (
+                    f"The comment is {len(note)} characters long; a comment may "
+                    f"have up to {STUDENT_NOTE_MAX_CHARS}. Shorten it and submit "
+                    f"again."
+                ),
+            },
+        )
+    try:
+        # No languages: bytes encoded from a str are UTF-8, which is read
+        # without one. The one exception is a lone surrogate a JSON body can
+        # carry: ``surrogatepass`` turns it into bytes that are not UTF-8, and
+        # the screen refuses them rather than the encoder failing with a 500.
+        screened = screen_text(
+            name="student_note",
+            content=note.encode("utf-8", "surrogatepass"),
+            context="homework",
+        )
+    except SecurityRejectedError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": STUDENT_NOTE_REJECTED,
+                "details": (
+                    f"{exc.category.value}: the comment did not pass a text "
+                    f"check. Remove hidden characters and instructions addressed "
+                    f"to the reviewing system, then submit again."
+                ),
+            },
+        ) from exc
+    return screened
 
 
 async def _hashing_upload(
@@ -316,11 +394,13 @@ async def create_and_dispatch_submission(
 
     The caller has already validated the file (:func:`validate_homework_file`),
     resolved the node-context, and prepared ``resolve_student``. This function:
-    streams the file to S3 (computing its SHA-256), re-checks the uploaded size,
-    then — inside an S3-cleanup guard — resolves the student, dedupes, creates
-    the submission + durable Job, commits, and dispatches AFTER the commit
-    (DD-3.2.6-A). A failure before the commit deletes the uploaded file; a
-    dispatch failure leaves the committed submission re-dispatchable.
+    refuses a comment the review cannot take (:func:`check_student_note`, the
+    last door, before anything is written), streams the file to S3 (computing
+    its SHA-256), re-checks the uploaded size, then — inside an S3-cleanup
+    guard — resolves the student, dedupes, creates the submission + durable
+    Job, commits, and dispatches AFTER the commit (DD-3.2.6-A). A failure
+    before the commit deletes the uploaded file; a dispatch failure leaves the
+    committed submission re-dispatchable.
 
     ``resolve_student`` runs inside the guard so a resolution failure cleans up
     the upload — preserving mode-1's exact behaviour after the extraction.
@@ -330,6 +410,7 @@ async def create_and_dispatch_submission(
     is persisted at create-time. ``max_upload_bytes`` is the post-upload size
     cap (default 10 MB; 100 MB for a project), matched to the pre-upload gate.
     """
+    note = check_student_note(student_note)
     submission_id = uuid.uuid4()
     filename = file.filename or "upload"
     key = f"homework/{tenant_id}/{submission_id}/{filename}"
@@ -380,7 +461,7 @@ async def create_and_dispatch_submission(
         delivery_mode=delivery_mode,
         webhook_url=webhook_url,
         response_language=response_language,
-        student_note=student_note,
+        student_note=note,
         base_id=base_id,
     )
 
@@ -405,9 +486,10 @@ async def create_and_dispatch_test_submission(
 ) -> SubmissionDispatch:
     """Refuse at the test's doors, store the answers, then record and dispatch.
 
-    The doors run first (``test_doors.check_test_answers``) — before the
-    upload and before any row (task 07, decision 12) — so a
-    refused structure stores nothing and writes nothing. What passes is stored
+    The doors run first (``test_doors.check_test_answers``, then the
+    comment's :func:`check_student_note`) — before the upload and before any
+    row (task 07, decision 12) — so a refused structure or comment stores
+    nothing and writes nothing. What passes is stored
     the way a file is (decision 7): one object under the same key pattern,
     holding the canonical answers the result builder reads and the version
     they were taken for — ``published``, the version in force at the doors,
@@ -417,6 +499,7 @@ async def create_and_dispatch_test_submission(
     twice are two submissions, each scored anew.
     """
     canonical = check_test_answers(published, answers, test_version)
+    note = check_student_note(student_note)
     payload = stored_answers(published.id, canonical).encode("utf-8")
     key = f"homework/{tenant_id}/{uuid.uuid4()}/{TEST_ANSWERS_FILENAME}"
     s3_url, _ = await s3.upload_smart(
@@ -451,7 +534,7 @@ async def create_and_dispatch_test_submission(
         delivery_mode=delivery_mode,
         webhook_url=webhook_url,
         response_language=response_language,
-        student_note=student_note,
+        student_note=note,
         base_id=None,
     )
 

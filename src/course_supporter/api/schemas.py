@@ -1759,6 +1759,16 @@ _TEST_VERSION_DESCRIPTION = (
     "are refused with ``TEST_VERSION_CHANGED``; when omitted, the current "
     "version is assumed."
 )
+# Not a ``max_length``: the door counts after line breaks are brought to one
+# character each (``submission_core.check_student_note``) and refuses with its
+# own code, where a schema limit would count CRLF twice and answer otherwise.
+_STUDENT_NOTE_DESCRIPTION = (
+    "The student's comment on this attempt: up to 2000 characters, a line break "
+    "counted as one and the edges trimmed. A longer comment is refused with "
+    "``STUDENT_NOTE_TOO_LONG``, one a text screen refuses (hidden characters, "
+    "instructions addressed to the reviewing system) with "
+    "``STUDENT_NOTE_REJECTED`` — both 422, before anything is stored."
+)
 
 
 class TestStructureOption(BaseModel):
@@ -1818,7 +1828,7 @@ class PortalTestSubmitRequest(BaseModel):
         "language.",
     )
     student_note: str | None = Field(
-        default=None, description="The student's comment on this attempt."
+        default=None, description=_STUDENT_NOTE_DESCRIPTION
     )
 
     _bounded = field_validator("answers")(_bounded_answers)
@@ -1858,7 +1868,7 @@ class HomeworkTestSubmitRequest(BaseModel):
         "language.",
     )
     student_note: str | None = Field(
-        default=None, description="The student's comment on this attempt."
+        default=None, description=_STUDENT_NOTE_DESCRIPTION
     )
 
     _bounded = field_validator("answers")(_bounded_answers)

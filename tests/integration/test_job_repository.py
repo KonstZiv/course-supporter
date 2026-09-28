@@ -40,7 +40,7 @@ class TestJobCreate:
         self, db_session: AsyncSession, seed_root_node: CourseNode
     ) -> None:
         """input_params dict round-trips through JSONB correctly."""
-        params = {
+        params: dict[str, object] = {
             "material_id": str(uuid.uuid4()),
             "source_type": "web",
             "source_url": "https://example.com",
@@ -746,7 +746,7 @@ class TestAdmissionAggregate:
         tid = seed_root_node.tenant_id
         nid = seed_root_node.id
         mid = uuid.uuid4()
-        params = {
+        params: dict[str, object] = {
             "material_id": str(mid),
             "source_type": "video",
             "source_url": "https://youtu.be/x",

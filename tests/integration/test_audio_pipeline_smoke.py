@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -32,6 +33,9 @@ from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import set_job_from_arq
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import AuthoredDocument
 
 _LOCAL_AUDIO_PATH = Path("/tmp/spike-audio/WxOfZx1OQYc.mp3")
 
@@ -93,7 +97,8 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
         source_url = str(_LOCAL_AUDIO_PATH)
         filename = _LOCAL_AUDIO_PATH.name
 
-    doc = await proc.process_raw(_SmokeSource())
+    # process_raw reads only the three attributes the stand-in carries.
+    doc = await proc.process_raw(cast("AuthoredDocument", _SmokeSource()))
     assert doc.source_type == SourceType.AUDIO
     assert len(doc.chunks) > 0
 

@@ -132,7 +132,7 @@ def _provider_with(
     # classify_error is sync on real providers; lambda matches that
     # contract and avoids Mock-as-ErrorCategory leaks.
     p.classify_error = lambda _exc, _cat=classify_as: _cat
-    return p  # type: ignore[return-value]
+    return p
 
 
 def _anthropic_rate_limit() -> Exception:

@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,11 +32,17 @@ from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import ChunkType, SourceType
 from course_supporter.service_logging import set_job_from_arq
 
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import AuthoredDocument
+
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "presentations"
 
 
 class _Source:
-    """Minimal AuthoredDocument stand-in pointing at an on-disk PDF."""
+    """Minimal AuthoredDocument stand-in pointing at an on-disk PDF.
+
+    Passed through ``cast``: ``process_raw`` reads only the attributes set here.
+    """
 
     def __init__(self, path: Path, *, language: str | None = None) -> None:
         self.source_type = SourceType.PRESENTATION
@@ -54,8 +62,8 @@ def _router(pass2a_segments: list[tuple[int, int]]) -> AsyncMock:
     async def _execute(
         stage_name: str,
         *,
-        response_validator=None,
-        contents=None,
+        response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
         **kwargs: object,
     ) -> StageResult:
         if stage_name == "presentation_pass_1_vision":
@@ -117,7 +125,10 @@ async def test_all_image_only_deck_reaches_content() -> None:
     proc = PresentationProcessor()
     set_job_from_arq(uuid.uuid4())
     doc = await proc.process_raw(
-        _Source(_FIXTURES / "image_only_intro.pdf", language="ukr")
+        cast(
+            "AuthoredDocument",
+            _Source(_FIXTURES / "image_only_intro.pdf", language="ukr"),
+        )
     )
 
     # Real extraction: every slide is image-only, so no SLIDE_TEXT chunk.
@@ -148,7 +159,9 @@ async def test_all_image_only_deck_reaches_content() -> None:
 async def test_mixed_deck_interleaves_visual_and_text_in_slide_order() -> None:
     proc = PresentationProcessor()
     set_job_from_arq(uuid.uuid4())
-    doc = await proc.process_raw(_Source(_FIXTURES / "mixed_slides.pdf"))
+    doc = await proc.process_raw(
+        cast("AuthoredDocument", _Source(_FIXTURES / "mixed_slides.pdf"))
+    )
 
     # Real extraction: slides 4-5 are the flattened image-only pair, so only
     # the eight text slides emit a SLIDE_TEXT chunk in process_raw.

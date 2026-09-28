@@ -101,7 +101,7 @@ class TestForeignKeyEnforcement:
     async def test_null_job_id_rejected(self, db_session: AsyncSession) -> None:
         """INSERT with NULL job_id violates the NOT NULL constraint."""
         esc = ExternalServiceCall(
-            job_id=None,  # type: ignore[arg-type]
+            job_id=None,
             provider="anthropic",
             model_id="claude-sonnet-4",
         )

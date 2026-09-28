@@ -385,6 +385,7 @@ class TestTestTypeEndToEnd:
                 str(seed["submission_id"]),
             )
 
+        assert delivered.await_args is not None
         payload = delivered.await_args.kwargs["payload"]
         assert payload.event == "reviewed"
         assert set(payload.review.model_dump()) == set(ReviewSummary.model_fields)
@@ -488,6 +489,7 @@ class TestWhenTheResultCannotBeBuilt:
             "failed",
             "path_failed",
         )
+        assert delivered.await_args is not None
         payload = delivered.await_args.kwargs["payload"]
         assert (payload.event, payload.reason) == ("failed", "path_failed")
         assert job.status == "failed", "the seam failed the job on the re-raise"

@@ -436,6 +436,7 @@ async def _run_submissions(
     """Run every queued submission the way the worker would; their job ids."""
     jobs = await _queued(session_factory, tenant_id, JobType.HOMEWORK_PROCESSING)
     for job in jobs:
+        assert job.input_params is not None
         await arq_process_homework(
             {
                 "session_factory": session_factory,
@@ -457,6 +458,7 @@ async def _run_explanations(
     """Run every queued generation the way the worker would; their job ids."""
     jobs = await _queued(session_factory, tenant_id, JobType.KEY_EXPLANATION)
     for job in jobs:
+        assert job.input_params is not None
         await arq_explain_key(
             {"session_factory": session_factory, "stage_router": model, "job_try": 1},
             str(job.id),
@@ -518,8 +520,9 @@ async def _generations(
                 )
             ).scalars()
         )
-        found = []
+        found: list[tuple[uuid.UUID, str | None, str]] = []
         for job in jobs:
+            assert job.input_params is not None
             version = await session.get(
                 TaskReference, uuid.UUID(str(job.input_params["reference_id"]))
             )
@@ -752,6 +755,7 @@ class TestAcceptance:
             ran = await _run_submissions(session_factory, tenant_id, storage)
             await _one_submission_without_a_call(session_factory, ran, step=5)
             await _only_in(session_factory, tenant_id, rows_before, ran, 5)
+            assert delivered.await_args is not None
             payload = delivered.await_args.kwargs["payload"]
             assert payload.event == "reviewed", "step 5: delivered by webhook"
             text = payload.review.review_text
@@ -781,6 +785,7 @@ class TestAcceptance:
             ran = await _run_submissions(session_factory, tenant_id, storage)
             await _one_submission_without_a_call(session_factory, ran, step=6)
             await _only_in(session_factory, tenant_id, rows_before, [english, *ran], 6)
+            assert delivered.await_args is not None
             text = delivered.await_args.kwargs["payload"].review.review_text
             assert f"- {_MODEL_ENG['5']}" in text, "step 6: the English explanation"
             assert "The explanation is provided in the course language." not in text, (

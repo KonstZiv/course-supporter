@@ -683,11 +683,12 @@ async def _layer(
     session_factory: async_sessionmaker[AsyncSession], task_id: uuid.UUID
 ) -> TaskReferenceOverride | None:
     async with session_factory() as session:
-        return await session.scalar(
+        layer: TaskReferenceOverride | None = await session.scalar(
             select(TaskReferenceOverride).where(
                 TaskReferenceOverride.authored_document_id == task_id
             )
         )
+        return layer
 
 
 async def _end_jobs(

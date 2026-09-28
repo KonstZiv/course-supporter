@@ -143,7 +143,8 @@ async def _provision(
     }
     resp = await client.post("/api/v1/students", json=body)
     assert resp.status_code == 201, resp.text
-    return resp.json()
+    provisioned: dict[str, object] = resp.json()
+    return provisioned
 
 
 async def _login(client: AsyncClient, seed: dict[str, uuid.UUID], login: str) -> str:
@@ -336,7 +337,7 @@ class TestEnrollment:
         self, portal_client: AsyncClient, portal_seed: dict[str, uuid.UUID]
     ) -> None:
         provisioned = await _provision(portal_client, "grace")
-        student_id = provisioned["student_id"]
+        student_id = str(provisioned["student_id"])
         root_id = str(portal_seed["root_id"])
 
         bind = await portal_client.post(

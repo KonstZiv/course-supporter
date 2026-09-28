@@ -27,7 +27,7 @@ from course_supporter.storage.job_repository import JobRepository
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
-_PROPOSAL = {
+_PROPOSAL: dict[str, object] = {
     "files": {"src/app.py": {"role": "full", "reason": "custom_source"}},
     "tree_digest": "digest-1",
     "computed_at": "2026-07-23T00:00:00+00:00",
@@ -195,7 +195,7 @@ class TestPreparationVisibility:
         prep_job_id = await _seed_prep_job(
             session_factory, committed_seeds, status="complete"
         )
-        decision = {
+        decision: dict[str, object] = {
             "files": {"src/app.py": "full"},
             "tree_digest": _PROPOSAL["tree_digest"],
             "decided_at": "2026-07-23T00:00:00+00:00",

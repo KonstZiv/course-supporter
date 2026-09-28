@@ -498,6 +498,7 @@ class TestFullWorkerProjectPipeline:
                 assert sub.score == 73
                 assert sub.snapshot_hash is not None
 
+            assert safety.await_args is not None
             text = safety.await_args.kwargs["submission_text"]
             # G2 — the identical rich str flowed through all three stages.
             assert sanity.seen == [text]
@@ -587,6 +588,7 @@ class TestFullWorkerProjectPipeline:
                 assert sub is not None
                 assert sub.status == "completed"
 
+            assert safety.await_args is not None
             text = safety.await_args.kwargs["submission_text"]
             # G2 — identical rich str through all stages.
             assert sanity.seen == [text]

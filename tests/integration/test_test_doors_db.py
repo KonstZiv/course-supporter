@@ -605,7 +605,9 @@ class TestEveryRefusalAtTheDoors:
             )
 
         assert refused.value.status_code == status
-        assert refused.value.detail["code"] == code
+        # fastapi takes ``detail: Any`` but starlette types the attribute ``str``;
+        # these routes raise a dict, and the assertion reads it as one.
+        assert refused.value.detail["code"] == code  # type: ignore[index]
         assert await _rows(session_factory, task_id) == before
         s3.upload_smart.assert_not_awaited()
         student.assert_not_awaited()
@@ -627,7 +629,9 @@ class TestEveryRefusalAtTheDoors:
         ):
             await _submit(session_factory, world, answers=dict(_ANSWERS))
 
-        assert refused.value.detail["code"] == "TEST_FORM_UNAVAILABLE"
-        details = refused.value.detail["details"].lower()
+        # fastapi takes ``detail: Any`` but starlette types the attribute ``str``;
+        # these routes raise a dict, and the assertion reads it as one.
+        assert refused.value.detail["code"] == "TEST_FORM_UNAVAILABLE"  # type: ignore[index]
+        details = refused.value.detail["details"].lower()  # type: ignore[index]
         assert "file" not in details, details
         assert "later" in details, details

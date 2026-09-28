@@ -268,6 +268,7 @@ async def _run_pending_work(
     """Run every queued generation the way the worker would. Returns how many."""
     jobs = await _pending_jobs(session_factory, tenant_id)
     for job in jobs:
+        assert job.input_params is not None
         reference_id = job.input_params["reference_id"]
         await arq_explain_key(
             {
@@ -428,7 +429,9 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
             for path in re.findall(r"/api/v1/documents/\$DOC_ID/reference\S*", text)
         }
         real = {
-            route.path
+            # ``app.routes`` is typed ``BaseRoute``, which has no ``path``; the filter
+            # keeps only routes that carry one, and no narrowing reaches the element.
+            route.path  # type: ignore[attr-defined]
             for route in app.routes
             if "reference" in getattr(route, "path", "")
         }
@@ -462,7 +465,9 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
             if path.rsplit("/", 1)[-1] in ends
         }
         real = {
-            route.path
+            # ``app.routes`` is typed ``BaseRoute``, which has no ``path``; the filter
+            # keeps only routes that carry one, and no narrowing reaches the element.
+            route.path  # type: ignore[attr-defined]
             for route in app.routes
             if getattr(route, "path", "").rsplit("/", 1)[-1] in ends
         }
@@ -500,7 +505,9 @@ class TestTheDocumentationSaysWhatTheCodeDoes:
             if path.startswith("/api/v1/tests/") or path.endswith("/tests")
         }
         real = {
-            route.path
+            # ``app.routes`` is typed ``BaseRoute``, which has no ``path``; the filter
+            # keeps only routes that carry one, and no narrowing reaches the element.
+            route.path  # type: ignore[attr-defined]
             for route in app.routes
             if re.fullmatch(
                 r"/api/v1/(?:tests/.+|nodes/[^/]+/tests)", getattr(route, "path", "")

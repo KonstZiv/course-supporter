@@ -338,6 +338,7 @@ class TestHappyPath:
 
         # reviewed webhook delivered exactly once.
         assert deliver.await_count == 1
+        assert deliver.await_args is not None
         payload = deliver.await_args.kwargs["payload"]
         assert payload.event == "reviewed"
         assert payload.review.score == 73
@@ -365,6 +366,7 @@ class TestSanityMismatch:
 
         sub = await _status(session_factory, homework_seed["submission_id"])
         assert sub.status == "mismatch"
+        assert sub.sanity_result is not None
         assert sub.sanity_result["verdict"] == "mismatch"
         # The review graph never ran — no score, no review.
         assert sub.score is None
@@ -373,6 +375,7 @@ class TestSanityMismatch:
 
         # mismatch webhook delivered (not reviewed).
         assert deliver.await_count == 1
+        assert deliver.await_args is not None
         payload = deliver.await_args.kwargs["payload"]
         assert payload.event == "mismatch"
         assert payload.reason == "answers a different task"

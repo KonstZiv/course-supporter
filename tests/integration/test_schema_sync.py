@@ -6,8 +6,10 @@ the corresponding Alembic migration is missing or incomplete.
 Requires a running PostgreSQL instance (docker compose up).
 """
 
+from collections.abc import Generator
+
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Engine, create_engine, inspect, text
 
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import Base
@@ -21,7 +23,7 @@ def _get_sync_url() -> str:
 
 
 @pytest.fixture()
-def db_engine():
+def db_engine() -> Generator[Engine]:
     """Create a sync engine for schema inspection."""
     engine = create_engine(_get_sync_url())
     yield engine

@@ -186,7 +186,8 @@ async def _token(
         json={"tenant_id": str(tenant_id), "login": login, "password": password},
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
+    token: str = resp.json()["access_token"]
+    return token
 
 
 def _auth(token: str) -> dict[str, str]:

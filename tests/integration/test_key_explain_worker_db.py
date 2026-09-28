@@ -643,7 +643,7 @@ def _real_router(
     """The shipped ladder, registry and prompt; only the model is a double."""
     return StageRouter(
         load_ladder_config(Path("config")),
-        {"deepseek_thinking": provider},  # type: ignore[dict-item]
+        {"deepseek_thinking": provider},
         registry=load_registry(Path("config/external_services.yaml")),
         session_factory=session_factory,
     )

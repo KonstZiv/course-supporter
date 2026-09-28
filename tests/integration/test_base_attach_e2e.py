@@ -19,11 +19,12 @@ import io
 import uuid
 import zipfile
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from arq.connections import ArqRedis, RedisSettings
 from arq.constants import default_queue_name
+from arq.typing import WorkerCoroutine
 from arq.worker import Worker
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete
@@ -155,7 +156,9 @@ async def _drain_base_normalize(
 ) -> None:
     """Run a REAL arq burst worker that drains the base_normalize job."""
     worker = Worker(
-        functions=[base_normalize_task],
+        # The seam types the task as returning an Awaitable; arq asks for a
+        # coroutine function, which is what the task is at run time.
+        functions=[cast(WorkerCoroutine, base_normalize_task)],
         redis_settings=RedisSettings.from_dsn(get_settings().redis_url),
         ctx={"s3_client": s3_client, "session_factory": session_factory},
         burst=True,

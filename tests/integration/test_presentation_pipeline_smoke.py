@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -24,6 +25,9 @@ from course_supporter.ingestion.presentation import PresentationProcessor
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import set_job_from_arq
+
+if TYPE_CHECKING:
+    from course_supporter.storage.orm import AuthoredDocument
 
 # tests/integration/<file> -> tests -> fixtures/presentations (in-repo).
 _FIXTURE = (
@@ -69,7 +73,8 @@ async def test_presentation_smoke_real_llm() -> None:
         source_url = str(_FIXTURE)
         filename = _FIXTURE.name
 
-    doc = await proc.process_raw(_SmokeSource())
+    # process_raw reads only the three attributes the stand-in carries.
+    doc = await proc.process_raw(cast("AuthoredDocument", _SmokeSource()))
     assert doc.source_type == SourceType.PRESENTATION
 
     summary = await proc.process_macro(doc, stage_router)

@@ -8,12 +8,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from course_supporter.config import Settings
 from course_supporter.llm.providers import PROVIDER_REGISTRY, LLMProvider
+from course_supporter.llm.stage_router import StageRouter
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from course_supporter.llm.ladder_config import LadderConfig
+    from course_supporter.llm.registry import ModelRegistryConfig
 
 logger = structlog.get_logger()
 
@@ -98,3 +105,28 @@ def create_providers(settings: Settings) -> dict[str, LLMProvider]:
         logger.warning("no_llm_providers_configured")
 
     return providers
+
+
+def create_stage_router(
+    settings: Settings,
+    *,
+    ladder_config: LadderConfig,
+    registry: ModelRegistryConfig,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> StageRouter:
+    """Build the StageRouter both entry points run on (KD16).
+
+    The API lifespan and the worker's startup call this once each, after
+    their boot checks, with the ladder config and registry those checks
+    already loaded. Each passes its own session factory -- the API's module
+    pool, the worker's own engine -- so every attempt row is written through
+    the process that made the call. Providers are built fresh per call
+    (Phase 1.2 §6.2, option a: stateless HTTP wrappers, cheap to build twice).
+    """
+    return StageRouter(
+        ladder_config=ladder_config,
+        providers=create_providers(settings),
+        registry=registry,
+        session_factory=session_factory,
+        record_full_input=settings.call_register_full_input,
+    )

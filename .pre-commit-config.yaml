@@ -6,37 +6,18 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
+  # Local, not mirrors-mypy: the hook runs mypy in the project's own uv
+  # environment, the one `make typecheck` and CI use, so there is no
+  # separate venv whose package versions can drift from uv.lock. The
+  # directories come from `[tool.mypy] files` in pyproject.toml.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - pydantic>=2.12
-          - pydantic-settings>=2.12
-          - sqlalchemy[asyncio]>=2.0.37
-          - pgvector>=0.4
-          - uuid-utils>=0.9
-          - beautifulsoup4>=4.12
-          - structlog>=25.1
-          - google-genai>=1.12
-          - anthropic>=0.49
-          - openai>=1.68
-          - types-PyYAML>=6.0
-          - pyyaml>=6.0
-          - fastapi>=0.128
-          - arq>=0.26
-          - jinja2>=3.1
-          - python-magic>=0.4.27
-          - pytest>=8.0
-          - pillow>=10.0
-          - argon2-cffi>=25.1
-          - pyjwt>=2.11
-          - aiosmtplib>=5.1
-          - httpx>=0.28
-          - alembic>=1.14
-        args: [--config-file=pyproject.toml]
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
         pass_filenames: false
-        entry: mypy
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

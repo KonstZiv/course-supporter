@@ -1,11 +1,11 @@
 """The StageRouter the API builds, for the RUN_SMOKE tests that drive a real one.
 
-Mirrors the construction in ``course_supporter.api.app.lifespan`` step for
-step — the registry, the ladders, the ladder checks the boot runs, the
-providers, the shared session factory — so a smoke test exercises the router
-production serves rather than a lookalike. The boot checks that are not about
-the router (submission paths, phrasebook, native language names) stay with
-the boot.
+Mirrors the steps in ``course_supporter.api.app.lifespan`` — the registry,
+the ladders, the ladder checks the boot runs, then the same
+:func:`~course_supporter.llm.factory.create_stage_router` with the shared
+session factory — so a smoke test exercises the router production serves
+rather than a lookalike. The boot checks that are not about the router
+(submission paths, phrasebook, native language names) stay with the boot.
 
 Importing this module builds no router and calls no provider: that happens
 only when :func:`build_stage_router` is called, inside a test the RUN_SMOKE
@@ -15,7 +15,7 @@ gate let through.
 from __future__ import annotations
 
 from course_supporter.config import settings
-from course_supporter.llm.factory import create_providers
+from course_supporter.llm.factory import create_stage_router
 from course_supporter.llm.ladder_config import (
     load_ladder_config,
     validate_ladder_prompts,
@@ -32,10 +32,9 @@ def build_stage_router() -> StageRouter:
     ladder_config = load_ladder_config(settings.ladders_dir)
     validate_ladders_against_registry(ladder_config, registry)
     validate_ladder_prompts(ladder_config)
-    return StageRouter(
+    return create_stage_router(
+        settings,
         ladder_config=ladder_config,
-        providers=create_providers(settings),
         registry=registry,
         session_factory=async_session,
-        record_full_input=settings.call_register_full_input,
     )

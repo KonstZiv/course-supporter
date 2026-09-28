@@ -168,14 +168,13 @@ async def startup(ctx: WorkerCtx) -> None:
         get_language_registry,
         validate_native_names,
     )
-    from course_supporter.llm.factory import create_providers
+    from course_supporter.llm.factory import create_stage_router
     from course_supporter.llm.ladder_config import (
         load_ladder_config,
         validate_ladder_prompts,
         validate_ladders_against_registry,
     )
     from course_supporter.llm.registry import load_registry
-    from course_supporter.llm.stage_router import StageRouter
     from course_supporter.phrasebook import validate_phrasebook
     from course_supporter.storage.s3 import S3Client
 
@@ -235,13 +234,11 @@ async def startup(ctx: WorkerCtx) -> None:
     allowed_languages = get_language_registry().languages
     validate_phrasebook(s.phrasebook_dir, allowed_languages)
     validate_native_names(allowed_languages, s.language_names_path)
-    stage_router_providers = create_providers(s)
-    stage_router = StageRouter(
+    stage_router = create_stage_router(
+        s,
         ladder_config=ladder_config,
-        providers=stage_router_providers,
         registry=registry,
         session_factory=session_factory,
-        record_full_input=s.call_register_full_input,
     )
 
     s3 = S3Client(

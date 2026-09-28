@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 import pytest
 from arq.connections import ArqRedis
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -197,17 +198,11 @@ async def cost_seed(
                 ExternalServiceCall.job_id.in_(job_ids_subq)
             )
         )
+        await session.execute(delete(Job).where(Job.tenant_id == seed["tenant_id"]))
         await session.execute(
-            Job.__table__.delete().where(Job.tenant_id == seed["tenant_id"])
+            delete(CourseNode).where(CourseNode.tenant_id == seed["tenant_id"])
         )
-        await session.execute(
-            CourseNode.__table__.delete().where(
-                CourseNode.tenant_id == seed["tenant_id"]
-            )
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == seed["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == seed["tenant_id"]))
         await session.commit()
 
 
@@ -467,10 +462,10 @@ class TestCostCourseE2E:
         finally:
             async with session_factory() as session:
                 await session.execute(
-                    CourseNode.__table__.delete().where(CourseNode.id == other_node_id)
+                    delete(CourseNode).where(CourseNode.id == other_node_id)
                 )
                 await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == other_tenant_id)
+                    delete(Tenant).where(Tenant.id == other_tenant_id)
                 )
                 await session.commit()
 
@@ -542,20 +537,16 @@ class TestCostCourseE2E:
         finally:
             async with session_factory() as session:
                 await session.execute(
-                    ExternalServiceCall.__table__.delete().where(
+                    delete(ExternalServiceCall).where(
                         ExternalServiceCall.job_id == intruder_job_id
                     )
                 )
+                await session.execute(delete(Job).where(Job.id == intruder_job_id))
                 await session.execute(
-                    Job.__table__.delete().where(Job.id == intruder_job_id)
+                    delete(CourseNode).where(CourseNode.id == intruder_node_id)
                 )
                 await session.execute(
-                    CourseNode.__table__.delete().where(
-                        CourseNode.id == intruder_node_id
-                    )
-                )
-                await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == intruder_tenant_id)
+                    delete(Tenant).where(Tenant.id == intruder_tenant_id)
                 )
                 await session.commit()
 

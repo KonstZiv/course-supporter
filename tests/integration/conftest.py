@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -165,19 +166,17 @@ async def committed_seeds(
     # ``AuthoredDocument.course_node_id → CourseNode.id`` FK chain.
     async with session_factory() as session:
         await session.execute(
-            Job.__table__.delete().where(Job.course_node_id == ids["course_node_id"])
+            delete(Job).where(Job.course_node_id == ids["course_node_id"])
         )
         await session.execute(
-            AuthoredDocument.__table__.delete().where(
+            delete(AuthoredDocument).where(
                 AuthoredDocument.course_node_id == ids["course_node_id"]
             )
         )
         await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.id == ids["course_node_id"])
+            delete(CourseNode).where(CourseNode.id == ids["course_node_id"])
         )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 

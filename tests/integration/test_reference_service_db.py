@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.homework.reference_key import answers_digest
@@ -775,7 +775,7 @@ async def _revise_text(
         .where(DocumentSummary.authored_document_id == document.id)
     )
     await session.execute(
-        DocumentSegment.__table__.update()
+        update(DocumentSegment)
         .where(DocumentSegment.document_summary_id == summary_id)
         .values(content=text)
     )

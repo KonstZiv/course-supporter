@@ -24,6 +24,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -89,21 +90,17 @@ async def portal_seed(
             )
         )
         await session.execute(
-            StudentCredential.__table__.delete().where(
+            delete(StudentCredential).where(
                 StudentCredential.tenant_id == seed["tenant_id"]
             )
         )
         await session.execute(
-            Student.__table__.delete().where(Student.tenant_id == seed["tenant_id"])
+            delete(Student).where(Student.tenant_id == seed["tenant_id"])
         )
         await session.execute(
-            CourseNode.__table__.delete().where(
-                CourseNode.tenant_id == seed["tenant_id"]
-            )
+            delete(CourseNode).where(CourseNode.tenant_id == seed["tenant_id"])
         )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == seed["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == seed["tenant_id"]))
         await session.commit()
 
 

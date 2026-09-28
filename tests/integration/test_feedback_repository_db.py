@@ -21,7 +21,7 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -252,29 +252,25 @@ async def committed_review(
 
     async with session_factory() as session:
         await session.execute(
-            StudentFeedback.__table__.delete().where(
-                StudentFeedback.tenant_id == ids["tenant_id"]
-            )
+            delete(StudentFeedback).where(StudentFeedback.tenant_id == ids["tenant_id"])
         )
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.tenant_id == ids["tenant_id"]
             )
         )
         await session.execute(
-            Student.__table__.delete().where(Student.tenant_id == ids["tenant_id"])
+            delete(Student).where(Student.tenant_id == ids["tenant_id"])
         )
         await session.execute(
-            AuthoredDocument.__table__.delete().where(
+            delete(AuthoredDocument).where(
                 AuthoredDocument.course_node_id == ids["course_node_id"]
             )
         )
         await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.id == ids["course_node_id"])
+            delete(CourseNode).where(CourseNode.id == ids["course_node_id"])
         )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 

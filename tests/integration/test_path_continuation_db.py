@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from course_supporter.homework.path_checkpoint import (
     FreezeReason,
@@ -108,13 +108,11 @@ async def held(
 
     async with session_factory() as session:
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(
-            Job.__table__.delete().where(Job.subject_id == ids["submission_id"])
-        )
+        await session.execute(delete(Job).where(Job.subject_id == ids["submission_id"]))
         await session.commit()
 
 

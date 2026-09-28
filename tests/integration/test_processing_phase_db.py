@@ -13,7 +13,7 @@ import uuid
 from collections.abc import AsyncGenerator, Iterable
 
 import pytest
-from sqlalchemy import event, inspect, select
+from sqlalchemy import delete, event, inspect, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -132,20 +132,14 @@ async def phase_scenario(
     yield ids
 
     async with session_factory() as session:
+        await session.execute(delete(Job).where(Job.course_node_id == ids["node_id"]))
         await session.execute(
-            Job.__table__.delete().where(Job.course_node_id == ids["node_id"])
-        )
-        await session.execute(
-            AuthoredDocument.__table__.delete().where(
+            delete(AuthoredDocument).where(
                 AuthoredDocument.course_node_id == ids["node_id"]
             )
         )
-        await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.id == ids["node_id"])
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(CourseNode).where(CourseNode.id == ids["node_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 
@@ -237,19 +231,17 @@ class TestProcessingPhaseNoNPlusOne:
     ) -> None:
         async with session_factory() as session:
             await session.execute(
-                Job.__table__.delete().where(Job.course_node_id == ids["node_id"])
+                delete(Job).where(Job.course_node_id == ids["node_id"])
             )
             await session.execute(
-                AuthoredDocument.__table__.delete().where(
+                delete(AuthoredDocument).where(
                     AuthoredDocument.course_node_id == ids["node_id"]
                 )
             )
             await session.execute(
-                CourseNode.__table__.delete().where(CourseNode.id == ids["node_id"])
+                delete(CourseNode).where(CourseNode.id == ids["node_id"])
             )
-            await session.execute(
-                Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-            )
+            await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
             await session.commit()
 
     async def _count_load_queries(
@@ -381,20 +373,16 @@ class TestPendingJobLoadedMarker:
                 assert "pending_job" not in inspect(doc).unloaded
         finally:
             async with session_factory() as session:
+                await session.execute(delete(Job).where(Job.course_node_id == node_id))
                 await session.execute(
-                    Job.__table__.delete().where(Job.course_node_id == node_id)
-                )
-                await session.execute(
-                    AuthoredDocument.__table__.delete().where(
+                    delete(AuthoredDocument).where(
                         AuthoredDocument.course_node_id == node_id
                     )
                 )
                 await session.execute(
-                    CourseNode.__table__.delete().where(CourseNode.id == node_id)
+                    delete(CourseNode).where(CourseNode.id == node_id)
                 )
-                await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == tenant_id)
-                )
+                await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
                 await session.commit()
 
     async def test_guard_raises_named_error_when_not_eager_loaded(
@@ -434,18 +422,14 @@ class TestPendingJobLoadedMarker:
                     _ = doc.processing_phase
         finally:
             async with session_factory() as session:
+                await session.execute(delete(Job).where(Job.course_node_id == node_id))
                 await session.execute(
-                    Job.__table__.delete().where(Job.course_node_id == node_id)
-                )
-                await session.execute(
-                    AuthoredDocument.__table__.delete().where(
+                    delete(AuthoredDocument).where(
                         AuthoredDocument.course_node_id == node_id
                     )
                 )
                 await session.execute(
-                    CourseNode.__table__.delete().where(CourseNode.id == node_id)
+                    delete(CourseNode).where(CourseNode.id == node_id)
                 )
-                await session.execute(
-                    Tenant.__table__.delete().where(Tenant.id == tenant_id)
-                )
+                await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
                 await session.commit()

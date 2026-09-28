@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -135,25 +135,17 @@ async def homework_seed(
 
     async with session_factory() as session:
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
+        await session.execute(delete(Job).where(Job.id == ids["job_id"]))
+        await session.execute(delete(Student).where(Student.id == ids["student_id"]))
         await session.execute(
-            Student.__table__.delete().where(Student.id == ids["student_id"])
+            delete(AuthoredDocument).where(AuthoredDocument.id == ids["task_id"])
         )
-        await session.execute(
-            AuthoredDocument.__table__.delete().where(
-                AuthoredDocument.id == ids["task_id"]
-            )
-        )
-        await session.execute(
-            CourseNode.__table__.delete().where(CourseNode.id == ids["node_id"])
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(CourseNode).where(CourseNode.id == ids["node_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 

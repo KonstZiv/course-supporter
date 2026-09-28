@@ -28,7 +28,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_process_homework
@@ -334,18 +334,14 @@ async def seed(
             ).scalars()
         )
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id.in_(job_ids)
-            )
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id.in_(job_ids))
         )
         await session.execute(
-            HomeworkSubmission.__table__.delete().where(
+            delete(HomeworkSubmission).where(
                 HomeworkSubmission.id == ids["submission_id"]
             )
         )
-        await session.execute(
-            Job.__table__.delete().where(Job.subject_id == ids["submission_id"])
-        )
+        await session.execute(delete(Job).where(Job.subject_id == ids["submission_id"]))
         await session.commit()
 
 

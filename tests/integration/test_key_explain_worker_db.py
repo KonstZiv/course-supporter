@@ -46,7 +46,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.agents.key_explainer import STAGE_NAME
@@ -278,14 +278,12 @@ async def seeded(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
+            delete(ExternalServiceCall).where(
                 ExternalServiceCall.job_id == ids["job_id"]
             )
         )
-        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(Job).where(Job.id == ids["job_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 
@@ -781,14 +779,12 @@ async def written(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
+            delete(ExternalServiceCall).where(
                 ExternalServiceCall.job_id == ids["job_id"]
             )
         )
-        await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(Job).where(Job.id == ids["job_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 
@@ -1057,12 +1053,10 @@ async def check(
     async with session_factory() as session:
         for ids in made:
             await session.execute(
-                ExternalServiceCall.__table__.delete().where(
+                delete(ExternalServiceCall).where(
                     ExternalServiceCall.job_id == ids["job_id"]
                 )
             )
-            await session.execute(Job.__table__.delete().where(Job.id == ids["job_id"]))
-            await session.execute(
-                Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-            )
+            await session.execute(delete(Job).where(Job.id == ids["job_id"]))
+            await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()

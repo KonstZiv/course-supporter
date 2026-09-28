@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.agents.key_explainer import STAGE_NAME
@@ -188,12 +188,8 @@ async def world(
                 )
             )
         )
-        await session.execute(
-            Job.__table__.delete().where(Job.tenant_id == ids["tenant_id"])
-        )
-        await session.execute(
-            Tenant.__table__.delete().where(Tenant.id == ids["tenant_id"])
-        )
+        await session.execute(delete(Job).where(Job.tenant_id == ids["tenant_id"]))
+        await session.execute(delete(Tenant).where(Tenant.id == ids["tenant_id"]))
         await session.commit()
 
 
@@ -302,7 +298,7 @@ async def _revise(
             )
         )
         await session.execute(
-            DocumentSegment.__table__.update()
+            update(DocumentSegment)
             .where(DocumentSegment.document_summary_id == summary_id)
             .values(content=text)
         )

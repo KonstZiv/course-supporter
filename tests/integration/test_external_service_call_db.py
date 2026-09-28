@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, delete, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -136,7 +136,7 @@ class TestForeignKeyEnforcement:
         # Raw DELETE triggers the FK check inside ``execute`` — not at
         # flush time as ORM-tracked changes do.
         with pytest.raises(IntegrityError):
-            await db_session.execute(Job.__table__.delete().where(Job.id == job.id))
+            await db_session.execute(delete(Job).where(Job.id == job.id))
 
     async def test_valid_job_id_accepted(self, db_session: AsyncSession) -> None:
         """ESC with a real Job FK persists cleanly."""
@@ -262,11 +262,9 @@ async def committed_register_job(
 
     async with session_factory() as session:
         await session.execute(
-            ExternalServiceCall.__table__.delete().where(
-                ExternalServiceCall.job_id == job_id
-            )
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
         )
-        await session.execute(Job.__table__.delete().where(Job.id == job_id))
+        await session.execute(delete(Job).where(Job.id == job_id))
         await session.commit()
 
 

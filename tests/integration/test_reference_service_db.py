@@ -63,6 +63,10 @@ class _CountingQueue:
     ) -> None:
         self.requests.append((authored_document_id, reference_id))
 
+    async def in_flight(self, *, authored_document_id: uuid.UUID) -> bool:
+        """A task it was asked for stays in flight: nothing here runs the work."""
+        return any(asked == authored_document_id for asked, _ in self.requests)
+
 
 async def _test_task(
     session: AsyncSession,

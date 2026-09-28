@@ -128,7 +128,10 @@ async def submit_homework(
             description="D7-local: the student's comment or question for this "
             "submission (free text). Steers the Mentor review of this one "
             "attempt; distinct from the student's standing mentor_preferences "
-            "(D7-global), which is not a submission field.",
+            "(D7-global), which is not a submission field. Up to 2000 "
+            "characters, a line break counted as one and the edges trimmed; "
+            "refused with STUDENT_NOTE_TOO_LONG or STUDENT_NOTE_REJECTED (422) "
+            "before anything is stored.",
         ),
     ] = None,
     base_snapshot_hash: Annotated[

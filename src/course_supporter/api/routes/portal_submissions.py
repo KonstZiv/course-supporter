@@ -143,7 +143,9 @@ async def submit_portal_homework(
         str | None,
         Form(
             description="D7-local: the student's comment or question for this "
-            "submission (free text).",
+            "submission (free text). Up to 2000 characters, a line break counted "
+            "as one and the edges trimmed; refused with STUDENT_NOTE_TOO_LONG or "
+            "STUDENT_NOTE_REJECTED (422) before anything is stored.",
         ),
     ] = None,
     base_snapshot_hash: Annotated[

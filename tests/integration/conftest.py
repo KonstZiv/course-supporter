@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import AuthoredDocument, CourseNode, Job, Tenant
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.redis_isolation import open_test_arq_redis
 
 # ── Engine (module-scoped, shared across test module) ──────────────
 
@@ -223,9 +224,10 @@ async def committed_job_and_material(
 
 @pytest.fixture()
 async def arq_redis() -> AsyncGenerator[ArqRedis]:
-    """Create and close a real ArqRedis connection pool."""
-    from arq.connections import RedisSettings, create_pool
+    """A real ArqRedis pool on the tests' own Redis database.
 
-    pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
-    yield pool
-    await pool.aclose()
+    Never the app's database (``REDIS_URL``) — a local worker reads that one.
+    The tests' database is emptied before and after each test.
+    """
+    async with open_test_arq_redis() as pool:
+        yield pool

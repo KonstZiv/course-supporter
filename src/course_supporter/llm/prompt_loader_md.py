@@ -51,9 +51,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from jinja2 import StrictUndefined, Template
+from jinja2 import Environment, StrictUndefined
 
 from course_supporter.llm.error_categories import InvalidPromptError
+from course_supporter.llm.prompt_json import prompt_json
 
 logger = structlog.get_logger()
 
@@ -68,6 +69,27 @@ _RECOGNISED_ROLES: frozenset[str] = frozenset({"system", "user", "assistant"})
 # detection benefit. Cleared on process restart, which is fine
 # because prompt files are static between deploys (KD16).
 _warned_unknown_roles: set[tuple[str, str]] = set()
+
+
+def _tojson_unicode(value: Any) -> str:
+    """JSON for a prompt, by the rule of :func:`prompt_json`.
+
+    Letters, the apostrophe and ``&`` stay as they are; only ``<`` and
+    ``>`` are escaped. ``sort_keys=True`` and the default separators keep
+    the shape Jinja2's own ``tojson`` gave these templates. Jinja2's
+    ``tojson`` is untouched: it escapes every non-ASCII letter, and a test
+    keeps it out of ``prompts/``. Autoescape is off, so a plain ``str`` is
+    rendered as is.
+    """
+    return prompt_json(value, sort_keys=True)
+
+
+# Same options as a bare ``Template(text, undefined=StrictUndefined)``,
+# plus the opt-in filter above. ``from_string`` compiles each call's
+# template anew, so nothing but the filter table is shared. Prompts are
+# plain text for a model, not HTML, so autoescape stays off as before.
+_JINJA_ENV = Environment(undefined=StrictUndefined)  # noqa: S701
+_JINJA_ENV.filters["tojson_unicode"] = _tojson_unicode
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +160,7 @@ def _render(text: str | None, context: dict[str, Any]) -> str | None:
     """
     if not text:
         return text
-    # Per the loader docstring: a fresh Template per call avoids
-    # shared-environment leakage between unrelated prompts.
-    return Template(text, undefined=StrictUndefined).render(**context)
+    return _JINJA_ENV.from_string(text).render(**context)
 
 
 def load_prompt(

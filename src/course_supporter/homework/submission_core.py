@@ -237,7 +237,7 @@ def check_student_note(student_note: str | None) -> str | None:
                 "code": STUDENT_NOTE_REJECTED,
                 "details": (
                     f"{exc.category.value}: the comment did not pass a text "
-                    f"check. Remove hidden or direction-changing characters, "
+                    f"check. Remove direction-changing, tag or control characters, "
                     f"then submit again."
                 ),
             },

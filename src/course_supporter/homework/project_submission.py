@@ -9,18 +9,25 @@ worker hit, 1A). Deterministic, zero LLM. It:
 1. normalizes the raw submission archive via the shared ``normalize_archive``
    (classify) with ``_PROJECT_NORMALIZE_LIMITS`` — a content/structural rejection
    fails the submission CLOSED (persisted like the stage-1 rejection);
-2. stores the canonical snapshot in S3 (a sibling of the raw key) + the three
+2. reads every text file of the snapshot -- docx and pdf included -- through
+   the same text screen a single file meets (task 11, decision 4): the
+   encoding recovered, the signal screen run, the result in NFC. A file that
+   cannot be read is named in ``not_opened`` instead of reaching the model
+   as replacement characters; a file whose name says it may hold a secret
+   never reached the snapshot at all (the normalizer excluded it) and is
+   named here too; a direction override refuses the submission;
+3. stores the canonical snapshot in S3 (a sibling of the raw key) + the three
    snapshot columns;
-3. computes the base-vs-submission delta (derived on read from the two
+4. computes the base-vs-submission delta (derived on read from the two
    persisted manifests, not persisted here) and LOGS its counts;
-4. builds the rich Mentor delta-context ``submission_text`` for safety →
+5. builds the rich Mentor delta-context ``submission_text`` for safety →
    sanity → review via the pure :func:`build_mentor_context` (P4).
 
 The context is the H2-budgeted trusted/untrusted delta assembly: a
 system-computed trusted block (base tree + two-level delta + F2 metrics +
 staleness) followed by priority-ordered untrusted file bodies / diffs. The
-pure builder does the assembly; this worker supplies only the I/O — the two
-snapshot zips and a ``read_text`` closure over them.
+pure builder does the assembly; this worker supplies only the I/O — the base
+snapshot zip, the texts the screen read, and a ``read_text`` closure over them.
 """
 
 from __future__ import annotations
@@ -34,6 +41,11 @@ from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 
+from course_supporter.homework.doors import (
+    DoorReading,
+    not_opened_block,
+    persist_door_refusal,
+)
 from course_supporter.homework.mentor_context import Side, build_mentor_context
 from course_supporter.homework.text_budget import project_context_budget_chars
 from course_supporter.normalizer import (
@@ -47,14 +59,19 @@ from course_supporter.normalizer import (
     manifest_to_jsonb,
     normalize_archive,
 )
+from course_supporter.normalizer.models import EntryClass, ExcludedReason
 from course_supporter.security.exceptions import (
     ErrorCategory,
     SecurityRejectedError,
 )
+from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 from course_supporter.security.stage1 import archive_kind_for_filename
+from course_supporter.security.text_screen import screen_text
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.storage.homework_repository import HomeworkRepository
@@ -105,10 +122,14 @@ async def process_project_submission(
     jid: uuid.UUID,
     file_bytes: bytes,
     raw_key: str,
-) -> str | None:
-    """Normalize a project submission, persist its snapshot, log the delta, and
-    return the rich Mentor delta-context ``submission_text`` — or ``None`` on a
-    fail-closed rejection (already persisted; the caller returns).
+    languages: Sequence[str] = (),
+) -> DoorReading | None:
+    """Normalize a project submission, screen its texts, persist its snapshot,
+    log the delta, and return what the doors read — the rich Mentor
+    delta-context as ``text``, with ``not_opened`` and the screen's flags — or
+    ``None`` on a fail-closed rejection (already persisted; the caller returns).
+
+    ``languages`` verifies a recovered encoding, exactly as for a single file.
 
     Fail-closed on a content/structural rejection (a malformed / bomb archive):
     persist a ``{"source": "normalizer", "reason": ...}`` safety result, set the
@@ -134,6 +155,15 @@ async def process_project_submission(
         reason = _project_failure_reason(exc)
         await _persist_rejection(session, hw_repo, sid, reason)
         log.warning("project_submission.rejected", reason=reason)
+        return None
+
+    # Screen before anything is stored: a refused project leaves no snapshot.
+    extractor = DefaultTextExtractor()
+    try:
+        screen = _screen_snapshot(snapshot.canonical_zip, snapshot.manifest, languages)
+    except SecurityRejectedError as exc:
+        await persist_door_refusal(session, hw_repo, sid, exc)
+        log.warning("project_submission.screen_refused", category=exc.category.value)
         return None
 
     # Persist the canonical snapshot (S3 sibling of the raw key) + the columns.
@@ -176,26 +206,25 @@ async def process_project_submission(
         snapshot_hash=snapshot.snapshot_hash,
     )
 
-    # Assemble the rich context inside a resource-scoped block. The submission
-    # snapshot is already in memory (just uploaded); only the base snapshot is
-    # fetched from S3, and only when a base is attached. Both zips close once the
-    # pure builder has read every body it needs (it reads lazily during assembly,
-    # entirely within this ``with``).
-    extractor = DefaultTextExtractor()
+    # Assemble the rich context inside a resource-scoped block. The submission's
+    # texts were read by the screen above; only the base snapshot is fetched
+    # from S3, and only when a base is attached. It closes once the pure builder
+    # has read every body it needs (it reads lazily during assembly, entirely
+    # within this ``with``).
     with ExitStack() as stack:
-        sub_zf = stack.enter_context(
-            zipfile.ZipFile(io.BytesIO(snapshot.canonical_zip))
-        )
         base_zf: zipfile.ZipFile | None = None
         if base is not None and base.snapshot_key is not None:
             base_bytes = await s3.get_object(base.snapshot_key)
             base_zf = stack.enter_context(zipfile.ZipFile(io.BytesIO(base_bytes)))
 
         def read_text(side: Side, entry: ManifestEntry) -> str | None:
-            zf = sub_zf if side == "sub" else base_zf
-            if zf is None:
+            if side == "sub":
+                # Only what the screen read: a file it set aside is None here,
+                # exactly as a binary one is.
+                return screen.texts.get(entry.path)
+            if base_zf is None:
                 return None
-            return extractor.extract(entry.cls, zf.read(entry.path))
+            return extractor.extract(entry.cls, base_zf.read(entry.path))
 
         context = build_mentor_context(
             base_manifest=base_manifest,
@@ -215,6 +244,11 @@ async def process_project_submission(
     # knowable from the character count. The assembly used to carry a second,
     # larger cap of its own; it could never fire before this one for any
     # alphabet, and step E removed it rather than keep a dead branch.
+    # What was not read is said to the Mentor the way it is for an archive:
+    # one block, after the work, so no review rests on a partial reading
+    # unknowingly. Counted against the budget like everything else.
+    context += not_opened_block(screen.not_opened)
+
     budget_chars = project_context_budget_chars()
     if len(context) > budget_chars:
         log.warning(
@@ -233,7 +267,95 @@ async def process_project_submission(
         )
         return None
 
-    return context
+    return DoorReading(text=context, not_opened=screen.not_opened, flags=screen.flags)
+
+
+class _SnapshotScreen:
+    """What the screen read out of a snapshot, and what it set aside."""
+
+    def __init__(self) -> None:
+        self.texts: dict[str, str] = {}
+        self.not_opened: tuple[NotOpenedEntry, ...] = ()
+        self.flags: tuple[ScreenFlag, ...] = ()
+
+
+def _screen_snapshot(
+    canonical_zip: bytes, manifest: Manifest, languages: Sequence[str]
+) -> _SnapshotScreen:
+    """Every text file of the snapshot through the one text screen (task 11).
+
+    Eager and whole: every TEXT and DOCUMENT entry is read here, not only the
+    ones the delta will show, so a direction override in any file refuses the
+    submission and the flags describe the whole project. Every name is
+    screened too -- the names reach the model in the tree and the file frames.
+
+    Raises:
+        SecurityRejectedError: ``SUSPICIOUS_UNICODE`` from any text or name.
+    """
+    result = _SnapshotScreen()
+    not_opened: list[NotOpenedEntry] = []
+    flags: list[ScreenFlag] = []
+    extractor = DefaultTextExtractor()
+    with zipfile.ZipFile(io.BytesIO(canonical_zip)) as zf:
+        for entry in manifest.included:
+            flags.extend(_name_flags(entry.path))
+            if entry.cls is EntryClass.BINARY:
+                continue
+            raw = zf.read(entry.path)
+            content: bytes | str
+            if entry.cls is EntryClass.DOCUMENT:
+                try:
+                    content = extractor.extract(entry.cls, raw) or ""
+                except Exception:
+                    # A docx that is not one, a pdf PyMuPDF cannot open: named
+                    # with the reason a single broken document is refused for,
+                    # instead of failing the whole project.
+                    not_opened.append(
+                        NotOpenedEntry(
+                            arcname=entry.path,
+                            reason=ErrorCategory.MAGIC_MISMATCH,
+                            size=entry.size,
+                        )
+                    )
+                    continue
+            else:
+                content = raw
+            try:
+                screened = screen_text(
+                    content, name=entry.path, mode="signal", languages=languages
+                )
+            except SecurityRejectedError as exc:
+                if exc.category is not ErrorCategory.CHARSET_VIOLATION:
+                    raise
+                not_opened.append(
+                    NotOpenedEntry(
+                        arcname=entry.path,
+                        reason=ErrorCategory.CHARSET_VIOLATION,
+                        size=entry.size,
+                    )
+                )
+                continue
+            result.texts[entry.path] = screened.text
+            flags.extend(screened.flags)
+    for excluded in manifest.excluded:
+        if excluded.reason is ExcludedReason.DENYLIST_DIR:
+            continue
+        flags.extend(_name_flags(excluded.path))
+        if excluded.reason is ExcludedReason.MAY_CONTAIN_SECRETS:
+            not_opened.append(
+                NotOpenedEntry(
+                    arcname=excluded.path,
+                    reason=ErrorCategory.MAY_CONTAIN_SECRETS,
+                    size=excluded.size,
+                )
+            )
+    result.not_opened = tuple(sorted(not_opened, key=lambda e: e.arcname))
+    result.flags = tuple(flags)
+    return result
+
+
+def _name_flags(path: str) -> tuple[ScreenFlag, ...]:
+    return screen_text(path, name=path, mode="signal", where="name").flags
 
 
 def _grouped(n: int) -> str:

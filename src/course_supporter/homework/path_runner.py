@@ -36,6 +36,7 @@ Failure:
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -45,6 +46,7 @@ from course_supporter.funds_port import (
     SubmissionContext,
     SubmissionOutcome,
 )
+from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
     PathCheckpoint,
@@ -247,12 +249,13 @@ async def _run_path(
     student, tenant = await _student_and_tenant(session, submission)
 
     # ── Doors: free, synchronous, and the same functions today's Mentor uses ──
-    file_path, submission_text, language = await _open_the_doors(
+    file_path, reading, language = await _open_the_doors(
         session, s3, hw_repo, submission, job_id=job_id, log=log
     )
-    if submission_text is None:
+    if reading is None:
         # The doors refused and persisted their own refusal, as they do today.
         return
+    submission_text = reading.text
     try:
         # ── The first funds question, before anything is paid for ──
         context = SubmissionContext(
@@ -298,7 +301,7 @@ async def _run_path(
                     session,
                     router,
                     submission=submission,
-                    submission_text=submission_text,
+                    reading=reading,
                     language=language,
                     choice=choice,
                     config=config,
@@ -385,7 +388,7 @@ async def _open_the_doors(
     *,
     job_id: uuid.UUID,
     log: Any,
-) -> tuple[Path | None, str | None, str | None]:
+) -> tuple[Path | None, DoorReading | None, str | None]:
     """Read what can be read, for free, and refuse what cannot be.
 
     The same three functions today's Mentor calls — the archive/single-file
@@ -394,12 +397,19 @@ async def _open_the_doors(
     editing it, and it is not to be touched while it serves production
     (``DD-SP-AM`` records the same choice for the ladders).
 
-    Returns ``(temp file, text, language)``; a ``None`` text means the doors
-    refused and already wrote why.
+    What was read is kept whole (task 11, decision 9): the text, what was
+    not opened, how a single file was read, and what the signal screen noticed
+    in the files, their names and the student's comment -- the same reading
+    today's Mentor carries to Stage 2 and the trace.
+
+    Returns ``(temp file, reading, language)``; a ``None`` reading means the
+    doors refused and already wrote why.
     """
     from course_supporter.homework.doors import (
         assemble_submission_text,
         extract_document_text,
+        persist_door_refusal,
+        screen_student_note,
     )
     from course_supporter.homework.project_submission import (
         process_project_submission,
@@ -407,7 +417,6 @@ async def _open_the_doors(
     from course_supporter.language import resolve_review_language
     from course_supporter.normalizer.classify import denylist_prefix
     from course_supporter.security.exceptions import SecurityRejectedError
-    from course_supporter.security.schemas import Stage1RejectionResult
     from course_supporter.security.stage1 import run_stage1
     from course_supporter.storage.authored_document_repository import (
         AuthoredDocumentRepository,
@@ -434,16 +443,27 @@ async def _open_the_doors(
         code for code in dict.fromkeys([course_language, review_language.code]) if code
     ]
 
+    try:
+        note_flags = screen_student_note(submission.student_note)
+    except SecurityRejectedError as exc:
+        await persist_door_refusal(session, hw_repo, submission.id, exc)
+        log.warning("path_door_refused", category=exc.category.value)
+        return file_path, None, review_language.code
+
     file_bytes = file_path.read_bytes()
     if task_doc is not None and task_doc.task_type == AssignmentType.TEST.value:
         # A test is answered with a structure, not a file to read (task 07,
         # decisions 6 and 7): the core stored its canonical answers as JSON,
         # checked against the test at the door, and the result builder reads
         # them. Stage 1 has nothing to open in them.
-        return file_path, file_bytes.decode("utf-8"), review_language.code
+        return (
+            file_path,
+            DoorReading(text=file_bytes.decode("utf-8"), flags=note_flags),
+            review_language.code,
+        )
 
     if task_doc is not None and task_doc.task_type == AssignmentType.PROJECT.value:
-        project_text = await process_project_submission(
+        project = await process_project_submission(
             session=session,
             s3=s3,
             hw_repo=hw_repo,
@@ -452,8 +472,15 @@ async def _open_the_doors(
             jid=job_id,
             file_bytes=file_bytes,
             raw_key=s3_key,
+            languages=verify_languages,
         )
-        return file_path, project_text, review_language.code
+        if project is None:
+            return file_path, None, review_language.code
+        return (
+            file_path,
+            replace(project, flags=(*project.flags, *note_flags)),
+            review_language.code,
+        )
 
     try:
         stage1_result = run_stage1(
@@ -464,21 +491,22 @@ async def _open_the_doors(
             archive_skip_matcher=denylist_prefix,
             document_extractor=extract_document_text,
         )
-        text, _not_opened = assemble_submission_text(
+        text, not_opened = assemble_submission_text(
             stage1_result,
             file_bytes=file_bytes,
             filename=(submission.original_filename or file_path.name),
         )
     except SecurityRejectedError as exc:
-        rejection = Stage1RejectionResult(category=exc.category, detail=exc.detail)
-        await hw_repo.store_safety_result(
-            submission.id, rejection.model_dump(mode="json")
-        )
-        await hw_repo.update_status(submission.id, "rejected", error_message=exc.detail)
-        await session.commit()
+        await persist_door_refusal(session, hw_repo, submission.id, exc)
         log.warning("path_door_refused", category=exc.category.value)
         return file_path, None, review_language.code
-    return file_path, text, review_language.code
+    reading = DoorReading(
+        text=text,
+        not_opened=not_opened,
+        recovered_encoding=stage1_result.recovered_encoding,
+        flags=(*stage1_result.flags, *note_flags),
+    )
+    return file_path, reading, review_language.code
 
 
 async def _run_stage(
@@ -486,7 +514,7 @@ async def _run_stage(
     router: StageRouter,
     *,
     submission: HomeworkSubmission,
-    submission_text: str,
+    reading: DoorReading,
     language: str | None,
     choice: PathChoice,
     config: PathConfig,
@@ -499,11 +527,12 @@ async def _run_stage(
             session=session,
             router=router,
             submission=submission,
-            submission_text=submission_text,
+            submission_text=reading.text,
             language=language,
             path_key=choice.key,
             stage_name=stage_name,
             stage=config.stages[stage_name],
+            door=reading,
         )
     )
 

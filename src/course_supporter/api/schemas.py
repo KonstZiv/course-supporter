@@ -1765,8 +1765,8 @@ _TEST_VERSION_DESCRIPTION = (
 _STUDENT_NOTE_DESCRIPTION = (
     "The student's comment on this attempt: up to 2000 characters, a line break "
     "counted as one and the edges trimmed. A longer comment is refused with "
-    "``STUDENT_NOTE_TOO_LONG``, one a text screen refuses (hidden characters, "
-    "instructions addressed to the reviewing system) with "
+    "``STUDENT_NOTE_TOO_LONG``, one a text screen refuses (direction-changing, "
+    "tag or control characters) with "
     "``STUDENT_NOTE_REJECTED`` — both 422, before anything is stored."
 )
 

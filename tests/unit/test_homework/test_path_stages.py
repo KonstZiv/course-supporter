@@ -126,6 +126,16 @@ class TestRegistry:
         assert outcome.reason_code == "swapped"
 
 
+def _no_course_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The course and the topic are gone: the safety stage still runs."""
+    nodes = AsyncMock()
+    nodes.get_by_id = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "course_supporter.storage.course_node_repository.CourseNodeRepository",
+        lambda _session: nodes,
+    )
+
+
 class TestWhatIsHandedToTodaysFunction:
     """The additive argument carries the path stage, field for field."""
 
@@ -149,6 +159,7 @@ class TestWhatIsHandedToTodaysFunction:
             "course_supporter.storage.homework_repository.HomeworkRepository",
             lambda _session: AsyncMock(),
         )
+        _no_course_nodes(monkeypatch)
 
         outcome = await get_stage_executor(SAFETY)(_context())
 
@@ -187,6 +198,7 @@ class TestWhatIsHandedToTodaysFunction:
             "course_supporter.storage.homework_repository.HomeworkRepository",
             lambda _session: AsyncMock(),
         )
+        _no_course_nodes(monkeypatch)
 
         outcome = await get_stage_executor(SAFETY)(_context())
 

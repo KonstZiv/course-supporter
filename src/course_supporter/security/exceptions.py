@@ -124,6 +124,12 @@ class ErrorCategory(StrEnum):
     # text than the tightest context window accepts, and the two ask the
     # student for different things.
     OVER_BUDGET = "over_budget"
+    # A file whose name says it may hold a secret (``.env``, ``*.pem``,
+    # ``id_rsa`` …; ``security/policies.is_secret_file_name``). Never an
+    # upload's refusal: the file is named in ``not_opened`` with this reason
+    # and never read, stored in a snapshot or shown to a model (task 11,
+    # decision 6).
+    MAY_CONTAIN_SECRETS = "may_contain_secrets"
 
 
 class SecurityRejectedError(Exception):

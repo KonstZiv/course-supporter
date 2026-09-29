@@ -32,13 +32,30 @@ class TestExtensionClassifier:
 
     def test_binary_for_unknown_and_dotfiles(self) -> None:
         clf = ExtensionClassifier()
-        for path in ("lib.so", "mod.pyc", "img.png", "a.out", ".gitignore", "Makefile"):
+        for path in ("lib.so", "mod.pyc", "img.png", "a.out", ".bashrc", "makefile"):
             assert clf.classify(path, b"") is EntryClass.BINARY
+
+    def test_the_closed_list_of_extensionless_names_is_text(self) -> None:
+        # Task 11, decision 5: the list shared with Stage 1's archive pass.
+        clf = ExtensionClassifier()
+        for path in (
+            "Makefile",
+            "Dockerfile",
+            "Dockerfile.prod",
+            "Containerfile",
+            "Procfile",
+            ".gitignore",
+            ".dockerignore",
+            ".env.example",
+            "LICENSE",
+            "deploy/Dockerfile",
+        ):
+            assert clf.classify(path, b"") is EntryClass.TEXT, path
 
     def test_extension_from_last_component_only(self) -> None:
         # A dot in a parent directory must not leak into the extension.
         clf = ExtensionClassifier()
-        assert clf.classify("my.pkg/Makefile", b"") is EntryClass.BINARY
+        assert clf.classify("my.pkg/README", b"") is EntryClass.BINARY
         assert clf.classify("v1.2/main.py", b"") is EntryClass.TEXT
 
 

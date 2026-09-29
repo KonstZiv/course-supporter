@@ -31,7 +31,7 @@ class ExcludedReason(StrEnum):
 
     ``FORBIDDEN_TYPE`` from the security layer is deliberately NOT here:
     an unknown extension is kept as an :attr:`EntryClass.BINARY`
-    INCLUDED entry (hash-tracked), not excluded. Only these three
+    INCLUDED entry (hash-tracked), not excluded. Only these four
     reasons drop content from the snapshot.
     """
 
@@ -44,6 +44,11 @@ class ExcludedReason(StrEnum):
     NESTED_ARCHIVE = "nested_archive"
     """Entry is itself an archive; never opened (bomb vector stays
     unreachable), recorded as an opaque raw-hashed blob."""
+    MAY_CONTAIN_SECRETS = "may_contain_secrets"
+    """The name says the file may hold a secret (``.env``, ``*.pem`` …;
+    ``security.policies.is_secret_file_name``). Kept out of the snapshot
+    for a base and a submission alike (task 11, decision 6): never stored,
+    never read, never shown to a model -- only named."""
 
 
 @dataclass(frozen=True, slots=True)

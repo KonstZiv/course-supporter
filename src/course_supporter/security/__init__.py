@@ -44,12 +44,14 @@ from course_supporter.security.regex_patterns import (
 from course_supporter.security.schemas import (
     CourseContext,
     SafetyResult,
+    ScreenFlag,
     SecurityContext,
     Stage1RejectionResult,
     ViolationCategory,
 )
-from course_supporter.security.stage1 import Stage1Result, run_stage1, screen_text
+from course_supporter.security.stage1 import Stage1Result, run_stage1
 from course_supporter.security.stage2 import run_stage2_safety_check
+from course_supporter.security.text_screen import ScreenedText, screen_text
 from course_supporter.security.unicode_check import check_text_unicode_safety
 
 __all__ = [
@@ -65,6 +67,8 @@ __all__ = [
     "ExtractedFile",
     "SafetyResult",
     "SafetyValidationError",
+    "ScreenFlag",
+    "ScreenedText",
     "SecurityContext",
     "SecurityRejectedError",
     "Stage1RejectionResult",

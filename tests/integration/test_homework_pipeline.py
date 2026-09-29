@@ -237,6 +237,7 @@ def _patch_pipeline(
                     nfc_text="def f(): return 1",
                     not_opened=(),
                     recovered_encoding="utf-8",
+                    flags=(),
                 )
             ),
         )

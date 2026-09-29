@@ -23,7 +23,7 @@ from course_supporter.normalizer.models import (
     ExcludedEntry,
     ExcludedReason,
 )
-from course_supporter.security.policies import CODE_EXTENSIONS
+from course_supporter.security.policies import CODE_EXTENSIONS, is_text_file_name
 
 # ── Extension → class map ──────────────────────────────────────────
 
@@ -102,6 +102,12 @@ class ExtensionClassifier:
     """Extension-based ``EntryClassifier`` strategy (port implementation)."""
 
     def classify(self, path: str, head: bytes) -> EntryClass:
+        # A Makefile or a Dockerfile is text though it has no text extension:
+        # the closed list shared with Stage 1's archive pass (task 11,
+        # decision 5). Without it the Mentor reviewed a project whose build
+        # it could not see.
+        if is_text_file_name(path):
+            return EntryClass.TEXT
         ext = _extension_of(path)
         if ext in _TEXT_EXTS:
             return EntryClass.TEXT

@@ -52,8 +52,10 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.homework.doors import DoorReading
     from course_supporter.homework.path_config import PathKey, PathStage
     from course_supporter.llm.stage_router import StageRouter
+    from course_supporter.security.schemas import CourseContext
     from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger(__name__)
@@ -71,6 +73,11 @@ class StageContext:
     it and to nothing else. What it must NOT touch is the submission's state or
     the run's checkpoint: those say where the whole path stands, and the body
     writes them in one place so they cannot be written from two.
+
+    ``door`` is what the doors read (task 11, decision 9): ``submission_text``
+    is its text, and the rest -- what was not opened, how the file was read,
+    what the signal screen noticed -- is for the safety stage and the trace,
+    never for a stage that reviews the work.
     """
 
     session: AsyncSession
@@ -81,6 +88,7 @@ class StageContext:
     path_key: PathKey
     stage_name: str
     stage: PathStage
+    door: DoorReading | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,17 +204,27 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
 
     Today's own function does the work — prompt, parse, verdict — through its
     one additive argument, so the new path and today's Mentor cannot end up with
-    two ideas of what is safe. What is this module's is the reaction: an unsafe
+    two ideas of what is safe. It is shown what today's Mentor shows it (task
+    11, decisions 9-10): the course and the topic the work is for, the signal
+    screen's flags and the student's comment; and the verdict carries what the
+    doors read onto the trace. What is this module's is the reaction: an unsafe
     verdict ends the submission at ``rejected``, and the reason code the surface
     phrases is the one the read path already knows for a Stage 2 refusal.
     """
+    from course_supporter.homework.doors import carry_door_reading
     from course_supporter.security.stage2 import run_stage2_safety_check
 
+    door = context.door
     verdict = await run_stage2_safety_check(
         context.submission_text,
         router=context.router,
+        course_context=await _course_context(context.session, context.submission),
         execution=_execution(context),
+        screen_flags=door.flags if door is not None else (),
+        student_note=context.submission.student_note,
     )
+    if door is not None:
+        carry_door_reading(verdict, door)
     from course_supporter.storage.homework_repository import HomeworkRepository
 
     await HomeworkRepository(context.session).store_safety_result(
@@ -220,6 +238,30 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
         violations=[v.value for v in verdict.violations],
     )
     return StageOutcome.ends_path("rejected", "stage2_rejected")
+
+
+async def _course_context(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> CourseContext:
+    """The course and the topic the work is for, as today's Mentor builds it.
+
+    The same four fields from the same two nodes (``api/tasks.py``); a node
+    that is gone leaves its fields empty rather than failing the stage.
+    """
+    from course_supporter.security.schemas import CourseContext
+    from course_supporter.storage.course_node_repository import (
+        CourseNodeRepository,
+    )
+
+    nodes = CourseNodeRepository(session)
+    course = await nodes.get_by_id(submission.course_node_id)
+    target = await nodes.get_by_id(submission.node_id)
+    return CourseContext(
+        course_title=course.title if course else "",
+        course_description=(course.description or "") if course else "",
+        node_title=target.title if target else "",
+        node_description=(target.description or "") if target else "",
+    )
 
 
 async def run_attempt_classifier_stage(context: StageContext) -> StageOutcome:

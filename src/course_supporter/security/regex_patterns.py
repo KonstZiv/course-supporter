@@ -35,10 +35,14 @@ break tests.
 
 ## Out-of-scope by design (not a TODO)
 
-Unicode obfuscation attacks (zero-width insertions, homoglyph
-variants) are caught upstream by ``check_text_unicode_safety``
-and ``nfkc_for_security`` before regex executes. This module
-does not duplicate that detection.
+Unicode obfuscation is handled upstream, in the text screen
+(``security/text_screen.py``), before regex executes: compatibility
+variants collapse through ``nfkc_for_security``, and zero-width
+characters are CUT OUT of the text this module scans (task 11,
+decision 3). The strict screen refuses them outright; the signal
+screen flags them -- and a trigger phrase with an invisible space
+inside it is still found here, because the space is gone by the time
+the patterns run. This module does not duplicate either step.
 
 ## Pattern design discipline
 
@@ -240,3 +244,19 @@ def match_text(text: str) -> CompiledPattern | None:
         if compiled.pattern.search(text):
             return compiled
     return None
+
+
+def find_all(text: str) -> list[tuple[CompiledPattern, int]]:
+    """Every match of every pattern, as ``(pattern, start offset)``.
+
+    The signal screen's counterpart of :func:`match_text`: it records each
+    hit as a flag with its line, so it needs all of them, not the first.
+    Same contract on ``text`` (NFKC-normalized, zero-width characters
+    already cut out). Ordered by offset, then by pattern order.
+    """
+    hits = [
+        (compiled, match.start())
+        for compiled in PROMPT_INJECTION_PATTERNS
+        for match in compiled.pattern.finditer(text)
+    ]
+    return sorted(hits, key=lambda hit: hit[1])

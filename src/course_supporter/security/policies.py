@@ -45,7 +45,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
+from pathlib import PurePosixPath
 from typing import Final, Literal
+
+# How the text screens answer what they find (task 11, decision 1). ``strict``
+# refuses on the first hit -- the author's material, as it always has.
+# ``signal`` records a hit as a flag for Stage 2 and refuses only on the
+# characters no legitimate text carries (direction overrides, tags, controls):
+# everything a student writes, whose legitimate work on an agents course is
+# full of the very phrases the regex layer knows.
+ScreenMode = Literal["strict", "signal"]
 
 # Video extensions that get the dedicated video-upload cap
 # (``max_video_upload_bytes``, resolved by
@@ -195,9 +205,17 @@ class ContextPolicy:
             nested archive, non-UTF-8 text) are the student's mistake,
             not an attack; a real project archive almost always holds
             one. Deliberately does NOT soften the structural guards
-            (traversal, bomb, symlink, depth) or the two hostility
-            signals (unicode hard-reject, prompt-injection pre-screen)
-            — naming and skipping those would be a ready-made bypass.
+            (traversal, bomb, symlink, depth) or the unicode
+            hard-reject — naming and skipping those would be a
+            ready-made bypass. With it come the student-archive rules
+            of task 11: member names are screened, a file that may hold
+            a secret is named and never read, and the closed list of
+            extensionless text files is read as text.
+        text_screen_mode: How the text screens answer what they find
+            (:data:`ScreenMode`): ``strict`` refuses on the first hit,
+            ``signal`` turns zero-width characters and injection phrases
+            into flags for Stage 2 and refuses only on the characters no
+            legitimate text carries (task 11, decisions 1-3).
     """
 
     name: Literal["authored", "homework"]
@@ -212,6 +230,7 @@ class ContextPolicy:
     conveyors: Mapping[str, Conveyor] | None
     archive_soft_exclude: bool
     enable_llm_safety_check: bool
+    text_screen_mode: ScreenMode
 
 
 AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
@@ -279,6 +298,7 @@ AUTHORED_POLICY: Final[ContextPolicy] = ContextPolicy(
     # and a half-read course archive is worse for them than a clear refusal.
     archive_soft_exclude=False,
     enable_llm_safety_check=True,
+    text_screen_mode="strict",
 )
 
 
@@ -343,6 +363,7 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     conveyors=HOMEWORK_CONVEYORS,
     archive_soft_exclude=True,
     enable_llm_safety_check=True,
+    text_screen_mode="signal",
 )
 
 
@@ -406,3 +427,65 @@ def get_max_size_for_extension(extension: str, policy: ContextPolicy) -> int:
     ):
         return policy.max_primary_format_bytes
     return policy.max_file_size_bytes
+
+
+# ── File names that decide how a file is read (task 11, decisions 5-6) ──
+#
+# ONE place for both contours that open a student's archive: Stage 1's archive
+# pass (``security/stage1.py``) and the project normalizer
+# (``normalizer/classify.py`` / ``normalizer/core.py``). Two lists would drift
+# the way the extension sets once did (DD-19-B).
+
+# Files without a text extension that are nevertheless text, and that a real
+# project carries. A closed list, matched on the last path component and case
+# as written: ``makefile`` is not on it, because nobody names it that.
+TEXT_FILE_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "Makefile",
+        "Dockerfile",
+        "Containerfile",
+        "Procfile",
+        ".gitignore",
+        ".dockerignore",
+        ".env.example",
+        "LICENSE",
+    }
+)
+_TEXT_FILE_NAME_GLOBS: Final[tuple[str, ...]] = ("Dockerfile.*",)
+
+# Files that may hold a secret. They are never read, never stored in a
+# snapshot and never shown to a model -- only named, with the reason. The one
+# ``.env`` sibling that is a template by convention is read as text instead.
+_SECRET_FILE_NAME_GLOBS: Final[tuple[str, ...]] = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa*",
+)
+_SECRET_FILE_NAME_EXCEPTIONS: Final[frozenset[str]] = frozenset({".env.example"})
+
+
+def _basename(path: str) -> str:
+    return PurePosixPath(path).name
+
+
+def is_text_file_name(path: str) -> bool:
+    """Is ``path`` a file without a text extension that is read as text?"""
+    name = _basename(path)
+    return name in TEXT_FILE_NAMES or any(
+        fnmatchcase(name, glob) for glob in _TEXT_FILE_NAME_GLOBS
+    )
+
+
+def is_secret_file_name(path: str) -> bool:
+    """May ``path`` hold a secret, so that it must never be opened?
+
+    Checked before :func:`is_text_file_name` wherever both apply: a secret is
+    decided by its name alone, whatever else the name would allow.
+    """
+    name = _basename(path)
+    if name in _SECRET_FILE_NAME_EXCEPTIONS:
+        return False
+    lowered = name.lower()
+    return any(fnmatchcase(lowered, glob) for glob in _SECRET_FILE_NAME_GLOBS)

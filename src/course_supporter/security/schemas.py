@@ -87,6 +87,32 @@ class NotOpenedEntry(BaseModel):
     size: int
 
 
+class ScreenFlag(BaseModel):
+    """One thing the signal screen noticed in a student's text (task 11).
+
+    Where it is and what kind it is -- never the fragment itself: the flag
+    travels to Stage 2 as a hint, into the submission's trace and into the
+    log, and none of those may carry a copy of what the student wrote. The
+    reviewing model never sees it; only Stage 2 may refuse on its strength.
+
+    Attributes:
+        source: The file's path inside the submission, the uploaded file's
+            name, or ``student_note`` for the comment.
+        where: ``content`` for the text of the file, ``name`` for its name.
+        line: 1-based line of the text; ``None`` for a name.
+        category: ``zero_width`` or a regex category
+            (``instruction_override``, ``system_prompt_leak``,
+            ``role_manipulation``).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: str
+    where: Literal["content", "name"] = "content"
+    line: int | None
+    category: str
+
+
 class SafetyResult(BaseModel):
     """Stage 2 safety classifier output parsed from LLM JSON.
 
@@ -133,6 +159,14 @@ class SafetyResult(BaseModel):
     # and a document arrives already decoded, so neither carries a single
     # answer here.
     recovered_encoding: str | None = None
+
+    # What the signal screen noticed on the way in (task 11, decision 2): the
+    # trace for the author and support. Stage 2 was shown the same list as a
+    # hint; the review never is, and the student-facing read path never
+    # serialises it. Capped at ``text_screen.FLAG_TRAIL_LIMIT`` in a stable
+    # order; ``flags_omitted`` counts what the cap left out.
+    flags: list[ScreenFlag] = Field(default_factory=list)
+    flags_omitted: int = 0
 
 
 class Stage1RejectionResult(BaseModel):

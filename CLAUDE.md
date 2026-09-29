@@ -34,7 +34,7 @@ uv run pytest tests/unit/test_foo.py
 uv run pytest -k "test_name"
 
 # Infrastructure
-docker compose up -d                 # Postgres + MinIO + Redis
+docker compose up -d                 # Postgres + S3-compatible storage (dev: SeaweedFS) + Redis
 
 # DB migrations
 make db-upgrade

@@ -1,6 +1,6 @@
 """Live-gesture tests for base_normalize_task (KD18 P2).
 
-Real MinIO + real PostgreSQL: upload an archive, run the task directly with a
+Real S3 + real PostgreSQL: upload an archive, run the task directly with a
 real ctx (no ARQ needed), assert the project_bases row transitions. BOTH arms:
 
 * READY on a valid project zip — and snapshot_hash is the DETERMINISTIC

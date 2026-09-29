@@ -2,7 +2,7 @@
 
 ``get_current_student`` is overridden to a fixed StudentContext; the gate
 (material / tenant / enrollment) and S3 presigning are mocked. The live
-presigned-GET (real MinIO 206) + real WebP addressing are covered by the
+presigned-GET (real S3 206) + real WebP addressing are covered by the
 integration / live acceptance.
 """
 

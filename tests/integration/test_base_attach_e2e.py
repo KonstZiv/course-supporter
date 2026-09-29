@@ -1,7 +1,7 @@
-"""Genuine end-to-end for the KD18 P2 base shell (real MinIO + real ARQ + DB).
+"""Genuine end-to-end for the KD18 P2 base shell (real S3 + real ARQ + DB).
 
 Zero mocks on the critical path: the base archive is uploaded through the real
-HTTP route to real MinIO, enqueued to real Redis, and normalized by a REAL arq
+HTTP route to real S3, enqueued to real Redis, and normalized by a REAL arq
 burst worker (real Redis dispatch → pickup → execute), then read back through the
 real GET routes. Only the auth identity is injected (dependency override) — every
 storage / queue / normalization hop is real.
@@ -10,7 +10,8 @@ The load-bearing assertion is the echo round-trip: the ``snapshot_hash`` that
 ``GET /base`` returns equals the deterministic aggregate the normalizer computes
 over the same content — the contract P3's echo-match depends on.
 
-Requires ``docker compose up -d`` (PostgreSQL + MinIO + Redis).
+Requires ``docker compose up -d`` (PostgreSQL + S3-compatible storage + Redis;
+in dev the storage is SeaweedFS from docker-compose).
 """
 
 from __future__ import annotations
@@ -195,7 +196,7 @@ class TestBaseAttachE2E:
         assert attach.status_code == 202, attach.text
         base_id = uuid.UUID(attach.json()["base_version_id"])
 
-        # The raw archive really landed in MinIO; the version is pending.
+        # The raw archive really landed in S3; the version is pending.
         async with session_factory() as session:
             base_row = await ProjectBaseRepository(session).get_by_id(base_id)
             assert base_row is not None
@@ -231,7 +232,7 @@ class TestBaseAttachE2E:
         assert manifest["aggregate_hash"] == expected.snapshot_hash
         assert any(e["reason"] == "denylist_dir" for e in manifest["excluded"])
 
-        # Snapshot really landed in MinIO; clean up both objects.
+        # Snapshot really landed in S3; clean up both objects.
         async with session_factory() as session:
             final = await ProjectBaseRepository(session).get_by_id(base_id)
             assert final is not None

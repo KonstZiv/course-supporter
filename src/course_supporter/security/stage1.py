@@ -8,8 +8,12 @@ hard-reject, regex pre-screen) behind one call:
     >>> result = run_stage1(filename="hw.txt", content=b"...", context="homework")
 
 Text that is not a file — a test's fields, the body of a request that carries
-a test (task 07c) — meets the text screens alone, through
-:func:`screen_text`: the file checks have nothing to judge in it.
+a test (task 07c), a student's comment — meets the text screens alone, through
+:func:`course_supporter.security.text_screen.screen_text`: the file checks
+have nothing to judge in it. Every text this orchestrator reads goes through
+that same function, in the mode its policy names
+(``ContextPolicy.text_screen_mode``, task 11): ``strict`` for the author,
+``signal`` for the student, whose hits become :attr:`Stage1Result.flags`.
 
 The orchestrator is **synchronous and pre-ESC**: every rejection
 raises before any LLM is invoked, so a malformed upload never
@@ -41,11 +45,12 @@ runs only when ``run_stage1`` returns successfully.
    * **Text** -- charset (when strict), three-tier decode, then the
      content half below.
 
-6. **Text content checks** -- NFKC, single leading BOM strip, unicode
-   hard-reject, regex pre-screen (``_screen_text``, shared by the text
-   and document paths).
+6. **Text content checks** -- :func:`~course_supporter.security.text_screen.screen_text`
+   (NFKC, single leading BOM strip, unicode, regex pre-screen), shared by
+   the text, document and archive paths.
 7. **Build result** -- NFC text for storage; ``archive_entries`` for
-   what an archive yielded, ``not_opened`` for what it did not.
+   what an archive yielded, ``not_opened`` for what it did not, ``flags``
+   for what the signal screen noticed.
 
 ## Acceptance trade-off (vision-blocking)
 
@@ -91,7 +96,6 @@ from course_supporter.security.archive import (
     SkipMatcher,
     extract_archive_safely,
 )
-from course_supporter.security.charset_recovery import recover_text
 from course_supporter.security.exceptions import (
     ErrorCategory,
     SecurityRejectedError,
@@ -104,19 +108,20 @@ from course_supporter.security.file_type import (
 )
 from course_supporter.security.normalization import (
     nfc_for_storage,
-    nfkc_for_security,
     normalize_filename,
 )
 from course_supporter.security.policies import (
     _PROSE,
     CODE_EXTENSIONS,
     ContextPolicy,
+    ScreenMode,
     get_max_size_for_extension,
+    is_secret_file_name,
+    is_text_file_name,
     policy_for,
 )
-from course_supporter.security.regex_patterns import match_text
-from course_supporter.security.schemas import NotOpenedEntry
-from course_supporter.security.unicode_check import check_text_unicode_safety
+from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
+from course_supporter.security.text_screen import ScreenedText, screen_text
 
 # Extensions decoded and run through the text content pipeline (charset,
 # unicode hard-reject, prompt-injection pre-screen).
@@ -189,6 +194,11 @@ class Stage1Result:
         context: Active context discriminator -- echoed for
             downstream callers that compose Stage 1 with later
             stages and want a single object to pass through.
+        flags: What the signal screen noticed in the text and, for an
+            archive, in the member names -- location and category, never
+            the fragment. Always empty in a ``strict`` context, where a
+            hit refuses instead. Stage 2 reads them as a hint; the
+            review never does (task 11, decision 2).
     """
 
     filename: str
@@ -200,6 +210,7 @@ class Stage1Result:
     context: Literal["authored", "homework"]
     not_opened: tuple[NotOpenedEntry, ...] = field(default=())
     recovered_encoding: str | None = None
+    flags: tuple[ScreenFlag, ...] = field(default=())
 
 
 def run_stage1(
@@ -310,12 +321,16 @@ def run_stage1(
 
         nfc_text: str | None = None
         recovered_encoding: str | None = None
+        flags: tuple[ScreenFlag, ...] = ()
         if _is_text_extension(ext):
-            nfc_text, recovered_encoding = _run_text_content_checks(
-                content=content,
-                filename=filename,
+            screened = screen_text(
+                content,
+                name=filename,
+                mode=policy.text_screen_mode,
                 languages=languages,
             )
+            nfc_text, recovered_encoding = screened.text, screened.encoding
+            flags = screened.flags
 
         return Stage1Result(
             filename=nfc_for_storage(filename),
@@ -326,6 +341,7 @@ def run_stage1(
             archive_entries=None,
             context=context,
             recovered_encoding=recovered_encoding,
+            flags=flags,
         )
     except SecurityRejectedError as exc:
         logger.warning(
@@ -336,53 +352,6 @@ def run_stage1(
             detail=exc.detail,
         )
         raise
-
-
-def screen_text(
-    *,
-    name: str,
-    content: bytes,
-    context: Literal["authored", "homework"],
-    languages: Sequence[str] = (),
-) -> str:
-    """The text screens of Stage 1 alone, for text that is not a file.
-
-    A test's fields and the body of a request that carries a test (task 07c)
-    are text: what can be wrong with them is what can be wrong with text — an
-    encoding that cannot be read in ``languages``, hidden or suspicious
-    Unicode, an attempt to steer a model. These are the screens
-    :func:`run_stage1` runs on a text file, in the same order. The checks of a
-    file — its extension, its size cap, whether its bytes look like that kind
-    of file — have nothing to judge here, and the last of them refuses empty
-    or very short content, which a test's text may lawfully be.
-
-    Args:
-        name: What the text is, for the log and the detail of a refusal.
-        content: The text as bytes; bounding its size is the caller's.
-        context: Whose text it is, for the log only: no policy applies.
-        languages: As for :func:`run_stage1`.
-
-    Returns:
-        The text in NFC, as :attr:`Stage1Result.nfc_text` would carry it.
-
-    Raises:
-        SecurityRejectedError: ``CHARSET_VIOLATION``, ``SUSPICIOUS_UNICODE``
-            or ``PROMPT_INJECTION``, logged as :func:`run_stage1` logs one.
-    """
-    try:
-        text, _ = _run_text_content_checks(
-            content=content, filename=name, languages=languages
-        )
-    except SecurityRejectedError as exc:
-        logger.warning(
-            "stage1.rejected",
-            category=exc.category.value,
-            filename=name,
-            context=context,
-            detail=exc.detail,
-        )
-        raise
-    return text
 
 
 # ── Archive handling ───────────────────────────────────────────────
@@ -474,17 +443,62 @@ def _handle_archive_input(
 
     read: list[ExtractedFile | ClassifiedEntry] = []
     not_opened: list[NotOpenedEntry] = []
+    flags: list[ScreenFlag] = []
+    mode = policy.text_screen_mode
 
     for entry in entries:
         if (
             isinstance(entry, ClassifiedEntry)
-            and entry.verdict is not EntryVerdict.INCLUDED
+            and entry.verdict is EntryVerdict.DENYLIST_SKIP
         ):
-            if entry.verdict is EntryVerdict.DENYLIST_SKIP:
-                # Packaging noise (__MACOSX/, node_modules/ ...). Dropped
-                # rather than reported: naming it would bury the entries the
-                # student can actually act on.
+            # Packaging noise (__MACOSX/, node_modules/ ...). Dropped rather
+            # than reported: naming it would bury the entries the student can
+            # actually act on.
+            continue
+
+        if soft:
+            # A member's name reaches the model -- in the file frame, or in
+            # the list of what was not opened -- so it meets the same screen
+            # as the member's text (task 11, decision 7): a direction override
+            # in a name refuses the submission, a trigger phrase is a flag.
+            flags.extend(_screen_name(entry.arcname, mode=mode))
+            if is_secret_file_name(entry.arcname):
+                # Named, never read (decision 6): whatever else the name or
+                # the extension would allow, this file is not opened.
+                not_opened.append(
+                    NotOpenedEntry(
+                        arcname=entry.arcname,
+                        reason=ErrorCategory.MAY_CONTAIN_SECRETS,
+                        size=entry.declared_size
+                        if isinstance(entry, ClassifiedEntry)
+                        else len(entry.content),
+                    )
+                )
                 continue
+
+        named_text = (
+            soft
+            and isinstance(entry, ClassifiedEntry)
+            and entry.verdict is EntryVerdict.FORBIDDEN_TYPE
+            and is_text_file_name(entry.arcname)
+        )
+        if named_text and b"\x00" in entry.content:
+            # A Makefile that is not text: the name promised what the bytes
+            # do not keep, which is the magic gate's question.
+            not_opened.append(
+                NotOpenedEntry(
+                    arcname=entry.arcname,
+                    reason=ErrorCategory.MAGIC_MISMATCH,
+                    size=len(entry.content),
+                )
+            )
+            continue
+
+        if (
+            isinstance(entry, ClassifiedEntry)
+            and entry.verdict is not EntryVerdict.INCLUDED
+            and not named_text
+        ):
             not_opened.append(
                 NotOpenedEntry(
                     arcname=entry.arcname,
@@ -514,31 +528,21 @@ def _handle_archive_input(
             )
             continue
 
-        if _is_text_extension(entry_ext):
+        if named_text or _is_text_extension(entry_ext):
             try:
-                member_text, member_encoding = _run_text_content_checks(
-                    content=entry.content,
-                    filename=entry.arcname,
+                screened = screen_text(
+                    entry.content,
+                    name=entry.arcname,
+                    mode=mode,
                     languages=languages,
                 )
-                if member_encoding != "utf-8":
-                    # Members travel onward as raw bytes, and the caller
-                    # decodes them as UTF-8 with replacement
-                    # (``homework/text_budget.py``). For a member that was
-                    # only readable after recovery, those raw bytes would
-                    # decode right back into the noise recovery just undid,
-                    # so the recovered text replaces them. Members that were
-                    # already UTF-8 are left byte-for-byte alone: re-encoding
-                    # them would quietly apply this pass's NFC normalization
-                    # to content nobody asked us to change.
-                    entry = replace(entry, content=member_text.encode("utf-8"))
             except SecurityRejectedError as exc:
                 # The split that defines the soft mode: a file saved in the
                 # wrong encoding is a formatting mistake, so it is set aside
                 # and the rest of the work is still reviewed. A unicode
-                # hard-reject or an injection hit is not a mistake, so it
-                # propagates and takes the whole submission with it --
-                # "name it and skip it" there would be a ready-made bypass.
+                # hard-reject is not a mistake, so it propagates and takes the
+                # whole submission with it -- "name it and skip it" there would
+                # be a ready-made bypass.
                 if not (soft and exc.category is ErrorCategory.CHARSET_VIOLATION):
                     raise
                 not_opened.append(
@@ -549,6 +553,17 @@ def _handle_archive_input(
                     )
                 )
                 continue
+            flags.extend(screened.flags)
+            if screened.encoding != "utf-8":
+                # Members travel onward as raw bytes, and the caller decodes
+                # them as UTF-8 with replacement (``homework/text_budget.py``).
+                # For a member that was only readable after recovery, those raw
+                # bytes would decode right back into the noise recovery just
+                # undid, so the recovered text replaces them. Members that were
+                # already UTF-8 are left byte-for-byte alone: re-encoding them
+                # would quietly apply this pass's NFC normalization to content
+                # nobody asked us to change.
+                entry = replace(entry, content=screened.text.encode("utf-8"))
 
         read.append(entry)
 
@@ -572,6 +587,7 @@ def _handle_archive_input(
         archive_entries=tuple(read),
         not_opened=tuple(not_opened),
         context=context,
+        flags=tuple(flags),
     )
 
 
@@ -636,14 +652,16 @@ def _handle_document_input(
             f"{filename!r} carries no extractable text",
         )
 
+    screened = screen_text(text, name=filename, mode=policy.text_screen_mode)
     return Stage1Result(
         filename=nfc_for_storage(filename),
         extension=extension,
         detected_mime=detected_mime,
         detected_charset=None,
-        nfc_text=_screen_text(text, filename=filename),
+        nfc_text=screened.text,
         archive_entries=None,
         context=context,
+        flags=screened.flags,
     )
 
 
@@ -721,110 +739,7 @@ def _is_text_extension(extension: str) -> bool:
     return extension.lower() in _TEXT_EXTENSIONS
 
 
-def _run_text_content_checks(
-    *,
-    content: bytes,
-    filename: str,
-    languages: Sequence[str],
-) -> tuple[str, str]:
-    """Recover the text, NFKC-normalize, run unicode + regex; return NFC.
-
-    Pipeline order (cheap-fail-fast):
-
-    1. Recovery -- see
-       :func:`course_supporter.security.charset_recovery.recover_text`.
-       Bytes that cannot be read back as text of ``languages`` reach
-       :attr:`ErrorCategory.CHARSET_VIOLATION` here, before any
-       screening work.
-    2. NFKC normalization for security (compatibility-folding so
-       full-width / circled / presentation forms collapse to ASCII
-       before the regex layer scans).
-    3. Unicode hard-reject (zero-width / bidi / tag / control).
-    4. Regex pre-screen for known prompt-injection phrases.
-    5. NFC normalization for storage.
-
-    What used to stand in front of all this was a gate on the label the
-    format detector reports. That gate is gone, and with it two silences.
-    It refused homework by a name the detector never gets right -- no
-    Cyrillic single-byte encoding is ever named -- and it let authored
-    material through to be decoded *by* that wrong name, which for
-    ``iso-8859-1`` never raises and never warns, so the file became noise
-    on its way to the Methodist. It also had a hole in the other
-    direction: the detector reads roughly the first 64 KiB, so a file with
-    that much Latin ahead of one Cyrillic byte was labelled ``us-ascii``,
-    passed, and raised an unguarded ``UnicodeDecodeError`` afterwards.
-    Deciding by decoding closes both.
-
-    Args:
-        content: Bytes to read and validate.
-        filename: Used in error / log detail to identify which
-            entry failed (especially inside archives).
-        languages: ISO 639-3 codes the text is expected to be in.
-            Empty, or carrying no language with letter and word data,
-            means nothing can be verified -- a non-UTF-8 file is then
-            refused rather than guessed at.
-
-    Returns:
-        The NFC-normalized text body, and the name of the encoding it
-        was read as (``"utf-8"`` for anything that decoded directly).
-
-    Raises:
-        SecurityRejectedError: with one of
-            ``CHARSET_VIOLATION`` / ``SUSPICIOUS_UNICODE`` /
-            ``PROMPT_INJECTION`` depending on which gate failed.
-    """
-    recovered = recover_text(content, languages=languages)
-    if not recovered.verified:
-        # Operator language: the reason code is what the interface turns
-        # into a phrase for a person (``charset_violation`` in the two
-        # dictionaries), so this string exists for the log and support.
-        raise SecurityRejectedError(
-            ErrorCategory.CHARSET_VIOLATION,
-            (
-                f"{filename!r} is not UTF-8 and its encoding could not be "
-                f"established ({recovered.reason}); detector label "
-                f"{detect_charset(content)!r}"
-            ),
-        )
-    if recovered.encoding != "utf-8":
-        logger.info(
-            "stage1_charset_recovered",
-            filename=filename,
-            encoding=recovered.encoding,
-            detector_label=detect_charset(content),
-            byte_length=len(content),
-            char_length=len(recovered.text),
-            languages=list(languages),
-        )
-    return _screen_text(recovered.text, filename=filename), recovered.encoding
-
-
-def _screen_text(text: str, *, filename: str) -> str:
-    """Run the content half of the text pipeline and return NFC for storage.
-
-    Split out of :func:`_run_text_content_checks` so the document conveyor can
-    reuse it: a docx has no charset to gate and no bytes to decode -- its text
-    arrives already decoded from the extractor -- but everything from NFKC on
-    applies to it exactly as it does to a ``.py`` file. Duplicating these four
-    steps for documents would have been a second place to forget the unicode
-    reject.
-    """
-    nfkc_text = nfkc_for_security(text)
-    # DD-SP-E: a single leading U+FEFF is a legitimate UTF-8 byte-order mark
-    # (the common source is a Google Docs "export as plain text", which
-    # prepends one), not an in-text zero-width obfuscation attempt. Strip
-    # exactly one leading BOM at the input to the unicode hard-reject so a
-    # benign encoding mark does not falsely reject the upload; in-text
-    # zero-width characters are still rejected by check_text_unicode_safety.
-    if nfkc_text.startswith("\ufeff"):
-        nfkc_text = nfkc_text[1:]
-    check_text_unicode_safety(nfkc_text)
-
-    matched = match_text(nfkc_text)
-    if matched is not None:
-        raise SecurityRejectedError(
-            ErrorCategory.PROMPT_INJECTION,
-            (f"matched pattern category {matched.category!r} in {filename!r}"),
-        )
-
-    return nfc_for_storage(text)
+def _screen_name(arcname: str, *, mode: ScreenMode) -> tuple[ScreenFlag, ...]:
+    """A member's name through the same screen as its text (task 11)."""
+    screened: ScreenedText = screen_text(arcname, name=arcname, mode=mode, where="name")
+    return screened.flags

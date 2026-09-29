@@ -14,11 +14,20 @@ Interface:
     * :func:`assemble_submission_text` — a finished Stage 1 result in, the text
       the Mentor reads plus the entries it will not see out. Raises
       ``SecurityRejectedError`` when nothing survives the reading budget.
+    * :class:`DoorReading` — what the doors read, as both bodies carry it on:
+      the text, what was not opened, how the file was read, and what the
+      signal screen noticed (task 11). :func:`carry_door_reading` puts the
+      last three onto the Stage 2 verdict, where the read path finds them.
+    * :func:`screen_student_note` — the comment through the one text screen,
+      for its flags (task 11, decision 10).
+    * :func:`persist_door_refusal` — the one shape a refusal at the doors is
+      stored in, for a refusal found after Stage 1's own ``try``.
 
-    Neither takes a session, touches the network, or knows which body called
-    it. :func:`extract_document_text` is pure; :func:`assemble_submission_text`
-    is pure apart from reading the ladder configuration and the model registry
-    for the text budget (``submission_text_budget_chars``, cached per process).
+    None but the last takes a session, touches the network, or knows which
+    body called it. :func:`extract_document_text` is pure;
+    :func:`assemble_submission_text` is pure apart from reading the ladder
+    configuration and the model registry for the text budget
+    (``submission_text_budget_chars``, cached per process).
 
 Extending:
     A new shape coming out of Stage 1 is a branch in
@@ -28,13 +37,96 @@ Extending:
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 
-    from course_supporter.security.schemas import NotOpenedEntry
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from course_supporter.security.exceptions import SecurityRejectedError
+    from course_supporter.security.schemas import SafetyResult
     from course_supporter.security.stage1 import Stage1Result
+    from course_supporter.storage.homework_repository import HomeworkRepository
+
+STUDENT_NOTE_SOURCE = "student_note"
+"""The ``source`` of a flag found in the student's comment."""
+
+
+@dataclass(frozen=True, slots=True)
+class DoorReading:
+    """What the doors read out of one submission, for every stage after them.
+
+    Attributes:
+        text: What the models read -- the reviewer, the attempt classifier
+            and Stage 2 alike. Never carries a flag.
+        not_opened: What was named and not read, with the reason.
+        recovered_encoding: How a single text file was read; ``None`` when the
+            question does not apply (archive, document, project, test).
+        flags: What the signal screen noticed -- in the files, their names and
+            the comment. For Stage 2 and the trace only (task 11, decision 2).
+    """
+
+    text: str
+    not_opened: tuple[NotOpenedEntry, ...] = ()
+    recovered_encoding: str | None = None
+    flags: tuple[ScreenFlag, ...] = ()
+
+
+def carry_door_reading(verdict: SafetyResult, reading: DoorReading) -> None:
+    """Put what the doors know onto the Stage 2 verdict before it is stored.
+
+    The verdict's column is what the read path reads, so a submission that
+    PASSES must still carry which files were skipped, how its file was read,
+    and -- for the author and support, never the student -- what the screen
+    noticed, capped in a stable order.
+    """
+    from course_supporter.security.text_screen import trail_flags
+
+    verdict.not_opened = list(reading.not_opened)
+    verdict.recovered_encoding = reading.recovered_encoding
+    verdict.flags, verdict.flags_omitted = trail_flags(reading.flags)
+
+
+def screen_student_note(note: str | None) -> tuple[ScreenFlag, ...]:
+    """The comment's flags, from the same screen and mode as the files.
+
+    The door already screened the comment and stored it in NFC
+    (``submission_core.check_student_note``), and stored nothing else: the door
+    is synchronous in the API and the flags are wanted in the worker. The
+    screen is deterministic and free, so it simply runs again here.
+
+    Raises:
+        SecurityRejectedError: ``SUSPICIOUS_UNICODE`` for a comment stored
+            before the door screened comments -- the characters that refuse a
+            file refuse the submission too.
+    """
+    from course_supporter.security.policies import HOMEWORK_POLICY
+    from course_supporter.security.text_screen import screen_text
+
+    if not note:
+        return ()
+    return screen_text(
+        note, name=STUDENT_NOTE_SOURCE, mode=HOMEWORK_POLICY.text_screen_mode
+    ).flags
+
+
+async def persist_door_refusal(
+    session: AsyncSession,
+    hw_repo: HomeworkRepository,
+    submission_id: uuid.UUID,
+    exc: SecurityRejectedError,
+) -> None:
+    """Store a refusal at the doors the way Stage 1's own refusal is stored."""
+    from course_supporter.security.schemas import Stage1RejectionResult
+
+    rejection = Stage1RejectionResult(category=exc.category, detail=exc.detail)
+    await hw_repo.store_safety_result(submission_id, rejection.model_dump(mode="json"))
+    await hw_repo.update_status(submission_id, "rejected", error_message=exc.detail)
+    await session.commit()
 
 
 def extract_document_text(raw: bytes) -> str | None:
@@ -103,10 +195,10 @@ def assemble_submission_text(
         ensure_single_file_fits(body, filename=filename, budget_chars=budget)
         not_opened = result.not_opened
 
-    return body + _not_opened_block(not_opened), not_opened
+    return body + not_opened_block(not_opened), not_opened
 
 
-def _not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
+def not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
     """Render the tail block naming the archive members that were not read.
 
     Appended to ``submission_text`` so the Mentor cannot rest a review on a

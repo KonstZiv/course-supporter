@@ -47,6 +47,7 @@ from course_supporter.security.archive import (
     EntryVerdict,
     extract_archive_safely,
 )
+from course_supporter.security.policies import is_secret_file_name
 from course_supporter.storage.content_hash import compute_raw_hash
 
 _MANIFEST_SCHEMA: Final[int] = 1
@@ -69,10 +70,10 @@ def normalize_archive(
 
     Pipeline: sandbox-unpack (classify mode, level-1 unpack-guard from
     ``limits``) -> canonicalize paths -> collapse denylist directories ->
-    map each survivor verdict (INCLUDED / FORBIDDEN_TYPE -> kept manifest
-    entry via ``classifier``; MAGIC_MISMATCH / NESTED_ARCHIVE -> excluded
-    row) -> enforce the level-2 content cap -> aggregate hash + canonical
-    zip.
+    map each survivor verdict (a secret-bearing name -> excluded row first;
+    INCLUDED / FORBIDDEN_TYPE -> kept manifest entry via ``classifier``;
+    MAGIC_MISMATCH / NESTED_ARCHIVE -> excluded row) -> enforce the level-2
+    content cap -> aggregate hash + canonical zip.
 
     Args:
         raw: Raw archive bytes (contract: a real project archive; the
@@ -138,6 +139,20 @@ def normalize_archive(
     excluded_other: list[ExcludedEntry] = []
     for path, entry in survivors:
         verdict = entry.verdict
+        if is_secret_file_name(path):
+            # Before any verdict: a file that may hold a secret is never kept,
+            # whatever its extension or content (task 11, decision 6). The
+            # same rule for a base and a submission, so a delta never reads
+            # "the student deleted .env" for a file neither side stores.
+            excluded_other.append(
+                ExcludedEntry(
+                    path=path,
+                    reason=ExcludedReason.MAY_CONTAIN_SECRETS,
+                    entries=1,
+                    size=entry.declared_size,
+                )
+            )
+            continue
         if verdict is EntryVerdict.INCLUDED or verdict is EntryVerdict.FORBIDDEN_TYPE:
             # Both are kept: INCLUDED -> text/document by the classifier;
             # FORBIDDEN_TYPE (ext outside KNOWN_EXTENSIONS) -> binary.

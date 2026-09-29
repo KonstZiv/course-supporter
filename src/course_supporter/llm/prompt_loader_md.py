@@ -36,6 +36,15 @@ Parsing and rendering are split deliberately:
   Jinja2-rendered fields. ``None`` fields stay ``None``; empty
   strings stay empty.
 
+Slot lock (task 11, decision 8). A prompt holds untrusted text in data slots
+-- a tag alone on its line, ``<submission>`` … ``</submission>``. No value
+rendered into a template may open or close one of THAT template's slots: every
+``{{ … }}`` output is finalised through :func:`lock_slots`, which turns the
+``<`` of such a tag into ``&lt;``. One place, so both roads and every stage
+get it; the values themselves are never touched (only the rendered copy), and
+JSON from ``tojson_unicode`` arrives with ``<`` already escaped, so it passes
+through unchanged rather than being converted twice.
+
 Coexists with the legacy :mod:`course_supporter.agents.prompt_loader`
 (YAML-based, different package); that loader is retired together with the
 legacy router — undated, tracked as DD-3.2.3-pre-A.
@@ -46,7 +55,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -84,12 +95,59 @@ def _tojson_unicode(value: Any) -> str:
     return prompt_json(value, sort_keys=True)
 
 
+# A data slot is a tag ALONE on its line: ``<submission>`` opening it and
+# ``</submission>`` closing it. The instructions of a prompt name their slots
+# in running text (``between the `<submission>` tags``); those mentions are not
+# on a line of their own, so they are never taken for a slot.
+_SLOT_OPEN = re.compile(r"^[ \t]*<([A-Za-z_][\w-]*)>[ \t]*$", re.MULTILINE)
+_SLOT_CLOSE = re.compile(r"^[ \t]*</([A-Za-z_][\w-]*)>[ \t]*$", re.MULTILINE)
+
+
+def slot_names(*templates: str | None) -> frozenset[str]:
+    """The data slots of a prompt: tags opened AND closed alone on a line."""
+    text = "\n".join(t for t in templates if t)
+    opened = set(_SLOT_OPEN.findall(text))
+    closed = set(_SLOT_CLOSE.findall(text))
+    return frozenset(opened & closed)
+
+
+def lock_slots(text: str, slots: frozenset[str]) -> str:
+    """Neutralise every opening or closing tag of ``slots`` inside ``text``.
+
+    ``</submission>`` becomes ``&lt;/submission>`` -- still readable, no longer
+    a tag. Case and inner whitespace are matched too (``< / Submission >``),
+    since a model reads those as the same tag.
+    """
+    if not slots or "<" not in text:
+        return text
+    return _slot_pattern(slots).sub(lambda m: "&lt;" + m.group(0)[1:], text)
+
+
+@lru_cache(maxsize=64)
+def _slot_pattern(slots: frozenset[str]) -> re.Pattern[str]:
+    names = "|".join(re.escape(name) for name in sorted(slots))
+    return re.compile(rf"<\s*/?\s*(?:{names})(?![\w-])", re.IGNORECASE)
+
+
+def _finalizer(slots: frozenset[str]) -> Callable[[Any], Any]:
+    def finalize(value: Any) -> Any:
+        return lock_slots(value, slots) if isinstance(value, str) else value
+
+    return finalize
+
+
 # Same options as a bare ``Template(text, undefined=StrictUndefined)``,
-# plus the opt-in filter above. ``from_string`` compiles each call's
-# template anew, so nothing but the filter table is shared. Prompts are
-# plain text for a model, not HTML, so autoescape stays off as before.
-_JINJA_ENV = Environment(undefined=StrictUndefined)  # noqa: S701
-_JINJA_ENV.filters["tojson_unicode"] = _tojson_unicode
+# plus the opt-in filter above and the slot lock. ``from_string`` compiles
+# each call's template anew, so nothing but the filter table and the
+# finaliser is shared. Prompts are plain text for a model, not HTML, so
+# autoescape stays off as before.
+@lru_cache(maxsize=64)
+def _jinja_env(slots: frozenset[str]) -> Environment:
+    env = Environment(  # noqa: S701
+        undefined=StrictUndefined, finalize=_finalizer(slots)
+    )
+    env.filters["tojson_unicode"] = _tojson_unicode
+    return env
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,15 +177,20 @@ class StagePrompt:
             rendered text. ``None`` fields stay ``None``; empty
             strings stay empty.
 
+        Every ``{{ … }}`` output is slot-locked against the slots of the
+        whole prompt (all three sections): a value may not open or close
+        any of them (module docstring).
+
         Raises:
             jinja2.UndefinedError: if a template references a
                 variable absent from ``context`` (StrictUndefined).
         """
+        env = _jinja_env(slot_names(self.system, self.user, self.assistant))
         return replace(
             self,
-            system=_render(self.system, context),
-            user=_render(self.user, context),
-            assistant=_render(self.assistant, context),
+            system=_render(env, self.system, context),
+            user=_render(env, self.user, context),
+            assistant=_render(env, self.assistant, context),
         )
 
     def content_hash(self) -> str:
@@ -151,7 +214,7 @@ class StagePrompt:
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _render(text: str | None, context: dict[str, Any]) -> str | None:
+def _render(env: Environment, text: str | None, context: dict[str, Any]) -> str | None:
     """Render a single section's template.
 
     Returns the input unchanged when there is nothing to render
@@ -160,7 +223,7 @@ def _render(text: str | None, context: dict[str, Any]) -> str | None:
     """
     if not text:
         return text
-    return _JINJA_ENV.from_string(text).render(**context)
+    return env.from_string(text).render(**context)
 
 
 def load_prompt(

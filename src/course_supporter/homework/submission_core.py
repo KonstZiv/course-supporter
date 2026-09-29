@@ -51,7 +51,8 @@ from course_supporter.enqueue import create_homework_job, dispatch_homework
 from course_supporter.homework.test_doors import check_test_answers, stored_answers
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.security.policies import HOMEWORK_POLICY
-from course_supporter.security.stage1 import archive_kind_for_filename, screen_text
+from course_supporter.security.stage1 import archive_kind_for_filename
+from course_supporter.security.text_screen import screen_text
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import upload_file_chunks
@@ -107,9 +108,10 @@ STUDENT_NOTE_TOO_LONG = "STUDENT_NOTE_TOO_LONG"
 """The comment is longer than :data:`STUDENT_NOTE_MAX_CHARS` (422)."""
 
 STUDENT_NOTE_REJECTED = "STUDENT_NOTE_REJECTED"
-"""A text screen of Stage 1 refused the comment (422); ``details`` opens with
-the screen's category — ``suspicious_unicode``, ``prompt_injection`` or
-``charset_violation``."""
+"""The text screen refused the comment (422); ``details`` opens with the
+screen's category — ``suspicious_unicode`` (direction overrides, tag or
+control characters) or ``charset_violation``. A phrase addressed to a model
+is not refused here: it is a flag for Stage 2 (task 11)."""
 
 
 def _door_refusal(code: ErrorCategory, details: str) -> dict[str, str]:
@@ -176,12 +178,16 @@ def check_student_note(student_note: str | None) -> str | None:
     """Refuse a comment the review cannot take; return it as it is stored (hotfix 6).
 
     The comment reaches the paid prompt of the review as it was written, so
-    it meets what the texts of a test written in the system meet: a length,
-    and the text screens of Stage 1
-    (:func:`~course_supporter.security.stage1.screen_text`) — hidden or
-    look-alike characters, an attempt to steer the model. Both
-    submissions call this before their first write, so a refused comment
-    leaves no submission, no stored file, no job and no student behind.
+    it meets a length and the one text screen
+    (:func:`~course_supporter.security.text_screen.screen_text`) in the mode
+    every text a student writes meets (task 11, decision 1): ``signal``. The
+    characters no legitimate text carries — direction overrides, tag and
+    control characters — refuse it; a phrase addressed to a model or a
+    zero-width character is only noticed, and the worker screens the stored
+    comment again for those flags (``doors.screen_student_note``) and shows it
+    to Stage 2 as its own block. Both submissions call this before their
+    first write, so a refused comment leaves no submission, no stored file,
+    no job and no student behind.
 
     Line breaks are brought to ``\\n`` before anything is counted: a browser
     sends every line break of a multipart field as ``\\r\\n``, so counting them
@@ -219,10 +225,11 @@ def check_student_note(student_note: str | None) -> str | None:
         # carry: ``surrogatepass`` turns it into bytes that are not UTF-8, and
         # the screen refuses them rather than the encoder failing with a 500.
         screened = screen_text(
+            note.encode("utf-8", "surrogatepass"),
             name="student_note",
-            content=note.encode("utf-8", "surrogatepass"),
+            mode=HOMEWORK_POLICY.text_screen_mode,
             context="homework",
-        )
+        ).text
     except SecurityRejectedError as exc:
         raise HTTPException(
             status_code=422,
@@ -230,8 +237,8 @@ def check_student_note(student_note: str | None) -> str | None:
                 "code": STUDENT_NOTE_REJECTED,
                 "details": (
                     f"{exc.category.value}: the comment did not pass a text "
-                    f"check. Remove hidden characters and instructions addressed "
-                    f"to the reviewing system, then submit again."
+                    f"check. Remove direction-changing, tag or control characters, "
+                    f"then submit again."
                 ),
             },
         ) from exc

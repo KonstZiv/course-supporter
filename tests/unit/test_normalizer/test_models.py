@@ -38,6 +38,7 @@ class TestEnumsExhaustive:
             "denylist_dir",
             "magic_mismatch",
             "nested_archive",
+            "may_contain_secrets",
         }
 
     def test_strenum_str_identity(self) -> None:

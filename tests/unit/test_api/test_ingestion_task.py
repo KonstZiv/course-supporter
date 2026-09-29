@@ -802,16 +802,16 @@ class TestNotOpenedBlock:
     """
 
     def test_empty_when_nothing_was_set_aside(self) -> None:
-        from course_supporter.homework.doors import _not_opened_block
+        from course_supporter.homework.doors import not_opened_block
 
-        assert _not_opened_block(()) == ""
+        assert not_opened_block(()) == ""
 
     def test_names_each_entry_with_reason_and_size(self) -> None:
-        from course_supporter.homework.doors import _not_opened_block
+        from course_supporter.homework.doors import not_opened_block
         from course_supporter.security.exceptions import ErrorCategory
         from course_supporter.security.schemas import NotOpenedEntry
 
-        block = _not_opened_block(
+        block = not_opened_block(
             (
                 NotOpenedEntry(
                     arcname="assets/logo.png",
@@ -833,11 +833,11 @@ class TestNotOpenedBlock:
         # The body uses ``--- name ---`` per file. If the block reused that
         # frame the model could read the skipped names as more work to grade,
         # which is the opposite of the point.
-        from course_supporter.homework.doors import _not_opened_block
+        from course_supporter.homework.doors import not_opened_block
         from course_supporter.security.exceptions import ErrorCategory
         from course_supporter.security.schemas import NotOpenedEntry
 
-        block = _not_opened_block(
+        block = not_opened_block(
             (
                 NotOpenedEntry(
                     arcname="a.bin", reason=ErrorCategory.MAGIC_MISMATCH, size=1

@@ -51,13 +51,15 @@ parses; downstream business policy lives elsewhere.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from pydantic import ValidationError
 
 from course_supporter.security.exceptions import SafetyValidationError
-from course_supporter.security.schemas import SafetyResult
+from course_supporter.security.schemas import SafetyResult, ScreenFlag
+from course_supporter.security.text_screen import render_flags_for_stage2
 from course_supporter.service_logging import get_current_job_id
 
 if TYPE_CHECKING:
@@ -81,6 +83,8 @@ async def run_stage2_safety_check(
     course_context: CourseContext | None = None,
     content_kind: Literal["homework", "authored"] = "homework",
     execution: StageExecution | None = None,
+    screen_flags: Sequence[ScreenFlag] = (),
+    student_note: str | None = None,
 ) -> SafetyResult:
     """Execute the ``safety_check`` stage and parse the verdict.
 
@@ -121,6 +125,16 @@ async def run_stage2_safety_check(
             advertising / branding / external links are NOT violations
             and ``off_topic`` is high-bar (Phase 2.3 hotfix). Verdict
             shape and parsing are identical for both.
+        screen_flags: What the signal screen of Stage 1 noticed in the
+            student's text, the file names and the comment (task 11,
+            decision 2). Rendered as a separate labelled block -- location
+            and category, never the fragment -- that the classifier reads as
+            a hint and not a verdict. Never part of ``submission_text``, so
+            the review downstream never sees it.
+        student_note: The student's comment to the submission, as stored
+            (task 11, decision 10). A separate labelled block of the input:
+            it is untrusted text the review's synthesis will read, so the
+            classifier judges it too.
 
     Returns:
         Parsed :class:`SafetyResult` (typed Pydantic model). The
@@ -140,6 +154,8 @@ async def run_stage2_safety_check(
         "stage2.safety_check.start",
         text_length=len(submission_text),
         course_context_provided=course_context is not None,
+        screen_flags=len(screen_flags),
+        student_note_provided=bool(student_note),
         job_id=str(job_id) if job_id is not None else None,
     )
 
@@ -156,6 +172,8 @@ async def run_stage2_safety_check(
         "node_title": course_context.node_title if course_context else "",
         "node_description": (course_context.node_description if course_context else ""),
         "outline_summary": (course_context.outline_summary if course_context else ""),
+        "screening_signals": render_flags_for_stage2(screen_flags),
+        "student_note": student_note or "",
     }
 
     # Authored materials route to a higher-trust prompt (advertising /

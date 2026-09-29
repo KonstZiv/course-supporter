@@ -213,6 +213,8 @@ class TestPromptRender:
             node_title="",
             node_description="",
             outline_summary="",
+            screening_signals="",
+            student_note="",
         )
         assert rendered.user is not None
         assert "def fib(n): return n" in rendered.user
@@ -233,6 +235,8 @@ class TestPromptRender:
             node_title="Recursion",
             node_description="Learn about recursive functions",
             outline_summary="Functions, recursion, base cases",
+            screening_signals="",
+            student_note="",
         )
         assert rendered.user is not None
         assert "### Course context" in rendered.user

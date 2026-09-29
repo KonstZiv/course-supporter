@@ -13,8 +13,12 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.homework.doors import (
+    DoorReading,
     assemble_submission_text,
+    carry_door_reading,
     extract_document_text,
+    persist_door_refusal,
+    screen_student_note,
 )
 from course_supporter.ingestion.factory import (
     create_heavy_steps,
@@ -990,17 +994,30 @@ async def arq_process_homework(
                     and task_doc.task_type == AssignmentType.PROJECT.value
                 )
 
-                # Set aside by Stage 1's archive pass; empty for a project
-                # submission (its own normalizer reports exclusions) and for
-                # any non-archive single file.
+                # Set aside by Stage 1's archive pass or by the project's
+                # screen; empty for any non-archive single file.
                 not_opened: tuple[NotOpenedEntry, ...] = ()
+                # What the signal screen noticed in the files, their names and
+                # the comment -- for Stage 2 and the trace, never the review
+                # (task 11). The comment is screened first: its hard refusal
+                # is a refusal at the doors like any other.
+                try:
+                    door_flags = screen_student_note(submission.student_note)
+                except SecurityRejectedError as note_exc:
+                    await persist_door_refusal(session, hw_repo, sid, note_exc)
+                    log.warning(
+                        "homework_rejected_stage1",
+                        category=note_exc.category.value,
+                        detail=note_exc.detail,
+                    )
+                    return
                 # How the file was read. ``None`` for a project submission,
                 # which never goes through Stage 1, and for anything that
                 # decoded as UTF-8 without recovery.
                 stage1_recovered_encoding: str | None = None
 
                 if is_project:
-                    project_text = await process_project_submission(
+                    project = await process_project_submission(
                         session=session,
                         s3=s3,
                         hw_repo=hw_repo,
@@ -1009,13 +1026,16 @@ async def arq_process_homework(
                         jid=jid,
                         file_bytes=file_bytes,
                         raw_key=s3_key,
+                        languages=verify_languages,
                     )
-                    if project_text is None:
+                    if project is None:
                         # Fail-closed rejection persisted inside; the finally
                         # cleans the temp file. P4 will assemble the real Mentor
                         # delta context; here the interim text feeds safety.
                         return
-                    submission_text = project_text
+                    submission_text = project.text
+                    not_opened = project.not_opened
+                    door_flags = (*project.flags, *door_flags)
                 else:
                     # --- KD14 Stage 1 — synchronous validation ---
                     # HOMEWORK_POLICY caps at 1 MB so the in-memory read above is
@@ -1044,6 +1064,7 @@ async def arq_process_homework(
                             filename=(submission.original_filename or file_path.name),
                         )
                         stage1_recovered_encoding = stage1_result.recovered_encoding
+                        door_flags = (*stage1_result.flags, *door_flags)
                     except SecurityRejectedError as stage1_exc:
                         # Stage 1 rejection persists as Stage1RejectionResult
                         # (synthetic shape; ``source='stage1'`` discriminates from
@@ -1104,15 +1125,23 @@ async def arq_process_homework(
                     submission_text=submission_text,
                     router=stage_router,
                     course_context=course_ctx,
+                    screen_flags=door_flags,
+                    student_note=submission.student_note,
                 )
                 # Carried onto the persisted verdict because this column is
                 # what the read path reads: a submission that PASSES must
-                # still be able to tell the student which files were skipped.
-                safety_result.not_opened = list(not_opened)
-                # Same carry as ``not_opened`` directly above, for the same
-                # reason: Stage 1 knows how the file was read, and the read
-                # path is where that answer is needed.
-                safety_result.recovered_encoding = stage1_recovered_encoding
+                # still be able to tell the student which files were skipped
+                # and how the file was read -- and the trace keeps what the
+                # screen noticed, for the author and support.
+                carry_door_reading(
+                    safety_result,
+                    DoorReading(
+                        text=submission_text,
+                        not_opened=not_opened,
+                        recovered_encoding=stage1_recovered_encoding,
+                        flags=door_flags,
+                    ),
+                )
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )

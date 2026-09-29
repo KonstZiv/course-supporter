@@ -153,7 +153,8 @@ async def test_wiring_base_attached_passes_versions(
         raw_key="homework/t/sid/proj.zip",
     )
 
-    assert result == "RICH"
+    assert result is not None
+    assert result.text == "RICH"
     assert captured["base_version"] == 1
     assert captured["latest_version"] == 2
     assert captured["base_manifest"].included  # revived, non-empty base manifest
@@ -193,7 +194,8 @@ async def test_wiring_no_base_versions_none(monkeypatch: pytest.MonkeyPatch) -> 
         raw_key="homework/t/sid/proj.zip",
     )
 
-    assert result == "RICH"
+    assert result is not None
+    assert result.text == "RICH"
     assert captured["base_version"] is None
     assert captured["latest_version"] is None
     assert captured["base_manifest"] is _EMPTY_MANIFEST
@@ -239,7 +241,7 @@ async def _run_no_base(
     monkeypatch.setattr(mod, "project_context_budget_chars", lambda: budget)
     zip_bytes = _zip_bytes({"proj/README.md": b"hello world\n" * 200})
     hw_repo = _FakeHwRepo()
-    text = await process_project_submission(
+    reading = await process_project_submission(
         session=_FakeSession(),  # type: ignore[arg-type]
         s3=_FakeS3(),  # type: ignore[arg-type]
         hw_repo=hw_repo,  # type: ignore[arg-type]
@@ -249,7 +251,7 @@ async def _run_no_base(
         file_bytes=zip_bytes,
         raw_key="homework/t/s/proj.zip",
     )
-    return text, hw_repo
+    return (reading.text if reading is not None else None), hw_repo
 
 
 class TestOversizeGuard:

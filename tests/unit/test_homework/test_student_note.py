@@ -128,7 +128,6 @@ class TestTheScreens:
     @pytest.mark.parametrize(
         "hidden",
         [
-            pytest.param("\u200b", id="zero-width-space"),
             pytest.param("\u202e", id="right-to-left-override"),
             pytest.param("\U000e0041", id="tag-character"),
             pytest.param("\x07", id="bell"),
@@ -149,11 +148,23 @@ class TestTheScreens:
         ],
         ids=["ignore-instructions", "ukrainian", "reveal-prompt"],
     )
-    def test_an_attempt_to_steer_the_model_is_refused(self, steering: str) -> None:
-        detail = _refusal(f"Дякую за перевірку. {steering}")
+    def test_an_attempt_to_steer_the_model_is_taken_for_stage2(
+        self, steering: str
+    ) -> None:
+        """Task 11: a phrase is a flag for Stage 2, not a refusal at the door."""
+        note = f"Дякую за перевірку. {steering}"
 
-        assert detail["code"] == STUDENT_NOTE_REJECTED
-        assert detail["details"].startswith("prompt_injection: ")
+        assert check_student_note(note) == note
+
+    def test_a_zero_width_character_is_taken_for_stage2(self) -> None:
+        note = "Перевірте, будь ласка,\u200b функцію average."
+
+        assert check_student_note(note) == note
+
+    def test_a_composed_emoji_is_taken(self) -> None:
+        note = "Дякую! 👨‍💻"
+
+        assert check_student_note(note) == note
 
     def test_a_comment_with_code_is_taken_as_it_is(self) -> None:
         """The stop condition of the task: the screen must not refuse this."""

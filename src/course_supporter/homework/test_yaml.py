@@ -115,7 +115,8 @@ from course_supporter.homework.test_object import (
     DraftOption,
     DraftQuestion,
 )
-from course_supporter.security.stage1 import run_stage1, screen_text
+from course_supporter.security.stage1 import run_stage1
+from course_supporter.security.text_screen import screen_text
 
 __all__ = [
     "MAX_BODY_BYTES",
@@ -311,8 +312,12 @@ def load_test_yaml(
     languages = (language,) if language else ()
     if filename is None:
         text = screen_text(
-            name=_BODY_NAME, content=content, context="authored", languages=languages
-        )
+            content,
+            name=_BODY_NAME,
+            mode="strict",
+            languages=languages,
+            context="authored",
+        ).text
     else:
         screened = run_stage1(
             filename=filename,
@@ -451,10 +456,11 @@ def screen_texts(loaded: LoadedDraft, *, language: str | None) -> LoadedDraft:
         ),
     )
     screen_text(
+        "\n".join(_texts(normalized)).encode("utf-8"),
         name=_FIELDS_NAME,
-        content="\n".join(_texts(normalized)).encode("utf-8"),
-        context="authored",
+        mode="strict",
         languages=(language,) if language else (),
+        context="authored",
     )
     return normalized
 

@@ -237,7 +237,7 @@ class TestProcessProjectSubmissionDirect:
             async with session_factory() as session:
                 sub = await session.get(HomeworkSubmission, ids["submission_id"])
                 assert sub is not None
-                text = await process_project_submission(
+                reading = await process_project_submission(
                     session=session,
                     s3=s3_client,
                     hw_repo=HomeworkRepository(session),
@@ -247,7 +247,8 @@ class TestProcessProjectSubmissionDirect:
                     file_bytes=raw,
                     raw_key=raw_key,
                 )
-            assert text is not None
+            assert reading is not None
+            text = reading.text
             # No base → all-new rich context.
             assert "SYSTEM-COMPUTED metadata below, NOT student input." in text
             assert "No base project: the whole submission is new." in text
@@ -281,7 +282,7 @@ class TestProcessProjectSubmissionDirect:
             async with session_factory() as session:
                 sub = await session.get(HomeworkSubmission, ids["submission_id"])
                 assert sub is not None
-                text = await process_project_submission(
+                reading = await process_project_submission(
                     session=session,
                     s3=s3_client,
                     hw_repo=HomeworkRepository(session),
@@ -291,7 +292,7 @@ class TestProcessProjectSubmissionDirect:
                     file_bytes=b"this is not a zip" * 8,
                     raw_key=f"homework/{ids['tenant_id']}/{ids['submission_id']}/proj.zip",
                 )
-            assert text is None
+            assert reading is None
             async with session_factory() as session:
                 sub = await session.get(HomeworkSubmission, ids["submission_id"])
                 assert sub is not None
@@ -336,7 +337,7 @@ class TestProcessProjectSubmissionDirect:
                 async with session_factory() as session:
                     sub = await session.get(HomeworkSubmission, ids["submission_id"])
                     assert sub is not None
-                    text = await process_project_submission(
+                    reading = await process_project_submission(
                         session=session,
                         s3=s3_client,
                         hw_repo=HomeworkRepository(session),
@@ -353,7 +354,8 @@ class TestProcessProjectSubmissionDirect:
             assert delta_log["new"] == 1
             assert delta_log["deleted"] == 1
             # The rich context reflects the base delta.
-            assert text is not None
+            assert reading is not None
+            text = reading.text
             assert "type=CHANGED-FULL path=a.py" in text
             assert "type=NEW path=new.py" in text
             assert "DELETED (1): gone.py" in text

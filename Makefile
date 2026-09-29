@@ -50,12 +50,12 @@ db-reset:  ## Повний ресет: downgrade до base + upgrade до head
 
 # --- Infrastructure ---
 
-up:  ## Запустити інфраструктуру (PostgreSQL + MinIO)
+up:  ## Запустити інфраструктуру (PostgreSQL + SeaweedFS + Redis)
 	docker compose up -d
 	@echo "Waiting for services..."
 	@docker compose exec postgres pg_isready -U $${POSTGRES_USER:-course_supporter} > /dev/null 2>&1 && \
 		echo "PostgreSQL: ready" || echo "PostgreSQL: waiting..."
-	@echo "MinIO Console: http://localhost:9001"
+	@echo "S3 (SeaweedFS): http://localhost:9000"
 
 down:  ## Зупинити інфраструктуру
 	docker compose down
@@ -69,10 +69,10 @@ logs:  ## Показати логи сервісів
 ps:  ## Статус сервісів
 	docker compose ps
 
-doctor:  ## Pre-flight infra check (postgres/redis/minio up + alembic at head + pings)
+doctor:  ## Pre-flight infra check (postgres/redis/seaweedfs up + alembic at head + pings)
 	@fail=0; \
 	running=$$(docker compose ps --status=running --services 2>/dev/null); \
-	for svc in postgres redis minio; do \
+	for svc in postgres redis seaweedfs; do \
 		if echo "$$running" | grep -qw $$svc; then echo "$$svc: up"; \
 		else echo "$$svc: DOWN"; fail=1; fi; \
 	done; \
@@ -82,8 +82,8 @@ doctor:  ## Pre-flight infra check (postgres/redis/minio up + alembic at head + 
 	else echo "alembic: MISMATCH cur='$$cur' head='$$head'"; fail=1; fi; \
 	if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then echo "redis ping: PONG"; \
 	else echo "redis ping: FAIL"; fail=1; fi; \
-	if curl -fs http://localhost:9000/minio/health/live >/dev/null 2>&1; then echo "minio health: ok"; \
-	else echo "minio health: FAIL"; fail=1; fi; \
+	if [ "$$(docker inspect -f '{{.State.Health.Status}}' $$(docker compose ps -q seaweedfs) 2>/dev/null)" = healthy ]; then echo "seaweedfs health: ok (S3 up, bucket present)"; \
+	else echo "seaweedfs health: FAIL"; fail=1; fi; \
 	if [ $$fail -eq 0 ]; then echo "doctor: PASS"; else echo "doctor: FAIL"; fi; \
 	exit $$fail
 

@@ -1,7 +1,7 @@
 """Route tests for POST /api/v1/documents/{id}/base (KD18 P2).
 
 Full FastAPI request pipeline (auth + tenant + document ownership) against real
-PostgreSQL; S3 and ARQ are dependency-overridden mocks (the full real-MinIO +
+PostgreSQL; S3 and ARQ are dependency-overridden mocks (the full real-S3 +
 real-ARQ end-to-end is the commit-6 HTTP-live gesture). Covers: 202 happy path
 (pending version + enqueue), the task_type / archive-kind 422 gates, the
 streamed 413 size cap, and the IntegrityError → 409 collision mapping.

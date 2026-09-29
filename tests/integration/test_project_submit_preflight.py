@@ -1,7 +1,7 @@
 """Route tests for the KD18 P3 project-submit preflight (both modes).
 
 Full FastAPI request pipeline (auth + tenant + the real submit gates) against
-real PostgreSQL; S3 and ARQ are dependency-overridden mocks (the full real-MinIO
+real PostgreSQL; S3 and ARQ are dependency-overridden mocks (the full real-S3
 + real-ARQ end-to-end is the Commit-6 gesture). Covers the whole preflight
 decision table via live HTTP on ``POST /homework/submit`` (mode-1) — every
 reject is asserted to happen BEFORE the submission row is created (zero orphan) —

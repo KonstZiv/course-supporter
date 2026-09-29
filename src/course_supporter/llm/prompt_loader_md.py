@@ -52,10 +52,9 @@ from typing import Any
 
 import structlog
 from jinja2 import Environment, StrictUndefined
-from jinja2.utils import htmlsafe_json_dumps
-from markupsafe import Markup
 
 from course_supporter.llm.error_categories import InvalidPromptError
+from course_supporter.llm.prompt_json import prompt_json
 
 logger = structlog.get_logger()
 
@@ -72,18 +71,17 @@ _RECOGNISED_ROLES: frozenset[str] = frozenset({"system", "user", "assistant"})
 _warned_unknown_roles: set[tuple[str, str]] = set()
 
 
-def _tojson_unicode(value: Any, indent: int | None = None) -> Markup:
-    """``tojson`` that leaves non-ASCII letters as they are.
+def _tojson_unicode(value: Any) -> str:
+    """JSON for a prompt, by the rule of :func:`prompt_json`.
 
-    Jinja2's own ``tojson`` dumps with ``ensure_ascii=True``, so every
-    Cyrillic letter reaches the model as a six-char ``\\uXXXX`` escape.
-    This filter differs only in ``ensure_ascii=False``: ``sort_keys`` is
-    kept, and ``htmlsafe_json_dumps`` still escapes ``<``, ``>``, ``&``
-    and ``'``, so input text cannot close a data tag such as
-    ``</node_canonical>``. Templates opt in by name; ``tojson`` itself
-    is untouched, so templates that use it render exactly as before.
+    Letters, the apostrophe and ``&`` stay as they are; only ``<`` and
+    ``>`` are escaped. ``sort_keys=True`` and the default separators keep
+    the shape Jinja2's own ``tojson`` gave these templates. Jinja2's
+    ``tojson`` is untouched: it escapes every non-ASCII letter, and a test
+    keeps it out of ``prompts/``. Autoescape is off, so a plain ``str`` is
+    rendered as is.
     """
-    return htmlsafe_json_dumps(value, sort_keys=True, ensure_ascii=False, indent=indent)
+    return prompt_json(value, sort_keys=True)
 
 
 # Same options as a bare ``Template(text, undefined=StrictUndefined)``,

@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import bisect
 import itertools
-import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -55,6 +54,7 @@ from course_supporter.llm.error_categories import (
     LadderExhaustedError,
     StructuralRetryError,
 )
+from course_supporter.llm.prompt_json import prompt_json
 from course_supporter.models.source import ChunkType
 from course_supporter.service_logging import get_current_job_id
 
@@ -341,7 +341,7 @@ async def step_5_pass2a_mapping(
     words = stt.words
     total_word_count = len(words)
 
-    words_json = json.dumps(
+    words_json = prompt_json(
         [
             {"text": w.text, "start": w.start_ms / 1000.0, "end": w.end_ms / 1000.0}
             for w in words
@@ -629,8 +629,8 @@ async def _denoise_segment(
         content=raw_content,
         title=draft.title,
         description=draft.description,
-        main_concepts_json=json.dumps(draft.main_concepts, separators=(",", ":")),
-        secondary_concepts_json=json.dumps(
+        main_concepts_json=prompt_json(draft.main_concepts, separators=(",", ":")),
+        secondary_concepts_json=prompt_json(
             draft.secondary_concepts, separators=(",", ":")
         ),
     )

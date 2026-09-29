@@ -104,6 +104,7 @@ from course_supporter.ingestion.schemas import (
 )
 from course_supporter.language import display_name
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.llm.prompt_json import prompt_json
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -431,7 +432,7 @@ class AudioProcessor(MaterialProcessor):
             )
 
         total_word_count = len(words)
-        words_json = json.dumps(
+        words_json = prompt_json(
             [
                 {
                     "text": w.text,
@@ -648,8 +649,8 @@ class AudioProcessor(MaterialProcessor):
             content=raw_content,
             title=draft.title,
             description=draft.description,
-            main_concepts_json=json.dumps(draft.main_concepts, separators=(",", ":")),
-            secondary_concepts_json=json.dumps(
+            main_concepts_json=prompt_json(draft.main_concepts, separators=(",", ":")),
+            secondary_concepts_json=prompt_json(
                 draft.secondary_concepts, separators=(",", ":")
             ),
         )

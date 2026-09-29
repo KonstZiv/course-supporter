@@ -26,6 +26,14 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET: ${S3_BUCKET}
+      # Capacity is bounded by free disk, not by config:
+      # -volume.max=0 sizes the volume-slot count as free disk / volume size
+      # (the default 8 slots x 1 GB capped writes at ~1 GB once the filer's
+      # metadata log took its share). Growing one volume at a time (default 7)
+      # keeps the metadata log (/topics, unnamed collection) at one slot, so on
+      # a small disk it cannot take every slot before the bucket writes.
+      # 1 GB volumes keep the slot count > 0 even with a few GB free.
+      WEED_MASTER_VOLUME_GROWTH_COPY_1: "1"
     # On every start: write the S3 identity from S3_* (never AWS_*), start the
     # server, then create ${S3_BUCKET} if it is missing.
     entrypoint: ["/bin/sh", "-c"]
@@ -35,7 +43,7 @@ services:
         printf '{"identities":[{"name":"dev","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
           "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json
         weed server -dir=/data -ip=127.0.0.1 -ip.bind=0.0.0.0 \
-          -master.volumeSizeLimitMB=1024 \
+          -master.volumeSizeLimitMB=1024 -volume.max=0 \
           -s3 -s3.port=8333 -s3.config=/tmp/s3.json &
         pid=$$!
         trap 'kill -TERM $$pid' TERM INT

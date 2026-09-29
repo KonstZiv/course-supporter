@@ -17,23 +17,44 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
+  # S3-compatible storage for dev/tests (SeaweedFS: server + bucket init in one
+  # image, pulled without a registry login). Pinned by tag AND digest.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    # On every start: write the S3 identity from S3_* (never AWS_*), start the
+    # server, then create ${S3_BUCKET} if it is missing.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        printf '{"identities":[{"name":"dev","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
+          "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json
+        weed server -dir=/data -ip=127.0.0.1 -ip.bind=0.0.0.0 \
+          -master.volumeSizeLimitMB=1024 \
+          -s3 -s3.port=8333 -s3.config=/tmp/s3.json &
+        pid=$$!
+        trap 'kill -TERM $$pid' TERM INT
+        until echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1; do sleep 1; done
+        if ! echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 2>/dev/null | grep -qw "$$S3_BUCKET"; then
+          echo "s3.bucket.create -name $$S3_BUCKET" | weed shell -master=127.0.0.1:9333
+        fi
+        wait $$pid
     ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # Console UI
+      - "9000:8333"   # S3 API
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
+    # Healthy = S3 API answers AND the bucket exists (filer dir /buckets/<name>).
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz && wget -q -O /dev/null http://127.0.0.1:8888/buckets/$$S3_BUCKET/"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -49,19 +70,7 @@ services:
       timeout: 5s
       retries: 5
 
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY};
-      mc mb local/${S3_BUCKET} --ignore-existing;
-      exit 0;
-      "
-
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
+  seaweedfs_data:

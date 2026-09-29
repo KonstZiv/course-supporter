@@ -1,6 +1,6 @@
 """Live gesture: s3_cleanup_task through the L2 seam (F5 close / acceptance §4).
 
-Real MinIO + PostgreSQL. Seed a queued s3_cleanup Job (NULL subject, R2), upload
+Real S3 + PostgreSQL. Seed a queued s3_cleanup Job (NULL subject, R2), upload
 keys, run the wrapped task, and assert the seam drove the row to ``complete``
 with the delete result on ``Job.result_data`` — the F5 fix (before L2 the
 s3_cleanup row never moved out of ``queued``).

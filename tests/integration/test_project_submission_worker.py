@@ -1,11 +1,12 @@
 """Integration tests for the KD18 P4 worker project-branch.
 
-Live infra (``docker compose up -d`` — PostgreSQL + MinIO + Redis), zero mocks
+Live infra (``docker compose up -d`` — PostgreSQL + S3-compatible storage + Redis;
+in dev the storage is SeaweedFS from docker-compose), zero mocks
 on the critical path (only the safety / sanity / review LLM stages are stubbed):
 
-* ``process_project_submission`` directly, with REAL MinIO — the normalize → S3
+* ``process_project_submission`` directly, with REAL S3 — the normalize → S3
   snapshot → persist → delta path, the fail-closed rejection, and the base
-  round-trip (base snapshot fetched from MinIO to build the rich context).
+  round-trip (base snapshot fetched from S3 to build the rich context).
 * the full ``arq_process_homework`` on a project submission through the real
   worker + real S3, proving the rich Mentor delta context reaches
   safety → sanity → review UNCHANGED (G2) and the run completes. The acceptance
@@ -110,7 +111,7 @@ async def _seed(
     """Tenant + node + project task + student + submission + job. Optionally a
     READY base (with a manifest + snapshot_key) linked via base_id.
 
-    ``file_url`` overrides the submission URL (a real path-style MinIO URL so the
+    ``file_url`` overrides the submission URL (a real path-style S3 URL so the
     worker's ``extract_key`` / ``download_file`` resolve it). ``job_status``
     mirrors the worker precondition: a direct ``process_project_submission`` call
     that hits the rejection path (job → ``complete``) must seed ``active``."""
@@ -218,7 +219,7 @@ async def _s3_purge(s3_client: S3Client, *keys: str | None) -> None:
                 await s3_client.delete_object(key)
 
 
-# ── direct process_project_submission (real MinIO) ─────────────────────────
+# ── direct process_project_submission (real S3) ────────────────────────────
 
 
 class TestProcessProjectSubmissionDirect:
@@ -313,7 +314,7 @@ class TestProcessProjectSubmissionDirect:
     ) -> None:
         # Base has a.py + gone.py; submission changes a.py, adds new.py, drops
         # gone.py → changed=1, new=1, deleted=1. The base snapshot must live in
-        # MinIO — the worker fetches it to build the rich context.
+        # S3 — the worker fetches it to build the rich context.
         base_snap = normalize_archive(
             _project_zip({"a.py": b"a = 1\n", "gone.py": b"g = 0\n"}),
             archive_kind="zip",

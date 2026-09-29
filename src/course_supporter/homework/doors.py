@@ -104,11 +104,14 @@ def screen_student_note(note: str | None) -> tuple[ScreenFlag, ...]:
             before the door screened comments -- the characters that refuse a
             file refuse the submission too.
     """
+    from course_supporter.security.policies import HOMEWORK_POLICY
     from course_supporter.security.text_screen import screen_text
 
     if not note:
         return ()
-    return screen_text(note, name=STUDENT_NOTE_SOURCE, mode="signal").flags
+    return screen_text(
+        note, name=STUDENT_NOTE_SOURCE, mode=HOMEWORK_POLICY.text_screen_mode
+    ).flags
 
 
 async def persist_door_refusal(

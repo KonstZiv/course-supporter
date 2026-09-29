@@ -227,7 +227,7 @@ def check_student_note(student_note: str | None) -> str | None:
         screened = screen_text(
             note.encode("utf-8", "surrogatepass"),
             name="student_note",
-            mode="signal",
+            mode=HOMEWORK_POLICY.text_screen_mode,
             context="homework",
         ).text
     except SecurityRejectedError as exc:

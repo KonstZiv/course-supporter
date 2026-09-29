@@ -64,6 +64,7 @@ from course_supporter.security.exceptions import (
     ErrorCategory,
     SecurityRejectedError,
 )
+from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 from course_supporter.security.stage1 import archive_kind_for_filename
 from course_supporter.security.text_screen import screen_text
@@ -79,6 +80,9 @@ if TYPE_CHECKING:
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
+
+# A project is the student's text: the mode their policy names (task 11).
+_MODE: Final = HOMEWORK_POLICY.text_screen_mode
 
 # An empty base manifest — the "no base attached" case. compute_delta against it
 # yields every submission path as "new" (KD18: base absent → delta "all new").
@@ -322,7 +326,7 @@ def _screen_snapshot(
                 content = raw
             try:
                 screened = screen_text(
-                    content, name=entry.path, mode="signal", languages=languages
+                    content, name=entry.path, mode=_MODE, languages=languages
                 )
             except SecurityRejectedError as exc:
                 if exc.category is not ErrorCategory.CHARSET_VIOLATION:
@@ -355,7 +359,7 @@ def _screen_snapshot(
 
 
 def _name_flags(path: str) -> tuple[ScreenFlag, ...]:
-    return screen_text(path, name=path, mode="signal", where="name").flags
+    return screen_text(path, name=path, mode=_MODE, where="name").flags
 
 
 def _grouped(n: int) -> str:

@@ -59,4 +59,10 @@ need files from it, copy them out while MinIO still runs (e.g.
 make check                     # ruff + mypy + pytest (full check)
 make all                       # format + full check
 uv run pytest -k "test_name"   # run single test
+uv run pytest --run-db --run-redis   # + integration tests (docker compose up -d)
 ```
+
+Redis integration tests use their own database on the same Redis — `15` by
+default, set with `TEST_REDIS_DB` — and empty it before and after each test;
+they refuse to run if it is the app's database (`REDIS_URL`), so a local worker
+never picks up test jobs.

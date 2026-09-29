@@ -33,6 +33,7 @@ from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSummaryDraft
 from course_supporter.models.source import SourceType
 from course_supporter.service_logging import set_job_from_arq
+from tests._helpers.redis_isolation import redis_test_settings
 
 if TYPE_CHECKING:
     from course_supporter.storage.orm import AuthoredDocument
@@ -69,13 +70,12 @@ async def test_audio_smoke_real_stt_real_llm() -> None:
     Pydantic schema regressions invisible to AsyncMock-driven tests.
     """
     from arq import create_pool
-    from arq.connections import RedisSettings
 
     from course_supporter.stt.setup import create_stt_router
     from tests._helpers.stage_router import build_stage_router
 
     settings = get_settings()
-    redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    redis = await create_pool(redis_test_settings())
 
     # session_factory is required by create_stt_router; smoke does not
     # exercise DB IO so a minimal stand-in is acceptable.

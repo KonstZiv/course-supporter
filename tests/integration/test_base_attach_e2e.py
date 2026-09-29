@@ -22,7 +22,7 @@ from collections.abc import AsyncGenerator, Generator
 from typing import Any, cast
 
 import pytest
-from arq.connections import ArqRedis, RedisSettings
+from arq.connections import ArqRedis
 from arq.constants import default_queue_name
 from arq.typing import WorkerCoroutine
 from arq.worker import Worker
@@ -41,6 +41,7 @@ from course_supporter.storage.project_base_repository import ProjectBaseReposito
 from course_supporter.storage.s3 import S3Client
 from course_supporter.workers.base_normalize import base_normalize_task
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.redis_isolation import redis_test_settings
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
@@ -159,7 +160,7 @@ async def _drain_base_normalize(
         # The seam types the task as returning an Awaitable; arq asks for a
         # coroutine function, which is what the task is at run time.
         functions=[cast(WorkerCoroutine, base_normalize_task)],
-        redis_settings=RedisSettings.from_dsn(get_settings().redis_url),
+        redis_settings=redis_test_settings(),
         ctx={"s3_client": s3_client, "session_factory": session_factory},
         burst=True,
         handle_signals=False,

@@ -51,7 +51,9 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from jinja2 import StrictUndefined, Template
+from jinja2 import Environment, StrictUndefined
+from jinja2.utils import htmlsafe_json_dumps
+from markupsafe import Markup
 
 from course_supporter.llm.error_categories import InvalidPromptError
 
@@ -68,6 +70,28 @@ _RECOGNISED_ROLES: frozenset[str] = frozenset({"system", "user", "assistant"})
 # detection benefit. Cleared on process restart, which is fine
 # because prompt files are static between deploys (KD16).
 _warned_unknown_roles: set[tuple[str, str]] = set()
+
+
+def _tojson_unicode(value: Any, indent: int | None = None) -> Markup:
+    """``tojson`` that leaves non-ASCII letters as they are.
+
+    Jinja2's own ``tojson`` dumps with ``ensure_ascii=True``, so every
+    Cyrillic letter reaches the model as a six-char ``\\uXXXX`` escape.
+    This filter differs only in ``ensure_ascii=False``: ``sort_keys`` is
+    kept, and ``htmlsafe_json_dumps`` still escapes ``<``, ``>``, ``&``
+    and ``'``, so input text cannot close a data tag such as
+    ``</node_canonical>``. Templates opt in by name; ``tojson`` itself
+    is untouched, so templates that use it render exactly as before.
+    """
+    return htmlsafe_json_dumps(value, sort_keys=True, ensure_ascii=False, indent=indent)
+
+
+# Same options as a bare ``Template(text, undefined=StrictUndefined)``,
+# plus the opt-in filter above. ``from_string`` compiles each call's
+# template anew, so nothing but the filter table is shared. Prompts are
+# plain text for a model, not HTML, so autoescape stays off as before.
+_JINJA_ENV = Environment(undefined=StrictUndefined)  # noqa: S701
+_JINJA_ENV.filters["tojson_unicode"] = _tojson_unicode
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +162,7 @@ def _render(text: str | None, context: dict[str, Any]) -> str | None:
     """
     if not text:
         return text
-    # Per the loader docstring: a fresh Template per call avoids
-    # shared-environment leakage between unrelated prompts.
-    return Template(text, undefined=StrictUndefined).render(**context)
+    return _JINJA_ENV.from_string(text).render(**context)
 
 
 def load_prompt(

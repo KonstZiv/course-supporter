@@ -45,7 +45,11 @@ _PASS_2A_REFS = [
 def _render_kwargs_for(prompt_ref: str, *, language: str | None) -> dict[str, object]:
     """Minimal render context for each prompt (besides ``language``)."""
     if prompt_ref == "pass_2a_mapping/v1.md":
-        return {"text": "sample document body", "language": language}
+        return {
+            "text": "1| sample document body",
+            "line_count": 1,
+            "language": language,
+        }
     if prompt_ref == "audio_pass_2a_mapping/v1.md":
         return {
             "words_count": 5,

@@ -29,8 +29,8 @@ _REGISTRY_FILE = Path("config/external_services.yaml")
 # here is a conscious recalibration of the new path, not of today's Mentor.
 _COPIED_RUNGS = [
     ("mistral", "mistral-small-latest", None),
-    ("deepseek", "deepseek-v4-flash", 8192),
-    ("gemini", "gemini-2.5-flash", None),
+    ("deepseek", "deepseek-flash", 8192),
+    ("gemini", "gemini-3.5-flash-lite", None),
 ]
 
 

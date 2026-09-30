@@ -52,23 +52,31 @@
 #      notice or a throttling pattern; verified shortlist for that day
 #      (registry rates 2026-07-26): gemini-3.6-flash,
 #      gemini-3.5-flash-lite.
-#   3. gemini/gemini-2.5-flash — fallback 2 / deep tier.
-#      Spike v2: $0.00164/slide, 5.25s latency. Cross-source-type
-#      reuse with Phase 2.2 audio Pass 2a precedent (KD-2.3-X
-#      opportunistic, not default — empirical fit confirmed by spike).
+#   3. mistral/mistral-small-latest — fallback 2 (2026-09-30; was
+#      gemini/gemini-2.5-flash, which answers our key 404 "no longer
+#      available to new users"). Vision-capable, a third provider. Not
+#      calibrated on slides; the OpenAI-compatible connector labels
+#      every image ``image/jpeg`` while slides are PNG — the live check
+#      after deployment settles whether Mistral accepts that.
 #
 # Pass 2a — 2 rungs:
 #   1. mistral/mistral-large-2512 — primary.
 #      Spike v2: $0.0016/material avg, 4.78s latency, best granularity
 #      (7 segments на 39-slide upper bound). Routes through
 #      ``OpenAICompatProvider`` (``PROVIDER_REGISTRY["mistral"]``).
-#   2. gemini/gemini-2.5-pro — fallback (premium ceiling).
-#      Spike v2: $0.023/material premium. Per-rung
-#      ``max_output_tokens: 4096`` override (KD-2.3-S + KD-2.3-E):
-#      Gemini 2.5 Pro's thinking-mode budget needs a higher
-#      max_tokens floor than the provider default; without the
-#      override the model is liable to be cut off mid-JSON before
-#      emitting the closing brace.
+#   2. gemini/gemini-3.8-flash — fallback (2026-09-30; was
+#      gemini/gemini-2.5-pro, never callable with our key). Not
+#      calibrated on this stage. Per-rung ``max_output_tokens: 8192``
+#      (was 4096): the model thinks, its reasoning is billed inside
+#      this ceiling, and the Gemini connector passes no thinking
+#      control at all (``providers/gemini.py`` sends no
+#      ``thinking_config``; the rung ``reasoning`` field is not read),
+#      so the ceiling is the only lever. 4096 left room for a
+#      reasoning run to eat the answer — the empty-body fault of
+#      hotfixes 1 and 2. 8192 is the ceiling the dictionary ladder
+#      settled on for the same reason; the answer (a short
+#      segment-grouping JSON) needs a small part of it. Worst case per
+#      call: 8192 x $0.0075 per 1k = $0.061 of output.
 #
 # Anthropic Sonnet 4.6 R3 rung **deferred** per DD-2.3-AD (Anthropic
 # native top-up not performed; vision-side trigger condition: Pass 2a
@@ -133,8 +141,8 @@ stages:
         reasoning: {exclude: true}
       - provider: gemini
         model: gemini-3-flash-preview
-      - provider: gemini
-        model: gemini-2.5-flash
+      - provider: mistral
+        model: mistral-small-latest
 
   # Pass 2a slide grouping (KD-2.3-H + KD-2.3-T Path 3).
   # Input: per-slide VD list from Pass 1 + n_slides + file_title
@@ -155,5 +163,5 @@ stages:
       - provider: mistral
         model: mistral-large-2512
       - provider: gemini
-        model: gemini-2.5-pro
-        max_output_tokens: 4096
+        model: gemini-3.8-flash
+        max_output_tokens: 8192

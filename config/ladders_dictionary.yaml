@@ -19,14 +19,18 @@
 # The output ceiling and the cost ceiling of a run are tied by one
 # multiplication, and moving either moves the other:
 #
-#     60 calls x 8192 tokens x $0.010 per 1k = $4.92 of output
-#     + ~1.5k input tokens per call x $0.00125 per 1k = ~$0.11 of input
-#     ~= $5.0 worst case, against the ratified $6 ceiling
+#     60 calls x 8192 tokens x $0.0075 per 1k = $3.69 of output
+#     + ~1.5k input tokens per call x $0.0015 per 1k = ~$0.14 of input
+#     ~= $3.8 worst case, against the ratified $6 ceiling
+#
+# Model since 2026-09-30: gemini-3.8-flash (was gemini-2.5-pro, never callable
+# with our key). The rates above are the registry's durable list rate; until
+# 2026-12-31 Google bills half of it.
 #
 # 8192 is not tight by accident. Thinking is billed inside this ceiling and
-# cannot be switched off for gemini-2.5-pro — the base connector translates no
-# reasoning form, so a ladder cannot ask for less (probe 2026-09-17: 627
-# thinking tokens for a three-token answer). A tighter ceiling would reproduce
+# cannot be switched off for a Gemini thinking model — the base connector
+# translates no reasoning form, so a ladder cannot ask for less (probe
+# 2026-09-17 on gemini-2.5-pro: 627 thinking tokens for a three-token answer). A tighter ceiling would reproduce
 # the fault of hotfixes 1 and 2: the ceiling spent on thinking, an empty body
 # returned, and the call paid for.
 
@@ -38,5 +42,5 @@ stages:
     requires: [structured_output]
     ladder:
       - provider: gemini
-        model: gemini-2.5-pro
+        model: gemini-3.8-flash
         max_output_tokens: 8192

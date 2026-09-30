@@ -58,7 +58,8 @@ The dearest single attempt across the ladder, from the model registry
 * ``deepseek_thinking/deepseek-v4-pro`` — $0.00066/1k in, $0.00198/1k out,
   32 768-token output ceiling → **$0.0757**;
 * ``dashscope/qwen3.7-max`` — $0.00165 / $0.004951, 8 192 → $0.0676;
-* ``deepseek/deepseek-v4-flash`` — $0.00022 / $0.00066, 8 192 → $0.0090.
+* ``deepseek/deepseek-flash`` — $0.00015 / $0.0006, 8 192 → $0.0074 (rung
+  renamed from ``deepseek-v4-flash`` and repriced 2026-09-30).
 
 Rounded up to $0.08. It is a ceiling for ONE attempt, the same meaning the path
 stages' ``money_usd`` carries (``config/submission_paths.yaml``), not a budget

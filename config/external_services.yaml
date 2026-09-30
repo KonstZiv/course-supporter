@@ -21,6 +21,12 @@
 #   yt-dlp backend lock (separate file, uv.lock) at 2026.8.19 = current latest
 #     stable per PyPI + GitHub releases on 2026-08-28 -> no bump needed this
 #     sweep (vision-rules#17 downloader item / DD-SP-F).
+# 2026-09-30 hotfix (dead rungs, audit on 32dbff4): added gemini-3.8-flash and
+#   deepseek-flash; marked gemini-2.5-flash / gemini-2.5-pro unavailable to our
+#   key and deepseek-v4-flash a deprecated name (entries kept for old register
+#   rows). mistral-small-latest max_context NOT raised to the listed 262144 (it
+#   drives the submission budgets; see the entry). Numbers taken from
+#   the audit's reading of the provider pages on 2026-09-30, not re-fetched.
 
 providers:
   gemini:
@@ -57,6 +63,11 @@ providers:
         cost_per_1k_in: 0.0005
         cost_per_1k_out: 0.003
       - id: gemini-2.5-flash
+        # UNAVAILABLE TO OUR KEY (2026-09-30): the prod key gets 404 "no longer
+        # available to new users" since at least 2026-07-09 — Google restricted
+        # the 2.5 models to projects that already used them (Gemini API
+        # deprecations page, checked 2026-09-30). Removed from every ladder on
+        # 2026-09-30; entry kept for the price of old register rows.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -66,6 +77,10 @@ providers:
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
       - id: gemini-2.5-pro
+        # UNAVAILABLE TO OUR KEY (2026-09-30): same 2.5 restriction as
+        # gemini-2.5-flash above; the prod key has never called it once
+        # (audit 2026-09-30). Removed from every ladder on 2026-09-30,
+        # replaced by gemini-3.8-flash; entry kept for old register rows.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -87,10 +102,29 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0015
         cost_per_1k_out: 0.0075
+      - id: gemini-3.8-flash
+        # Registered 2026-09-30 as the replacement for gemini-2.5-pro rungs
+        # (unavailable to our key). ai.google.dev/gemini-api/docs/pricing
+        # (page updated 2026-09-24), per the audit of 2026-09-30. $1.50 / $7.50
+        # per 1M is the durable list rate from 2027-01-01; an introductory
+        # discount ($0.75 / $3.75 per 1M) is live through 2026-12-31. The
+        # registry has no dated prices, so it pins the durable (higher) rate —
+        # ceilings computed from it stay safe after the discount ends; bills
+        # before 2027 read up to 2x lower. Thinking model: reasoning is billed
+        # inside max_output_tokens and the connector cannot limit it.
+        capabilities: [vision, structured_output, long_context]
+        max_context: 1048576
+        max_output_tokens: 65536
+        unit_type: tokens
+        cost_per_1k_in: 0.0015
+        cost_per_1k_out: 0.0075
       - id: gemini-3.5-flash-lite
         # ai.google.dev/gemini-api/docs/pricing + model page, verified
         # 2026-08-28. Single input rate for text/image/video/audio.
-        # $0.30 / $2.50 per 1M.
+        # $0.30 / $2.50 per 1M. Unchanged per the 2026-09-30 audit (page
+        # updated 2026-09-24). Since 2026-09-30 the third rung of the
+        # classifier ladders (safety / sanity / attempt_classifier), of
+        # pass_2a_mapping rung 2 and of code_summary.
         capabilities: [vision, structured_output, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -167,7 +201,28 @@ providers:
     # thinking modes of deepseek-v4-flash / v4-pro; retirement re-confirmed
     # 2026-08-28). Pricing per api-docs.deepseek.com/quick_start/pricing.
     models:
+      - id: deepseek-flash
+        # Registered 2026-09-30: the current name of the flash tier (since
+        # 2026-09-10 DeepSeek serves V4.1 Flash under it; deepseek-v4-flash
+        # below is the deprecated name). api-docs.deepseek.com/quick_start/
+        # pricing, per the audit of 2026-09-30: cache-miss input off-peak
+        # $0.15 / peak $0.30 per 1M, output off-peak $0.60 / peak $1.20 per 1M.
+        # Peak hours, context and output maximum are carried over from the
+        # deepseek-v4-flash entry: peak = 01:00-04:00 & 06:00-10:00 UTC
+        # Mon-Fri, context 1M, output maximum 384K. Classifier rungs pin 8192.
+        capabilities: [structured_output, long_context]
+        max_context: 1048576
+        max_output_tokens: 384000
+        unit_type: tokens
+        # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
+        #   rate = LOWER BOUND; peak-hour calls bill 2x.
+        cost_per_1k_in: 0.00015
+        cost_per_1k_out: 0.0006
       - id: deepseek-v4-flash
+        # DEPRECATED NAME (2026-09-30): since 2026-09-10 DeepSeek routes it
+        # "temporarily" to V4.1 Flash; the new name is deepseek-flash above and
+        # no shutdown date is announced. Removed from every ladder on
+        # 2026-09-30; entry kept for the price of old register rows.
         # Current flash tier (replaces the retired chat alias). Referenced by the
         # safety_check / safety_check_authored / pass_2a_mapping ladders —
         # registered 2026-05-23 to close their cost-tracking gap. DeepSeek moved
@@ -238,7 +293,7 @@ providers:
       - id: mistral-large-2512
         # Mistral Large 3. Rates + 256k context per mistral.ai/pricing/api and
         # the official model card (docs.mistral.ai, mistral-large-3-25-12),
-        # verified 2026-08-28. Previous $2/$6 was the Large 2 rate.
+        # verified 2026-08-28; unchanged per the 2026-09-30 audit. Previous $2/$6 was the Large 2 rate.
         # max_output_tokens left at 8192: first-party ceiling is not published
         # (Bedrock's 32K is a different platform).
         capabilities: [structured_output, long_context]
@@ -269,6 +324,14 @@ providers:
         # their only consumer, and a field with one reader is a place to forget.
         # Before: four 429s per gate, ~15 s and a fallback per submission.
         # After: one call per gate, attempt_count 1, zero 429.
+        # max_context deliberately kept at 131072. The Mistral model list
+        # (checked 2026-09-30) gives 262144, but this record is the tightest
+        # window on the submission-reading stages, so it sets the student-text
+        # and project-context budgets (homework/text_budget.py). Raising it
+        # doubles both past the ratified 100-150k characters (FORMATS.md) and
+        # lifts the dearest safety / attempt_classifier attempt to ~$0.060,
+        # over their $0.05 ceiling. Follow-up, not part of the 2026-09-30
+        # hotfix. The window is under-stated, which is the safe direction.
         capabilities: [vision, structured_output]
         max_context: 131072
         max_output_tokens: 8192

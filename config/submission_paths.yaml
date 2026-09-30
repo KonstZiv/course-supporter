@@ -33,9 +33,11 @@ stages:
       # Output is a short structured verdict, so 8192 is ample; the third rung
       # takes this stage ceiling instead of the registry's 65536.
       output_tokens: 8192
-      # не калібровано: rung gemini/gemini-2.5-flash, 65536 input + 8192 output
-      # tokens = $0.0401 (the dearest single attempt), rounded up. The input is
-      # the submission text budget: 131072 characters at 2 characters a token.
+      # не калібровано: rung gemini/gemini-3.5-flash-lite (since 2026-09-30,
+      # was gemini-2.5-flash: 404 for our key; same $0.30 / $2.50 per 1M),
+      # 65536 input + 8192 output tokens = $0.0401 (the dearest single
+      # attempt), rounded up. The input is the submission text budget: 131072
+      # characters at 2 characters a token.
       money_usd: 0.05
     ladder:
       - provider: mistral
@@ -43,11 +45,11 @@ stages:
         reasoning: null
         max_output_tokens: null
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         reasoning: null
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
         reasoning: null
         max_output_tokens: null
 
@@ -64,8 +66,10 @@ stages:
     ceilings:
       tool_steps: 0
       output_tokens: 8192
-      # не калібровано: rung gemini/gemini-2.5-flash, 65536 input + 8192 output
-      # tokens = $0.0401 (the dearest single attempt), rounded up. The input is
+      # не калібровано: rung gemini/gemini-3.5-flash-lite (since 2026-09-30,
+      # was gemini-2.5-flash: 404 for our key; same $0.30 / $2.50 per 1M),
+      # 65536 input + 8192 output tokens = $0.0401 (the dearest single
+      # attempt), rounded up. The input is
       # the submission text budget: 131072 characters at 2 characters a token.
       money_usd: 0.05
     ladder:
@@ -74,11 +78,11 @@ stages:
         reasoning: null
         max_output_tokens: null
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         reasoning: null
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
         reasoning: null
         max_output_tokens: null
 

@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
+from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.feedback_kinds import (
     FeedbackKind,
     FeedbackTargetKind,
@@ -2585,6 +2586,276 @@ class TaskCriteria(SoftDeleteMixin, Base):
     )
 
 
+class TaskCriteriaList(SoftDeleteMixin, Base):
+    """The criteria list of one task version — the machine layer (task 08).
+
+    The successor of ``TaskCriteria``, which stays as an archive once the review
+    reads this table: a list here carries the task-08 criterion form (ids,
+    weight categories, check methods, concepts, mandatory items) and a
+    lifecycle, so that several workers share one composition (``TASK.md``
+    section 9, decision 2).
+
+    Lifecycle (``CriteriaListState``). The first submission of a version inserts
+    a ``pending`` row — a claim — and commits it; it calls the model holding no
+    lock and no connection, then marks the row ``ready`` in a transaction of its
+    own. A second submission that finds the claim waits, re-reading the row, and
+    takes the ready list. A claim older than the service's threshold counts as
+    abandoned: the next submission takes it over by a conditional update of
+    ``claimed_at``, so two submissions never hold one claim, and a claimer that
+    lost its claim cannot write over the new claimer's list. A composition that
+    gives up turns its row into history (``failed`` and soft-deleted in one
+    update), so the next submission may claim again.
+
+    Version keys, as in ``TaskCriteria``: ``source_content_hash`` and
+    ``source_task_type`` must both equal the document's current values for the
+    list to be current. Earlier versions are soft-deleted history;
+    ``uq_task_criteria_lists_authored_document_id_active`` keeps one live row —
+    a claim or a ready list — per task.
+
+    Like ``TaskCriteria``, a LEAF of the content_hash graph: derivative of the
+    task, never a Merkle parent, excluded from every content_hash formula.
+    """
+
+    __tablename__ = "task_criteria_lists"
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("state", CriteriaListState), name="ck_task_criteria_lists_state"
+        ),
+        # A ready list is whole: the review and the author read these fields
+        # without a second guess about a half-written row.
+        CheckConstraint(
+            "state <> 'ready' OR (criteria IS NOT NULL "
+            "AND contradictions IS NOT NULL AND concepts_in_input IS NOT NULL "
+            "AND dropped_concept_count IS NOT NULL "
+            "AND input_fingerprint IS NOT NULL)",
+            name="ck_task_criteria_lists_ready_complete",
+        ),
+        # A failed composition is history, never the live row: as the live row
+        # it would hold its task's one slot and block the next claim.
+        CheckConstraint(
+            "state <> 'failed' OR deleted_at IS NOT NULL",
+            name="ck_task_criteria_lists_failed_is_history",
+        ),
+        Index(
+            "ix_task_criteria_lists_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # One live row per task — a claim or a ready list. This is what makes
+        # "a second submission cannot start a second composition" a rule of the
+        # database rather than of the code.
+        Index(
+            "uq_task_criteria_lists_authored_document_id_active",
+            "authored_document_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "The criteria list of a task version (mentor-rebuild task 08) — "
+                "the machine layer, with a lifecycle (pending → ready | failed) "
+                "so that several workers share one composition. One live row — "
+                "a claim or a ready list — per task; earlier versions are "
+                "soft-deleted history."
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → AuthoredDocument (the task). Hard-delete cascades with the "
+        "document; soft-delete cascades via "
+        "AuthoredDocument.__cascades_soft_delete_to__. One live row per task "
+        "(uq_task_criteria_lists_authored_document_id_active).",
+    )
+    source_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="Content-axis version key = AuthoredDocument.content_hash when "
+        "the composition was claimed (the TaskCriteria axis, same meaning).",
+    )
+    source_task_type: Mapped[str] = mapped_column(
+        String(32),
+        comment="Type-axis version key = AuthoredDocument.task_type when the "
+        "composition was claimed; re-typing the task makes the list stale.",
+    )
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default=CriteriaListState.PENDING.value,
+        server_default=CriteriaListState.PENDING.value,
+        comment="Composition lifecycle (CriteriaListState): pending (claimed, "
+        "the model is being called) → ready | failed(reason). Enforced by "
+        "ck_task_criteria_lists_state.",
+    )
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the current claim started; renewed when an abandoned "
+        "claim is taken over. The takeover and the final write compare it, so "
+        "a claimer that lost its claim cannot write over the new claimer's "
+        "list.",
+    )
+    form_version: Mapped[int] = mapped_column(
+        SmallInteger,
+        comment="Version of the criterion form the list is composed in — the "
+        "response contract of the decomposition prompt (2: task 08).",
+    )
+    criteria: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+        default=None,
+        comment="The criteria of this task version as one document: each "
+        "criterion with its id, text, evidence, weight category, check method, "
+        "soft-descent mark, main concepts and mandatory items. NULL until "
+        "READY.",
+    )
+    contradictions: Mapped[list[str] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+        default=None,
+        comment="Contradictions between the task and its node description found "
+        "by the same call — for the author only, never in criteria or score. "
+        "[] — none found; NULL until READY.",
+    )
+    concepts_in_input: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+        default=None,
+        comment="Whether a node or root summary — the source of concepts — was "
+        "available to the composition. A list composed without one is "
+        "recomposed exactly once when one appears; after that the flag stays "
+        "true even if the concepts later disappear. NULL until READY.",
+    )
+    dropped_concept_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        comment="Concepts the model named that were not in its input — dropped "
+        "by code and counted. NULL until READY.",
+    )
+    input_fingerprint: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+        comment="SHA-256 of the input context (task content hash, node "
+        "description, concept lists, prompt hash) — diagnostics only, never a "
+        "version key. NULL until READY.",
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        comment="Why the composition gave up (state='failed'). NULL otherwise.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TaskCriteriaList(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"state={self.state!r}, deleted_at={self.deleted_at!r})"
+        )
+
+
+class TaskCriteriaOverride(SoftDeleteMixin, Base):
+    """The author's edit of a task's criteria list (task 08).
+
+    Replaced whole, like ``TaskReferenceOverride``, but with history: a
+    replacement or a reset soft-deletes the previous edit, so every earlier
+    state stays as a snapshot (``TASK.md`` section 3.6). The edit is bound to
+    the task version it was written for (``source_content_hash`` +
+    ``source_task_type``) and is NOT carried to a new version — the deliberate
+    difference from a test key: a key is the author's truth, while criteria are
+    recomposed by the model for every version.
+
+    Absence is meaningful: no live row means the machine list is the one in
+    force. Contradictions are not part of this layer — they belong to the
+    composition that found them.
+    """
+
+    __tablename__ = "task_criteria_overrides"
+    __table_args__ = (
+        # An empty edit is not an edit: a reset is a soft delete, not "[]".
+        CheckConstraint(
+            "criteria <> '[]'::jsonb",
+            name="ck_task_criteria_overrides_criteria_present",
+        ),
+        Index(
+            "ix_task_criteria_overrides_active",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # One live edit per task; replaced and reset edits are history.
+        Index(
+            "uq_task_criteria_overrides_authored_document_id_active",
+            "authored_document_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {
+            "comment": (
+                "The author's edit of a task's criteria list (mentor-rebuild "
+                "task 08) — replaced whole, bound to one task version, "
+                "soft-deleted on replacement or reset so every earlier state "
+                "stays as a snapshot. One live edit per task."
+            ),
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → AuthoredDocument (the task). Hard-delete cascades with the "
+        "document; soft-delete cascades via "
+        "AuthoredDocument.__cascades_soft_delete_to__. One live edit per task "
+        "(uq_task_criteria_overrides_authored_document_id_active).",
+    )
+    source_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="AuthoredDocument.content_hash of the task version this edit "
+        "was written for. The edit is in force only while it equals the live "
+        "one; it is never carried to a new version.",
+    )
+    source_task_type: Mapped[str] = mapped_column(
+        String(32),
+        comment="AuthoredDocument.task_type of the task version this edit was "
+        "written for; re-typing the task leaves the edit out of force.",
+    )
+    criteria: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="The author's criteria, replaced whole — the criterion form of "
+        "task_criteria_lists.criteria; ids of edited criteria are kept, new "
+        "criteria get new ones.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    authored_document: Mapped["AuthoredDocument"] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"TaskCriteriaOverride(id={self.id!r}, "
+            f"authored_document_id={self.authored_document_id!r}, "
+            f"deleted_at={self.deleted_at!r})"
+        )
+
+
 class TaskReference(Base):
     """One generated version of what a task is checked against (task 06).
 
@@ -2667,8 +2938,7 @@ class TaskReference(Base):
     kind: Mapped[str] = mapped_column(
         String(32),
         comment="Which kind of reference this version carries (ReferenceKind). "
-        "Today: 'test_key'. Task 08 adds 'mandatory_points' as a MEMBER — a "
-        "widened CHECK, not a new table.",
+        "Today: 'test_key'. A new kind is a new member and a widened CHECK.",
     )
     source_content_hash: Mapped[str] = mapped_column(
         String(64),
@@ -3046,7 +3316,12 @@ CourseNode.__cascades_soft_delete_to__ = [
     NodeSummaryRaw,
     NodeSummaryFinal,
 ]
-AuthoredDocument.__cascades_soft_delete_to__ = [DocumentSummary, TaskCriteria]
+AuthoredDocument.__cascades_soft_delete_to__ = [
+    DocumentSummary,
+    TaskCriteria,
+    TaskCriteriaList,
+    TaskCriteriaOverride,
+]
 DocumentSummary.__cascades_soft_delete_to__ = [DocumentSegment]
 # Phase 3.1 Q-C ratify (Option A — two-level): PreviousSnapshot cascades
 # from its parent NodeSummaryFinal, mirroring the AuthoredDocument →

@@ -19,6 +19,8 @@ from course_supporter.storage.orm import (
     NodeSummaryRaw,
     Student,
     TaskCriteria,
+    TaskCriteriaList,
+    TaskCriteriaOverride,
     Tenant,
 )
 
@@ -50,10 +52,14 @@ class TestCascadeDeclarations:
     def test_authored_document_cascades(self) -> None:
         # sprint-mentor T4: TaskCriteria (the cached criteria decomposition,
         # D11) is derivative of the task, so it cascade-soft-deletes with the
-        # AuthoredDocument alongside DocumentSummary.
+        # AuthoredDocument alongside DocumentSummary. Task 08 adds the criteria
+        # list and the author's edit of it, derivative of the task the same way;
+        # TaskCriteria stays, as an archive.
         assert AuthoredDocument.__cascades_soft_delete_to__ == [
             DocumentSummary,
             TaskCriteria,
+            TaskCriteriaList,
+            TaskCriteriaOverride,
         ]
 
     def test_document_summary_cascades(self) -> None:

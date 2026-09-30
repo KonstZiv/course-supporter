@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import structlog
 from fastapi import FastAPI
 from pydantic import SecretStr
 from structlog.testing import capture_logs
@@ -29,6 +30,7 @@ from structlog.testing import capture_logs
 from course_supporter import boot
 from course_supporter.config import Settings
 from course_supporter.llm import factory
+from course_supporter.storage import s3 as s3_module
 from course_supporter.storage.s3 import S3Client
 from course_supporter.worker import HomeworkWorkerSettings, WorkerSettings
 
@@ -76,7 +78,14 @@ def _no_io(monkeypatch: pytest.MonkeyPatch) -> None:
     the same on every machine whatever keys its environment carries. S3 gets a
     client whose ``head_bucket`` answers, so ``ensure_bucket`` runs for real
     and writes its own event.
+
+    The module loggers on the startup path are swapped for fresh ones: a
+    logger another test already bound (``cache_logger_on_first_use``) keeps the
+    processors of its day and slips past ``capture_logs``. Which events the
+    code writes does not change -- only who hears them.
     """
+    for module in (app_module, factory, s3_module):
+        monkeypatch.setattr(module, "logger", structlog.get_logger())
     monkeypatch.setattr(app_module, "configure_logging", MagicMock())
     monkeypatch.setattr("course_supporter.worker.configure_logging", MagicMock())
     monkeypatch.setattr(app_module, "create_pool", AsyncMock())

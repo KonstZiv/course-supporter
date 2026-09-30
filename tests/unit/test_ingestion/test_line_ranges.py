@@ -183,6 +183,67 @@ class TestNumberLines:
         _assert_reversible(lines)
 
 
+class TestWrapBreaks:
+    """Where a line longer than ``MAX_LINE_CHARS`` is cut."""
+
+    def test_sentence_end_wins_over_a_later_colon(self) -> None:
+        first = "Перше речення про змінні закінчується тут крапкою. "
+        second = "Далі йде перелік, а перед ним двокрапка: "
+        text = first * 3 + second + "слово " * 60
+        assert text.index(":") < MAX_LINE_CHARS
+        lines = number_lines(text)
+
+        assert lines[0].display == (first * 3).rstrip()
+        _assert_partition(text, lines)
+
+    def test_semicolon_when_the_window_has_no_sentence_end(self) -> None:
+        clause = "перше твердження без крапки в кінці; "
+        text = clause * 4 + "далі слова " * 40
+        lines = number_lines(text)
+
+        assert lines[0].display.endswith(";")
+        assert "." not in text[: MAX_LINE_CHARS + 1]
+        _assert_partition(text, lines)
+
+    def test_closing_quote_stays_with_its_sentence(self) -> None:
+        text = ("Він сказав «так». " * 12) + "слово " * 40
+        lines = number_lines(text)
+
+        assert lines[0].display.endswith("«так».")
+        _assert_partition(text, lines)
+
+    def test_table_row_is_cut_only_after_a_cell_bar(self) -> None:
+        cells = [f"клітинка номер {i} з довшим текстом усередині" for i in range(12)]
+        row = "| " + " | ".join(cells) + " |"
+        text = "| Заголовок |\n" + row
+        lines = number_lines(text)
+
+        pieces = [line.display for line in lines[1:]]
+        assert len(pieces) > 1
+        for piece in pieces[:-1]:
+            assert piece.endswith("|")
+        # Every cell survives whole in exactly one piece.
+        for cell in cells:
+            assert sum(cell in piece for piece in pieces) == 1
+        _assert_partition(text, lines)
+        _assert_reversible(lines)
+
+    def test_table_cell_longer_than_the_window_is_not_split(self) -> None:
+        long_cell = "дуже довга клітинка " * 20
+        row = f"| коротка | {long_cell}| кінець |"
+        lines = number_lines(row)
+
+        assert [line.display for line in lines] == [
+            f"| коротка | {long_cell}|",
+            "кінець |",
+        ]
+        _assert_partition(row, lines)
+
+    def test_table_row_without_inner_bars_stays_whole(self) -> None:
+        row = "| " + "слово " * 60 + "|"
+        assert [line.display for line in number_lines(row)] == [row]
+
+
 class TestRenderNumbered:
     def test_numbers_every_line_and_keeps_blank_lines(self) -> None:
         text = "# Тема\n\nПерший рядок\nдругий рядок\n\n\nКінець"
@@ -483,6 +544,54 @@ class TestProcessorsWithLineRanges:
         assert f"The document has {n} numbered lines" in feedback
         assert "gap: lines 3-3 are not covered" in feedback
         assert f"the last segment must end at line {n}" in feedback
+
+
+class TestWebProcessorEdgeCases:
+    @pytest.mark.asyncio
+    async def test_segment_boundary_inside_a_wrapped_paragraph(self) -> None:
+        """A one-line web paragraph wraps; a boundary on a wrapped piece."""
+        sentence = "Цикл while виконує тіло, поки умова лишається істинною. "
+        paragraph = (sentence * 12).strip()
+        doc = SourceDocument(
+            source_type=SourceType.WEB,
+            source_url="https://example.com/while",
+            chunks=WebProcessor._text_to_chunks(f"Вступ.\n\n{paragraph}"),
+        )
+        text = doc.assemble_text()
+        lines = number_lines(text)
+        assert len(lines) >= 4  # "Вступ." + the paragraph wrapped
+        processor = WebProcessor()
+        router = _router_returning(_response((1, 2), (3, len(lines))))
+
+        draft = await processor.process_macro(doc, router)
+        segments = await processor.process_detail(doc, draft)
+
+        split = lines[2].start
+        assert text[split:].startswith("Цикл while")
+        assert [(s.start_pos, s.end_pos) for s in segments] == [
+            (0, split),
+            (split, len(text)),
+        ]
+        assert "".join(s.content or "" for s in segments) == text
+        # Both halves of the wrapped paragraph anchor to paragraph 1.
+        assert segments[1].start_paragraph == segments[1].end_paragraph == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_segment_list_matches_the_text_processor(self) -> None:
+        payload = _response()
+        web_doc, text_doc = _web_doc(), _markdown_doc()
+
+        web_draft = await WebProcessor().process_macro(
+            web_doc, _router_returning(payload)
+        )
+        text_draft = await TextProcessor().process_macro(
+            text_doc, _router_returning(payload)
+        )
+
+        assert web_draft.model_dump() == text_draft.model_dump()
+        assert web_draft.segments == []
+        assert await WebProcessor().process_detail(web_doc, web_draft) == []
+        assert await TextProcessor().process_detail(text_doc, text_draft) == []
 
 
 class TestPromptRender:

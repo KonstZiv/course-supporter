@@ -13,7 +13,8 @@ Numbering, over the exact string of :meth:`SourceDocument.assemble_text`:
   separator, spacing inside a chunk) are shown unnumbered, so a boundary
   never lands on emptiness and the prompt spends nothing on dead numbers.
 * A line longer than :data:`MAX_LINE_CHARS` is wrapped into several numbered
-  lines — at a sentence end if possible, else at a space, else hard. A file
+  lines — at a sentence end if possible, else at ``:`` / ``;``, else at a
+  space, else hard; a markdown table row only between cells. A file
   whose paragraphs are single long lines (web pages, plain text) can then
   still be split inside a paragraph.
 * Numbered line ``k`` owns the chars from its first char up to the first
@@ -35,12 +36,22 @@ from dataclasses import dataclass
 # be coarser than the rules ask; well over a typical sentence.
 MAX_LINE_CHARS = 250
 
-# A wrapped piece is not cut shorter than this when a better cut exists
-# further on (avoids a stub line of a few words).
+# Shortest wrapped piece: a break that would leave fewer chars than this on
+# the piece is ignored, and the search falls to the next break kind (avoids
+# a stub line of a few words).
 _MIN_PIECE_CHARS = 80
 
-_SENTENCE_END = re.compile(r"[.!?…:;](?:[\"'»”)\]]*)\s+")
+# Break kinds for prose, best first; each is used only when the window has
+# no break of the kinds before it. A sentence end or clause end may be
+# followed by closing quotes / brackets.
+_SENTENCE_END = re.compile(r"[.!?…][\"'»”)\]]*\s+")
+_CLAUSE_END = re.compile(r"[:;][\"'»”)\]]*\s+")
 _WHITESPACE = re.compile(r"\s+")
+_PROSE_BREAKS = (_SENTENCE_END, _CLAUSE_END, _WHITESPACE)
+
+# A markdown table row is cut only right after an unescaped cell bar, so
+# no cell is split and every piece holds whole cells.
+_CELL_BAR = re.compile(r"(?<!\\)\|\s*")
 
 
 @dataclass(frozen=True)
@@ -92,14 +103,25 @@ def number_lines(text: str) -> list[NumberedLine]:
 
 
 def _wrap(text: str, start: int, end: int) -> list[tuple[int, int]]:
-    """Cut ``text[start:end]`` (one non-blank line) into display pieces."""
+    """Cut ``text[start:end]`` (one non-blank line) into display pieces.
+
+    Prose breaks at the last sentence end in the window, else the last
+    ``:`` / ``;``, else the last space, else hard at the limit. A markdown
+    table row (first non-space char ``|``) breaks only after a cell bar —
+    the last one in the window, or the first one past it when a single cell
+    is longer than the window — and stays whole when no bar is left.
+    """
     pieces: list[tuple[int, int]] = []
+    is_table_row = text[start:end].lstrip().startswith("|")
     while end - start > MAX_LINE_CHARS:
         window = text[start : start + MAX_LINE_CHARS + 1]
-        cut = _last_break(_SENTENCE_END, window) or _last_break(_WHITESPACE, window)
-        if cut is None:
-            cut = MAX_LINE_CHARS
-        piece_end = start + len(window[:cut].rstrip())
+        if is_table_row:
+            cut = _last_break(_CELL_BAR, window) or _next_cell_bar(text, start, end)
+            if cut is None:
+                break
+        else:
+            cut = _prose_cut(window)
+        piece_end = start + len(text[start : start + cut].rstrip())
         if piece_end > start:
             pieces.append((start, piece_end))
         start += cut
@@ -107,6 +129,26 @@ def _wrap(text: str, start: int, end: int) -> list[tuple[int, int]]:
             start += 1
     pieces.append((start, end))
     return pieces
+
+
+def _prose_cut(window: str) -> int:
+    """Cut at the best break kind the window has, else hard at the limit."""
+    for pattern in _PROSE_BREAKS:
+        cut = _last_break(pattern, window)
+        if cut is not None:
+            return cut
+    return MAX_LINE_CHARS
+
+
+def _next_cell_bar(text: str, start: int, end: int) -> int | None:
+    """Cut (relative to ``start``) after the first cell bar past the window.
+
+    ``None`` when the only bars left close the row: the rest stays whole.
+    """
+    for match in _CELL_BAR.finditer(text, start + MAX_LINE_CHARS, end):
+        if match.end() < end:
+            return match.end() - start
+    return None
 
 
 def _last_break(pattern: re.Pattern[str], window: str) -> int | None:

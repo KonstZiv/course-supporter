@@ -107,7 +107,9 @@ class TestProcessMacroHappyPath:
         assert draft.secondary_concepts == []
         router.execute_for_stage.assert_awaited_once()
         call_kwargs = router.execute_for_stage.await_args.kwargs
-        assert call_kwargs["text"] == "Heading paragraph.\n\nBody paragraph two."
+        # Numbered lines (blank separator line stays unnumbered) + N.
+        assert call_kwargs["text"] == "1| Heading paragraph.\n\n2| Body paragraph two."
+        assert call_kwargs["line_count"] == 2
         assert call_kwargs["response_validator"] is not None
         assert router.execute_for_stage.await_args.args == ("pass_2a_mapping",)
 
@@ -116,18 +118,16 @@ class TestProcessMacroHappyPath:
         """KD-2.1-O: segments carry metadata only; ``content`` stays None."""
         processor = TextProcessor()
         doc = _make_doc("alpha.", "beta.")
-        # Contiguous segments per fixup 2.1.7.1 invariants (no gaps; first
-        # starts at 0; last segment ends at total text length — matches
-        # the reference text length passed via Pydantic context per
-        # fixup 2.1.7.2).
+        # Two numbered lines; the server turns line ranges into the
+        # contiguous char cover 0..6 / 6..13 of "alpha.\n\nbeta.".
         router = _router_returning(
             '{"title": "T", "description": "D",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 6,'
+            '   {"start_line": 1, "end_line": 1,'
             '    "title": "Alpha section",'
             '    "description": "Frames the alpha topic.",'
             '    "main_concepts": ["a"], "secondary_concepts": []},'
-            '   {"order": 1, "start_pos": 6, "end_pos": 13,'
+            '   {"start_line": 2, "end_line": 2,'
             '    "title": null,'
             '    "description": "Follow-up on beta.",'
             '    "main_concepts": ["b"], "secondary_concepts": []}'
@@ -137,6 +137,10 @@ class TestProcessMacroHappyPath:
         draft = await processor.process_macro(doc, router)
 
         assert len(draft.segments) == 2
+        assert [(s.order, s.start_pos, s.end_pos) for s in draft.segments] == [
+            (0, 0, 8),
+            (1, 8, 13),
+        ]
         assert draft.segments[0].title == "Alpha section"
         assert draft.segments[0].description == "Frames the alpha topic."
         assert draft.segments[0].content is None
@@ -152,20 +156,18 @@ class TestProcessMacroConceptsAggregation:
     async def test_concepts_aggregation_from_segments(self) -> None:
         """Sorted union of segment concepts populates document-level fields."""
         processor = TextProcessor()
-        # assemble_text() = "a\n\nb\n\nc" (7 chars). Contiguous cover
-        # 0..7 split per fixup 2.1.7.1; last end_pos matches the
-        # reference text length passed via Pydantic context.
+        # assemble_text() = "a\n\nb\n\nc": three numbered lines.
         doc = _make_doc("a", "b", "c")
         router = _router_returning(
             '{"title": "T", "description": "D",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 3,'
+            '   {"start_line": 1, "end_line": 1,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": ["A", "B"], "secondary_concepts": ["X"]},'
-            '   {"order": 1, "start_pos": 3, "end_pos": 5,'
+            '   {"start_line": 2, "end_line": 2,'
             '    "title": null, "description": "d1",'
             '    "main_concepts": ["B", "C"], "secondary_concepts": ["Y"]},'
-            '   {"order": 2, "start_pos": 5, "end_pos": 7,'
+            '   {"start_line": 3, "end_line": 3,'
             '    "title": null, "description": "d2",'
             '    "main_concepts": ["D"], "secondary_concepts": ["Z"]}'
             " ]}"
@@ -180,16 +182,16 @@ class TestProcessMacroConceptsAggregation:
     async def test_concepts_aggregation_main_wins_over_secondary(self) -> None:
         """Conflict rule: a concept that is main anywhere stays in main."""
         processor = TextProcessor()
-        # assemble_text() = "a\n\nb" (4 chars).
+        # assemble_text() = "a\n\nb": two numbered lines.
         doc = _make_doc("a", "b")
         router = _router_returning(
             '{"title": "T", "description": "D",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 2,'
+            '   {"start_line": 1, "end_line": 1,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": ["yield", "generator"],'
             '    "secondary_concepts": ["StopIteration"]},'
-            '   {"order": 1, "start_pos": 2, "end_pos": 4,'
+            '   {"start_line": 2, "end_line": 2,'
             '    "title": null, "description": "d1",'
             '    "main_concepts": ["itertools"],'
             '    "secondary_concepts": ["yield"]}'
@@ -215,15 +217,15 @@ class TestProcessMacroConceptsAggregation:
         string.
         """
         processor = TextProcessor()
-        # assemble_text() = "a\n\nb" (4 chars).
+        # assemble_text() = "a\n\nb": two numbered lines.
         doc = _make_doc("a", "b")
         router = _router_returning(
             '{"title": "T", "description": "D",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 2,'
+            '   {"start_line": 1, "end_line": 1,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": ["HTML Template"], "secondary_concepts": []},'
-            '   {"order": 1, "start_pos": 2, "end_pos": 4,'
+            '   {"start_line": 2, "end_line": 2,'
             '    "title": null, "description": "d1",'
             '    "main_concepts": ["HTML templates"],'
             '    "secondary_concepts": ["HTML template"]}'
@@ -300,19 +302,18 @@ class TestProcessMacroValidationError:
 
     @pytest.mark.asyncio
     async def test_coverage_mismatch_surfaces_structural_retry(self) -> None:
-        """Reference text length passed via Pydantic context catches
-        a LLM-emitted ``segments[-1].end_pos`` that overshoots / undershoots
-        the deterministic document length."""
+        """The server-derived line count catches a last ``end_line`` that
+        overshoots the document; the feedback names the lines and N."""
         from pydantic import ValidationError
 
         processor = TextProcessor()
-        # assemble_text() = "hello world" (11 chars).
+        # assemble_text() = "hello world": one numbered line.
         doc = _make_doc("hello world")
-        # end_pos=20 overshoots the 11-char reference document.
+        # end_line=3 overshoots the one-line document.
         router = _router_returning(
             '{"title": "T", "description": "D",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 20,'
+            '   {"start_line": 1, "end_line": 3,'
             '    "title": null, "description": "d0",'
             '    "main_concepts": [], "secondary_concepts": []}'
             " ]}"
@@ -321,10 +322,8 @@ class TestProcessMacroValidationError:
         with pytest.raises(StructuralRetryError) as exc_info:
             await processor.process_macro(doc, router)
         assert isinstance(exc_info.value.__cause__, ValidationError)
-        # Feedback message should be actionable (mention coverage).
-        cause = exc_info.value.__cause__
-        assert any(
-            "cover" in err.get("msg", "")
-            or "reference_text_length" in err.get("msg", "")
-            for err in cause.errors()
-        )
+        # Feedback is actionable: names N, the ranges and the fix.
+        feedback = exc_info.value.feedback
+        assert "The document has 1 numbered lines (1-1)" in feedback
+        assert "your ranges are 1-3" in feedback
+        assert "the last segment must end at line 1" in feedback

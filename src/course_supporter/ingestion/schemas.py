@@ -19,8 +19,9 @@ emit complete payloads; partial output fails fast through Pydantic
 validation rather than silently propagating None into ORM rows.
 
 **Pass 2a output offset invariants (fixup 2.1.7.1).** Beyond the
-type-level checks, the schemas enforce structural invariants that
-the Pass 2a prompt (``prompts/pass_2a_mapping/v1.md``) commits to:
+type-level checks, the schemas enforce structural invariants over the
+segment offsets (for text/web the model now emits line ranges,
+:class:`TextMappingResponse`, and the server derives the offsets):
 ``end_pos > start_pos`` per segment; segments order strictly
 monotonic (0, 1, 2, ...); adjacency without gaps
 (``prev.end_pos == next.start_pos``); ``segments[0].start_pos == 0``.
@@ -420,6 +421,155 @@ class DocumentSummaryDraft(BaseModel):
                 f"(segment_count={len(self.segments)}); "
                 "prompt rule: 'last segment.end_pos must equal "
                 "the total document character count'"
+            )
+        return self
+
+
+# Text / web Pass 2a model-response schemas (line ranges).
+#
+# The mapping model reads the document as numbered lines
+# (:mod:`course_supporter.ingestion.line_ranges`) and names each segment
+# by an inclusive line range; the server converts the ranges into the
+# char offsets of :class:`DocumentSegmentDraft` and builds the
+# :class:`DocumentSummaryDraft` above, whose contract is unchanged.
+# Char offsets are never asked of the model: it guesses them. No
+# ``order`` field — position is the array order (as for audio and
+# presentation).
+
+
+class TextMappingSegment(BaseModel):
+    """One text/web Pass 2a segment as the model emits it.
+
+    Lines are 1-indexed and inclusive on both ends: ``start_line=3,
+    end_line=5`` covers lines 3, 4 and 5.
+    """
+
+    start_line: int = Field(
+        description="Inclusive 1-indexed line number where the segment begins.",
+    )
+    end_line: int = Field(
+        description=(
+            "Inclusive 1-indexed line number where the segment ends "
+            "(must be >= start_line)."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Optional short heading for this segment.",
+    )
+    description: str = Field(
+        description=(
+            "1-2 sentence description of what this segment covers "
+            "(not a paraphrase of its content)."
+        ),
+    )
+    main_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings taught in this segment (KD-gamma).",
+    )
+    secondary_concepts: list[str] = Field(
+        default_factory=list,
+        description="Concept strings mentioned but not taught in this segment.",
+    )
+
+
+class TextMappingResponse(BaseModel):
+    """Text/web Pass 2a model output: document fields + line-range segments.
+
+    The cover rule over line numbers is enforced by
+    :meth:`_segments_cover_all_lines`, gated on
+    ``ValidationInfo.context["line_count"]`` (the server-derived count of
+    numbered lines, N). An empty ``segments`` list stays allowed, as it is
+    for :class:`DocumentSummaryDraft` (the prompt reserves it for a
+    trivially short document); there is no upper bound on the count.
+    """
+
+    title: str = Field(description="Self-contained summary title (<=128 chars).")
+    description: str = Field(description="Brief description (<=512 chars).")
+    segments: list[TextMappingSegment] = Field(
+        default_factory=list,
+        description="Line-range segments covering lines 1..N in order.",
+    )
+
+    def line_cover_problems(self, line_count: int) -> list[str]:
+        """Every way the segments fail to cover lines ``1..line_count``.
+
+        Empty when the cover is exact: the first segment starts at line 1,
+        each next one starts right after the previous ``end_line``, the last
+        ends at line N, and no segment ends before it starts. Each problem
+        names the segment (1-based, by array position) and the lines to use,
+        so a retry can rewrite every boundary rather than only the last.
+        """
+        problems: list[str] = []
+        n = line_count
+        expected_start = 1
+        for idx, seg in enumerate(self.segments, start=1):
+            start, end = seg.start_line, seg.end_line
+            if start != expected_start:
+                if idx == 1:
+                    problems.append(
+                        f"segment 1 starts at line {start}; "
+                        "the first segment must start at line 1"
+                    )
+                elif start > expected_start:
+                    problems.append(
+                        f"gap: lines {expected_start}-{start - 1} are not covered; "
+                        f"segment {idx} must start at line {expected_start}, "
+                        f"right after segment {idx - 1} ends at line "
+                        f"{expected_start - 1}"
+                    )
+                else:
+                    problems.append(
+                        f"overlap: segment {idx} starts at line {start}, but "
+                        f"segment {idx - 1} already ends at line "
+                        f"{expected_start - 1}; segment {idx} must start at "
+                        f"line {expected_start}"
+                    )
+            if end < start:
+                problems.append(
+                    f"segment {idx} is empty: end_line {end} is before "
+                    f"start_line {start}; end_line must be >= start_line"
+                )
+            if not (1 <= start <= n) or not (1 <= end <= n):
+                problems.append(
+                    f"segment {idx} (lines {start}-{end}) is outside the "
+                    f"document: lines are numbered 1-{n}"
+                )
+            expected_start = end + 1
+        if self.segments and self.segments[-1].end_line != n:
+            last = self.segments[-1].end_line
+            problems.append(
+                f"the last segment ends at line {last}, but the document has "
+                f"{n} lines; the last segment must end at line {n}"
+            )
+        return problems
+
+    @model_validator(mode="after")
+    def _segments_cover_all_lines(self, info: ValidationInfo) -> TextMappingResponse:
+        """Exact line cover, gated on ``context["line_count"]``.
+
+        One error lists every problem together with the segments' current
+        ranges and N: a retry that only sees the first problem tends to fix
+        the last boundary and leave the rest wrong.
+        """
+        if not self.segments or info.context is None:
+            return self
+        line_count = info.context.get("line_count")
+        if line_count is None:
+            return self
+        problems = self.line_cover_problems(line_count)
+        if problems:
+            ranges = ", ".join(
+                f"{seg.start_line}-{seg.end_line}" for seg in self.segments
+            )
+            raise ValueError(
+                f"segment line ranges do not cover the document. The document "
+                f"has {line_count} numbered lines (1-{line_count}); your ranges "
+                f"are {ranges}. Problems: " + "; ".join(problems) + ". "
+                "Rewrite start_line and end_line of EVERY segment: the first "
+                "segment starts at line 1, each next segment starts at the "
+                f"previous end_line + 1, the last segment ends at line "
+                f"{line_count}"
             )
         return self
 

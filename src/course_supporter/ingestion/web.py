@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import structlog
-from pydantic import ValidationError
 
-from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.ingestion.base import (
-    CategorisedProcessingError,
     MaterialProcessor,
     UnsupportedFormatError,
 )
@@ -24,15 +21,13 @@ from course_supporter.ingestion.schemas import (
     DocumentSegmentDraft,
     DocumentSummaryDraft,
 )
-from course_supporter.language import display_name
-from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.ingestion.text_mapping import map_text_document
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
     SourceDocument,
     SourceType,
 )
-from course_supporter.security.exceptions import ErrorCategory
 
 if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
@@ -134,102 +129,14 @@ class WebProcessor(MaterialProcessor):
         doc: SourceDocument,
         router: StageRouter,
     ) -> DocumentSummaryDraft:
-        """Pass 2a -- premium LLM extracts concept structure (KD-2.1-A).
+        """Pass 2a -- LLM maps the document into segments (KD-2.1-A).
 
-        Concatenates chunk text into a single body and routes the
-        resulting document through the ``pass_2a_mapping`` stage.
-        Returns a :class:`DocumentSummaryDraft`; segment drafts are
-        retained on the result for Phase 2.1 C7 (Pass 2b) consumption
-        and are not materialised here.
-
-        Document-level ``main_concepts`` / ``secondary_concepts`` are
-        derived algorithmically as ``union + dedup`` over the per-segment
-        concepts (vision.md §2.2, KD-2.1-O). The LLM is asked to emit
-        concepts only at segment level — this method assembles the
-        document-level view by sorted set-union and applies the
-        conflict rule: any concept that appears as ``main`` in at
-        least one segment stays in ``main_concepts`` and is removed
-        from ``secondary_concepts``.
+        Shared by TextProcessor and WebProcessor: see
+        :func:`~course_supporter.ingestion.text_mapping.map_text_document`
+        (numbered-line prompt, line ranges converted to char offsets
+        server-side, concepts aggregated over segments).
         """
-        text = doc.assemble_text()
-        if not text.strip():
-            msg = "Cannot run Pass 2a on empty document (no content chunks)"
-            raise CategorisedProcessingError(ErrorCategory.EMPTY_DOCUMENT, msg)
-        reference_text_length = len(text)
-        parsed: dict[str, DocumentSummaryDraft] = {}
-
-        def _coverage_validator(content: str) -> None:
-            """StageRouter response_validator hook (fixup 2.1.7.2).
-
-            Mirrors :meth:`TextProcessor.process_macro` -- translates
-            a Pydantic ``ValidationError`` into
-            :class:`StructuralRetryError` so the router's existing
-            instructor-style retry path fires.
-            """
-            try:
-                draft_local = DocumentSummaryDraft.model_validate_json(
-                    content,
-                    context={"reference_text_length": reference_text_length},
-                )
-            except ValidationError as exc:
-                error_types = sorted({e.get("type", "unknown") for e in exc.errors()})
-                first = exc.errors()[0]
-                first_loc = ".".join(str(x) for x in first.get("loc", []))
-                logger.warning(
-                    "pass2a.validation.failed",
-                    source_type=doc.source_type.value,
-                    validation_error_types=error_types,
-                    first_error_msg=first.get("msg", ""),
-                    first_error_loc=first_loc,
-                    reference_text_length=reference_text_length,
-                )
-                feedback = (
-                    f"{first.get('msg', 'validation error')} "
-                    f"(field: {first_loc or '<root>'}). "
-                    "Regenerate the response with valid output."
-                )
-                raise StructuralRetryError(feedback) from exc
-            parsed["draft"] = draft_local
-
-        result = await router.execute_for_stage(
-            "pass_2a_mapping",
-            response_validator=_coverage_validator,
-            expects_json=True,
-            text=text,
-            language=display_name(doc.language) if doc.language else None,
-        )
-        draft = parsed["draft"]
-        logger.debug(
-            "pass2a.validation.ok",
-            source_type=doc.source_type.value,
-            provider=result.provider_used,
-            model=result.model_used,
-            attempt_count=result.attempt_count,
-            reference_text_length=reference_text_length,
-        )
-
-        # Algorithmic aggregation of document-level concepts from
-        # per-segment concepts (vision.md §2.2, KD-2.1-O). LLM emits
-        # concepts only at segment level; ``DocumentSummary.main_concepts``
-        # is the spelling-consolidated union over all segments
-        # (concept-quality phase 1). Concepts accumulate WITH repeats so
-        # dedupe can count occurrences; main and secondary are consolidated
-        # separately. Conflict rule: any concept whose normalization key
-        # appears as ``main`` in at least one segment stays in
-        # ``main_concepts`` and is dropped from ``secondary_concepts`` by key.
-        all_main: list[str] = []
-        all_secondary: list[str] = []
-        for seg in draft.segments:
-            all_main.extend(seg.main_concepts)
-            all_secondary.extend(seg.secondary_concepts)
-        main_concepts = dedupe_concepts(all_main)
-        secondary_concepts = subtract_by_key(
-            dedupe_concepts(all_secondary), main_concepts
-        )
-        draft.main_concepts = sorted(main_concepts)
-        draft.secondary_concepts = sorted(secondary_concepts)
-
-        return draft
+        return await map_text_document(doc, router)
 
     async def process_detail(
         self,

@@ -2545,9 +2545,12 @@ class TaskCriteria(SoftDeleteMixin, Base):
         ),
         {
             "comment": (
-                "Cached task→criteria decomposition (vision §1386, D11) — "
-                "one ACTIVE row per task version; reused read-through by "
-                "the Mentor review graph (T6)"
+                "Archive since mentor-rebuild task 08: the cached task→criteria "
+                "decomposition (vision §1386, D11) reviews read until then — one "
+                "ACTIVE row per task version; the column comments describe the "
+                "table as it worked then. No code reads or writes it but the "
+                "soft-delete cascade, which marks its rows deleted with their "
+                "task; criteria lists live in task_criteria_lists."
             ),
         },
     )
@@ -3032,9 +3035,11 @@ class TaskReferenceOverride(Base):
 
     One row per (task, kind), replaced WHOLE rather than patched field by
     field. That is the deliberate difference from ``NodeSummaryFinal``, whose
-    author edits are partial (``PATCH .../final``): ratified 2026-09-19, one
-    form serves the reference here and the criteria layer of task 08, and a
-    whole replacement leaves no half-changed state behind.
+    author edits are partial (``PATCH .../final``): ratified 2026-09-19, a
+    whole replacement leaves no half-changed state behind. The author's edit
+    of a criteria list (task 08) is replaced whole too, but in a table of its
+    own, ``TaskCriteriaOverride``, which keeps every replaced edit as a
+    snapshot; the row here is overwritten in place.
 
     There are no versions here. The machine layer accumulates them because each
     generation is a new fact; the author's answers are one current truth, and

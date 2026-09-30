@@ -1,13 +1,12 @@
 """What a reference is, and how far it has got (mentor-rebuild task 06).
 
 Purpose:
-    A reference is what a task is checked against: today the answer key of a
-    test, in task 08 the mandatory points of a written task. Both are the same
-    entity with a different ``kind`` — a closed vocabulary rather than a free
-    string, for the same reason the feedback vocabularies are closed
-    (:mod:`course_supporter.feedback_kinds`): the first question anyone asks of
-    this table is "how many of each", and a free string turns that into
-    text-parsing.
+    A reference is what a task is checked against: the answer key of a test,
+    the one kind there is. A version still names its ``kind`` — a closed
+    vocabulary rather than a free string, for the same reason the feedback
+    vocabularies are closed (:mod:`course_supporter.feedback_kinds`): the first
+    question anyone asks of this table is "how many of each", and a free string
+    turns that into text-parsing.
 
 Interface:
     :class:`ReferenceKind` — which kind of reference a version carries.
@@ -19,9 +18,9 @@ Extending:
     cannot widen a CHECK in place. The database refuses a value it has not been
     told about, so Python and SQL cannot drift apart silently.
 
-    ``MANDATORY_POINTS`` is deliberately NOT declared ahead of task 08: a value
-    the database rejects is a value no row can carry, and declaring it early
-    would make the enum claim a capability the schema does not have yet.
+    The mandatory points of a written task, once planned here as a second
+    kind, are not one: since task 08 they live inside the criteria list, beside
+    their criterion (:mod:`course_supporter.homework.criteria_form`).
 """
 
 from __future__ import annotations

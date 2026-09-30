@@ -38,13 +38,19 @@ error_codes:
   - TASK_TEXT_TRUNCATED
   - NO_QUESTION_NUMBERS
   - KEY_DOES_NOT_MATCH_QUESTIONS
+  - NOT_A_TEXT_TASK
+  - AWAITING_FIRST_SUBMISSION
+  - UNKNOWN_CRITERION_ID
+  - CHECK_METHOD_NOT_ADMITTED
+  - UNKNOWN_CONCEPT
 keywords:
   - помилки
   - коди помилок
   - тест
   - YAML
   - коментар
-last_updated: 2026-09-28
+  - критерії
+last_updated: 2026-09-30
 ---
 
 # Коди помилок
@@ -141,3 +147,18 @@ last_updated: 2026-09-28
 | `NO_QUESTION_NUMBERS` | 422 | у тексті немає жодного номера питання | набрати номери `1.` на початку рядків власноруч |
 | `KEY_DOES_NOT_MATCH_QUESTIONS` | 422 | номери в ключі не збігаються з тестом | виправити ключ за `details` і надіслати цілком |
 | `GENERATION_IN_PROGRESS` | 409 | система ще пише пояснення або обробляє завдання | дочекатися, доки вона закінчить, і надіслати ключ ще раз |
+
+## Запити переліку критеріїв
+
+Коди, які видають запити переліку критеріїв текстового завдання (`…/criteria` і `…/criteria/override`,
+див. [Критерії текстового завдання](../authors/index.md#criteria)). Нічого з відмовленого запиту не
+зберігається.
+
+| код | стан | причина | що робити |
+|---|---|---|---|
+| [`NOT_A_TEXT_TASK`](../authors/index.md#NOT_A_TEXT_TASK) | 422 | матеріал — тест або не завдання | для тесту — позначки правильних відповідей у редакторі тесту |
+| [`TASK_NOT_READY`](../authors/index.md#TASK_NOT_READY) | 422 | завдання ще обробляється або його прибрано з курсу | дочекатися кінця обробки й повторити запит |
+| [`AWAITING_FIRST_SUBMISSION`](../authors/index.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає: його складуть після першої подачі | дочекатися першої подачі роботи студентом і тоді правити |
+| [`UNKNOWN_CRITERION_ID`](../authors/index.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
+| [`CHECK_METHOD_NOT_ADMITTED`](../authors/index.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
+| [`UNKNOWN_CONCEPT`](../authors/index.md#UNKNOWN_CONCEPT) | 422 | концепт не з `concepts` читання | вибрати концепт із `concepts` або прибрати його |

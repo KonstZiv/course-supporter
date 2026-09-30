@@ -139,8 +139,9 @@ class VersionWorkKind(StrEnum):
 
     Its own vocabulary rather than ``JobType``: the port speaks about money and
     must not learn how the work is scheduled (the same reason it is told
-    neither the stage nor the provider of a submission's calls). A second
-    member arrives with task 08's criteria decomposition.
+    neither the stage nor the provider of a submission's calls). The criteria
+    decomposition of task 08 would be a second member; it does not go through
+    the port (debt DD-SP-CB).
 
     * ``KEY_EXPLANATION`` — the explanations of a test's answer key.
     """

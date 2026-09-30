@@ -5,9 +5,10 @@ Requires ``docker compose up -d`` (PostgreSQL), migrated to head.
 ``test_schema_sync`` checks tables and columns but not comments (``DD-L4-A``),
 and a migration copies each comment from the ORM by hand — a drift between the
 two would pass every other test and leave the database saying one thing and the
-code another. For the two tables of task 08, and for the one comment it narrows
-(``task_references.kind``), this reads the live comments and compares them with
-the ORM's, table and column by column.
+code another. For the two tables of task 08, for the one column comment it
+narrows (``task_references.kind``) and for the table comment of the archive it
+retires (``task_criteria``, commit K6), this reads the live comments and
+compares them with the ORM's, table and column by column.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from sqlalchemy import Table, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.storage.orm import (
+    TaskCriteria,
     TaskCriteriaList,
     TaskCriteriaOverride,
     TaskReference,
@@ -81,3 +83,17 @@ class TestCommentsAreTheOrms:
 
         assert live["kind"] == orm_comment
         assert "mandatory_points" not in (live["kind"] or "")
+
+    async def test_the_archive_no_longer_says_the_review_reads_it(
+        self, db_session: AsyncSession
+    ) -> None:
+        """No review reads ``task_criteria`` since commit K4 (section 9,
+        decision 24), so its table comment says no review does."""
+        live = await db_session.execute(
+            text("SELECT obj_description(CAST(:table AS regclass), 'pg_class')"),
+            {"table": "task_criteria"},
+        )
+        comment = live.scalar_one()
+
+        assert comment == cast(Table, TaskCriteria.__table__).comment
+        assert "read-through" not in (comment or "")

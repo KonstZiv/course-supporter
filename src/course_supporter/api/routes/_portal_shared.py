@@ -116,7 +116,7 @@ def version_1_outcome(
       is sent as ``score``: 100 correct, 0 incorrect, anything between
       partially correct. A row without a score reads as 0, as the webhook's
       ``score`` does. For a version-1 review that is not a test, this is the
-      rule only until task 08, which revisits it.
+      rule only until task 09, which revisits it.
     """
     if structure.verdict is not None:
         passed = structure.verdict.passed

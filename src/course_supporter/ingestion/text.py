@@ -276,8 +276,10 @@ class TextProcessor(MaterialProcessor):
         model's line ranges.
 
         Reference text is assembled via the canonical
-        :meth:`SourceDocument.assemble_text` helper -- identical string
-        seen by Pass 2a's mapping prompt and by Stage 2's safety check.
+        :meth:`SourceDocument.assemble_text` helper -- the string Pass 2a
+        numbered for the mapping prompt (the model sees its numbered-line
+        rendering) and converted line ranges over, and the one Stage 2's
+        safety check reads.
 
         Drafts that already carry a non-None ``content`` are passed through
         verbatim (defensive: not expected in text/web canonical path).

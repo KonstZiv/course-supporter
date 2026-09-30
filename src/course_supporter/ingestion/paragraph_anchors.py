@@ -1,6 +1,7 @@
 """Paragraph positional-anchor bridge for text/web Pass 2b (Phase 3.3a).
 
-The text/web mapping LLM (Pass 2a) emits char offsets; this module turns a
+Pass 2a gives each text/web segment char offsets (the server derives them
+from the mapping model's line ranges); this module turns a
 segment's ``[start_pos, end_pos)`` char range into a ``[start_paragraph,
 end_paragraph]`` ordinal range over the authored chunks. It is the
 paragraph-axis sibling of ``presentation.chars_per_slide_cumsum`` — a

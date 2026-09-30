@@ -143,11 +143,14 @@ class SourceDocument(BaseModel):
     def assemble_text(self) -> str:
         """Mapping/slice reference text for LLM offset semantics.
 
-        Pass 2a routes this exact string through the mapping prompt; the
-        emitted ``start_pos`` / ``end_pos`` are inclusive/exclusive char
-        offsets into it. Pass 2b slices this same string to materialise
-        ``DocumentSegment.content``. Centralising the assembly here prevents
-        silent offset drift between those two stages.
+        Segment ``start_pos`` / ``end_pos`` are inclusive/exclusive char
+        offsets into this string, and Pass 2b slices it to materialise
+        ``DocumentSegment.content``. For text / web the mapping model reads
+        it as numbered lines and the server converts the line ranges into
+        these offsets; presentation, audio and video bridge their own units
+        (slides, words) onto it; code computes the offsets outright.
+        Centralising the assembly here prevents silent offset drift between
+        Pass 2a and Pass 2b.
 
         The Stage 2 LLM safety check uses :meth:`safety_text`, not this
         method — they coincide for single-stream source types but diverge

@@ -147,7 +147,8 @@ class WebProcessor(MaterialProcessor):
 
         Zero LLM calls. Mirrors ``TextProcessor.process_detail``: slices
         ``doc.assemble_text()`` per draft offset pair. Reference text is
-        the same string the mapping LLM saw in Pass 2a. Non-None
+        the string Pass 2a numbered for the mapping prompt and converted
+        the model's line ranges over. Non-None
         ``draft.content`` is passed through verbatim (defensive).
         """
         reference_text = doc.assemble_text()

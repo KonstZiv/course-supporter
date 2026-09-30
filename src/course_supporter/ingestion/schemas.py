@@ -25,9 +25,9 @@ segment offsets (for text/web the model now emits line ranges,
 ``end_pos > start_pos`` per segment; segments order strictly
 monotonic (0, 1, 2, ...); adjacency without gaps
 (``prev.end_pos == next.start_pos``); ``segments[0].start_pos == 0``.
-LLM JSON that violates the invariants raises ``ValidationError`` at
-parse time; this prevents orphan ``DocumentSummary`` commits when
-only Pass 2a succeeds but Pass 2b would reject the offsets.
+A draft that violates the invariants raises ``ValidationError`` when
+built; this prevents orphan ``DocumentSummary`` commits when only
+Pass 2a succeeds but Pass 2b would reject the offsets.
 
 **``content_char_count`` server-side derivation (fixup 2.1.7.2).** The
 LLM no longer emits ``content_char_count``; the field was a vector
@@ -37,15 +37,18 @@ on a 10017-char Ukrainian document). The total-cover invariant
 ``segments[-1].end_pos == reference_text_length`` is now asserted
 inside ``DocumentSummaryDraft._coverage_matches_reference_length``,
 which reads the deterministic server-derived length from Pydantic
-``ValidationInfo.context`` (key ``reference_text_length``).
-``api/tasks.py`` passes ``len(doc.assemble_text())`` into the
-context via the StageRouter's ``response_validator`` closure; a
-:class:`pydantic.ValidationError` raised inside that closure is
-translated to :class:`StructuralRetryError` so the StageRouter
-ladder retry mechanism (KD16) can attempt instructor-style retry
-and fall through to alternative providers before declaring final
-failure. Architectural principle: never ask the LLM for quantities
-we can compute deterministically.
+``ValidationInfo.context`` (key ``reference_text_length``). No model
+emits this draft's JSON any more: text / web build it from line ranges
+already checked in the StageRouter ``response_validator`` closure
+(:class:`TextMappingResponse`, where a failure becomes
+:class:`StructuralRetryError` and drives the retry + ladder fallback,
+KD16), and code builds it from computed offsets -- both pass the context
+AFTER the router, so a cover failure here means a code defect, not a
+model error, and triggers no retry. Presentation, audio and video keep
+the closure-to-retry mechanism on their own mapping schemas (slides,
+word indices) and build this draft without the context. Architectural
+principle: never ask the LLM for quantities we can compute
+deterministically.
 
 The coverage check is gated on context presence -- callers that
 construct drafts without the context (existing unit-test fixtures,
@@ -390,11 +393,13 @@ class DocumentSummaryDraft(BaseModel):
         When parsed via
         ``DocumentSummaryDraft.model_validate_json(content,
         context={"reference_text_length": N})``, asserts that
-        ``segments[-1].end_pos == N``. The caller (process_macro
-        closure passed as StageRouter ``response_validator``)
-        translates the resulting ``ValidationError`` into
-        :class:`StructuralRetryError`, so coverage mismatch drives
-        the existing instructor-style retry + ladder fallback.
+        ``segments[-1].end_pos == N``. Text / web
+        (:func:`~course_supporter.ingestion.text_mapping.to_summary_draft`)
+        and code validate with this context after the StageRouter, from
+        offsets that cover the text by construction, so a mismatch is a
+        code defect and raises without a retry; the model-facing cover
+        check that drives retries is
+        :meth:`TextMappingResponse._segments_cover_all_lines`.
 
         Skipped silently when context is ``None`` or
         ``reference_text_length`` is absent (unit-test fixtures,

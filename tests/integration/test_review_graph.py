@@ -23,6 +23,13 @@ from course_supporter.agents.mentor_review import (
     NodeCourseEvaluation,
     ReconciliationMatch,
 )
+from course_supporter.homework.criteria_form import Criterion
+from course_supporter.homework.criteria_list_service import (
+    CriteriaInForce,
+    CriteriaLayer,
+    CriteriaUnavailable,
+    UnavailableReason,
+)
 from course_supporter.homework.review_config import get_mentor_review_config
 from course_supporter.homework.review_graph import MentorReviewService
 from course_supporter.models import review_structure
@@ -32,24 +39,28 @@ from course_supporter.storage.orm import (
     CourseNode,
     HomeworkSubmission,
     Student,
-    TaskCriteria,
 )
 
 pytestmark = pytest.mark.requires_db
 
 
-class _FakeCriteria:
-    """Stands in for CriteriaCacheService — returns a fixed row (or None)."""
+_NO_LIST = CriteriaUnavailable(UnavailableReason.TASK_NOT_READY)
 
-    def __init__(self, row: TaskCriteria | None = None) -> None:
-        self.row = row
+
+class _FakeCriteria:
+    """Stands in for CriteriaListService — a fixed list in force, or none."""
+
+    def __init__(
+        self, listed: CriteriaInForce | CriteriaUnavailable = _NO_LIST
+    ) -> None:
+        self.listed = listed
         self.last_id: uuid.UUID | None = None
 
-    async def get_or_compute(
+    async def get_or_compose(
         self, authored_document_id: uuid.UUID
-    ) -> TaskCriteria | None:
+    ) -> CriteriaInForce | CriteriaUnavailable:
         self.last_id = authored_document_id
-        return self.row
+        return self.listed
 
 
 class _FakeAgent:
@@ -156,7 +167,7 @@ class TestAssembly:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent(delta=-3)
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         output = await service.review(
             submission=submission, submission_text="def f(): ...", language="ukr"
@@ -181,8 +192,75 @@ class TestAssembly:
         assert output.review_result.verdict.passed is True
         assert output.review_result.verdict.correctness == "partially_correct"
         assert output.review_markdown == "# Review\n\nWell done."
-        # No criteria available -> 1A got an empty list; degrade, no crash.
+        # No criteria available -> 1A got an empty list and the result says
+        # why; degrade, no crash (task 08, decision 7).
         assert agent.calls["node_course"]["criteria"] == []
+        assert output.review_result.criteria_unavailable == "task_not_ready"
+
+    async def test_the_list_in_force_reaches_1a_as_weighted_pairs(
+        self,
+        db_session: AsyncSession,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        student = await _make_student(db_session, seed_root_node.tenant_id)
+        submission = await _make_submission(
+            db_session,
+            tenant_id=seed_root_node.tenant_id,
+            student_id=student.id,
+            node_id=seed_root_node.id,
+            authored_document_id=seed_material_entry.id,
+        )
+        listed = CriteriaInForce(
+            criteria=(
+                Criterion.model_validate(
+                    {
+                        "id": "c1",
+                        "text": "Handles n = 0",
+                        "evidence": "returns 1",
+                        "weight": "must",
+                        "check_method": "mandatory_points",
+                        "soft_descent": False,
+                        "concepts": [],
+                        "mandatory_points": [
+                            {"id": "c1.p1", "text": "returns 1 for 0"},
+                            {"id": "c1.p2", "text": "no recursion error"},
+                        ],
+                    }
+                ),
+                Criterion.model_validate(
+                    {
+                        "id": "c2",
+                        "text": "Names are clear",
+                        "evidence": "readable names",
+                        "weight": "may",
+                        "check_method": "model_verdict",
+                        "soft_descent": False,
+                        "concepts": [],
+                        "mandatory_points": [],
+                    }
+                ),
+            ),
+            layer=CriteriaLayer.MODEL,
+            source_id=uuid.uuid4(),
+        )
+        agent = _FakeAgent()
+
+        output = await _service(db_session, agent, _FakeCriteria(listed)).review(
+            submission=submission, submission_text="def f(): ...", language="ukr"
+        )
+
+        # Today's Mentor reads pairs: the weight leads the text in English and
+        # the mandatory points follow the evidence (task 08, decision 3.5).
+        assert agent.calls["node_course"]["criteria"] == [
+            {
+                "statement": "[must] Handles n = 0",
+                "evidence": "returns 1 — mandatory points: returns 1 for 0; "
+                "no recursion error",
+            },
+            {"statement": "[may] Names are clear", "evidence": "readable names"},
+        ]
+        assert output.review_result.criteria_unavailable is None
 
     async def test_denoise_delta_is_clamped_to_cap(
         self,
@@ -199,7 +277,7 @@ class TestAssembly:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent(delta=50)  # way past the +-10 cap
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         output = await service.review(
             submission=submission, submission_text="x", language="ukr"
@@ -228,7 +306,7 @@ class TestContextRouting:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent()
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         await service.review(submission=submission, submission_text="x", language="ukr")
 
@@ -269,7 +347,7 @@ class TestHistory:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent()
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         await service.review(submission=current, submission_text="x", language="ukr")
 
@@ -303,7 +381,7 @@ class TestHistory:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent()
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         await service.review(submission=current, submission_text="x", language="ukr")
 
@@ -370,7 +448,7 @@ class TestHistory:
             authored_document_id=seed_material_entry.id,
         )
         agent = _FakeAgent()
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         output = await service.review(
             submission=current, submission_text="x", language="ukr"
@@ -408,7 +486,7 @@ class TestHallucinationGuard:
                 )
             ],
         )
-        service = _service(db_session, agent, _FakeCriteria(None))
+        service = _service(db_session, agent, _FakeCriteria())
 
         output = await service.review(
             submission=submission, submission_text="x", language="ukr"

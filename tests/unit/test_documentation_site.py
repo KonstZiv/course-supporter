@@ -10,7 +10,9 @@ lock runs wherever the tests run, CI included.
 
 The two refusals of a student's comment (hotfix 6) are held the same way: the
 errors page lists them, and the API page — where a school's platform reads
-about the comment — has a section for each.
+about the comment — has a section for each. So are the refusals of the
+criteria routes (task 08): the errors page lists each with a row that leads to
+its anchor on the authors' page.
 
 That each link finds its anchor is the site build's to prove: ``mkdocs build
 --strict`` fails on a link to an anchor a page does not have
@@ -29,6 +31,7 @@ import yaml
 # ``api/__init__`` eagerly imports the FastAPI app -- so importing the door
 # module first hits a pre-existing circular import (``test_policies.py``).
 import course_supporter.api  # noqa: F401
+from course_supporter.homework.criteria_edit_service import CriteriaRefusalCode
 from course_supporter.homework.submission_core import (
     STUDENT_NOTE_REJECTED,
     STUDENT_NOTE_TOO_LONG,
@@ -42,6 +45,12 @@ _API = _PAGES / "api" / "index.md"
 
 # The first cell of a table row: the code, linked or as it is.
 _ROW_CODE = re.compile(r"^\| \[?`([A-Z][A-Z0-9_]+)`", re.MULTILINE)
+# The first cell of a row whose code links to its own anchor on the authors'
+# page. ``TASK_NOT_READY`` also has an unlinked row among the answer-key codes,
+# which :data:`_ROW_CODE` would count for the criteria routes too.
+_ROW_LINKED_TO_AUTHORS = re.compile(
+    r"^\| \[`([A-Z][A-Z0-9_]+)`\]\(\.\./authors/index\.md#\1\)", re.MULTILINE
+)
 # An anchor the page declares (attr_list): at the end of a heading, or of a
 # table cell. Anywhere else the braces are text, not an anchor.
 _ANCHOR = re.compile(r"\{#([A-Z][A-Z0-9_]+)\}(?=[ \t]*(?:\||$))", re.MULTILINE)
@@ -94,3 +103,22 @@ class TestTheSiteNamesTheCodesOfAStudentsComment:
 
         missing = self._CODES - anchors
         assert not missing, f"no anchor on the API page: {sorted(missing)}"
+
+
+class TestTheSiteNamesEveryCodeOfTheCriteriaRoutes:
+    _CODES = frozenset(code.value for code in CriteriaRefusalCode)
+
+    def test_the_errors_page_lists_them_with_a_linked_row_each(self) -> None:
+        text = _ERRORS.read_text(encoding="utf-8")
+
+        assert self._CODES, "the vocabulary under test is not empty"
+        missing = self._CODES - set(_front_matter(text)["error_codes"])
+        assert not missing, f"not in error_codes: {sorted(missing)}"
+        missing = self._CODES - set(_ROW_LINKED_TO_AUTHORS.findall(text))
+        assert not missing, f"no linked row on the errors page: {sorted(missing)}"
+
+    def test_the_authors_page_has_an_anchor_for_each(self) -> None:
+        anchors = set(_ANCHOR.findall(_AUTHORS.read_text(encoding="utf-8")))
+
+        missing = self._CODES - anchors
+        assert not missing, f"no anchor on the authors' page: {sorted(missing)}"

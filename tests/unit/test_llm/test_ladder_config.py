@@ -374,15 +374,17 @@ class TestRealConfigs:
         # output ceiling on reasoning, returned an empty body and the stage was
         # paid twice. 32768 is the ratified value — fourfold margin over the
         # largest measured success, and bounded by the 900 s HTTP read timeout
-        # (see ladders_mentor.yaml). The provider stays thinking-on and the
-        # fallback rungs keep 8192: a swap or a silent revert breaks this test.
+        # (see ladders_mentor.yaml). The provider stays thinking-on. The
+        # fallback rungs carry 16384 since task 08 (section 9, decision 6):
+        # room for the mandatory points of the v2 form. A swap or a silent
+        # revert breaks this test.
         config = load_ladder_config(Path("config"))
         ladder = config.get_stage("criteria_decomposition").ladder
 
         assert ladder[0].provider == "deepseek_thinking"
         assert ladder[0].model == "deepseek-v4-pro"
         assert ladder[0].max_output_tokens == 32768
-        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [16384, 16384]
 
     def test_layered_evaluation_node_course_rung_1_carries_hotfix_2_ceiling(
         self,

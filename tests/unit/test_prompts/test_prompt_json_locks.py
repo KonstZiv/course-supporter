@@ -7,7 +7,7 @@ and ``&`` stay as they are, only ``<`` and ``>`` are escaped (``\\u003c`` /
 
 * Static lock: no prompt template uses Jinja2's stock ``tojson``, which
   escapes every non-ASCII letter — unless it is allowed below with a reason.
-* Dynamic lock: the function itself, and each of the six places that put
+* Dynamic lock: the function itself, and each of the seven places that put
   JSON into a prompt, driven through the code that builds the prompt (the
   agent or pipeline step, then the stage's own template rendered from the
   render context the step handed to the router — what ``StageRouter`` does).
@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
 from course_supporter.agents.methodist import MethodistAgent
 from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSegmentDraft
@@ -131,6 +132,29 @@ class _CapturingRouter:
             provider_used="mock",
             model_used="mock-model",
             attempt_count=1,
+        )
+
+    async def execute_stage(
+        self,
+        stage: Any,
+        stage_name: str,
+        /,
+        *,
+        response_validator: Any = None,
+        expects_json: bool = False,
+        contents: Any = None,
+        stop_on_output_ceiling: bool = False,
+        money_ceiling_usd: float | None = None,
+        **render_context: Any,
+    ) -> StageResult:
+        """The entry of a caller holding its own stage — the same capture."""
+        del stage, stop_on_output_ceiling, money_ceiling_usd
+        return await self.execute_for_stage(
+            stage_name,
+            response_validator=response_validator,
+            expects_json=expects_json,
+            contents=contents,
+            **render_context,
         )
 
 
@@ -448,3 +472,44 @@ async def test_video_pass_2c_prompt() -> None:
 
     [(stage, context)] = router.calls
     _assert_denoise_prompt(_render(stage, context))
+
+
+# ── Dynamic lock: criteria decomposition v2 (tojson_unicode in the template) ──
+
+_CRITERIA_REPLY = json.dumps(
+    {
+        "criteria": [
+            {
+                "text": "Є базовий випадок.",
+                "evidence": "Явне повернення для найменшого входу.",
+                "weight": "must",
+                "check_method": "model_verdict",
+            }
+        ]
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_criteria_composition_prompt() -> None:
+    router = _CapturingRouter(_CRITERIA_REPLY)
+
+    await CriteriaDecomposerAgent(router).compose(  # type: ignore[arg-type]
+        task_title="Факторіал",
+        task_description="Рекурсія.",
+        task_text="Напишіть рекурсивну функцію.",
+        task_type="task",
+        language="Ukrainian",
+        node_description="Рекурсія в Python.",
+        node_concepts=_HOSTILE,
+        root_concepts=_HOSTILE,
+    )
+
+    [(stage, context)] = router.calls
+    assert stage == "criteria_decomposition"
+    text = _render(stage, context)
+    fragment = _expected(_HOSTILE, sort_keys=True)
+    _assert_fragment(fragment, _HOSTILE)
+    assert f"<node_concepts>\n{fragment}\n</node_concepts>" in text
+    assert f"<course_concepts>\n{fragment}\n</course_concepts>" in text
+    assert text.count("\\u") == 2 * _ANGLES_PER_LIST

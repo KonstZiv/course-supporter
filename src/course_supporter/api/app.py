@@ -22,6 +22,7 @@ from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
+from course_supporter.api.routes.criteria import router as criteria_router
 from course_supporter.api.routes.documents import router as documents_router
 from course_supporter.api.routes.feedback import router as feedback_router
 from course_supporter.api.routes.homework import router as homework_router
@@ -262,6 +263,7 @@ app.include_router(nodes_router, prefix="/api/v1")
 app.include_router(node_summaries_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(references_router, prefix="/api/v1")
+app.include_router(criteria_router, prefix="/api/v1")
 app.include_router(test_objects_router, prefix="/api/v1")
 app.include_router(homework_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")

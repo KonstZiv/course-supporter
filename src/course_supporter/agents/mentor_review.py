@@ -9,7 +9,7 @@ Phases (ratified decision 1 — phase 1 split in two by grounding seam):
 
 * :meth:`MentorReviewAgent.evaluate_node_course` — layers 1+2 (node, course):
   rubric application, grounded in the node/course ``NodeSummaryFinal``, the task
-  criteria (T4 cache), and ``author_mentor_notes`` (D6).
+  criteria (the list in force, task 08), and ``author_mentor_notes`` (D6).
 * :meth:`MentorReviewAgent.evaluate_industry` — layer 3 (industry): autonomous
   professional judgment from model knowledge, deliberately course-free (no
   criteria, no Final, no author notes) so the layer is not anchored by the

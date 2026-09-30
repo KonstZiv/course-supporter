@@ -58,10 +58,11 @@ Why the digest is canonical:
     passed by accident.
 
 Extending:
-    A second kind of reference (task 08's mandatory points) checks itself
-    against the same task text but not against question numbers. It gets its own
-    comparison function beside :func:`compare_to_questions`; the parsing and the
-    digest are reusable as they stand.
+    A second kind of reference would check itself against the same task text
+    but not against question numbers. It would get its own comparison function
+    beside :func:`compare_to_questions`; the parsing and the digest are reusable
+    as they stand. The mandatory points of a written task, once planned as
+    that kind, live in the criteria list since task 08.
 """
 
 from __future__ import annotations

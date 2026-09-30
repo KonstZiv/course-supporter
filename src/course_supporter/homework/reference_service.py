@@ -28,9 +28,9 @@ The lazy path, and why the reader writes:
     (``storage/document_summary_repository.py``), and nothing downstream is
     told. So the state of a reference is computed by its first READER — this
     service, called from the author's routes today and from task 07's
-    submission path tomorrow — exactly as the criteria cache computes its own
-    (``homework/criteria_cache.py``: read the document, compare the version
-    keys, decide). The ingestion pipeline stays untouched (ratified
+    submission path tomorrow — exactly as the criteria list of a task is
+    judged (``homework/criteria_list_service.py``: read the document, compare
+    the version keys, decide). The ingestion pipeline stays untouched (ratified
     2026-09-19), and the price is that a read can write: carrying the author's
     answers onto a new task version happens when someone looks, not when the
     version appears. Two readers never write: :meth:`ReferenceService.key_applies`

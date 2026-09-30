@@ -16,6 +16,17 @@ from pydantic import (
 )
 
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
+from course_supporter.homework.criteria_edit_service import CriteriaStatus
+from course_supporter.homework.criteria_form import (
+    MAX_CONCEPTS,
+    MAX_CRITERIA,
+    MAX_POINT_CHARS,
+    MAX_POINTS,
+    MAX_TEXT_CHARS,
+    Criterion,
+    CriterionEdit,
+)
+from course_supporter.homework.criteria_list_service import CriteriaLayer
 from course_supporter.homework.test_completeness import IncompleteCode
 from course_supporter.homework.test_object import PublicationState
 from course_supporter.homework.test_object_service import DraftCheckState
@@ -1110,6 +1121,115 @@ class ReferenceViewResponse(BaseModel):
             "generated explanation of a doubted question; the author's own "
             "explanation of it they are. Empty when the model doubts nothing, "
             "until ``ready``, and for explanations written before doubts existed."
+        ),
+    )
+
+
+class CriteriaOverrideRequest(BaseModel):
+    """Body of PUT /documents/{id}/criteria/override (mentor-rebuild task 08).
+
+    The author's criteria list, whole: a criterion left out is out of the edit,
+    and there is no partial form — a review uses the list as one. A criterion
+    or a mandatory point sent with its ``id`` keeps it; one sent without is new
+    and gets its id from the code.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    criteria: list[CriterionEdit] = Field(
+        min_length=1,
+        max_length=MAX_CRITERIA,
+        description=(
+            "Every criterion of the edit, in order. Each has ``id`` (omitted for "
+            f"a new criterion), ``text`` and ``evidence`` (up to {MAX_TEXT_CHARS} "
+            "characters each), ``weight`` (``must``, ``should`` or ``may``), "
+            "``check_method`` (``model_verdict``, ``mandatory_points``, or "
+            "``code_test`` for a project), ``concepts`` (up to "
+            f"{MAX_CONCEPTS}, from the reading's ``concepts``) and "
+            f"``mandatory_points`` (up to {MAX_POINTS}, each an ``id`` — omitted "
+            f"for a new point — and a ``text`` of up to {MAX_POINT_CHARS} "
+            "characters; there exactly when ``check_method`` is "
+            "``mandatory_points``). ``soft_descent`` is the code's and is not sent."
+        ),
+    )
+
+    @field_validator("criteria")
+    @classmethod
+    def _ids_do_not_repeat(cls, value: list[CriterionEdit]) -> list[CriterionEdit]:
+        """A kept criterion is sent once: two with one id claim one criterion."""
+        ids = [criterion.id for criterion in value if criterion.id is not None]
+        repeated = sorted({i for i in ids if ids.count(i) > 1})
+        if repeated:
+            msg = f"criterion ids repeat: {repeated}"
+            raise ValueError(msg)
+        return value
+
+
+class CriteriaInForceResponse(BaseModel):
+    """The list a review of the task's current version uses, and whose it is."""
+
+    layer: CriteriaLayer = Field(
+        description="``author`` — the author's edit; ``model`` — the model's list."
+    )
+    criteria: list[Criterion]
+
+
+class CriteriaViewResponse(BaseModel):
+    """What the author sees about a task's criteria (mentor-rebuild task 08).
+
+    Returned by all three routes, as the key's routes do, so the author reads
+    one shape — after an edit, after a reset, and when merely looking.
+    """
+
+    status: CriteriaStatus = Field(
+        description=(
+            "``ready`` — a list is in force; ``awaiting_first_submission`` — none "
+            "yet: it is composed after the first submission of a student's work."
+        )
+    )
+    message: str | None = Field(
+        default=None,
+        description=(
+            "While no list is in force, when it will be — for the author, in "
+            "Ukrainian; null otherwise."
+        ),
+    )
+    model: list[Criterion] | None = Field(
+        default=None,
+        description=(
+            "The model's list for the current version of the task; null while "
+            "none is composed."
+        ),
+    )
+    author: list[Criterion] | None = Field(
+        default=None,
+        description=(
+            "The author's edit for the current version; null when there is none. "
+            "An edit of an earlier version is not shown: it is not carried to a "
+            "new one."
+        ),
+    )
+    in_force: CriteriaInForceResponse | None = Field(
+        default=None,
+        description=(
+            "The list a review uses: the author's edit when there is one, else "
+            "the model's list; null while neither is."
+        ),
+    )
+    contradictions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Where the task contradicts the description of its node, as found "
+            "when the model's list was composed — for the author only, never a "
+            "criterion or a score."
+        ),
+    )
+    concepts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The concepts a criterion of this task may name: the main concepts "
+            "of its node and course, then any the list in force or the model's "
+            "list names beyond them."
         ),
     )
 

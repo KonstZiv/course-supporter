@@ -1226,7 +1226,9 @@ async def arq_process_homework(
                 # Refresh so the graph reads fresh attributes after the safety
                 # commits expired the in-memory submission.
                 await session.refresh(submission)
-                review_service = build_mentor_review_service(session, stage_router)
+                review_service = build_mentor_review_service(
+                    session, stage_router, session_factory
+                )
                 review_output = await review_service.review(
                     submission=submission,
                     submission_text=submission_text,

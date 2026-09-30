@@ -22,7 +22,8 @@ Domain responsibilities split (probe-resolved S3 + S5, ratified):
   Pass 2 — Phase 3.2.3b territory).
 * **Deterministic by code, never asked of the LLM** (KD-2.1-O extended):
   ``main_concepts`` / ``secondary_concepts`` (union over own
-  DocumentSummary + children NodeSummaryRaw concepts);
+  educational DocumentSummary + children NodeSummaryRaw concepts;
+  methodological documents are left out);
   ``own_documents_count`` / ``own_chars_count`` /
   ``cumulative_documents_count`` / ``cumulative_chars_count``.
 
@@ -38,7 +39,8 @@ infrastructure context.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -50,9 +52,11 @@ from course_supporter.llm.error_categories import (
     LadderExhaustedError,
     StructuralRetryError,
 )
+from course_supporter.models.source import MaterialRole, SourceType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    DocumentSegment,
     DocumentSummary,
     NodeSummaryRaw,
 )
@@ -63,6 +67,121 @@ if TYPE_CHECKING:
     from course_supporter.llm.stage_router import StageRouter
 
 logger = structlog.get_logger(__name__)
+
+FULL_TEXT_BUDGET_CHARS: Final[int] = 200_000
+"""Ceiling on the full text one bottom-up call carries, in characters.
+
+A safeguard against the exceptional node, not a working limit. Both rungs of
+``methodist_bottomup`` have a 1M-token context and a 0.5 input-budget ratio;
+200k characters of Ukrainian is ~80k tokens, a small share of that window,
+while a typical lesson (a few methodological notes and one or two tasks)
+carries 10-40k characters. Filled in priority order — methodological
+documents, then tasks; what does not fit goes in as its summary and is named
+in ``methodist_observations`` (enforced by the response validator).
+"""
+
+_CONTIGUOUS_SLICE_SOURCES: Final[frozenset[str]] = frozenset(
+    {SourceType.TEXT.value, SourceType.WEB.value}
+)
+"""Source types whose segments are contiguous slices of one reference text.
+
+Their segments join back with nothing between (``homework/task_context.py``
+``load_task_source_text``); every other source type's segments are separate
+pieces of text and are joined with a blank line.
+"""
+
+
+@dataclass(frozen=True)
+class OwnDocument:
+    """One READY own document of a node, as the bottom-up pass reads it.
+
+    ``full_text`` is read only for the documents the pass shows in full —
+    methodological documents and tasks — and is ``None`` for the rest.
+    """
+
+    title: str
+    description: str
+    main_concepts: list[str]
+    secondary_concepts: list[str]
+    content_char_count: int
+    material_role: str
+    task_type: str | None
+    full_text: str | None = None
+
+    @property
+    def is_methodological(self) -> bool:
+        return self.material_role == MaterialRole.METHODOLOGICAL.value
+
+    @property
+    def is_task(self) -> bool:
+        return self.task_type is not None
+
+
+@dataclass(frozen=True)
+class DocumentBlocks:
+    """The own documents of a node split into the three prompt blocks.
+
+    Each entry is the render dict of one document. ``full_text`` is set when
+    the document is shown in full; otherwise its summary fields are shown.
+    ``summarised_titles`` lists the documents that were due in full but went
+    in as a summary because :data:`FULL_TEXT_BUDGET_CHARS` ran out.
+    """
+
+    methodological: list[dict[str, Any]]
+    tasks: list[dict[str, Any]]
+    educational: list[dict[str, Any]]
+    summarised_titles: list[str]
+
+
+def join_segment_texts(contents: list[str], source_type: str) -> str:
+    """Rebuild a document's text from its active segments in position order."""
+    separator = "" if source_type in _CONTIGUOUS_SLICE_SOURCES else "\n\n"
+    return separator.join(contents)
+
+
+def build_document_blocks(
+    docs: list[OwnDocument], *, budget: int = FULL_TEXT_BUDGET_CHARS
+) -> DocumentBlocks:
+    """Split own documents into prompt blocks and spend the full-text budget.
+
+    Methodological documents claim the budget first, then tasks, each in its
+    input order. A document either fits whole or goes in as its summary — the
+    text is never cut. A later, shorter document may still fit after an
+    earlier one did not. A document with no text (no active segments) goes in
+    as its summary without counting as over budget.
+    """
+    entries = [_document_entry(d) for d in docs]
+    methodological = [i for i, d in enumerate(docs) if d.is_methodological]
+    tasks = [i for i, d in enumerate(docs) if d.is_task and not d.is_methodological]
+    remaining = budget
+    summarised: list[str] = []
+    for i in methodological + tasks:
+        text = docs[i].full_text or ""
+        if text and len(text) <= remaining:
+            entries[i]["full_text"] = text
+            remaining -= len(text)
+        elif text:
+            entries[i]["summarised_for_budget"] = True
+            summarised.append(docs[i].title)
+    in_full = set(methodological + tasks)
+    return DocumentBlocks(
+        methodological=[entries[i] for i in methodological],
+        tasks=[entries[i] for i in tasks],
+        educational=[e for i, e in enumerate(entries) if i not in in_full],
+        summarised_titles=summarised,
+    )
+
+
+def _document_entry(doc: OwnDocument) -> dict[str, Any]:
+    return {
+        "title": doc.title,
+        "description": doc.description,
+        "task_type": doc.task_type,
+        "main_concepts": list(doc.main_concepts),
+        "secondary_concepts": list(doc.secondary_concepts),
+        "full_text": None,
+        "summarised_for_budget": False,
+    }
 
 
 class Pass1ChildRawMissingError(RuntimeError):
@@ -206,7 +325,7 @@ class _MethodistBottomupResult(BaseModel):
 
     Concept fields are intentionally absent — those are computed
     deterministically in code per KD-2.1-O (algorithmic union over
-    own DocumentSummary concepts union children's NodeSummaryRaw concepts).
+    own educational documents' concepts union children's NodeSummaryRaw concepts).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -245,6 +364,12 @@ class _MethodistTopdownResult(BaseModel):
     observations: list[str] = Field(default_factory=list)
 
 
+def _unreported_summarised(titles: list[str], observations: list[str]) -> list[str]:
+    """Titles of summarised documents that no observation names."""
+    text = "\n".join(observations).casefold()
+    return [t for t in titles if t.casefold() not in text]
+
+
 # ── MethodistAgent ────────────────────────────────────────────────
 
 
@@ -277,8 +402,12 @@ class MethodistAgent:
 
         Read inputs per S5 / KD10 read policy:
 
-        * Own DocumentSummary rows for this node's ready AuthoredDocuments
-          (NOT DocumentSegment — KD10 read policy MVP).
+        * Own DocumentSummary rows for this node's ready AuthoredDocuments,
+          with each document's ``material_role`` and ``task_type``.
+          Methodological documents and tasks are read in full from their
+          active DocumentSegment rows, within
+          :data:`FULL_TEXT_BUDGET_CHARS`; the other educational documents
+          go in as their summary (:func:`build_document_blocks`).
         * Children CourseNodes via ``parent_id == node.id``.
         * Children's NodeSummaryRaw rows for their ``compressed_summary``
           and concept fields (KD10 guarantees they are committed in
@@ -296,19 +425,18 @@ class MethodistAgent:
         skips, raise :class:`MethodistInputBudgetExhaustedError` for
         domain-level operator messaging.
         """
-        own_docs = await self._fetch_own_ready_summaries(node.id)
+        own_docs = await self._fetch_own_documents(node.id)
         child_raws = await self._fetch_children_raws(node.id)
         course_title, language = await self._resolve_course_context(node)
 
-        own_documents_payload = [
-            {
-                "title": d.title or "",
-                "description": d.description or "",
-                "main_concepts": list(d.main_concepts or []),
-                "secondary_concepts": list(d.secondary_concepts or []),
-            }
-            for d in own_docs
-        ]
+        blocks = build_document_blocks(own_docs, budget=FULL_TEXT_BUDGET_CHARS)
+        if blocks.summarised_titles:
+            logger.warning(
+                "methodist_bottomup_full_text_budget_exceeded",
+                node_id=str(node.id),
+                budget_chars=FULL_TEXT_BUDGET_CHARS,
+                summarised_documents=blocks.summarised_titles,
+            )
         children_compressed = [
             {
                 "title": c["title"],
@@ -325,7 +453,7 @@ class MethodistAgent:
         # non-empty when the node carries any input. An empty response
         # would otherwise pass schema validation (all fields default to
         # empty) and produce a silent DONE on a content-bearing node.
-        has_inputs = bool(own_documents_payload) or bool(children_compressed)
+        has_inputs = bool(own_docs) or bool(children_compressed)
 
         parsed: dict[str, _MethodistBottomupResult] = {}
 
@@ -361,17 +489,33 @@ class MethodistAgent:
                         "methodist_bottomup_semantic_minimum_violated",
                         node_id=str(node.id),
                         empty_fields=missing,
-                        own_documents=len(own_documents_payload),
+                        own_documents=len(own_docs),
                         children=len(children_compressed),
                     )
                     raise StructuralRetryError(
                         f"Required fields are empty: {missing}. The node has "
-                        f"{len(own_documents_payload)} own documents and "
+                        f"{len(own_docs)} own documents and "
                         f"{len(children_compressed)} children — title, "
                         f"description, and compressed_summary MUST contain "
                         f"a synthesis of those inputs. Regenerate with "
                         f"non-empty values for the listed fields."
                     )
+            unreported = _unreported_summarised(
+                blocks.summarised_titles, result.methodist_observations
+            )
+            if unreported:
+                logger.warning(
+                    "methodist_bottomup_budget_observation_missing",
+                    node_id=str(node.id),
+                    unreported_documents=unreported,
+                )
+                raise StructuralRetryError(
+                    "These documents were given as a summary, not in full, "
+                    f"because the full-text budget ran out: {unreported}. "
+                    "methodist_observations MUST contain an observation that "
+                    "names each of them by its exact title and says it was "
+                    "read from its summary only. Regenerate the response."
+                )
             parsed["result"] = result
 
         try:
@@ -382,8 +526,11 @@ class MethodistAgent:
                 course_title=course_title,
                 node_title=node.title,
                 language=language,
-                own_document_count=len(own_documents_payload),
-                own_documents=own_documents_payload,
+                own_document_count=len(own_docs),
+                methodological_documents=blocks.methodological,
+                task_documents=blocks.tasks,
+                educational_documents=blocks.educational,
+                summarised_documents=blocks.summarised_titles,
                 child_count=len(children_compressed),
                 children_compressed=children_compressed,
             )
@@ -612,17 +759,25 @@ class MethodistAgent:
             return False
         return all(r.startswith("input budget exceeded") for _, _, r in attempts)
 
-    async def _fetch_own_ready_summaries(
-        self, course_node_id: Any
-    ) -> list[DocumentSummary]:
-        """READY own AuthoredDocuments with their DocumentSummary attached.
+    async def _fetch_own_documents(self, course_node_id: Any) -> list[OwnDocument]:
+        """READY own AuthoredDocuments with their summary, role and task type.
 
         READY ≡ ``error_message IS NULL AND job_id IS NULL`` (mirrors
         the live ``MaterialState.READY`` property on ORM). Soft-deleted
-        rows are excluded on both joins.
+        rows are excluded on both joins. A test written in the system is
+        never processed, has no DocumentSummary and so is not read here.
+        Ordered by the author's document order for a stable prompt.
+
+        Methodological documents and tasks carry ``full_text`` — their
+        active segments in position order (:func:`join_segment_texts`).
         """
         result = await self._session.execute(
-            select(DocumentSummary)
+            select(
+                DocumentSummary,
+                AuthoredDocument.material_role,
+                AuthoredDocument.task_type,
+                AuthoredDocument.source_type,
+            )
             .join(
                 AuthoredDocument,
                 AuthoredDocument.id == DocumentSummary.authored_document_id,
@@ -632,8 +787,46 @@ class MethodistAgent:
             .where(AuthoredDocument.error_message.is_(None))
             .where(AuthoredDocument.job_id.is_(None))
             .where(DocumentSummary.deleted_at.is_(None))
+            .order_by(AuthoredDocument.order, AuthoredDocument.id)
         )
-        return list(result.scalars().all())
+        rows = list(result.all())
+        full_text_sources = {
+            summary.id: source_type
+            for summary, role, task_type, source_type in rows
+            if role == MaterialRole.METHODOLOGICAL.value or task_type is not None
+        }
+        texts = await self._fetch_full_texts(full_text_sources)
+        return [
+            OwnDocument(
+                title=summary.title or "",
+                description=summary.description or "",
+                main_concepts=list(summary.main_concepts or []),
+                secondary_concepts=list(summary.secondary_concepts or []),
+                content_char_count=summary.content_char_count or 0,
+                material_role=role,
+                task_type=task_type,
+                full_text=texts.get(summary.id),
+            )
+            for summary, role, task_type, _source_type in rows
+        ]
+
+    async def _fetch_full_texts(self, source_types: dict[Any, str]) -> dict[Any, str]:
+        """Full text per DocumentSummary id, rebuilt from active segments."""
+        if not source_types:
+            return {}
+        result = await self._session.execute(
+            select(DocumentSegment.document_summary_id, DocumentSegment.content)
+            .where(DocumentSegment.document_summary_id.in_(list(source_types)))
+            .where(DocumentSegment.deleted_at.is_(None))
+            .order_by(DocumentSegment.document_summary_id, DocumentSegment.start_pos)
+        )
+        contents: dict[Any, list[str]] = {}
+        for summary_id, content in result.all():
+            contents.setdefault(summary_id, []).append(content or "")
+        return {
+            summary_id: join_segment_texts(parts, source_types[summary_id])
+            for summary_id, parts in contents.items()
+        }
 
     async def _fetch_children_raws(self, course_node_id: Any) -> list[dict[str, Any]]:
         """Children CourseNode + their NodeSummaryRaw row, ordered by id.
@@ -740,13 +933,16 @@ class MethodistAgent:
 
     @staticmethod
     def _compute_concept_unions(
-        own_docs: list[DocumentSummary],
+        own_docs: list[OwnDocument],
         child_raws: list[dict[str, Any]],
     ) -> tuple[list[str], list[str]]:
         """Algorithmic concept union (KD-2.1-O extended to methodist tier).
 
-        Combines own DocumentSummary main/secondary concepts with
-        children's NodeSummaryRaw main/secondary concepts. Inputs
+        Combines own educational documents' main/secondary concepts with
+        children's NodeSummaryRaw main/secondary concepts. Methodological
+        documents are left out: their terms describe how the course is run
+        and checked ("зарахування", "grading policy"), not what it teaches,
+        and the node's main concepts feed the task criteria. Inputs
         accumulate WITH repeats, then main and secondary are
         spelling-consolidated separately (concept-quality phase 1).
         Conflict rule mirrors ``ingestion/text.py`` Pass 2a: any concept
@@ -758,8 +954,10 @@ class MethodistAgent:
         all_main: list[str] = []
         all_secondary: list[str] = []
         for d in own_docs:
-            all_main.extend(d.main_concepts or [])
-            all_secondary.extend(d.secondary_concepts or [])
+            if d.is_methodological:
+                continue
+            all_main.extend(d.main_concepts)
+            all_secondary.extend(d.secondary_concepts)
         for c in child_raws:
             all_main.extend(c.get("main_concepts", []))
             all_secondary.extend(c.get("secondary_concepts", []))
@@ -770,8 +968,8 @@ class MethodistAgent:
         return sorted(main_concepts), sorted(secondary_concepts)
 
     @staticmethod
-    def _compute_own_size(own_docs: list[DocumentSummary]) -> tuple[int, int]:
-        """Own document count + own char count from DocumentSummary inputs."""
+    def _compute_own_size(own_docs: list[OwnDocument]) -> tuple[int, int]:
+        """Own document count + own char count from the own documents."""
         own_chars = sum((d.content_char_count or 0) for d in own_docs)
         return len(own_docs), own_chars
 

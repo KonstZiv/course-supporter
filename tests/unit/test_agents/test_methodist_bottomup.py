@@ -37,6 +37,7 @@ from course_supporter.agents.methodist import (
     MethodistAgent,
     MethodistInputBudgetExhaustedError,
     MethodistRootResolutionError,
+    OwnDocument,
     Pass1ChildRawMissingError,
 )
 from course_supporter.llm.error_categories import (
@@ -54,6 +55,21 @@ class _FakeDocumentSummary:
     main_concepts: list[str] = field(default_factory=list)
     secondary_concepts: list[str] = field(default_factory=list)
     content_char_count: int = 0
+    material_role: str = "educational"
+    task_type: str | None = None
+    full_text: str | None = None
+
+    def as_own_document(self) -> OwnDocument:
+        return OwnDocument(
+            title=self.title,
+            description=self.description,
+            main_concepts=list(self.main_concepts),
+            secondary_concepts=list(self.secondary_concepts),
+            content_char_count=self.content_char_count,
+            material_role=self.material_role,
+            task_type=self.task_type,
+            full_text=self.full_text,
+        )
 
 
 @dataclass
@@ -165,9 +181,9 @@ class _StubAgent(MethodistAgent):
         self._stub_course_title = course_title
         self._stub_language = language
 
-    async def _fetch_own_ready_summaries(self, course_node_id: Any) -> list[Any]:
+    async def _fetch_own_documents(self, course_node_id: Any) -> list[OwnDocument]:
         del course_node_id
-        return list(self._stub_own_docs)
+        return [d.as_own_document() for d in self._stub_own_docs]
 
     async def _fetch_children_raws(self, course_node_id: Any) -> list[dict[str, Any]]:
         del course_node_id

@@ -60,8 +60,12 @@
 # the 0.5 ratio + universal estimator is the production baseline,
 # with a tighter ratio or a tokenizer upgrade tracked separately.
 stages:
+  # v2 (2026-09-30): own documents split by role and task type —
+  # methodological documents and tasks in full text, the rest as a summary —
+  # and one unambiguous definition per output field (common_mistakes = the
+  # student's mistakes, never the subject's pitfalls).
   methodist_bottomup:
-    prompt_ref: "prompts/methodist_bottomup/v1.md"
+    prompt_ref: "prompts/methodist_bottomup/v2.md"
     requires: [structured_output, long_context]
     input_budget_ratio: 0.5
     ladder:

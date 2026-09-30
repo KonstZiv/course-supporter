@@ -956,8 +956,8 @@ class MethodistAgent:
         for d in own_docs:
             if d.is_methodological:
                 continue
-            all_main.extend(d.main_concepts or [])
-            all_secondary.extend(d.secondary_concepts or [])
+            all_main.extend(d.main_concepts)
+            all_secondary.extend(d.secondary_concepts)
         for c in child_raws:
             all_main.extend(c.get("main_concepts", []))
             all_secondary.extend(c.get("secondary_concepts", []))

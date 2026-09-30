@@ -56,7 +56,14 @@ def _assert_partition(text: str, lines: list[NumberedLine]) -> None:
         assert line.end > line.start
         assert line.display
         assert line.display == line.display.rstrip()
-        assert line.display in text[line.start : line.end]
+        # The span is exactly: [blank lines before line 1] + display +
+        # [whitespace it owns: newline, blank lines, a wrap's trailing space].
+        owned = text[line.start : line.end]
+        at = owned.find(line.display) if line.number == 1 else 0
+        assert at >= 0
+        assert owned[:at].strip() == ""
+        assert owned[at : at + len(line.display)] == line.display
+        assert owned[at + len(line.display) :].strip() == ""
 
 
 def _assert_reversible(lines: list[NumberedLine]) -> None:
@@ -435,8 +442,14 @@ def _router_returning(payload: str) -> AsyncMock:
 
 
 def _char_draft(text: str, cuts: list[str]) -> DocumentSummaryDraft:
-    """The correct old-style char-offset answer: segments start at ``cuts``."""
-    starts = [0] + [text.index(cut) for cut in cuts]
+    """The correct old-style char-offset answer: segments start at ``cuts``.
+
+    Each cut is searched after the previous one, so a phrase that also
+    occurs earlier in the text still lands where the segment starts.
+    """
+    starts = [0]
+    for cut in cuts:
+        starts.append(text.index(cut, starts[-1] + 1))
     ends = [*starts[1:], len(text)]
     return DocumentSummaryDraft.model_validate(
         {

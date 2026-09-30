@@ -13,6 +13,8 @@ Interface:
     ``task_criteria_lists.criteria`` and ``task_criteria_overrides.criteria``.
     :class:`CriterionDraft` — a criterion as its composer writes it: everything
     but the identifiers, which are the code's.
+    :class:`CriterionEdit` and :class:`MandatoryPointEdit` — a criterion as the
+    author sends it in an edit: identifiers only for what the author kept.
     :func:`compose_criteria` — drafts to criteria: identifiers assigned,
     concepts kept only when the input had them (:func:`keep_input_concepts`).
     Its result, :class:`CriteriaComposition`, is what one composition yields.
@@ -270,6 +272,55 @@ class CriterionDraft(BaseModel):
     @model_validator(mode="after")
     def _check_points(self) -> Self:
         _points_follow_method(self.check_method, len(self.mandatory_points))
+        return self
+
+
+class MandatoryPointEdit(BaseModel):
+    """A mandatory point as the author sends it in an edit of a list.
+
+    ``id`` names a point of the list being edited, which the edit keeps; a
+    point without one is new, and the code gives it the next identifier of
+    its criterion (``TASK.md`` section 9, decisions 17 and 21).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: Annotated[str, StringConstraints(pattern=_POINT_ID)] | None = None
+    text: _PointText
+
+
+class CriterionEdit(BaseModel):
+    """A criterion as the author sends it: the stored form, identifiers optional.
+
+    The author replaces the whole list and may change every field of a
+    criterion (``TASK.md`` section 9, decision 17), except two that stay the
+    code's, as in :class:`CriterionDraft`: the identifiers of what is new and
+    ``soft_descent``, which follows ``check_method`` — so an edit that sends
+    the mark is refused as an extra field. ``id`` names a criterion of the list
+    being edited, which the edit keeps; a criterion without one is new. The
+    limits are the stored form's. Whether an identifier, a check method or a
+    concept fits the task is decided against the task, by the author's edit
+    service, not here.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: Annotated[str, StringConstraints(pattern=_CRITERION_ID)] | None = None
+    text: _Text
+    evidence: _Text
+    weight: WeightCategory
+    check_method: CheckMethod
+    concepts: Annotated[tuple[_Concept, ...], Field(max_length=MAX_CONCEPTS)] = ()
+    mandatory_points: Annotated[
+        tuple[MandatoryPointEdit, ...], Field(max_length=MAX_POINTS)
+    ] = ()
+
+    @model_validator(mode="after")
+    def _check_points(self) -> Self:
+        _points_follow_method(self.check_method, len(self.mandatory_points))
+        ids = [point.id for point in self.mandatory_points if point.id is not None]
+        if len(set(ids)) != len(ids):
+            raise ValueError("the point ids of a criterion repeat")
         return self
 
 

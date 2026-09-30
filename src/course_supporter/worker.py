@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import structlog
 from arq.connections import ArqRedis, RedisSettings
 
+from course_supporter import boot
 from course_supporter.api.tasks import (
     arq_ingest_material,
     arq_prepare_document,
@@ -159,23 +160,6 @@ async def startup(ctx: WorkerCtx) -> None:
         create_async_engine,
     )
 
-    from course_supporter.homework.path_config import (
-        get_path_config,
-        validate_path_config,
-    )
-    from course_supporter.homework.path_stages import validate_stage_executors
-    from course_supporter.language import (
-        get_language_registry,
-        validate_native_names,
-    )
-    from course_supporter.llm.factory import create_stage_router
-    from course_supporter.llm.ladder_config import (
-        load_ladder_config,
-        validate_ladder_prompts,
-        validate_ladders_against_registry,
-    )
-    from course_supporter.llm.registry import load_registry
-    from course_supporter.phrasebook import validate_phrasebook
     from course_supporter.storage.s3 import S3Client
 
     s = get_settings()
@@ -194,52 +178,10 @@ async def startup(ctx: WorkerCtx) -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    # Load the model registry once for the StageRouter: it consumes it for
-    # ESC cost_usd + max_tokens fallback on unpinned ladder rungs.
-    registry = load_registry(s.external_services_path)
-
-    # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
-    # (option a, two-build); mirrors the FastAPI lifespan wiring in
-    # ``api/app.py`` so worker-side consumers (e.g. ``arq_process_homework``
-    # invoking ``run_stage2_safety_check``) can read the same ladder
-    # registry as HTTP-side consumers.
-    ladder_config = load_ladder_config(s.ladders_dir)
-    # Fail-fast on a misconfigured ladder before the worker
-    # starts accepting jobs: unknown model, missing capability or context window,
-    # untranslatable reasoning form, or a rung without a named price
-    # (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1; P6; mentor-rebuild 01).
-    validate_ladders_against_registry(ladder_config, registry)
-    # The rebuilt Mentor's submission paths are checked beside the ladders: a
-    # hole or an inadmissible rung stops the worker before it takes a job
-    # instead of waiting for the first submission routed through them
-    # (mentor-rebuild 02).
-    path_config = get_path_config(s.submission_paths_config_path)
-    validate_path_config(
-        path_config,
-        registry,
-        ladder_stage_names=ladder_config.stages.keys(),
-    )
-    # A described stage nobody can run is the same kind of hole as a missing
-    # field, and stops the worker for the same reason (mentor-rebuild task 03).
-    validate_stage_executors(path_config.stages)
-    # Task 04's three checks, in the same place and for the same reason as the
-    # two above: a hole in configuration stops the boot instead of surfacing in
-    # a student's review. Every ladder prompt is read here (``DD-SP-AP``, half
-    # two — the half for path stages already runs inside validate_path_config);
-    # the phrasebook must carry every allowed language and every key of the
-    # source, both sets checked both ways; the native-names file must cover the
-    # same list. Reading the phrasebook at boot is also what lets the assembler
-    # never open a file at review time.
-    validate_ladder_prompts(ladder_config)
-    allowed_languages = get_language_registry().languages
-    validate_phrasebook(s.phrasebook_dir, allowed_languages)
-    validate_native_names(allowed_languages, s.language_names_path)
-    stage_router = create_stage_router(
-        s,
-        ladder_config=ladder_config,
-        registry=registry,
-        session_factory=session_factory,
-    )
+    # Registry, ladders, the six boot checks and the StageRouter: the same
+    # function the API lifespan runs (``boot``), so every worker-side consumer
+    # (e.g. ``arq_process_homework``) reads the ladders the API reads.
+    stage_router = boot.build_checked_stage_router(s, session_factory=session_factory)
 
     s3 = S3Client(
         endpoint_url=s.s3_endpoint,

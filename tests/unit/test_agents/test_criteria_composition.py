@@ -1,11 +1,13 @@
 """Unit tests for CriteriaDecomposerAgent.compose — the v2 list (task 08, K2).
 
 A fake router hands the agent's own validator a canned answer, as the v1
-tests in ``test_criteria_decomposer.py`` do. The render context it captures is
-rendered through the real ``prompts/criteria_decomposition/v2.md``, so the
-variables the agent passes and the variables the template reads cannot drift
-apart unseen. The stage's ladder still points at v1 until task 08 switches it
-(K4), so the template is loaded by name.
+tests in ``test_criteria_decomposer.py`` do, and records how the stage was run
+— the agent walks its stage through ``execute_stage`` with the stop at the
+output ceiling on (task 08, K3). The render context it captures is rendered
+through the real ``prompts/criteria_decomposition/v2.md``, so the variables the
+agent passes and the variables the template reads cannot drift apart unseen.
+The stage's ladder still points at v1 until task 08 switches it (K4), so the
+template is loaded by name.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from course_supporter.llm.error_categories import (
     LadderExhaustedError,
     StructuralRetryError,
 )
-from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.models.source import AssignmentType
 
@@ -40,27 +42,36 @@ _V2 = "prompts/criteria_decomposition/v2.md"
 
 
 class _FakeStageRouter:
-    """Captures the render context and runs the validator on canned content."""
+    """Captures how the stage is run and runs the validator on canned content."""
 
     def __init__(
         self, *, canned_response: str, exception_on_call: Exception | None = None
     ) -> None:
         self.canned_response = canned_response
         self.exception_on_call = exception_on_call
+        self.last_stage: StageConfig | None = None
         self.last_stage_name: str | None = None
+        self.last_stop_on_output_ceiling: bool | None = None
         self.last_kwargs: dict[str, Any] | None = None
 
-    async def execute_for_stage(
+    async def execute_stage(
         self,
+        stage: StageConfig,
         stage_name: str,
+        /,
         *,
         response_validator: Callable[[str], None] | None = None,
+        contents: list[bytes] | None = None,
         expects_json: bool = False,
+        stop_on_output_ceiling: bool = False,
+        money_ceiling_usd: float | None = None,
         **render_context: Any,
     ) -> Any:
+        self.last_stage = stage
         self.last_stage_name = stage_name
+        self.last_stop_on_output_ceiling = stop_on_output_ceiling
         self.last_kwargs = render_context
-        del expects_json
+        del contents, expects_json, money_ceiling_usd
         if self.exception_on_call is not None:
             raise self.exception_on_call
         if response_validator is not None:
@@ -175,6 +186,40 @@ class TestHappyPath:
         assert '<node_concepts>\n["Recursion", "Base Case"]\n</node_concepts>' in user
         assert '<course_concepts>\n["Functions"]\n</course_concepts>' in user
         assert "in **English**" in system
+
+    async def test_walks_the_ladders_stage_and_stops_at_the_output_ceiling(
+        self,
+    ) -> None:
+        # Decision 4 of section 9: its own execution of the ladder's stage, with
+        # the stop on — not the by-name entry, which keeps descending.
+        _, router = await _compose(_VALID)
+
+        ladder = load_ladder_config(_REPO_ROOT / "config").get_stage(STAGE_NAME)
+        assert router.last_stage == ladder
+        assert router.last_stage_name == STAGE_NAME
+        assert router.last_stop_on_output_ceiling is True
+
+    async def test_a_stage_handed_in_is_the_one_walked(self) -> None:
+        ladder = load_ladder_config(_REPO_ROOT / "config").get_stage(STAGE_NAME)
+        own = ladder.model_copy(update={"prompt_ref": _V2})
+        router = _FakeStageRouter(canned_response=_VALID)
+        agent = CriteriaDecomposerAgent(router, stage=own)  # type: ignore[arg-type]
+
+        await agent.compose(
+            task_title="T",
+            task_description="D",
+            task_text="X",
+            task_type="task",
+            language=None,
+            node_description="",
+            node_concepts=["Recursion"],
+            root_concepts=[],
+        )
+
+        assert router.last_stage is own
+        assert agent.prompt_hash() == (
+            load_prompt(_V2, base_path=_REPO_ROOT).content_hash()
+        )
 
     async def test_contradictions_may_be_left_out(self) -> None:
         answer = json.dumps({"criteria": [_criterion()]})

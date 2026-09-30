@@ -219,6 +219,49 @@ class TestTakeOver:
         )
 
 
+class TestRenew:
+    """The claimer's heartbeat (task 08, K3): the takeover's condition, own claim."""
+
+    async def test_the_claimer_renews_its_own_claim(
+        self, db_session: AsyncSession, seed_material_entry: AuthoredDocument
+    ) -> None:
+        repo = TaskCriteriaListRepository(db_session)
+        row = await _claim(repo, seed_material_entry)
+        held = row.claimed_at
+
+        renewed = await repo.renew(row.id, claimed_at=held, now=held + _LATER)
+
+        assert renewed == held + _LATER
+        reread = await repo.get_by_id(row.id)
+        assert reread is not None
+        assert reread.claimed_at == held + _LATER
+        assert reread.state == CriteriaListState.PENDING
+
+    async def test_a_claim_taken_over_is_not_renewed_by_its_old_claimer(
+        self, db_session: AsyncSession, seed_material_entry: AuthoredDocument
+    ) -> None:
+        repo = TaskCriteriaListRepository(db_session)
+        row = await _claim(repo, seed_material_entry)
+        held = row.claimed_at
+        taken = await repo.take_over(row.id, seen_claimed_at=held, now=held + _LATER)
+
+        assert await repo.renew(row.id, claimed_at=held, now=held + 2 * _LATER) is None
+
+        reread = await repo.get_by_id(row.id)
+        assert reread is not None
+        assert reread.claimed_at == taken
+
+    async def test_a_ready_list_is_not_renewed(
+        self, db_session: AsyncSession, seed_material_entry: AuthoredDocument
+    ) -> None:
+        repo = TaskCriteriaListRepository(db_session)
+        row = await _claim(repo, seed_material_entry)
+        held = row.claimed_at
+        assert await _mark_ready(repo, row.id, held) is True
+
+        assert await repo.renew(row.id, claimed_at=held, now=held + _LATER) is None
+
+
 class TestMarkReady:
     async def test_mark_ready_stores_the_list(
         self, db_session: AsyncSession, seed_material_entry: AuthoredDocument

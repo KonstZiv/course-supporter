@@ -151,8 +151,8 @@ class TaskCriteriaListRepository:
         Renews ``claimed_at`` only while it still equals the value the caller
         saw when it judged the claim abandoned, so of two submissions that
         judged the same claim abandoned exactly one takes it over. Whether a
-        claim is abandoned — its age against the threshold — is the service's
-        judgement, not this method's.
+        claim is abandoned — how long its claimer has been silent — is the
+        service's judgement, not this method's.
 
         Args:
             list_id: The ``pending`` row to take over.
@@ -163,13 +163,44 @@ class TaskCriteriaListRepository:
             The new ``claimed_at`` — the caller's claim from now on — or None
             if the row is no longer that pending claim.
         """
+        return await self._renew_claimed_at(list_id, held=seen_claimed_at, now=now)
+
+    async def renew(
+        self,
+        list_id: uuid.UUID,
+        *,
+        claimed_at: datetime,
+        now: datetime | None = None,
+    ) -> datetime | None:
+        """Keep a live claim alive — the claimer's heartbeat.
+
+        The same conditional update as :meth:`take_over`, for the claimer's own
+        claim: it lands only while the row still holds the ``claimed_at`` the
+        claimer wrote last. None means the claim was taken over in between —
+        the claimer has lost it and stops beating, and its final write is
+        refused by :meth:`mark_ready` and :meth:`mark_failed`.
+
+        Args:
+            list_id: The claimer's ``pending`` row.
+            claimed_at: The claim time the claimer holds.
+            now: The renewed claim time; the database's ``now()`` when omitted.
+
+        Returns:
+            The renewed ``claimed_at``, or None if the claim is no longer the
+            caller's.
+        """
+        return await self._renew_claimed_at(list_id, held=claimed_at, now=now)
+
+    async def _renew_claimed_at(
+        self, list_id: uuid.UUID, *, held: datetime, now: datetime | None
+    ) -> datetime | None:
         stmt = (
             update(TaskCriteriaList)
             .where(
                 TaskCriteriaList.id == list_id,
                 TaskCriteriaList.state == CriteriaListState.PENDING.value,
                 TaskCriteriaList.deleted_at.is_(None),
-                TaskCriteriaList.claimed_at == seen_claimed_at,
+                TaskCriteriaList.claimed_at == held,
             )
             .values(claimed_at=now if now is not None else func.now())
             .returning(TaskCriteriaList.claimed_at)

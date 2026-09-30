@@ -135,6 +135,29 @@ class _CapturingRouter:
             attempt_count=1,
         )
 
+    async def execute_stage(
+        self,
+        stage: Any,
+        stage_name: str,
+        /,
+        *,
+        response_validator: Any = None,
+        expects_json: bool = False,
+        contents: Any = None,
+        stop_on_output_ceiling: bool = False,
+        money_ceiling_usd: float | None = None,
+        **render_context: Any,
+    ) -> StageResult:
+        """The entry of a caller holding its own stage — the same capture."""
+        del stage, stop_on_output_ceiling, money_ceiling_usd
+        return await self.execute_for_stage(
+            stage_name,
+            response_validator=response_validator,
+            expects_json=expects_json,
+            contents=contents,
+            **render_context,
+        )
+
 
 # ── Static lock ─────────────────────────────────────────────────────
 

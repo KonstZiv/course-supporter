@@ -2598,13 +2598,15 @@ class TaskCriteriaList(SoftDeleteMixin, Base):
     Lifecycle (``CriteriaListState``). The first submission of a version inserts
     a ``pending`` row — a claim — and commits it; it calls the model holding no
     lock and no connection, then marks the row ``ready`` in a transaction of its
-    own. A second submission that finds the claim waits, re-reading the row, and
-    takes the ready list. A claim older than the service's threshold counts as
-    abandoned: the next submission takes it over by a conditional update of
-    ``claimed_at``, so two submissions never hold one claim, and a claimer that
-    lost its claim cannot write over the new claimer's list. A composition that
-    gives up turns its row into history (``failed`` and soft-deleted in one
-    update), so the next submission may claim again.
+    own. While the model answers, the claimer renews ``claimed_at`` every so
+    often — its heartbeat. A second submission that finds the claim waits,
+    re-reading the row, and takes the ready list. A claim silent for longer than
+    the service's threshold counts as abandoned: a submission takes it over by a
+    conditional update of ``claimed_at``, so two submissions never hold one
+    claim, and a claimer that lost its claim cannot write over the new
+    claimer's list. A composition that gives up turns its row into history
+    (``failed`` and soft-deleted in one update), so the next submission may
+    claim again.
 
     Version keys, as in ``TaskCriteria``: ``source_content_hash`` and
     ``source_task_type`` must both equal the document's current values for the
@@ -2691,9 +2693,11 @@ class TaskCriteriaList(SoftDeleteMixin, Base):
     claimed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        comment="When the current claim started; renewed when an abandoned "
-        "claim is taken over. The takeover and the final write compare it, so "
-        "a claimer that lost its claim cannot write over the new claimer's "
+        comment="The current claimer's last sign of life: set when the claim is "
+        "made, renewed by the claimer's heartbeat while it composes and by a "
+        "takeover. A claim silent for longer than the service's threshold is "
+        "abandoned. The renewal, the takeover and the final write compare it, "
+        "so a claimer that lost its claim cannot write over the new claimer's "
         "list.",
     )
     form_version: Mapped[int] = mapped_column(

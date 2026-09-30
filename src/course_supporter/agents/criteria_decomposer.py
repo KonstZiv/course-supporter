@@ -20,21 +20,24 @@ Two response contracts live here for the length of task 08.
 :meth:`CriteriaDecomposerAgent.decompose` answers ``v1.md`` — the
 ``{statement, evidence}`` pairs today's cache stores.
 :meth:`CriteriaDecomposerAgent.compose` answers ``v2.md`` — the form of
-:mod:`course_supporter.homework.criteria_form` — and has no caller yet: the
-stage keeps one name for both versions (the call register tells them apart
-by ``prompt_ref``), and its ladder points at v1 until task 08 switches the
-prompt, the list service and the review in one commit (K4), which removes
-``decompose`` together with the cache.
+:mod:`course_supporter.homework.criteria_form` — for the criteria-list
+service (:mod:`course_supporter.homework.criteria_list_service`), which no
+review calls yet. The stage keeps one name for both versions (the call
+register tells them apart by ``prompt_ref``), and its ladder points at v1
+until task 08 switches the prompt, the list service and the review in one
+commit (K4), which removes ``decompose`` together with the cache.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from course_supporter.config import get_settings
 from course_supporter.homework.criteria_form import (
     MAX_CRITERIA,
     CriteriaComposition,
@@ -43,13 +46,27 @@ from course_supporter.homework.criteria_form import (
     compose_criteria,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.prompt_loader_md import load_prompt
+from course_supporter.llm.stage_router import StageExecution
 
 if TYPE_CHECKING:
+    from course_supporter.llm.ladder_config import StageConfig
     from course_supporter.llm.stage_router import StageRouter
 
 logger = structlog.get_logger(__name__)
 
 STAGE_NAME = "criteria_decomposition"
+
+
+@lru_cache(maxsize=1)
+def _ladder_stage() -> StageConfig:
+    """The stage as ``config/ladders_*.yaml`` declares it, read once per process.
+
+    The same files the router was built from at startup, so :meth:`compose`
+    walks the router's own ladder — only the way down it differs.
+    """
+    return load_ladder_config(get_settings().ladders_dir).get_stage(STAGE_NAME)
 
 
 class _CriterionItem(BaseModel):
@@ -105,8 +122,30 @@ def _validation_feedback(exc: ValidationError) -> str:
 class CriteriaDecomposerAgent:
     """Turn a task's material into its cached checkable criteria (D11)."""
 
-    def __init__(self, stage_router: StageRouter) -> None:
+    def __init__(
+        self, stage_router: StageRouter, *, stage: StageConfig | None = None
+    ) -> None:
+        """Bind the agent to a router.
+
+        Args:
+            stage_router: The router the stage is walked on.
+            stage: The stage :meth:`compose` walks; the ladders' own
+                ``criteria_decomposition`` when omitted. Tests hand in a stage
+                of their own; production never does.
+        """
         self._stage_router = stage_router
+        self._stage = stage
+
+    def _stage_config(self) -> StageConfig:
+        return self._stage if self._stage is not None else _ladder_stage()
+
+    def prompt_hash(self) -> str:
+        """The version of the prompt :meth:`compose` renders.
+
+        The hash the call register stores next to ``prompt_ref`` — of the
+        template, before rendering — so a list can say which prompt made it.
+        """
+        return load_prompt(self._stage_config().prompt_ref).content_hash()
 
     async def decompose(
         self,
@@ -213,6 +252,12 @@ class CriteriaDecomposerAgent:
         every concept the input did not have
         (:func:`~course_supporter.homework.criteria_form.compose_criteria`).
 
+        The stage is walked through an execution of this agent's own, with
+        the stop at the output ceiling on (``TASK.md`` section 9, decision 4):
+        a rung that spends its whole ceiling on an empty answer ends the walk
+        instead of paying the next rung for the same empty answer. The
+        by-name entry keeps descending for every other caller.
+
         Args:
             task_title: The task document's title.
             task_description: The task document's short description.
@@ -232,7 +277,8 @@ class CriteriaDecomposerAgent:
             count of dropped concepts.
 
         Raises:
-            LadderExhaustedError: The ladder could not produce a valid list
+            LadderExhaustedError: The ladder could not produce a valid list;
+                ``stop`` says whether it stopped at the output ceiling
                 (propagated for the caller to handle).
         """
         admitted = check_methods_for(task_type)
@@ -260,8 +306,13 @@ class CriteriaDecomposerAgent:
                     )
             parsed["response"] = response
 
-        await self._stage_router.execute_for_stage(
-            STAGE_NAME,
+        execution = StageExecution(
+            stage=self._stage_config(),
+            stage_name=STAGE_NAME,
+            stop_on_output_ceiling=True,
+        )
+        await execution.run(
+            self._stage_router,
             response_validator=_validator,
             expects_json=True,
             task_type=task_type,

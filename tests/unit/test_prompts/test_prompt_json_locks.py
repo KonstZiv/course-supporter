@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
-from course_supporter.agents.methodist import MethodistAgent
+from course_supporter.agents.methodist import MethodistAgent, OwnDocument
 from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSegmentDraft
 from course_supporter.ingestion.video_pipeline import steps
@@ -244,15 +244,17 @@ class _MethodistAgent(MethodistAgent):
     def __init__(self, router: _CapturingRouter) -> None:
         super().__init__(session=AsyncMock(), stage_router=router)  # type: ignore[arg-type]
 
-    async def _fetch_own_ready_summaries(self, course_node_id: Any) -> list[Any]:
+    async def _fetch_own_documents(self, course_node_id: Any) -> list[OwnDocument]:
         del course_node_id
         return [
-            SimpleNamespace(
+            OwnDocument(
                 title="Лекція",
                 description="Опис.",
                 main_concepts=_HOSTILE,
                 secondary_concepts=_HOSTILE,
                 content_char_count=100,
+                material_role="educational",
+                task_type=None,
             )
         ]
 

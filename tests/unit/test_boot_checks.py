@@ -1,24 +1,23 @@
-"""The two boot places run the same checks (mentor-rebuild task 04).
+"""The six boot checks live in one place, and no process runs its own.
 
-``worker.py::startup`` and ``api/app.py::lifespan`` are mirrored by hand: the
-same configuration must be refused in both, because either process alone can be
-the one a deploy brings up first. Nothing enforces the mirroring — it is two
-lists of calls in two files — so a check added to one and forgotten in the
-other is invisible until the half that skipped it serves a review.
+``boot.build_checked_stage_router`` loads the registry and the ladders, runs the
+checks and builds the StageRouter for every process -- the API's
+``api/app.py::lifespan`` and the workers' ``worker.py::startup`` (Б1). Before
+it, the two boot places were mirrored by hand, and a check added to one and
+forgotten in the other was invisible until the half that skipped it served a
+review.
 
-Both halves are locked behaviourally as well — ``test_worker.py`` runs
-``startup`` against broken config, and ``TestLifespanActuallyRuns`` below runs
-``lifespan`` the same way. This structural check is kept beside them because it
-generalises: it notices the NEXT validator added to one half and not the other,
-which no behavioural test written today can.
+The structural checks here pin the shape: every expected check is called in the
+shared function, and neither boot place calls a check (or loads the ladders)
+itself. They generalise: they notice the NEXT validator written straight into
+a boot place, which no behavioural test written today can. The behavioural
+locks are ``test_one_startup.py`` (each check, failing, stops every process)
+and ``TestLifespanActuallyRuns`` below (real broken config, real lifespan).
 
-What it cannot see, measured rather than assumed: a call in dead code. Rewriting
-``validate_phrasebook(...)`` as ``if False: validate_phrasebook(...)`` leaves
-the call in the tree and the check unexecuted, and this passes. That is why it
-is not the only lock. (Its brittleness runs the other way and is harmless:
-writing the same call as ``phrasebook.validate_phrasebook(...)`` — an attribute,
-not a name — turns it red though nothing changed. A lock that demands a
-conscious update fails in the safe direction.)
+What a structural check cannot see, measured rather than assumed: a call in
+dead code. Rewriting ``validate_phrasebook(...)`` as
+``if False: validate_phrasebook(...)`` leaves the call in the tree and the
+check unexecuted, and this passes. That is why it is not the only lock.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import pytest
 import yaml
 from fastapi import FastAPI
 
-from course_supporter import language
+from course_supporter import boot, language
 from course_supporter.config import get_settings
 
 # ``import course_supporter.api.app`` binds the package's ``app`` attribute --
@@ -57,55 +56,79 @@ EXPECTED_CHECKS = frozenset(
 )
 
 
-def _called_names(path: Path, function: str) -> frozenset[str]:
-    """The plain function names called inside one function of a module.
-
-    Parsed, not grepped: a validator's name appears in the comments beside the
-    calls too, and a comment is not a call.
-    """
+def _function(path: Path, function: str) -> ast.AST:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
             and node.name == function
         ):
-            return frozenset(
-                child.func.id
-                for child in ast.walk(node)
-                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
-            )
+            return node
     pytest.fail(f"{path.name} has no function named {function!r}")
 
 
+def _called_names(path: Path, function: str) -> frozenset[str]:
+    """The names called inside one function of a module.
+
+    Parsed, not grepped: a validator's name appears in the comments beside the
+    calls too, and a comment is not a call. Both ``name(...)`` and
+    ``module.name(...)`` count.
+    """
+    names: set[str] = set()
+    for child in ast.walk(_function(path, function)):
+        if not isinstance(child, ast.Call):
+            continue
+        if isinstance(child.func, ast.Name):
+            names.add(child.func.id)
+        elif isinstance(child.func, ast.Attribute):
+            names.add(child.func.attr)
+    return frozenset(names)
+
+
+SHARED = (Path(boot.__file__), "build_checked_stage_router")
 BOOT_PLACES = [
     (Path(worker_module.__file__), "startup"),
     (Path(app_module.__file__), "lifespan"),
 ]
 
+# What only the shared function may do: load what the checks read, and build
+# the router from it.
+SHARED_ONLY = EXPECTED_CHECKS | {
+    "load_registry",
+    "load_ladder_config",
+    "get_path_config",
+    "create_stage_router",
+}
 
-class TestBothBootPlacesCheckTheSameThings:
+
+class TestTheChecksLiveInTheSharedStartup:
+    def test_the_shared_function_runs_every_expected_check(self) -> None:
+        missing = EXPECTED_CHECKS - _called_names(*SHARED)
+
+        assert not missing, (
+            f"boot.build_checked_stage_router does not run: {sorted(missing)}"
+        )
+
     @pytest.mark.parametrize(
         ("path", "function"), BOOT_PLACES, ids=["worker", "lifespan"]
     )
-    def test_every_expected_check_runs(self, path: Path, function: str) -> None:
-        missing = EXPECTED_CHECKS - _called_names(path, function)
+    def test_no_boot_place_runs_a_check_itself(self, path: Path, function: str) -> None:
+        called = _called_names(path, function)
+        own = {name for name in called if name.startswith("validate")}
+        own |= called & SHARED_ONLY
 
-        assert not missing, (
-            f"{path.name}::{function} does not run: {sorted(missing)}. "
-            "A check belongs in both boot places or in neither."
+        assert not own, (
+            f"{path.name}::{function} runs {sorted(own)} itself; it belongs in "
+            "boot.build_checked_stage_router, which every process calls."
         )
 
-    def test_neither_half_has_a_check_the_other_lacks(self) -> None:
-        """Catches the next one too, not only the six named above."""
-        worker, lifespan = (_called_names(path, fn) for path, fn in BOOT_PLACES)
-        validators = {name for name in worker | lifespan if name.startswith("validate")}
-
-        assert validators - worker == set(), (
-            "lifespan checks something the worker does not"
-        )
-        assert validators - lifespan == set(), (
-            "the worker checks something lifespan does not"
-        )
+    @pytest.mark.parametrize(
+        ("path", "function"), BOOT_PLACES, ids=["worker", "lifespan"]
+    )
+    def test_every_boot_place_calls_the_shared_function(
+        self, path: Path, function: str
+    ) -> None:
+        assert "build_checked_stage_router" in _called_names(path, function)
 
 
 class TestLifespanActuallyRuns:

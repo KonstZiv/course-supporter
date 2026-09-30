@@ -1,10 +1,11 @@
 """One StageRouter factory for both entry points.
 
 ``create_stage_router`` is what the API lifespan and the worker's startup
-build their router with. The first class pins what it builds from fake
-settings (dummy key strings, no network); the other two are the lock: each
-entry point must call this very function, so a private copy of the wiring
-in either one turns its own test red.
+build their router with, both through ``boot.build_checked_stage_router``.
+The first class pins what it builds from fake settings (dummy key strings,
+no network); the other two are the lock: each entry point must call this
+very function, so a private copy of the wiring in either one turns its own
+test red.
 """
 
 from __future__ import annotations
@@ -110,7 +111,7 @@ class TestApiLifespanUsesTheFactory:
                 new_callable=AsyncMock,
                 return_value=AsyncMock(),
             ),
-            patch("course_supporter.api.app.create_stage_router") as factory,
+            patch("course_supporter.boot.create_stage_router") as factory,
         ):
             mock_engine.dispose = AsyncMock()
             mock_s3_cls.return_value = AsyncMock()
@@ -141,7 +142,7 @@ class TestWorkerStartupUsesTheFactory:
                 "sqlalchemy.ext.asyncio.async_sessionmaker",
                 return_value=session_factory,
             ),
-            patch("course_supporter.llm.factory.create_stage_router") as factory,
+            patch("course_supporter.boot.create_stage_router") as factory,
         ):
             await startup(ctx)
 

@@ -15,10 +15,12 @@ stages:
   # against a fixed schema -- frontier reasoning capability would be
   # overkill. Override of the factory default mistral-large-2512 is
   # intentional; do NOT "fix" by reverting to large unless safety-
-  # accuracy telemetry shows small underperforming. deepseek-v4-flash
-  # and gemini-2.5-flash are equivalent-tier fallbacks for
+  # accuracy telemetry shows small underperforming. deepseek-flash
+  # and gemini-3.5-flash-lite are equivalent-tier fallbacks for
   # infrastructure outages on the primary; ladder order is by
-  # historical reliability, not capability.
+  # historical reliability, not capability. (2026-09-30: rung 3 was
+  # gemini-2.5-flash, which answers our key 404 "no longer available to
+  # new users"; rung 2 renamed deepseek-v4-flash -> deepseek-flash.)
   #
   # Snapshot convention: this ladder uses provider aliases for all
   # three rungs (mistral / deepseek / gemini) -- "latest stable",
@@ -52,10 +54,10 @@ stages:
       # max_output_tokens (stage_router._build_request), so v4-flash's 384K
       # provider ceiling does not flow into these wire calls. N20, 2026-07-19.
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
 
   # Authored-context Stage 2 (Phase 2.3 hotfix). Same cheap binary
   # classifier ladder as ``safety_check``; routed to the authored
@@ -67,8 +69,11 @@ stages:
     prompt_ref: "prompts/safety_check_authored/v1.md"
     requires: [structured_output]
     # F6 (task-code-materials, ratified 2026-07-12): oversize authored
-    # input (large code/text/web surfaces) skips the 131k rungs and lands
-    # on the 1M gemini rung instead of being silently provider-truncated.
+    # input (large code/text/web surfaces) skips the mistral-small rung
+    # and lands on rung 2, deepseek-flash (1 048 576 context), instead of
+    # being silently provider-truncated. The budget is computed per rung
+    # from that rung's own max_context (llm/stage_router.py), so rung 3 is
+    # reached only when rung 2 fails, not by size (corrected 2026-09-30).
     # Applies to ALL authored source types — accepted deliberately as an
     # improvement. Last-resort byte backstop (1.5 MiB + loud warning)
     # lives at the call site (api/tasks.py:_bound_safety_text).
@@ -79,18 +84,18 @@ stages:
       # v4-flash output here is a short SafetyResult verdict, so 8192 is ample
       # headroom; full rationale over the safety_check rung.
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
 
   # ── sanity_check (sprint-mentor T7, vision §1336-1339 / KD16 §1452) ──
   # Lightweight validity gate between safety and review: "does the submission
   # look like an attempt at the declared task?" → {verdict, confidence, reason}.
   # Its purpose is economy — skip the expensive three-phase review graph on
   # obvious garbage — so the model tier is the CHEAP binary classifier, the same
-  # tier as ``safety_check`` (mistral-small primary; deepseek-v4-flash /
-  # gemini-2.5-flash equivalent-tier fallbacks for outages, ordered by
+  # tier as ``safety_check`` (mistral-small primary; deepseek-flash /
+  # gemini-3.5-flash-lite equivalent-tier fallbacks for outages, ordered by
   # historical reliability, not capability). Frontier reasoning would be
   # overkill for a coarse triage decision; a high confidence_threshold
   # (config/sanity.yaml) keeps the gate conservative regardless of model. Alias
@@ -105,10 +110,10 @@ stages:
       # v4-flash output here is a short sanity verdict {verdict, confidence,
       # reason}, so 8192 is ample headroom; full rationale over safety_check.
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
 
   # ── criteria_decomposition (sprint-mentor T4, vision §1386 / D11) ──
   # Decomposes a task AuthoredDocument into the checkable review criteria
@@ -162,7 +167,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   # ── key_explanation (mentor-rebuild task 06) ──
@@ -200,7 +205,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   # ── Mentor review graph (sprint-mentor T6, vision §1369-1400 / D8-D12) ──
@@ -242,7 +247,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   # Phase 1B — industry layer (D8, autonomous). Same DEEP tier as 1A: an
@@ -268,7 +273,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   # Phase 3 — denoising (D10): semantic recidivism/correction matching against
@@ -283,10 +288,10 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-pro
+        model: gemini-3.8-flash
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   # Synthesis — the single human review (review_markdown). MEDIUM strong-
@@ -302,8 +307,8 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-pro
+        model: gemini-3.8-flash
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192

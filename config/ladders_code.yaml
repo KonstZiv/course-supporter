@@ -6,7 +6,9 @@
 # 43/43) -> deepseek-v4-flash fallback (recall 1.0, cap-disciplined,
 # provider diversity). gemini-2.5-flash EXCLUDED (4/5 fenced + hard
 # fail on the largest fixture). No third LLM rung — the deterministic
-# minimum rung of the R4 ladder sits below in code.
+# minimum rung of the R4 ladder sits below in code. The DeepSeek rungs
+# were renamed deepseek-v4-flash -> deepseek-flash on 2026-09-30 (the
+# same model under DeepSeek's new name).
 #
 # The ratified 8192-byte per-file skeleton cap is enforced CODE-SIDE
 # for every rung (ingestion/code_skeleton.py:cap_skeleton) — the spike
@@ -20,7 +22,10 @@
 # code_segment_description mirrors the skeleton rungs (same cheap-tier
 # role, same providers). code_summary mirrors methodist_bottomup (the
 # existing thinking large-window convention — ONE synthesis call over
-# prepared inputs; ratified two-step generation).
+# prepared inputs; ratified two-step generation). code_summary rung 3 is
+# gemini-3.5-flash-lite since 2026-09-30 (was gemini-2.5-flash, which
+# answers our key 404 "no longer available to new users"); not
+# calibrated on this stage.
 
 stages:
   code_skeleton_extraction:
@@ -32,7 +37,7 @@ stages:
         model: gemini-3.1-flash-lite
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192
 
   code_segment_description:
@@ -44,7 +49,7 @@ stages:
         model: gemini-3.1-flash-lite
         max_output_tokens: 4096
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 4096
 
   code_summary:
@@ -59,5 +64,5 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: gemini
-        model: gemini-2.5-flash
+        model: gemini-3.5-flash-lite
         max_output_tokens: 8192

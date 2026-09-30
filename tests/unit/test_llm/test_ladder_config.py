@@ -1,8 +1,11 @@
 """Tests for the KD16 ladder config loader."""
 
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from course_supporter.llm.ladder_config import (
@@ -320,7 +323,7 @@ class TestRealConfigs:
         assert rungs == [
             ("dashscope", "qwen3.5-flash"),
             ("gemini", "gemini-3-flash-preview"),
-            ("gemini", "gemini-2.5-flash"),
+            ("mistral", "mistral-small-latest"),
         ]
 
     def test_presentation_pass_2a_mapping_ladder_has_2_rungs(self) -> None:
@@ -331,7 +334,7 @@ class TestRealConfigs:
         rungs = [(e.provider, e.model) for e in stage.ladder]
         assert rungs == [
             ("mistral", "mistral-large-2512"),
-            ("gemini", "gemini-2.5-pro"),
+            ("gemini", "gemini-3.8-flash"),
         ]
 
     def test_pass_1_primary_rung_carries_reasoning_exclude_override(self) -> None:
@@ -407,7 +410,8 @@ class TestRealConfigs:
         # second provider would split the Usage difference — the only
         # measurement of what a run costs — across two pages. The ceiling and
         # the $6 cost ceiling of a run are one multiplication apart: 60 calls x
-        # 8192 x $0.010 per 1k = $4.92 of output. A second rung, or a different
+        # 8192 x $0.0075 per 1k = $3.69 of output (gemini-3.8-flash since
+        # 2026-09-30). A second rung, or a different
         # ceiling, breaks this test before it breaks the arithmetic.
         config = load_ladder_config(Path("config"))
         stage = config.get_stage("dictionary_translation")
@@ -415,7 +419,7 @@ class TestRealConfigs:
         assert stage.requires == [Capability.STRUCTURED_OUTPUT]
         assert len(stage.ladder) == 1
         assert stage.ladder[0].provider == "gemini"
-        assert stage.ladder[0].model == "gemini-2.5-pro"
+        assert stage.ladder[0].model == "gemini-3.8-flash"
         assert stage.ladder[0].max_output_tokens == 8192
 
     def test_dictionary_translation_prompt_renders_what_the_script_passes(
@@ -486,20 +490,22 @@ class TestRealConfigs:
         assert ladder[0].max_output_tokens == 32768
         assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
 
-    def test_pass_2a_fallback_rung_carries_max_output_tokens_4096_override(
+    def test_pass_2a_fallback_rung_carries_max_output_tokens_8192_override(
         self,
     ) -> None:
-        # KD-2.3-E + KD-2.3-S override gate: Gemini 2.5 Pro's
-        # thinking-mode budget needs ``max_output_tokens >= 4096``
-        # or the model risks being cut off mid-JSON before emitting
-        # the closing brace. Per-rung override threads through
+        # KD-2.3-E + KD-2.3-S override gate: the Gemini fallback is a
+        # thinking model whose reasoning is billed inside
+        # ``max_output_tokens``, and the Gemini connector cannot limit the
+        # reasoning, so the ceiling is the only lever. 4096 (the gemini-2.5-pro
+        # value) was raised to 8192 with the swap to gemini-3.8-flash on
+        # 2026-09-30. Per-rung override threads through
         # ``LadderEntry.max_output_tokens -> LLMRequest.max_tokens``.
         config = load_ladder_config(Path("config"))
         fallback = config.get_stage("presentation_pass_2a_mapping").ladder[1]
 
         assert fallback.provider == "gemini"
-        assert fallback.model == "gemini-2.5-pro"
-        assert fallback.max_output_tokens == 4096
+        assert fallback.model == "gemini-3.8-flash"
+        assert fallback.max_output_tokens == 8192
         assert fallback.reasoning is None
 
     def test_presentation_fallback_rungs_have_no_overrides(self) -> None:
@@ -1054,52 +1060,52 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
     # ladders_audio.yaml
     "audio_pass_2a_mapping": [
         ("gemini", "gemini-3.1-flash-lite"),
-        ("gemini", "gemini-2.5-flash"),
-        ("anthropic", "claude-haiku-4-5-20251001"),
+        ("deepseek", "deepseek-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     "audio_pass_2c_denoise": [
         ("gemini", "gemini-3.1-flash-lite"),
-        ("gemini", "gemini-2.5-flash"),
-        ("anthropic", "claude-haiku-4-5-20251001"),
+        ("deepseek", "deepseek-flash"),
+        ("mistral", "mistral-small-latest"),
     ],
     # ladders_code.yaml
     "code_skeleton_extraction": [
         ("gemini", "gemini-3.1-flash-lite"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "code_segment_description": [
         ("gemini", "gemini-3.1-flash-lite"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "code_summary": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("gemini", "gemini-2.5-flash"),
+        ("gemini", "gemini-3.5-flash-lite"),
     ],
     # ladders_dictionary.yaml
     "dictionary_translation": [
-        ("gemini", "gemini-2.5-pro"),
+        ("gemini", "gemini-3.8-flash"),
     ],
     # ladders_mentor.yaml
     "safety_check": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-v4-flash"),
-        ("gemini", "gemini-2.5-flash"),
+        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.5-flash-lite"),
     ],
     "safety_check_authored": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-v4-flash"),
-        ("gemini", "gemini-2.5-flash"),
+        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.5-flash-lite"),
     ],
     "sanity_check": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-v4-flash"),
-        ("gemini", "gemini-2.5-flash"),
+        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.5-flash-lite"),
     ],
     "criteria_decomposition": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     # mentor-rebuild task 06: a copy of criteria_decomposition's ladder, for
     # the same reason — structured reasoning over one task document, paid once
@@ -1107,27 +1113,27 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
     "key_explanation": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "mentor_layered_evaluation_node_course": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "mentor_layered_evaluation_industry": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "mentor_denoising": [
         ("dashscope", "qwen3.7-max"),
-        ("gemini", "gemini-2.5-pro"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     "mentor_synthesis": [
         ("dashscope", "qwen3.7-max"),
-        ("gemini", "gemini-2.5-pro"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     # ladders_methodist.yaml
     "methodist_bottomup": [
@@ -1137,39 +1143,39 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
     "methodist_topdown": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-flash"),
     ],
     # ladders_pipeline.yaml
     "pass_2a_mapping": [
-        ("deepseek", "deepseek-v4-flash"),
-        ("gemini", "gemini-2.5-flash"),
-        ("anthropic", "claude-haiku-4-5-20251001"),
+        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.5-flash-lite"),
+        ("mistral", "mistral-large-2512"),
     ],
     # ladders_presentation.yaml
     "presentation_pass_1_vision": [
         ("dashscope", "qwen3.5-flash"),
         ("gemini", "gemini-3-flash-preview"),
-        ("gemini", "gemini-2.5-flash"),
+        ("mistral", "mistral-small-latest"),
     ],
     "presentation_pass_2a_mapping": [
         ("mistral", "mistral-large-2512"),
-        ("gemini", "gemini-2.5-pro"),
+        ("gemini", "gemini-3.8-flash"),
     ],
     # ladders_video.yaml
     "video_pass_1_vision": [
         ("dashscope", "qwen3.5-flash"),
         ("gemini", "gemini-3-flash-preview"),
-        ("gemini", "gemini-2.5-flash"),
+        ("mistral", "mistral-small-latest"),
     ],
     "video_pass_2a_mapping": [
         ("deepseek_thinking", "deepseek-v4-pro"),
         ("dashscope", "qwen3.7-max"),
-        ("gemini", "gemini-2.5-pro"),
+        ("gemini", "gemini-3.8-flash"),
     ],
     "video_pass_2c_denoise": [
         ("gemini", "gemini-3.1-flash-lite"),
-        ("gemini", "gemini-2.5-flash"),
-        ("anthropic", "claude-haiku-4-5-20251001"),
+        ("deepseek", "deepseek-flash"),
+        ("mistral", "mistral-small-latest"),
     ],
 }
 
@@ -1198,3 +1204,45 @@ class TestLadderModelTable:
             for entry in config.get_stage(stage_name).ladder
         ]
         assert rungs == LADDER_MODEL_TABLE[stage_name]
+
+
+# Models and providers removed from every ladder on 2026-09-30 (audit on
+# 32dbff4): gemini-2.5-* answer our key 404 or were never callable with it,
+# deepseek-v4-flash is a deprecated name, and Anthropic is out by operator
+# decision (no credit, too dear). Read from the raw YAML rather than through
+# the loaders, so a ladder in a file no loader knows yet is covered too.
+_REMOVED_MODELS = frozenset({"gemini-2.5-flash", "gemini-2.5-pro", "deepseek-v4-flash"})
+_REMOVED_PROVIDERS = frozenset({"anthropic"})
+_LADDER_FILES = sorted(
+    [*Path("config").glob("ladders_*.yaml"), Path("config/submission_paths.yaml")]
+)
+
+
+def _rungs(node: Any) -> Iterator[dict[str, Any]]:
+    """Every mapping in a YAML tree that names both a provider and a model."""
+    if isinstance(node, dict):
+        if "provider" in node and "model" in node:
+            yield node
+        for value in node.values():
+            yield from _rungs(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _rungs(item)
+
+
+class TestNoRemovedModelOnAnyLadder:
+    def test_the_ladder_files_are_found(self) -> None:
+        # Guards the glob: an empty parametrisation would pass vacuously.
+        assert len(_LADDER_FILES) >= 9
+
+    @pytest.mark.parametrize("path", _LADDER_FILES, ids=lambda p: p.name)
+    def test_no_removed_model_or_provider(self, path: Path) -> None:
+        rungs = list(_rungs(yaml.safe_load(path.read_text())))
+        offending = [
+            (rung["provider"], rung["model"])
+            for rung in rungs
+            if rung["model"] in _REMOVED_MODELS
+            or rung["provider"] in _REMOVED_PROVIDERS
+        ]
+        assert rungs
+        assert offending == []

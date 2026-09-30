@@ -454,14 +454,17 @@ async def arq_ingest_material(
             # Fixup 2.1.7.2 — content_char_count derived server-side from
             # the canonical reference text (``doc.assemble_text()``). The
             # LLM no longer emits this value (anchor-bias mitigation per
-            # Etap 0 forensic 2026-05-13). The full-cover invariant
-            # (``segments[-1].end_pos == reference_text_length``) is now
-            # enforced inside ``DocumentSummaryDraft`` via Pydantic
-            # context, with the closure passed as StageRouter
-            # ``response_validator`` translating ``ValidationError`` to
-            # ``StructuralRetryError`` so the ladder retry mechanism
-            # runs before terminal failure. By the time control reaches
-            # this point, the draft is guaranteed coverage-correct.
+            # Etap 0 forensic 2026-05-13). Full cover is settled inside
+            # process_macro: each processor's StageRouter
+            # ``response_validator`` checks the model's own units (line
+            # ranges for text / web, slides for presentation, word indices
+            # for audio / video) and turns a failure into
+            # ``StructuralRetryError`` so the ladder retry runs before
+            # terminal failure; the char offsets are then derived by the
+            # server (text / web and code also re-check
+            # ``segments[-1].end_pos == reference_text_length`` on the
+            # draft). By the time control reaches this point, the draft is
+            # guaranteed coverage-correct.
             derived_char_count = len(doc.assemble_text())
             summary_repo = DocumentSummaryRepository(session)
             summary = await summary_repo.create(

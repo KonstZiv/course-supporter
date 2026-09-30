@@ -82,12 +82,12 @@ class TestProcessMacroHappyPath:
     async def test_returns_document_summary_draft(self) -> None:
         """LLM returns document-level metadata; concepts aggregate from segments."""
         processor = WebProcessor()
-        # assemble_text() = "Lead paragraph.\n\nFollow-up content." (35 chars).
+        # assemble_text() = "Lead paragraph.\n\nFollow-up content.": 2 lines.
         doc = _make_doc("Lead paragraph.", "Follow-up content.")
         router = _router_returning(
             '{"title": "Article", "description": "Brief web article.",'
             ' "segments": ['
-            '   {"order": 0, "start_pos": 0, "end_pos": 35,'
+            '   {"start_line": 1, "end_line": 2,'
             '    "title": null, "description": "Single-segment article body.",'
             '    "main_concepts": ["topic"], "secondary_concepts": ["aside"]}'
             " ]}"
@@ -101,7 +101,9 @@ class TestProcessMacroHappyPath:
         assert draft.main_concepts == ["topic"]
         assert draft.secondary_concepts == ["aside"]
         call_kwargs = router.execute_for_stage.await_args.kwargs
-        assert call_kwargs["text"] == "Lead paragraph.\n\nFollow-up content."
+        assert call_kwargs["text"] == "1| Lead paragraph.\n\n2| Follow-up content."
+        assert call_kwargs["line_count"] == 2
+        assert [(s.start_pos, s.end_pos) for s in draft.segments] == [(0, 35)]
         assert call_kwargs["response_validator"] is not None
         assert router.execute_for_stage.await_args.args == ("pass_2a_mapping",)
 

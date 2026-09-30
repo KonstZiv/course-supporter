@@ -34,7 +34,8 @@
 #   70s latency, output 3787 tokens (2972 reasoning) — over-shoots
 #   the spec at ~5k chars enclosing_context but still legible; used
 #   when primary degrades.
-# * deepseek-v4-flash — control; spike median $0.001/call,
+# * deepseek-v4-flash (named deepseek-flash since 2026-09-30, the same
+#   model under DeepSeek's new name) — control; spike median $0.001/call,
 #   18s latency, output 1203 tokens (737 reasoning) — surprisingly
 #   competent honest methodist context. Cheap floor for deeper
 #   subtrees where the top-down has already stabilised and the
@@ -78,7 +79,7 @@ stages:
   # which any rung's max_context comfortably fits. ``long_context`` is the
   # bottom-up requirement (it integrates every child's compressed_summary up
   # to the root, which DOES grow); applying it here would falsely exclude
-  # legitimate rungs like deepseek-v4-flash (1M context) without changing
+  # legitimate rungs like deepseek-flash (1M context) without changing
   # what the stage actually needs.
   methodist_topdown:
     prompt_ref: "prompts/methodist_topdown/v1.md"
@@ -92,5 +93,5 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 8192
       - provider: deepseek
-        model: deepseek-v4-flash
+        model: deepseek-flash
         max_output_tokens: 8192

@@ -190,10 +190,7 @@ class TestWorkerLifecycle:
             patch("course_supporter.worker.configure_logging"),
             patch("sqlalchemy.ext.asyncio.create_async_engine"),
             patch("sqlalchemy.ext.asyncio.async_sessionmaker"),
-            patch(
-                "course_supporter.llm.registry.load_registry",
-                return_value=registry,
-            ),
+            patch("course_supporter.boot.load_registry", return_value=registry),
             pytest.raises(ValueError, match="'deepseek-v4-pro' has no named price"),
         ):
             await startup(ctx)

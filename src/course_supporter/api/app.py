@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
+from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
@@ -50,21 +51,7 @@ from course_supporter.api.routes.test_objects import router as test_objects_rout
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.config import settings
-from course_supporter.homework.path_config import (
-    get_path_config,
-    validate_path_config,
-)
-from course_supporter.homework.path_stages import validate_stage_executors
-from course_supporter.language import get_language_registry, validate_native_names
-from course_supporter.llm.factory import create_stage_router
-from course_supporter.llm.ladder_config import (
-    load_ladder_config,
-    validate_ladder_prompts,
-    validate_ladders_against_registry,
-)
-from course_supporter.llm.registry import load_registry
 from course_supporter.logging_config import configure_logging
-from course_supporter.phrasebook import validate_phrasebook
 from course_supporter.storage.database import async_session, engine
 from course_supporter.storage.s3 import S3Client
 
@@ -100,46 +87,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         environment=str(settings.environment),
         log_level=settings.log_level,
     )
-    # Load the model registry once for the StageRouter: it consumes it for
-    # ESC cost_usd + max_tokens fallback on unpinned ladder rungs.
-    registry = load_registry(settings.external_services_path)
-
-    # KD16 StageRouter — separate provider dict per Phase 1.2 §6.2 ratify
-    # (option a, two-build); providers are stateless HTTP wrappers and a
-    # second construction is cheap.
-    ladder_config = load_ladder_config(settings.ladders_dir)
-    # Fail-fast on a misconfigured ladder before the FastAPI
-    # app starts serving: unknown model, missing capability or context window,
-    # untranslatable reasoning form, or a rung without a named price
-    # (TASK-2.4.23 — DD-2.4-K + DD-2.4-Q-axis1; P6; mentor-rebuild 01).
-    validate_ladders_against_registry(ladder_config, registry)
-    # The rebuilt Mentor's submission paths are checked beside the ladders: a
-    # hole or an inadmissible rung stops the boot instead of waiting for the
-    # first submission routed through them (mentor-rebuild 02).
-    path_config = get_path_config(settings.submission_paths_config_path)
-    validate_path_config(
-        path_config,
-        registry,
-        ladder_stage_names=ladder_config.stages.keys(),
-    )
-    validate_stage_executors(path_config.stages)
-    # Task 04's three checks, in the same place and for the same reason as the
-    # two above: a hole in configuration stops the boot instead of surfacing in
-    # a student's review. Every ladder prompt is read here (``DD-SP-AP``, half
-    # two — the half for path stages already runs inside validate_path_config);
-    # the phrasebook must carry every allowed language and every key of the
-    # source, both sets checked both ways; the native-names file must cover the
-    # same list. Reading the phrasebook at boot is also what lets the assembler
-    # never open a file at review time.
-    validate_ladder_prompts(ladder_config)
-    allowed_languages = get_language_registry().languages
-    validate_phrasebook(settings.phrasebook_dir, allowed_languages)
-    validate_native_names(allowed_languages, settings.language_names_path)
-    app.state.stage_router = create_stage_router(
-        settings,
-        ladder_config=ladder_config,
-        registry=registry,
-        session_factory=async_session,
+    # Registry, ladders, the six boot checks and the StageRouter: the same
+    # function every worker runs at its startup (``boot``).
+    app.state.stage_router = boot.build_checked_stage_router(
+        settings, session_factory=async_session
     )
 
     # ARQ Redis pool for job enqueue. expires_extra_ms overrides ARQ's 24h

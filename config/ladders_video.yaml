@@ -46,7 +46,10 @@
 #      notice or a throttling pattern; verified shortlist for that day
 #      (registry rates 2026-07-26): gemini-3.6-flash,
 #      gemini-3.5-flash-lite.
-#   3. gemini/gemini-2.5-flash — fallback 2 / stable deep tier. Same 8192 pin.
+#   3. mistral/mistral-small-latest — fallback 2 (2026-09-30; was
+#      gemini/gemini-2.5-flash, which answers our key 404 "no longer
+#      available to new users"). Vision-capable, a third provider. Same
+#      8192 pin. Not calibrated on the chain-diff workload.
 #
 # Anthropic (Claude) vision R3 rung **deferred** per DD-2.3-AD: no Claude
 # *vision* model is registered (presentation ladder is likewise Qwen→Gemini,
@@ -76,8 +79,8 @@ stages:
       - provider: gemini
         model: gemini-3-flash-preview
         max_output_tokens: 8192
-      - provider: gemini
-        model: gemini-2.5-flash
+      - provider: mistral
+        model: mistral-small-latest
         max_output_tokens: 8192
 
   # Pass 2a semantic mapping (KD-2.2-A/F/H word-idx contract; landed in task
@@ -129,9 +132,10 @@ stages:
   #   2. dashscope/qwen3.7-max — diverse-provider rescue (different vendor /
   #      data-centre / billing surface from DeepSeek). Reasoning-tier
   #      flagship with 1M context and 65k output; ~4× faster than Pro.
-  #   3. gemini/gemini-2.5-pro — last-resort escalation;
-  #      reasoning-tier baseline at Google; survives outages where both
-  #      DeepSeek and DashScope MaaS surfaces would be down.
+  #   3. gemini/gemini-3.8-flash — last-resort escalation (2026-09-30;
+  #      was gemini/gemini-2.5-pro, never callable with our key). A
+  #      thinking model at Google; survives outages where both DeepSeek
+  #      and DashScope MaaS surfaces would be down. Not calibrated here.
   #
   # Dropped in task-2.4.17: gemini-3.1-flash-lite and gemini-2.5-flash.
   # Both are flash-tier and the 5-way spike empirically demonstrated they
@@ -140,7 +144,7 @@ stages:
   # reasoning_tokens is the supporting evidence).
   #
   # Anthropic / Sonnet R4 rung remains unavailable (operator credits
-  # concern; restoration would slot it after gemini-2.5-pro).
+  # concern; restoration would slot it after gemini-3.8-flash).
   #
   # n=1 caveat (KD-2.4-T). Rung order is calibrated against a single
   # English mid-length lecture (~10:48). Other languages, very short
@@ -166,7 +170,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 65536
       - provider: gemini
-        model: gemini-2.5-pro
+        model: gemini-3.8-flash
         max_output_tokens: 65536
 
   # Pass 2c selective denoise (KD2d + KD8/KD-2.3-X; task 2.4.7).
@@ -188,13 +192,16 @@ stages:
   # production audio denoise). Seed mirrors the audio Pass 2c pool (denoise is
   # cheaper than Pass 2a mapping — bounded output, editorial not generative):
   #   1. gemini/gemini-3.1-flash-lite — cost-first primary (audio Pass 2c rung).
-  #   2. gemini/gemini-2.5-flash — second tier.
-  #   3. anthropic/claude-haiku-4-5-20251001 — provider-diverse deep fallback.
+  #   2. deepseek/deepseek-flash — second tier (2026-09-30; was
+  #      gemini/gemini-2.5-flash, 404 "no longer available to new users").
+  #   3. mistral/mistral-small-latest — third tier (2026-09-30, operator
+  #      decision; was anthropic/claude-haiku-4-5-20251001: no Anthropic
+  #      credit, dropped as too dear). Three rungs, three providers.
   # Per-rung ``max_output_tokens: 8192`` pins the output budget rung-uniform
   # (mirrors Pass 1 / Pass 2a). Probe (2026-05-23): the StageRouter calls
   # providers directly (NOT the legacy ModelRouter chain), so an unpinned rung
   # sends ``max_tokens=None`` — gemini then uses its implicit model default and
-  # anthropic falls back to its own provider default (8192). Those diverge per
+  # others fall back to their own provider default. Those diverge per
   # provider; the explicit pin makes the output budget identical and explicit on
   # every rung, so a truncated denoise can't hide behind a silent per-provider
   # default (the Pass 1 / 2a rationale). 8192 comfortably covers a single
@@ -207,9 +214,9 @@ stages:
       - provider: gemini
         model: gemini-3.1-flash-lite
         max_output_tokens: 8192
-      - provider: gemini
-        model: gemini-2.5-flash
+      - provider: deepseek
+        model: deepseek-flash
         max_output_tokens: 8192
-      - provider: anthropic
-        model: claude-haiku-4-5-20251001
+      - provider: mistral
+        model: mistral-small-latest
         max_output_tokens: 8192

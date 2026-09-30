@@ -8,8 +8,10 @@ stage ``review`` and persists the returned result.
 
 Flow (ratified decisions 1-7):
 
-1. **Context (live).** Criteria from the T4 cache (``get_or_compute``,
-   None-tolerant); the task title/description/text; the node + course
+1. **Context (live).** The criteria list in force from the criteria-list
+   service (task 08: the author's edit, else the model's list, composed once
+   per version), read as "what to check / evidence" pairs — or no list, with
+   the reason stored in the result; the task title/description/text; the node + course
    ``NodeSummaryFinal`` (layers 1 + 2, None-tolerant — empty grounding
    degrades, never hard-fails); ``author_mentor_notes`` (D6); the student's
    prior attempts (D5/D10).
@@ -40,9 +42,10 @@ from course_supporter.agents.mentor_review import (
     LayerJudgment,
     MentorReviewAgent,
 )
-from course_supporter.homework.criteria_cache import (
-    CriteriaCacheService,
-    build_criteria_cache_service,
+from course_supporter.homework.criteria_list_service import (
+    CriteriaInForce,
+    CriteriaListService,
+    build_criteria_list_service,
 )
 from course_supporter.homework.review_config import (
     MentorReviewConfig,
@@ -69,6 +72,9 @@ from course_supporter.storage.orm import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from course_supporter.homework.criteria_form import Criterion
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.storage.orm import HomeworkSubmission
 
@@ -113,7 +119,7 @@ class MentorReviewService:
         *,
         session: AsyncSession,
         agent: MentorReviewAgent,
-        criteria_service: CriteriaCacheService,
+        criteria_service: CriteriaListService,
         config: MentorReviewConfig,
     ) -> None:
         self._session = session
@@ -145,10 +151,21 @@ class MentorReviewService:
         # was the one circuit that did not.
         language_name = display_name(language) if language else None
 
-        criteria_row = await self._criteria.get_or_compute(
-            submission.authored_document_id
-        )
-        criteria = criteria_row.criteria if criteria_row is not None else []
+        listed = await self._criteria.get_or_compose(submission.authored_document_id)
+        if isinstance(listed, CriteriaInForce):
+            criteria = criteria_pairs(listed.criteria)
+            criteria_unavailable = None
+        else:
+            # Reviewed without a list — the template's own fallback line — and
+            # told apart in the stored result (decision 7); the next
+            # submission tries again (TASK.md 3.7).
+            criteria = []
+            criteria_unavailable = listed.reason.value
+            logger.warning(
+                "mentor_review_without_criteria",
+                submission_id=str(submission.id),
+                reason=criteria_unavailable,
+            )
 
         task_title, task_description, task_text = await self._load_task_context(
             submission.authored_document_id
@@ -239,6 +256,7 @@ class MentorReviewService:
             ),
             score_signals=score_signals,
             verdict=derive_verdict(denoised, self._config.verdict_thresholds),
+            criteria_unavailable=criteria_unavailable,
         )
 
         # --- Synthesis: one human review honoring D9.
@@ -404,17 +422,44 @@ def _within_depth(
 
 
 def build_mentor_review_service(
-    session: AsyncSession, stage_router: StageRouter
+    session: AsyncSession,
+    stage_router: StageRouter,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> MentorReviewService:
-    """Wire the review graph with the production agent, cache, and config.
+    """Wire the review graph with the production agent, criteria list, and config.
 
     The job (T6) constructs the service from its ``StageRouter`` (ESC rows are
-    already tagged with the job id via the ContextVar set at job entry),
-    mirroring the criteria-cache and methodist factories.
+    already tagged with the job id via the ContextVar set at job entry). The
+    session factory is the criteria-list service's: a list is committed in
+    transactions of its own, whatever becomes of the review's (task 08,
+    section 9, decision 5).
     """
     return MentorReviewService(
         session=session,
         agent=MentorReviewAgent(stage_router),
-        criteria_service=build_criteria_cache_service(session, stage_router),
+        criteria_service=build_criteria_list_service(session_factory, stage_router),
         config=get_mentor_review_config(),
     )
+
+
+def criteria_pairs(criteria: Sequence[Criterion]) -> list[dict[str, str]]:
+    """The criteria list as today's Mentor reads it: what to check, and its evidence.
+
+    The phase-1 template takes ``{statement, evidence}`` pairs and does not
+    change (task 08, decision 3.5): the weight category leads the text in
+    English — ``[must]``, ``[should]``, ``[may]`` — and a criterion's mandatory
+    points follow its evidence.
+    """
+    pairs: list[dict[str, str]] = []
+    for criterion in criteria:
+        evidence = criterion.evidence
+        if criterion.mandatory_points:
+            points = "; ".join(point.text for point in criterion.mandatory_points)
+            evidence = f"{evidence} — mandatory points: {points}"
+        pairs.append(
+            {
+                "statement": f"[{criterion.weight.value}] {criterion.text}",
+                "evidence": evidence,
+            }
+        )
+    return pairs

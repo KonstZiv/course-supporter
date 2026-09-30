@@ -131,6 +131,16 @@ class ReviewResult(BaseModel):
         description="D9 ledger — every score mover, surfaced in review_markdown."
     )
     verdict: Verdict
+    criteria_unavailable: str | None = Field(
+        default=None,
+        description=(
+            "Why this review had no criteria list — a reason code of the "
+            "criteria-list service (task_not_ready, composition_failed, "
+            "wait_exhausted); null when the list in force was used. Stored with "
+            "the review so a review graded without criteria can be told apart "
+            "(mentor-rebuild task 08, section 9, decision 7)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _exactly_three_distinct_layers(self) -> ReviewResult:

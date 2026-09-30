@@ -1,13 +1,11 @@
-"""Unit tests for CriteriaDecomposerAgent.compose — the v2 list (task 08, K2).
+"""Unit tests for CriteriaDecomposerAgent.compose — the v2 list (task 08).
 
-A fake router hands the agent's own validator a canned answer, as the v1
-tests in ``test_criteria_decomposer.py`` do, and records how the stage was run
-— the agent walks its stage through ``execute_stage`` with the stop at the
-output ceiling on (task 08, K3). The render context it captures is rendered
-through the real ``prompts/criteria_decomposition/v2.md``, so the variables the
-agent passes and the variables the template reads cannot drift apart unseen.
-The stage's ladder still points at v1 until task 08 switches it (K4), so the
-template is loaded by name.
+A fake router hands the agent's own validator a canned answer and records how
+the stage was run — the agent walks its stage through ``execute_stage`` with
+the stop at the output ceiling on (K3). The render context it captures is
+rendered through the real ``prompts/criteria_decomposition/v2.md`` — the
+ladder's prompt since K4, which a test below locks — so the variables the agent
+passes and the variables the template reads cannot drift apart unseen.
 """
 
 from __future__ import annotations
@@ -309,15 +307,15 @@ class TestPromptAgreesWithCode:
         offered = "`code_test`" in system
         assert offered == (CheckMethod.CODE_TEST in check_methods_for(task_type))
 
-    def test_the_stage_still_answers_v1(self) -> None:
-        """``compose`` has no caller until K4 switches everything at once.
+    def test_the_stage_answers_v2(self) -> None:
+        """The ladder's prompt is the one ``compose`` checks answers against.
 
-        Pointing the ladder at v2 alone would send v2 answers to the v1 check of
-        ``decompose`` on every rung — each one paid, each one refused. K4
-        switches this reference together with the list service and the review.
+        Task 08 switched it together with the list service and the review
+        (K4); a ladder pointing back at v1 would send v1 answers to the v2
+        check on every rung — each one paid, each one refused.
         """
         stage = load_ladder_config(_REPO_ROOT / "config").get_stage(STAGE_NAME)
-        assert stage.prompt_ref == "prompts/criteria_decomposition/v1.md"
+        assert stage.prompt_ref == _V2
 
 
 class TestSlots:

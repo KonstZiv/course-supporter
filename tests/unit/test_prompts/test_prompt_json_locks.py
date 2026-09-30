@@ -10,11 +10,10 @@ and ``&`` stay as they are, only ``<`` and ``>`` are escaped (``\\u003c`` /
 * Dynamic lock: the function itself, and each of the seven places that put
   JSON into a prompt, driven through the code that builds the prompt (the
   agent or pipeline step, then the stage's own template rendered from the
-  render context the step handed to the router — what ``StageRouter`` does;
-  the criteria decomposition's v2 template is rendered by name until its
-  stage switches to it, task 08 K4). Each serialised fragment must equal
-  ``json.dumps(ensure_ascii=False, ...)`` with that place's parameters, ``<``
-  and ``>`` replaced, and nothing else escaped.
+  render context the step handed to the router — what ``StageRouter`` does).
+  Each serialised fragment must equal ``json.dumps(ensure_ascii=False, ...)``
+  with that place's parameters, ``<`` and ``>`` replaced, and nothing else
+  escaped.
 """
 
 from __future__ import annotations
@@ -477,10 +476,6 @@ async def test_video_pass_2c_prompt() -> None:
 
 # ── Dynamic lock: criteria decomposition v2 (tojson_unicode in the template) ──
 
-# The stage's ladder still points at v1, which puts no JSON into its prompt;
-# v2 is rendered by name until task 08 switches the ladder to it (K4).
-_CRITERIA_V2 = "prompts/criteria_decomposition/v2.md"
-
 _CRITERIA_REPLY = json.dumps(
     {
         "criteria": [
@@ -512,8 +507,7 @@ async def test_criteria_composition_prompt() -> None:
 
     [(stage, context)] = router.calls
     assert stage == "criteria_decomposition"
-    rendered = load_prompt(_CRITERIA_V2, base_path=_REPO_ROOT).render(**context)
-    text = (rendered.system or "") + "\n" + (rendered.user or "")
+    text = _render(stage, context)
     fragment = _expected(_HOSTILE, sort_keys=True)
     _assert_fragment(fragment, _HOSTILE)
     assert f"<node_concepts>\n{fragment}\n</node_concepts>" in text

@@ -2483,6 +2483,13 @@ class NodeSummaryFinalPreviousSnapshot(SoftDeleteMixin, Base):
 class TaskCriteria(SoftDeleteMixin, Base):
     """Cached decomposition of a task into checkable criteria (vision §1386, D11).
 
+    **An archive since mentor-rebuild task 08:** no code composes, reads or
+    stores criteria in it any more. The criteria list of a task version lives
+    in ``TaskCriteriaList`` and the author's edit in ``TaskCriteriaOverride``;
+    the rows here stay as the criteria earlier reviews were graded against,
+    and the soft-delete cascade still marks them deleted with their task.
+    What follows describes the table as it worked until then.
+
     1:1 (active) with a task ``AuthoredDocument`` — one ACTIVE row per
     task (PARTIAL unique on ``authored_document_id`` WHERE
     ``deleted_at IS NULL``). An LLM decomposition step derives the
@@ -2510,11 +2517,9 @@ class TaskCriteria(SoftDeleteMixin, Base):
     ``DocumentSummary`` (Task 3.2.6 Finding 2); soft-deleted history
     coexists with the single active row.
 
-    MVP scope (sprint-mentor T4) is compute + cache + reuse only. The
-    author-editable slice of D11 (a Final-like editable layer with a
-    snapshot on re-version) is deferred — the author influences review
-    through ``author_mentor_notes`` (D6) until then. This table is the
-    Raw-equivalent only; no Final / Snapshot sibling exists yet.
+    MVP scope (sprint-mentor T4) was compute + cache + reuse only; the
+    author-editable slice of D11 arrived with task 08, in its own table
+    (``TaskCriteriaOverride``), not as a sibling of this one.
 
     Like ``NodeSummaryRaw`` / ``NodeSummaryFinal`` this is a LEAF of the
     content_hash graph — derivative of the task, never a Merkle parent —

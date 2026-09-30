@@ -118,9 +118,13 @@ stages:
   # ── criteria_decomposition (sprint-mentor T4, vision §1386 / D11) ──
   # Decomposes a task AuthoredDocument into the checkable review criteria
   # the Mentor graph (T6) scores against. Computed ONCE per task version
-  # and cached (TaskCriteria) — a correctness/fairness guarantee, not an
-  # optimisation: the step is non-deterministic, so without the cache two
-  # attempts at the same task would be graded against different criteria.
+  # and kept as its criteria list (task_criteria_lists, mentor-rebuild task
+  # 08) — a correctness/fairness guarantee, not an optimisation: the step is
+  # non-deterministic, so without the list two attempts at the same task
+  # would be graded against different criteria. Prompt v2 (task 08): the
+  # criterion form of homework/criteria_form.py — weights, check methods,
+  # concepts from the input, mandatory points; v1 stays in the tree for the
+  # register rows that name it.
   #
   # Model pick: a structured reasoning task over one task document
   # (decompose requirements → atomic criteria), NOT a cheap binary
@@ -137,7 +141,7 @@ stages:
   # descend a rung on a large task and pays for the attempt, so it now carries
   # the ratio like the rest of the student chain.
   criteria_decomposition:
-    prompt_ref: "prompts/criteria_decomposition/v1.md"
+    prompt_ref: "prompts/criteria_decomposition/v2.md"
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
@@ -159,16 +163,24 @@ stages:
       # one fixed here. Worst-case cost ~$0.065 off-peak (~$0.13 peak), once per
       # task version, not per submission. The provider is deliberately NOT
       # switched to thinking-off ``deepseek``: that would change model behaviour
-      # without calibration. Rungs 2 and 3 are unchanged.
+      # without calibration.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
         max_output_tokens: 32768
+      # Rungs 2 and 3 ceiling: 16384 (mentor-rebuild task 08, section 9
+      # decision 6, decided 2026-09-29), up from 8192 — room for the mandatory
+      # points the v2 form adds. Observed 2026-09-07: 18 criteria on
+      # qwen3.7-max took 5707 output tokens, 4036 of them reasoning. Registry
+      # limits are far above (config/external_services.yaml, read 2026-09-30):
+      # qwen3.7-max 65536, deepseek-flash 384000. What bounds rung 2 is time:
+      # the DashScope client's default request timeout is 300 s
+      # (dashscope/common/constants.py).
       - provider: dashscope
         model: qwen3.7-max
-        max_output_tokens: 8192
+        max_output_tokens: 16384
       - provider: deepseek
         model: deepseek-flash
-        max_output_tokens: 8192
+        max_output_tokens: 16384
 
   # ── key_explanation (mentor-rebuild task 06) ──
   # Writes one explanation per question of a test's answer key: why the answer
@@ -186,7 +198,9 @@ stages:
   # output ceiling and the budget ratio are copied from criteria_decomposition,
   # whose rationale (hotfix 1, ratified 2026-09-14) is that deepseek_thinking
   # counts reasoning inside max_output_tokens and 8192 left nothing for the
-  # answer. The first live run of this stage is the calibration data.
+  # answer. The first live run of this stage is the calibration data. Rungs 2
+  # and 3 keep 8192: task 08 raised criteria_decomposition's for the mandatory
+  # points of its v2 form, which explanations do not carry.
   #
   # Prompt v2 (mentor-rebuild task 07): a doubt flag per question beside each
   # explanation, and the reason told through the option's content, not its

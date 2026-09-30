@@ -4,10 +4,11 @@ task-code-materials commit 6 (ratified R5(b): every consumer guards its
 own input). Code segments are verbatim source files, so the stitched
 task_text of a project task can reach megabytes — where the previous
 unguarded ``"\\n\\n".join`` would ride straight into the mentor stages'
-context windows and die with a provider error. Both stitch sites —
-:func:`course_supporter.homework.task_context.load_task_context` AND
-its private twin ``CriteriaCacheService._task_text`` — now call
-:func:`stitch_task_text`; a third site must too (grep lock below).
+context windows and die with a provider error. The stitch site —
+:func:`course_supporter.homework.task_context.load_task_context`, which the
+criteria-list service reads the task through as well (task 08 retired the
+criteria cache and its private twin of this join) — calls
+:func:`stitch_task_text`; any new site must too.
 
 Managed degradation (mirror of the ``mentor_context`` drop-with-marker
 pattern): segments are added whole, in reading order, until the budget

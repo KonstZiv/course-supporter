@@ -70,12 +70,13 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_allowed_origins: list[str] = []
     cors_allow_credentials: bool = False
-    # PATCH is required: the SPA edits via PATCH (node rename, node-summary
-    # Final, document, homework). Omitting it makes the browser CORS-preflight
-    # reject every PATCH before it is sent. NOTE: prod overrides this via the
-    # CORS_ALLOWED_METHODS env var (.env.prod) — this default is not the value
-    # that runs in production.
-    cors_allowed_methods: list[str] = ["GET", "POST", "DELETE", "PATCH"]
+    # Every method a route uses must be listed: the browser's CORS preflight
+    # refuses a missing one before the request is sent, and the SPA sees only
+    # "CORS error" (PATCH on 2026-08-28, PUT on 2026-09-30).
+    # tests/unit/test_cors_config.py compares this list with the route table.
+    # CORS_ALLOWED_METHODS in the environment (e.g. .env.prod) replaces the
+    # list whole, so an override has to carry every method too.
+    cors_allowed_methods: list[str] = ["GET", "POST", "PUT", "DELETE", "PATCH"]
     cors_allowed_headers: list[str] = ["Content-Type", "X-API-Key", "Authorization"]
 
     # --- Student portal session (Phase 6 T1, KD17) ---

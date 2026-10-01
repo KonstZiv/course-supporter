@@ -431,7 +431,7 @@ class TestRealConfigs:
         config = load_ladder_config(Path("config"))
         stage = config.get_stage("dictionary_translation")
 
-        assert stage.requires == [Capability.STRUCTURED_OUTPUT]
+        assert stage.requires == [Capability.JSON_MODE]
         assert len(stage.ladder) == 1
         assert stage.ladder[0].provider == "gemini"
         assert stage.ladder[0].model == "gemini-3.8-flash"
@@ -573,14 +573,14 @@ def _two_model_registry() -> ModelRegistryConfig:
                         id="vl-model",
                         capabilities=[
                             Capability.VISION,
-                            Capability.STRUCTURED_OUTPUT,
+                            Capability.JSON_MODE,
                         ],
                         cost_per_1k_in=0.0,
                         cost_per_1k_out=0.0,
                     ),
                     ProviderModelConfig(
                         id="text-model",
-                        capabilities=[Capability.STRUCTURED_OUTPUT],
+                        capabilities=[Capability.JSON_MODE],
                         cost_per_1k_in=0.0,
                         cost_per_1k_out=0.0,
                     ),
@@ -626,11 +626,11 @@ class TestStageConfigRequiresField:
         stage = StageConfig.model_validate(
             {
                 "prompt_ref": "prompts/x.md",
-                "requires": ["vision", "structured_output"],
+                "requires": ["vision", "json_mode"],
                 "ladder": [{"provider": "anthropic", "model": "m"}],
             }
         )
-        assert stage.requires == [Capability.VISION, Capability.STRUCTURED_OUTPUT]
+        assert stage.requires == [Capability.VISION, Capability.JSON_MODE]
 
 
 class TestValidateLaddersAgainstRegistry:
@@ -816,9 +816,7 @@ class TestProductionLaddersValidate:
         assert config.get_stage("presentation_pass_1_vision").requires == [
             Capability.VISION
         ]
-        assert config.get_stage("safety_check").requires == [
-            Capability.STRUCTURED_OUTPUT
-        ]
+        assert config.get_stage("safety_check").requires == [Capability.JSON_MODE]
         # Pass 2c stages stay unconstrained.
         assert config.get_stage("video_pass_2c_denoise").requires == []
         assert config.get_stage("audio_pass_2c_denoise").requires == []
@@ -911,7 +909,7 @@ def _registry_with_max_context(
                         id="vl-model",
                         capabilities=[
                             Capability.VISION,
-                            Capability.STRUCTURED_OUTPUT,
+                            Capability.JSON_MODE,
                         ],
                         max_context=vl_max_context,
                         cost_per_1k_in=0.0,
@@ -919,7 +917,7 @@ def _registry_with_max_context(
                     ),
                     ProviderModelConfig(
                         id="text-model",
-                        capabilities=[Capability.STRUCTURED_OUTPUT],
+                        capabilities=[Capability.JSON_MODE],
                         max_context=text_max_context,
                         cost_per_1k_in=0.0,
                         cost_per_1k_out=0.0,

@@ -59,7 +59,7 @@ stages:
   # ``_segments_contiguous`` + ``_full_cover`` + ``_subsegments_cover_parent``.
   audio_pass_2a_mapping:
     prompt_ref: "prompts/audio_pass_2a_mapping/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     ladder:
       - provider: gemini
         model: gemini-3.1-flash-lite

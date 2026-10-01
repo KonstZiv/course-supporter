@@ -74,7 +74,7 @@ stages:
   # common_mistakes = [] — the latter also enforced in code.
   methodist_bottomup:
     prompt_ref: "prompts/methodist_bottomup/v3.md"
-    requires: [structured_output, long_context]
+    requires: [json_mode, long_context]
     input_budget_ratio: 0.5
     ladder:
       # Ceiling 32768 on both rungs, up from 16384 (2026-09-30). 16384 was
@@ -100,7 +100,7 @@ stages:
         model: qwen3.7-max
         max_output_tokens: 32768
 
-  # ``requires: [structured_output]`` — deliberately NOT ``[..., long_context]``.
+  # ``requires: [json_mode]`` — deliberately NOT ``[..., long_context]``.
   # Top-down input is small by construction: this node's own canonical state
   # plus six fields of the parent's canonical state plus the parent's
   # enclosing_context. Spike §3 measured ~3-8k chars on the stretch fixture,
@@ -114,7 +114,7 @@ stages:
   # parent's objectives as what this node's submission must show.
   methodist_topdown:
     prompt_ref: "prompts/methodist_topdown/v2.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       # Ceiling 8192 kept on 2026-09-30 when the bottom-up ceiling was raised:

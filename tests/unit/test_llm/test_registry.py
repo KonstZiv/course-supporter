@@ -22,7 +22,7 @@ def valid_config() -> dict:
                 "models": [
                     {
                         "id": "model-a",
-                        "capabilities": ["vision", "structured_output"],
+                        "capabilities": ["vision", "json_mode"],
                         "max_context": 100000,
                         "unit_type": "tokens",
                         "cost_per_1k_in": 0.001,
@@ -35,7 +35,7 @@ def valid_config() -> dict:
                 "models": [
                     {
                         "id": "model-b",
-                        "capabilities": ["structured_output"],
+                        "capabilities": ["json_mode"],
                         "max_context": 65000,
                         "unit_type": "tokens",
                         "cost_per_1k_in": 0.0001,
@@ -50,7 +50,7 @@ def valid_config() -> dict:
         "actions": {
             "analyze": {
                 "strategy": "default",
-                "requires": ["structured_output"],
+                "requires": ["json_mode"],
                 "chain": {
                     "default": ["model-a", "model-b"],
                     "budget": ["model-b"],
@@ -58,7 +58,7 @@ def valid_config() -> dict:
             },
             "see": {
                 "strategy": "default",
-                "requires": ["vision", "structured_output"],
+                "requires": ["vision", "json_mode"],
                 "chain": {
                     "default": ["model-a"],
                 },
@@ -71,7 +71,7 @@ class TestModelConfig:
     def test_estimate_cost(self) -> None:
         m = ModelConfig(
             provider="test",
-            capabilities=["structured_output"],
+            capabilities=["json_mode"],
             max_context=100000,
             cost_per_1k={"input": 0.001, "output": 0.002},  # type: ignore[arg-type]
         )
@@ -81,7 +81,7 @@ class TestModelConfig:
     def test_estimate_cost_zero_tokens(self) -> None:
         m = ModelConfig(
             provider="test",
-            capabilities=["structured_output"],
+            capabilities=["json_mode"],
             max_context=100000,
             cost_per_1k={"input": 0.001, "output": 0.002},  # type: ignore[arg-type]
         )

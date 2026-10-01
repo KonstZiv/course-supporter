@@ -9,12 +9,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from course_supporter.llm.error_categories import ErrorCategory
+from course_supporter.call_outcome import CallOutcome
+from course_supporter.llm.error_categories import (
+    ErrorCategory,
+    LadderExhaustedError,
+    LadderStop,
+    StructuralRetryError,
+)
+from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
 from course_supporter.llm.prompt_loader_md import StagePrompt
 from course_supporter.llm.providers.base import LLMProvider, RequestConfigError
@@ -189,3 +197,184 @@ class TestRefusedBeforeTheCall:
         refusing.complete.assert_not_awaited()
         second.complete.assert_not_awaited()
         assert rows == []
+
+
+# ── K3: a schema answer cut off at the output ceiling ──
+
+_CUT = '{"ok": tr'
+
+
+def _answers(*responses: tuple[str, FinishReason]) -> Any:
+    p = _provider()
+    p.complete = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content=content,
+                provider="p",
+                model_id="m",
+                tokens_in=10,
+                tokens_out=16,
+                finish_reason=finish,
+            )
+            for content, finish in responses
+        ]
+    )
+    return p
+
+
+def _two_rungs() -> StageConfig:
+    return StageConfig(
+        prompt_ref="prompts/example/v1.md",
+        ladder=[
+            LadderEntry(provider="p", model="m"),
+            LadderEntry(provider="q", model="m"),
+        ],
+    )
+
+
+def _strict_validator(seen: list[str]) -> Any:
+    def _validate(content: str) -> None:
+        seen.append(content)
+        try:
+            json.loads(content)
+        except ValueError as exc:
+            raise StructuralRetryError(f"not JSON: {exc}") from exc
+
+    return _validate
+
+
+@pytest.fixture
+def rows(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+
+    async def _persist(_factory: Any, **kwargs: Any) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("course_supporter.llm.stage_router._persist", _persist)
+    return captured
+
+
+def _router(first: Any, second: Any) -> StageRouter:
+    return StageRouter(
+        LadderConfig(stages={"named": _two_rungs()}),
+        {"p": first, "q": second},
+        registry=_registry(m=[Capability.JSON_MODE, Capability.SCHEMA_STRICT]),
+        session_factory=object(),  # type: ignore[arg-type]
+    )
+
+
+class TestTruncatedUnderSchema:
+    async def test_cut_answer_stops_the_path_stage_after_one_paid_attempt(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        first = _answers((_CUT, FinishReason.OUTPUT_CEILING))
+        second = _provider()
+        seen: list[str] = []
+
+        with pytest.raises(LadderExhaustedError) as caught:
+            await _router(first, second).execute_stage(
+                _two_rungs(),
+                "s",
+                expects_json=True,
+                response_schema=_SCHEMA,
+                response_validator=_strict_validator(seen),
+                stop_on_output_ceiling=True,
+            )
+
+        assert caught.value.stop is LadderStop.OUTPUT_CEILING
+        first.complete.assert_awaited_once()  # no structural retry
+        second.complete.assert_not_awaited()  # no descent
+        assert seen == []  # the validator never saw the cut document
+        (paid,) = [r for r in rows if r["outcome"] is not CallOutcome.ABANDONED]
+        assert paid["outcome"] is CallOutcome.INVALID_CONTENT
+        assert paid["finish_reason"] is FinishReason.OUTPUT_CEILING
+        assert paid["error_message"] == "output ceiling: truncated response"
+
+    async def test_cut_structural_retry_stops_too(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        first = _answers(
+            ("prose, not JSON", FinishReason.STOP),
+            (_CUT, FinishReason.OUTPUT_CEILING),
+        )
+        second = _provider()
+
+        with pytest.raises(LadderExhaustedError) as caught:
+            await _router(first, second).execute_stage(
+                _two_rungs(),
+                "s",
+                expects_json=True,
+                response_schema=_SCHEMA,
+                response_validator=_strict_validator([]),
+                stop_on_output_ceiling=True,
+            )
+
+        assert caught.value.stop is LadderStop.OUTPUT_CEILING
+        assert first.complete.await_count == 2
+        second.complete.assert_not_awaited()
+
+    async def test_prose_under_schema_keeps_the_structural_retry(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        first = _answers(
+            ("prose, not JSON", FinishReason.STOP),
+            ('{"ok": true}', FinishReason.STOP),
+        )
+        seen: list[str] = []
+
+        result = await _router(first, _provider()).execute_stage(
+            _two_rungs(),
+            "s",
+            expects_json=True,
+            response_schema=_SCHEMA,
+            response_validator=_strict_validator(seen),
+            stop_on_output_ceiling=True,
+        )
+
+        assert result.content == '{"ok": true}'
+        assert seen == ["prose, not JSON", '{"ok": true}']
+        assert rows[0]["outcome"] is CallOutcome.INVALID_CONTENT
+        assert rows[0]["finish_reason"] is FinishReason.STOP
+
+    async def test_without_schema_the_cut_body_goes_to_the_validator(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        first = _answers(
+            (_CUT, FinishReason.OUTPUT_CEILING),
+            ('{"ok": true}', FinishReason.STOP),
+        )
+        seen: list[str] = []
+
+        result = await _router(first, _provider()).execute_stage(
+            _two_rungs(),
+            "s",
+            expects_json=True,
+            response_validator=_strict_validator(seen),
+            stop_on_output_ceiling=True,
+        )
+
+        assert seen[0] == _CUT
+        assert first.complete.await_count == 2  # today's structural retry
+        assert result.content == '{"ok": true}'
+
+    async def test_by_name_entry_keeps_validating_a_cut_schema_answer(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        first = _answers(
+            (_CUT, FinishReason.OUTPUT_CEILING),
+            (_CUT, FinishReason.OUTPUT_CEILING),
+        )
+        second = _provider()
+        seen: list[str] = []
+
+        result = await _router(first, second).execute_for_stage(
+            "named",
+            expects_json=True,
+            response_schema=_SCHEMA,
+            response_validator=_strict_validator(seen),
+        )
+
+        # Today's path: validator -> structural retry on the rung -> descent.
+        assert seen[:2] == [_CUT, _CUT]
+        assert first.complete.await_count == 2
+        assert result.provider_used == "q"

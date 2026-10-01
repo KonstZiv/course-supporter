@@ -236,6 +236,8 @@ class TestCanonicalFieldsWrittenInPlace:
             main_concepts=["doctest"],
             secondary_concepts=["unittest"],
             content_char_count=12345,
+            # A task keeps common_mistakes (a node without tasks clears it).
+            task_type="task",
         )
         router = _FakeStageRouter(canned_response=_llm_json())
         agent = _StubAgent(

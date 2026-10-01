@@ -10,7 +10,10 @@ Pins the contract of ``methodist_bottomup`` v2 without a database or a model:
   methodological documents, Cyrillic verbatim;
 * node concepts leave methodological documents out and keep the children's;
 * full text rebuilt from segments: joined in the order read, separator by
-  source type.
+  source type;
+* v3 — requirements never flow down: the field definitions differ for a node
+  with own tasks and a node without them, and ``common_mistakes`` of a node
+  without own tasks is ``[]`` whatever the model returns.
 """
 
 from __future__ import annotations
@@ -447,3 +450,176 @@ class TestFullTextFromSegments:
 
         assert await agent._fetch_full_texts({}) == {}
         session.execute.assert_not_awaited()
+
+
+# ── v3: requirements never flow down ─────────────────────────────
+
+_TASK_NODE_DEFINITIONS = (
+    "**only what the student must show in the submission\n  of this node's tasks**",
+    "**a sign the reviewer sees in the submitted work**",
+    "a guess about the student's intent or way of working",
+    "over only the part a reviewer can see in the work",
+    "- **Level labels.**",
+    "`[base] …`, `[pro] …`",
+    "`- <sign> → <reaction>`",
+    "Every reaction, tolerance and condition the materials give MUST appear",
+)
+_NO_TASK_NODE_DEFINITIONS = (
+    "**results at the exit of this node**",
+    "«Після завершення блоку студент …»",
+    "nothing that reads as a requirement of one submission",
+    "- `common_mistakes` — `[]`.",
+    "No reactions, tolerances or acceptance conditions of individual tasks",
+)
+
+
+def _block_children() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "Заняття 1",
+            "compressed_summary": "Про агента; помилка: немає PROMPTS.md.",
+            "main_concepts": ["агент"],
+            "secondary_concepts": [],
+        }
+    ]
+
+
+class TestPromptVersion:
+    def test_bottomup_ladder_points_at_v3(self) -> None:
+        stage = load_ladder_config(_REPO_ROOT / "config").get_stage(
+            "methodist_bottomup"
+        )
+        assert stage.prompt_ref == "prompts/methodist_bottomup/v3.md"
+
+    def test_topdown_ladder_points_at_v2(self) -> None:
+        stage = load_ladder_config(_REPO_ROOT / "config").get_stage("methodist_topdown")
+        assert stage.prompt_ref == "prompts/methodist_topdown/v2.md"
+
+
+class TestNodeKindInPrompt:
+    async def test_node_with_own_tasks(self) -> None:
+        router = _Router(_reply([]))
+        await _run(_Agent(router, [_lecture(), _task(), _guide()]))
+
+        text = _render(router.context)
+
+        assert router.context["has_own_tasks"] is True
+        assert "Node kind: with own tasks" in text
+        assert "**This node has own tasks**" in text
+        for definition in _TASK_NODE_DEFINITIONS:
+            assert definition in text
+        for definition in _NO_TASK_NODE_DEFINITIONS:
+            assert definition not in text
+        assert "requirements never flow down" in text
+        # Cyrillic reaches the model verbatim, not as \uXXXX.
+        assert "\\u" not in text
+        assert "обов'язкового" in text
+
+    async def test_node_without_own_tasks(self) -> None:
+        router = _Router(_reply([]))
+        await _run(_Agent(router, [_guide()], _block_children()))
+
+        text = _render(router.context)
+
+        assert router.context["has_own_tasks"] is False
+        assert "Node kind: without own tasks" in text
+        assert "**This node has no own tasks**" in text
+        for definition in _NO_TASK_NODE_DEFINITIONS:
+            assert definition in text
+        for definition in _TASK_NODE_DEFINITIONS:
+            assert definition not in text
+        assert "that `common_mistakes` is empty because the node has no own" in text
+        assert "this node has no own tasks — see" in text
+        assert "\\u" not in text
+        assert "немає PROMPTS.md" in text
+
+    async def test_methodological_task_makes_a_task_node(self) -> None:
+        doc = _doc(
+            "Методичка-завдання",
+            role="methodological",
+            task_type="task",
+            full_text="Здати звіт.",
+        )
+        router = _Router(_reply([]))
+        await _run(_Agent(router, [doc]))
+
+        text = _render(router.context)
+
+        assert router.context["has_own_tasks"] is True
+        assert "methodological documents with a task type" in text
+
+
+class TestCommonMistakesGuard:
+    async def test_block_without_tasks_gets_empty_list(self) -> None:
+        router = _Router(_reply([]))  # the reply carries one mistake
+        raw = await _run(_Agent(router, [], _block_children()))
+
+        assert raw.common_mistakes == []
+
+    async def test_methodological_documents_alone_are_not_tasks(self) -> None:
+        router = _Router(_reply([]))
+        raw = await _run(_Agent(router, [_guide(), _lecture()]))
+
+        assert raw.common_mistakes == []
+
+    async def test_educational_leaf_gets_empty_list(self) -> None:
+        router = _Router(_reply([]))
+        raw = await _run(_Agent(router, [_lecture()]))
+
+        assert raw.common_mistakes == []
+
+    async def test_other_fields_of_a_node_without_tasks_are_kept(self) -> None:
+        router = _Router(_reply(["Типові помилки порожні: власних завдань немає."]))
+        raw = await _run(_Agent(router, [], _block_children()))
+
+        assert raw.title == "Знайомство з агентом"
+        assert raw.methodist_observations == [
+            "Типові помилки порожні: власних завдань немає."
+        ]
+
+    async def test_node_with_tasks_keeps_the_field_untouched(self) -> None:
+        mistakes = [
+            "[base] у архіві немає REFLECTION.md",
+            "[pro] звіт наводить результат, якого немає у доданому виводі",
+        ]
+        reply = json.loads(_reply([]))
+        reply["common_mistakes"] = mistakes
+        router = _Router(json.dumps(reply, ensure_ascii=False))
+        raw = await _run(_Agent(router, [_task(), _guide()], _block_children()))
+
+        assert raw.common_mistakes == mistakes
+
+
+class TestTopdownPrompt:
+    def test_parent_is_context_not_requirements(self) -> None:
+        ref = (
+            load_ladder_config(_REPO_ROOT / "config")
+            .get_stage("methodist_topdown")
+            .prompt_ref
+        )
+        node = {
+            "title": "Заняття 1",
+            "description": "Перше знайомство з агентом.",
+            "learning_objectives": ["поставити задачу агентові"],
+            "main_concepts": ["агент"],
+            "secondary_concepts": [],
+            "key_activities": [],
+            "teaching_approach": "",
+            "assessment_approach": "",
+        }
+        parent = {k: node[k] for k in node if k not in {"key_activities"}}
+        parent.pop("assessment_approach")
+        rendered = load_prompt(ref, base_path=_REPO_ROOT).render(
+            course_title="Агентна розробка",
+            language="Ukrainian",
+            node=node,
+            parent=parent,
+            parent_enclosing_context=None,
+        )
+        text = (rendered.system or "") + "\n" + (rendered.user or "")
+
+        assert "### The parent is context, not requirements." in text
+        assert "never from the layers above it" in text
+        assert "(as direction, not as requirements of this node's work)" in text
+        assert '["поставити задачу агентові"]' in text
+        assert "\\u" not in text

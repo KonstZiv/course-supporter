@@ -25,7 +25,9 @@ Domain responsibilities split (probe-resolved S3 + S5, ratified):
   educational DocumentSummary + children NodeSummaryRaw concepts;
   methodological documents are left out);
   ``own_documents_count`` / ``own_chars_count`` /
-  ``cumulative_documents_count`` / ``cumulative_chars_count``.
+  ``cumulative_documents_count`` / ``cumulative_chars_count``;
+  ``common_mistakes = []`` on a node without own tasks
+  (:func:`_own_task_mistakes`).
 
 Budget exhaustion contract: when ``StageRouter`` exhausts the ladder
 because every rung's input estimate exceeds its budget, the agent
@@ -370,6 +372,27 @@ def _unreported_summarised(titles: list[str], observations: list[str]) -> list[s
     return [t for t in titles if t.casefold() not in text]
 
 
+def _own_task_mistakes(
+    mistakes: list[str], *, has_own_tasks: bool, node_id: Any
+) -> list[str]:
+    """``common_mistakes`` as stored: kept only on a node with own tasks.
+
+    The Mentor reads common mistakes from the node that holds the task, and
+    nothing from a node without own tasks may become a requirement of the
+    submissions below it. The prompt asks for ``[]`` on such a node; this
+    guard holds whatever the model returns.
+    """
+    if has_own_tasks:
+        return list(mistakes)
+    if mistakes:
+        logger.info(
+            "methodist_bottomup_common_mistakes_dropped",
+            node_id=str(node_id),
+            dropped=len(mistakes),
+        )
+    return []
+
+
 # ── MethodistAgent ────────────────────────────────────────────────
 
 
@@ -454,6 +477,10 @@ class MethodistAgent:
         # would otherwise pass schema validation (all fields default to
         # empty) and produce a silent DONE on a content-bearing node.
         has_inputs = bool(own_docs) or bool(children_compressed)
+        # A node with own tasks is where a submission is reviewed; every other
+        # node (root, block, introduction) only frames the nodes below it.
+        # Decides the prompt's field definitions and the common_mistakes guard.
+        has_own_tasks = any(d.is_task for d in own_docs)
 
         parsed: dict[str, _MethodistBottomupResult] = {}
 
@@ -527,6 +554,7 @@ class MethodistAgent:
                 node_title=node.title,
                 language=language,
                 own_document_count=len(own_docs),
+                has_own_tasks=has_own_tasks,
                 methodological_documents=blocks.methodological,
                 task_documents=blocks.tasks,
                 educational_documents=blocks.educational,
@@ -572,7 +600,9 @@ class MethodistAgent:
         raw.assessment_approach = result.assessment_approach
         raw.teaching_approach = result.teaching_approach
         raw.key_activities = list(result.key_activities)
-        raw.common_mistakes = list(result.common_mistakes)
+        raw.common_mistakes = _own_task_mistakes(
+            result.common_mistakes, has_own_tasks=has_own_tasks, node_id=node.id
+        )
         raw.compressed_summary = result.compressed_summary
         raw.methodist_observations = list(result.methodist_observations)
         raw.main_concepts = main_concepts

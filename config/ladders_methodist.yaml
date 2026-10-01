@@ -64,8 +64,16 @@ stages:
   # methodological documents and tasks in full text, the rest as a summary —
   # and one unambiguous definition per output field (common_mistakes = the
   # student's mistakes, never the subject's pitfalls).
+  # v3 (2026-10-01): requirements never flow down. A node with own tasks
+  # takes success_criteria and common_mistakes from its own tasks only,
+  # mistakes as signs visible in the submitted work, and carries the
+  # reactions and tolerances of its methodological documents into
+  # assessment_approach ("sign -> reaction" lines); [base] / [pro] labels
+  # whenever levels differ. A node without own tasks (root, block,
+  # introduction) writes success_criteria as results at its exit and
+  # common_mistakes = [] — the latter also enforced in code.
   methodist_bottomup:
-    prompt_ref: "prompts/methodist_bottomup/v2.md"
+    prompt_ref: "prompts/methodist_bottomup/v3.md"
     requires: [structured_output, long_context]
     input_budget_ratio: 0.5
     ladder:
@@ -101,15 +109,19 @@ stages:
   # to the root, which DOES grow); applying it here would falsely exclude
   # legitimate rungs like deepseek-flash (1M context) without changing
   # what the stage actually needs.
+  # v2 (2026-10-01): the parent is context and direction for this node, not
+  # requirements — enclosing_context and observations never present the
+  # parent's objectives as what this node's submission must show.
   methodist_topdown:
-    prompt_ref: "prompts/methodist_topdown/v1.md"
+    prompt_ref: "prompts/methodist_topdown/v2.md"
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
       # Ceiling 8192 kept on 2026-09-30 when the bottom-up ceiling was raised:
-      # the top-down prompt (v1) and its answer — enclosing_context plus
-      # appended observations — did not change with the full-text bottom-up
-      # v2. Spike outputs, reasoning included: 1878 / 3787 / 1203 tokens on
+      # the top-down prompt and its answer — enclosing_context plus
+      # appended observations — did not change in size with the full-text
+      # bottom-up v2 (nor with v2 of the top-down prompt, which only adds a
+      # rule that the parent is context, not requirements). Spike outputs, reasoning included: 1878 / 3787 / 1203 tokens on
       # the three rungs, so 8192 still leaves a twofold or larger margin.
       - provider: deepseek_thinking
         model: deepseek-v4-pro

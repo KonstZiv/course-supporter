@@ -172,9 +172,10 @@ def _execution(context: StageContext) -> StageExecution:
 
     ``PathStage`` and ``StageConfig`` carry the same router-facing fields by
     construction (mentor-rebuild task 03) and their rungs the same four, so this
-    is a translation and not a decision. The two limits that have no counterpart
-    on a ladder stage — no descent past a spent output ceiling, and the money
-    ceiling — are what make it a path stage rather than a copy of one.
+    is a translation and not a decision. The three limits that have no
+    counterpart on a ladder stage — no descent past a spent output ceiling, the
+    money ceiling, and the stage's output ceiling on unpinned rungs — are what
+    make it a path stage rather than a copy of one.
     """
     stage = context.stage
     return StageExecution(
@@ -186,7 +187,15 @@ def _execution(context: StageContext) -> StageExecution:
                     provider=rung.provider,
                     model=rung.model,
                     reasoning=rung.reasoning,
-                    max_output_tokens=rung.max_output_tokens,
+                    # An unpinned rung takes the stage's output ceiling, not the
+                    # model's: the router has no notion of a stage ceiling and
+                    # would fall back to the registry cap (65536 for
+                    # gemini-3.5-flash-lite), which then both goes on the wire
+                    # and prices the attempt far past the money ceiling. Pinned
+                    # here, the one number serves the request and the estimate.
+                    max_output_tokens=(
+                        rung.max_output_tokens or stage.ceilings.output_tokens
+                    ),
                 )
                 for rung in stage.ladder
             ],

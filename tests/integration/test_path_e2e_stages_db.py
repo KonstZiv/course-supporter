@@ -217,7 +217,10 @@ def _stage(money_usd: float = 0.05) -> dict[str, Any]:
         "requires": [],
         "input_budget_ratio": None,
         "record_output": False,
-        "ceilings": {"tool_steps": 0, "money_usd": money_usd, "output_tokens": 8192},
+        # The output ceiling matches the registry double's cap (1000): an
+        # unpinned rung is priced by the stage ceiling, so this keeps the money
+        # arithmetic of the tests below on the double's own numbers.
+        "ceilings": {"tool_steps": 0, "money_usd": money_usd, "output_tokens": 1000},
         # Two rungs, because "a trace per rung" is only a claim on a ladder
         # that has more than one.
         "ladder": [

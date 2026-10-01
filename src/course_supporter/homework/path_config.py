@@ -124,7 +124,10 @@ class PathRung(BaseModel):
     """One rung of a stage ladder; every key is required and ``null`` is a value.
 
     ``reasoning: null`` means no reasoning form; ``max_output_tokens: null``
-    means no pin, so the stage's output ceiling applies.
+    means no pin, so the stage's output ceiling applies — not by the router,
+    which only knows the registry's per-model cap, but because
+    ``homework/path_stages.py::_execution`` puts ``ceilings.output_tokens`` on
+    the rung before the router sees it.
     """
 
     model_config = _STRICT

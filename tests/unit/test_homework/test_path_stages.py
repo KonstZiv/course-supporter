@@ -7,6 +7,8 @@ rather than a second copy of them. Both are pinned here.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -17,6 +19,7 @@ from course_supporter.homework.path_config import (
     PathKey,
     PathStage,
     SubmissionState,
+    load_path_config,
 )
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
@@ -28,7 +31,12 @@ from course_supporter.homework.path_stages import (
     register_stage_executor,
     validate_stage_executors,
 )
-from course_supporter.llm.stage_router import StageExecution
+from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
+from course_supporter.llm.prompt_loader_md import StagePrompt
+from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.registry import ModelRegistryConfig, load_registry
+from course_supporter.llm.schemas import LLMResponse
+from course_supporter.llm.stage_router import StageExecution, StageRouter
 from course_supporter.models.source import AssignmentType
 
 if TYPE_CHECKING:
@@ -331,3 +339,188 @@ class TestTheBranchCostsNothingOnTodaysMentor:
 
         assert answered is False
         assert opened == 0
+
+
+_PATHS_FILE = Path("config/submission_paths.yaml")
+_REGISTRY_FILE = Path("config/external_services.yaml")
+# About 1 000 tokens at the router's 3.5 characters a token — a typical
+# submission, well inside the safety stage's input budget.
+_TYPICAL_INPUT = "x" * 3500
+
+
+def _typical_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "course_supporter.llm.stage_router.load_prompt",
+        lambda prompt_ref, *, base_path=None: StagePrompt(
+            system="sys", user=_TYPICAL_INPUT
+        ),
+    )
+
+
+def _answering_provider() -> LLMProvider:
+    provider = AsyncMock(spec=LLMProvider)
+    provider.enabled = True
+    provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content="answer",
+            provider="p",
+            model_id="m",
+            tokens_in=1,
+            tokens_out=1,
+            latency_ms=1,
+            cost_usd=0.0,
+        )
+    )
+    return provider  # type: ignore[return-value]
+
+
+def _registry(max_output_tokens: int) -> ModelRegistryConfig:
+    """Both test models, capped far above the stage's output ceiling."""
+    return ModelRegistryConfig.model_validate(
+        {
+            "providers": {
+                provider: {
+                    "type": "llm",
+                    "models": [
+                        {
+                            "id": model,
+                            "cost_per_1k_in": 0.0,
+                            "cost_per_1k_out": 0.0,
+                            "max_output_tokens": max_output_tokens,
+                            "max_context": 1_000_000,
+                        }
+                    ],
+                }
+                for provider, model in (("mistral", "m"), ("gemini", "g"))
+            },
+            "actions": {},
+        }
+    )
+
+
+async def _execution_of(
+    monkeypatch: pytest.MonkeyPatch, context: StageContext
+) -> StageExecution:
+    """What the safety stage hands today's check, caught on its way in."""
+    seen: dict[str, Any] = {}
+
+    async def _fake_check(_text: str, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        verdict = AsyncMock()
+        verdict.is_safe = True
+        verdict.model_dump = lambda **_: {}
+        return verdict
+
+    monkeypatch.setattr(
+        "course_supporter.security.stage2.run_stage2_safety_check", _fake_check
+    )
+    monkeypatch.setattr(
+        "course_supporter.storage.homework_repository.HomeworkRepository",
+        lambda _session: AsyncMock(),
+    )
+    _no_course_nodes(monkeypatch)
+    await get_stage_executor(SAFETY)(context)
+    execution = seen["execution"]
+    assert isinstance(execution, StageExecution)
+    return execution
+
+
+class TestStageOutputCeiling:
+    """An unpinned rung of a path stage runs under the stage's output ceiling.
+
+    The router knows only the registry's per-model cap; the stage ceiling
+    reaches it because ``_execution`` pins it on the rung — so the request and
+    the money estimate read one number. The by-name road is not touched.
+    """
+
+    async def test_an_unpinned_rung_sends_the_stage_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lock 1: an unpinned rung goes out with ``ceilings.output_tokens``."""
+        _typical_prompt(monkeypatch)
+        execution = await _execution_of(monkeypatch, _context())
+        first = _answering_provider()
+        router = StageRouter(
+            LadderConfig(stages={}),
+            {"mistral": first},
+            registry=_registry(max_output_tokens=65536),
+        )
+
+        await execution.run(router)
+
+        assert first.complete.await_args.args[0].max_tokens == 8192
+
+    async def test_the_shipped_third_safety_rung_is_affordable_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lock 2: gemini-3.5-flash-lite as the first and only attempt is called.
+
+        Priced at the registry's 65536 it is about $0.164 against a $0.05
+        ceiling and was skipped without a call; priced at the stage's 8192 it
+        is about $0.021. Only the money is judged here: this says nothing about
+        the rung after two failed ones, which share the same ceiling.
+        """
+        _typical_prompt(monkeypatch)
+        registry = load_registry(_REGISTRY_FILE)
+        shipped = load_path_config(_PATHS_FILE).stages[SAFETY]
+        third = shipped.ladder[2]
+        assert third.model == "gemini-3.5-flash-lite"
+        assert third.max_output_tokens is None
+        cap = registry.models[third.model].max_output_tokens
+        assert cap is not None and cap > shipped.ceilings.output_tokens
+        context = replace(
+            _context(), stage=shipped.model_copy(update={"ladder": [third]})
+        )
+        execution = await _execution_of(monkeypatch, context)
+        gemini = _answering_provider()
+        router = StageRouter(
+            LadderConfig(stages={}), {"gemini": gemini}, registry=registry
+        )
+
+        result = await execution.run(router)
+
+        assert result.model_used == "gemini-3.5-flash-lite"
+        request = gemini.complete.await_args.args[0]
+        assert request.max_tokens == shipped.ceilings.output_tokens
+
+    async def test_a_pinned_rung_keeps_its_pin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lock 3: a pin below the stage ceiling is what is sent."""
+        _typical_prompt(monkeypatch)
+        execution = await _execution_of(monkeypatch, _context())
+        assert execution.stage.ladder[1].max_output_tokens == 4096
+        second = _answering_provider()
+        router = StageRouter(
+            LadderConfig(stages={}),
+            # Rung 1 has no provider, so the pinned rung is the one called.
+            {"gemini": second},
+            registry=_registry(max_output_tokens=65536),
+        )
+
+        await execution.run(router)
+
+        assert second.complete.await_args.args[0].max_tokens == 4096
+
+    async def test_the_by_name_road_keeps_the_registry_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lock 4: a ladder stage called by name is not given a stage ceiling."""
+        _typical_prompt(monkeypatch)
+        provider = _answering_provider()
+        router = StageRouter(
+            LadderConfig(
+                stages={
+                    "demo": StageConfig(
+                        prompt_ref="prompts/example/v1.md",
+                        ladder=[LadderEntry(provider="mistral", model="m")],
+                    )
+                }
+            ),
+            {"mistral": provider},
+            registry=_registry(max_output_tokens=65536),
+        )
+
+        await router.execute_for_stage("demo")
+
+        assert provider.complete.await_args.args[0].max_tokens == 65536

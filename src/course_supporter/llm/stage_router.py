@@ -602,10 +602,12 @@ class StageRouter:
         a "skip everything" rule when the registry is incomplete.
 
         The output side is what the rung is allowed to produce, not what it
-        will: the pin if the rung has one, else the stage's ceiling from the
-        registry. That is the same number :meth:`_build_request` puts on the
+        will: the pin if the rung has one, else the model's own output cap from
+        the registry. That is the same number :meth:`_build_request` puts on the
         wire as ``max_tokens``, so the estimate prices the request that would
-        actually be sent.
+        actually be sent. The router knows no stage output ceiling; a caller
+        that has one pins it on the rung (the rebuilt Mentor's path stages do,
+        in ``homework/path_stages.py::_execution``).
         """
         model = self._registry.models.get(entry.model)
         if model is None:

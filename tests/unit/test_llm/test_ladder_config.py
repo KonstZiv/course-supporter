@@ -386,6 +386,19 @@ class TestRealConfigs:
         assert ladder[0].max_output_tokens == 32768
         assert [rung.max_output_tokens for rung in ladder[1:]] == [16384, 16384]
 
+    def test_methodist_bottomup_rungs_carry_the_full_text_ceiling(self) -> None:
+        # 2026-09-30: with methodological documents and tasks read in full
+        # (prompt v2) the first deepseek-v4-pro answer hit the old 16384
+        # ceiling, the JSON was cut and the attempt paid twice. 32768 on both
+        # rungs; the top-down stage keeps 8192 (its answer did not change).
+        # A silent revert breaks this test.
+        config = load_ladder_config(Path("config"))
+        bottomup = config.get_stage("methodist_bottomup").ladder
+        topdown = config.get_stage("methodist_topdown").ladder
+
+        assert [rung.max_output_tokens for rung in bottomup] == [32768, 32768]
+        assert [rung.max_output_tokens for rung in topdown] == [8192, 8192, 8192]
+
     def test_layered_evaluation_node_course_rung_1_carries_hotfix_2_ceiling(
         self,
     ) -> None:

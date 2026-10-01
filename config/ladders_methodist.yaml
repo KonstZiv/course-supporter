@@ -69,12 +69,28 @@ stages:
     requires: [structured_output, long_context]
     input_budget_ratio: 0.5
     ladder:
+      # Ceiling 32768 on both rungs, up from 16384 (2026-09-30). 16384 was
+      # sized for the v1 answer; v2 reads methodological documents and tasks
+      # in full and writes a much longer description (common_mistakes, success
+      # criteria tagged base / pro, fuller observations). On a real lesson node
+      # (~21k chars of full texts in) the first deepseek-v4-pro answer hit
+      # 16384, the JSON was cut, the attempt was paid and dropped, and only
+      # the retry passed. Registry limits (config/external_services.yaml):
+      # deepseek-v4-pro 65536, qwen3.7-max 65536. deepseek_thinking counts the
+      # reasoning inside max_output_tokens (see criteria_decomposition in
+      # ladders_mentor.yaml), so the ceiling has to hold reasoning + JSON.
+      # Time bounds: rung 1 at the observed ~60-69 tokens/s writes 32768 in
+      # ~9 min against the 900 s HTTP read timeout (providers/openai_compat.py);
+      # rung 2 is bounded by the DashScope client's 300 s default request
+      # timeout, not by this ceiling. No money ceiling applies to this stage
+      # (execute_for_stage passes none); worst case per attempt off-peak at
+      # ~10k tokens in: rung 1 $0.039 -> $0.072, rung 2 $0.098 -> $0.179.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
-        max_output_tokens: 16384
+        max_output_tokens: 32768
       - provider: dashscope
         model: qwen3.7-max
-        max_output_tokens: 16384
+        max_output_tokens: 32768
 
   # ``requires: [structured_output]`` — deliberately NOT ``[..., long_context]``.
   # Top-down input is small by construction: this node's own canonical state
@@ -90,6 +106,11 @@ stages:
     requires: [structured_output]
     input_budget_ratio: 0.5
     ladder:
+      # Ceiling 8192 kept on 2026-09-30 when the bottom-up ceiling was raised:
+      # the top-down prompt (v1) and its answer — enclosing_context plus
+      # appended observations — did not change with the full-text bottom-up
+      # v2. Spike outputs, reasoning included: 1878 / 3787 / 1203 tokens on
+      # the three rungs, so 8192 still leaves a twofold or larger margin.
       - provider: deepseek_thinking
         model: deepseek-v4-pro
         max_output_tokens: 8192

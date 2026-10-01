@@ -24,8 +24,13 @@ from pydantic import BaseModel
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
-from course_supporter.llm.providers.base import LLMProvider, StructuredOutputError
-from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.providers.base import (
+    LLMProvider,
+    RequestConfigError,
+    StructuredOutputError,
+)
+from course_supporter.llm.response_schema import mentions_json, openai_response_format
+from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 
 # OpenAI populates BadRequestError.code from body["code"]. The
 # canonical context-overflow code on OpenAI is "context_length_exceeded".
@@ -134,6 +139,22 @@ class OpenAICompatProvider(LLMProvider):
         """
         return {}
 
+    def check_request(self, request: LLMRequest) -> None:
+        """JSON mode needs the word "json" in the messages (task 09a).
+
+        OpenAI and DeepSeek answer ``response_format={"type": "json_object"}``
+        with HTTP 400 unless a message mentions JSON; Mistral shares this
+        connector and the rule. Caught here, before the call, it is a
+        configuration error the stage's prompt has to fix -- not a refusal
+        that silently descends the ladder.
+        """
+        if request.schema_mode is SchemaMode.JSON and not mentions_json(request):
+            msg = (
+                f"{self.provider_name}: JSON mode requires the word 'json' in "
+                f"the system or user message (stage '{request.action}')"
+            )
+            raise RequestConfigError(msg)
+
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Classify OpenAI-SDK exceptions into ladder categories.
 
@@ -220,6 +241,14 @@ class OpenAICompatProvider(LLMProvider):
         else:
             messages.append({"role": "user", "content": request.prompt})
 
+        # Task 09a: the schema mode chosen by the router goes on the wire as
+        # its own kwarg, never merged into the vendor hook -- a request without
+        # a schema mode sends exactly what it sent before.
+        schema_kwargs: dict[str, Any] = {}
+        response_format = openai_response_format(request)
+        if response_format is not None:
+            schema_kwargs["response_format"] = response_format
+
         client = self._next_client()
         with self._measure_latency() as timer:
             response = await client.chat.completions.create(
@@ -227,6 +256,7 @@ class OpenAICompatProvider(LLMProvider):
                 messages=messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
+                **schema_kwargs,
                 **self._extra_create_kwargs(),
             )
 

@@ -17,9 +17,10 @@ Interface:
     What the document holds — everything that can change the output:
     the rendered system and user prompts; a SHA-256 digest per attachment
     (the bytes themselves are never serialised); the model; temperature;
-    the output ceiling; the reasoning form; whether JSON was requested; and
-    the provider name. The provider is part of the input because two ladder
-    providers can send the same model name with different behaviour —
+    the output ceiling; the reasoning form; whether JSON was requested; the
+    response schema and how it is enforced (task 09a); and the provider
+    name. The provider is part of the input because two ladder providers
+    can send the same model name with different behaviour —
     ``deepseek`` and ``deepseek_thinking`` differ exactly in thinking off/on.
 
     The level is one attempt, not one stage call: a structural retry appends
@@ -64,7 +65,7 @@ def _attachment_digest(item: object) -> str:
 
 def attempt_input_document(request: LLMRequest, *, provider: str) -> dict[str, object]:
     """The output-affecting parts of one attempt, as a JSON-ready mapping."""
-    return {
+    document: dict[str, object] = {
         "provider": provider,
         "model": request.model,
         "temperature": request.temperature,
@@ -75,6 +76,15 @@ def attempt_input_document(request: LLMRequest, *, provider: str) -> dict[str, o
         "user": request.prompt,
         "attachments": [_attachment_digest(item) for item in request.contents or []],
     }
+    # Task 09a. The schema changes what the provider is allowed to answer, so
+    # it is input. Written only when present: a request without a schema then
+    # hashes exactly as before the field existed, and every input_hash already
+    # in the register stays comparable with new rows of the same input. A
+    # schema and its absence still never collide -- the key itself differs.
+    if request.response_schema is not None:
+        document["response_schema"] = request.response_schema
+        document["schema_mode"] = request.schema_mode
+    return document
 
 
 def canonical_attempt_input(request: LLMRequest, *, provider: str) -> str:

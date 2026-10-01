@@ -82,8 +82,8 @@ from course_supporter.llm.input_hash import (
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
-from course_supporter.llm.registry import ModelRegistryConfig
-from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.registry import Capability, ModelRegistryConfig
+from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 from course_supporter.llm.token_budget import estimate_tokens
 from course_supporter.service_logging import _persist
 
@@ -228,6 +228,7 @@ class StageExecution:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute this stage on ``router``, passing the caller's own arguments."""
@@ -237,6 +238,7 @@ class StageExecution:
             response_validator=response_validator,
             contents=contents,
             expects_json=expects_json,
+            response_schema=response_schema,
             stop_on_output_ceiling=self.stop_on_output_ceiling,
             money_ceiling_usd=self.money_ceiling_usd,
             **render_context,
@@ -292,6 +294,7 @@ class StageRouter:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a named stage.
@@ -321,6 +324,14 @@ class StageRouter:
                 provider returns bare JSON (native JSON mode and/or
                 markdown-fence stripping). Leave ``False`` for
                 plain-text stages (e.g. Pass 2c denoise).
+            response_schema: Optional JSON Schema of the answer, built by
+                the stage with ``response_schema.strict_json_schema``;
+                requires ``expects_json=True``. Per rung the router decides
+                how it reaches the wire: the schema itself for a
+                ``schema_strict`` model, the provider's JSON mode for a
+                ``json_mode`` one, nothing for a model with neither.
+                ``response_validator`` runs in every case. ``None`` (default)
+                leaves every connector's wire exactly as before.
             **render_context: Variables for the prompt template's
                 Jinja2 placeholders.
 
@@ -340,6 +351,7 @@ class StageRouter:
             response_validator=response_validator,
             contents=contents,
             expects_json=expects_json,
+            response_schema=response_schema,
             **render_context,
         )
 
@@ -352,6 +364,7 @@ class StageRouter:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
         **render_context: Any,
@@ -382,6 +395,7 @@ class StageRouter:
             response_validator: As on :meth:`execute_for_stage`.
             contents: As on :meth:`execute_for_stage`.
             expects_json: As on :meth:`execute_for_stage`.
+            response_schema: As on :meth:`execute_for_stage`.
             stop_on_output_ceiling: Stop instead of descending when a rung
                 returns nothing AND reports the output ceiling as spent. The
                 next rung would be asked the same question with the same input,
@@ -417,6 +431,9 @@ class StageRouter:
             FileNotFoundError: if the stage's prompt file is missing.
             jinja2.UndefinedError: if a template variable is missing.
             LadderExhaustedError: if every ladder entry failed.
+            RequestConfigError: if a rung's connector cannot send the request
+                as configured (e.g. JSON mode without the word "json"); raised
+                before that rung's call, so nothing is paid for it.
         """
         # KD-1.2-H Variant A — observability log line at the start of
         # every stage execution. Correlates with caller-side logs (e.g.
@@ -550,8 +567,18 @@ class StageRouter:
                     continue
 
             request = self._build_request(
-                prompt, entry, stage_name, contents=contents, expects_json=expects_json
+                prompt,
+                entry,
+                stage_name,
+                contents=contents,
+                expects_json=expects_json,
+                response_schema=response_schema,
             )
+            # Before the call, outside the attempt's ``except``: a request the
+            # connector cannot send is a configuration fault, and the next
+            # rung is built from the same configuration -- descending would
+            # hide it behind a fallback.
+            provider.check_request(request)
             attempt = await self._attempt_entry(
                 provider, entry, request, record, response_validator
             )
@@ -626,6 +653,7 @@ class StageRouter:
         *,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
     ) -> LLMRequest:
         """Map StagePrompt + LadderEntry to the legacy LLMRequest.
 
@@ -650,6 +678,17 @@ class StageRouter:
         registry_max_tokens = (
             registry_model.max_output_tokens if registry_model else None
         )
+        # Task 09a — the stage hands over a schema; the rung's model decides
+        # how far the provider can hold it. Strict where measured to work,
+        # plain JSON mode where only that is known to work, and otherwise the
+        # wire stays as it is without a schema. The registry is the one place
+        # that knows, so the decision is made here and not in a connector.
+        schema_mode: SchemaMode | None = None
+        if response_schema is not None and registry_model is not None:
+            if Capability.SCHEMA_STRICT in registry_model.capabilities:
+                schema_mode = SchemaMode.STRICT
+            elif Capability.JSON_MODE in registry_model.capabilities:
+                schema_mode = SchemaMode.JSON
         return LLMRequest(
             prompt=prompt.user or "",
             system_prompt=prompt.system,
@@ -660,6 +699,8 @@ class StageRouter:
             reasoning=entry.reasoning,
             max_tokens=entry.max_output_tokens or registry_max_tokens,
             expects_json=expects_json,
+            response_schema=response_schema,
+            schema_mode=schema_mode,
         )
 
     async def _attempt_entry(

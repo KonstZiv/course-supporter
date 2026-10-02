@@ -36,13 +36,6 @@ class _StubProvider(LLMProvider):
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise NotImplementedError
 
-    async def complete_structured(
-        self,
-        request: LLMRequest,
-        response_schema: type,
-    ) -> tuple[object, LLMResponse]:
-        raise NotImplementedError
-
 
 class TestBaseClassifier:
     """Default classifier returns SEMANTIC for any exception."""

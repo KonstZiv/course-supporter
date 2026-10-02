@@ -41,11 +41,9 @@ class DeepSeekProvider(OpenAICompatProvider):
     def _extra_create_kwargs(self) -> dict[str, Any]:
         """Inject ``extra_body={"thinking": {"type": "disabled"}}`` (KD-2.4-S).
 
-        Returned dict is spread into both
-        :meth:`openai.AsyncOpenAI.chat.completions.create` (via
-        :meth:`complete`) and instructor's
-        ``create_with_completion`` (via :meth:`complete_structured`),
-        so non-think mode applies to both unstructured and structured
-        output paths.
+        Returned dict is spread into
+        :meth:`openai.AsyncOpenAI.chat.completions.create` by
+        :meth:`complete` -- the single call path, structured output
+        included -- so non-think mode applies to every call.
         """
         return {"extra_body": {"thinking": {"type": "disabled"}}}

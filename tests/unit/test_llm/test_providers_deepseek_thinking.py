@@ -6,10 +6,9 @@ thinking-on sibling. Verifies that:
 * the subclass inherits :class:`OpenAICompatProvider` cleanly,
 * :meth:`_extra_create_kwargs` returns the empty base-class default
   (NOT the thinking-disabled override from KD-2.4-S),
-* both call paths (``chat.completions.create`` and instructor's
-  ``create_with_completion``) reach the SDK with no ``extra_body``
-  injected, so the DeepSeek API applies its default thinking-on V4
-  behaviour,
+* the single call path (``chat.completions.create``) reaches the SDK
+  with no ``extra_body`` injected, so the DeepSeek API applies its
+  default thinking-on V4 behaviour,
 * the provider registry exposes the new class under
   ``"deepseek_thinking"`` and the factory wires it from the shared
   ``DEEPSEEK_API_KEY`` pool, returning a working instance alongside the
@@ -23,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
 from course_supporter.llm.providers.deepseek_thinking import DeepSeekThinkingProvider
@@ -52,22 +50,6 @@ def _stub_completion_response() -> MagicMock:
     response.choices = [choice]
     response.usage = MagicMock(prompt_tokens=42, completion_tokens=7)
     return response
-
-
-def _stub_structured_completion() -> MagicMock:
-    """Mock returned alongside the parsed instance from instructor."""
-    completion = MagicMock()
-    choice = MagicMock()
-    choice.message.content = '{"ok": true}'
-    completion.choices = [choice]
-    completion.usage = MagicMock(prompt_tokens=42, completion_tokens=7)
-    return completion
-
-
-class _SchemaForTest(BaseModel):
-    """Minimal schema used as ``response_model`` placeholder."""
-
-    ok: bool
 
 
 class TestDeepSeekThinkingProviderHook:
@@ -132,38 +114,6 @@ class TestDeepSeekThinkingProviderHook:
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hello"},
         ]
-
-    @pytest.mark.asyncio
-    async def test_complete_structured_omits_extra_body(self) -> None:
-        """instructor's ``create_with_completion`` also runs without ``extra_body``."""
-        provider = _make_provider()
-
-        fake_instructor = MagicMock()
-        parsed_instance = _SchemaForTest(ok=True)
-        fake_instructor.chat.completions.create_with_completion = AsyncMock(
-            return_value=(parsed_instance, _stub_structured_completion())
-        )
-        # Skip the lazy instructor bootstrap; install our fake cycle directly.
-        provider._instructor_clients = (fake_instructor,)  # type: ignore[assignment]
-        provider._instructor_cycle = itertools.cycle((fake_instructor,))
-
-        request = LLMRequest(
-            prompt="hello",
-            system_prompt=None,
-            model="deepseek-v4-pro",
-            temperature=0.0,
-            max_tokens=256,
-        )
-
-        await provider.complete_structured(request, _SchemaForTest)
-
-        instructor_create = fake_instructor.chat.completions.create_with_completion
-        instructor_create.assert_awaited_once()
-        kwargs = instructor_create.await_args.kwargs
-        assert "extra_body" not in kwargs
-        assert kwargs["model"] == "deepseek-v4-pro"
-        assert kwargs["max_retries"] == 2
-        assert kwargs["response_model"] is _SchemaForTest
 
 
 class TestProviderRegistryDeepSeekThinking:

@@ -1,13 +1,11 @@
 """Anthropic Claude provider."""
 
 import itertools
-import json
 import re
 from collections.abc import Iterator, Sequence
 from typing import Any
 
 import anthropic
-from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import normalize_finish_reason
@@ -115,25 +113,3 @@ class AnthropicProvider(LLMProvider):
             ),
             latency_ms=timer.elapsed_ms,
         )
-
-    async def complete_structured(
-        self,
-        request: LLMRequest,
-        response_schema: type[BaseModel],
-    ) -> tuple[Any, LLMResponse]:
-        """Generate structured output via system prompt with JSON schema."""
-        schema_json = json.dumps(
-            response_schema.model_json_schema(), ensure_ascii=False
-        )
-        structured_system = (
-            f"{request.system_prompt or ''}\n\n"
-            f"Respond ONLY with raw JSON matching this schema, "
-            f"no markdown fences:\n{schema_json}"
-        )
-        modified_request = request.model_copy(
-            update={"system_prompt": structured_system}
-        )
-        llm_response = await self.complete(modified_request)
-        raw = strip_markdown_json(llm_response.content)
-        parsed = self._parse_structured(raw, response_schema)
-        return parsed, llm_response

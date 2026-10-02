@@ -1,8 +1,8 @@
 """OpenAI-compatible provider (OpenAI + DeepSeek + Mistral).
 
-Uses ``instructor`` for structured output: tool/function calling
-with automatic retry on validation errors. This is more reliable
-than embedding JSON schema in the system prompt.
+Structured output goes through :meth:`OpenAICompatProvider.complete` like
+any other call: the router-chosen schema mode is sent as ``response_format``
+(task 09a).
 
 Supports multimodal vision requests: when ``LLMRequest.contents``
 contains ``bytes`` items they are sent as base64 inline images.
@@ -14,21 +14,16 @@ import base64
 import itertools
 import re
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 import openai
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
-from course_supporter.llm.providers.base import (
-    LLMProvider,
-    RequestConfigError,
-    StructuredOutputError,
-)
+from course_supporter.llm.providers.base import LLMProvider, RequestConfigError
 from course_supporter.llm.response_schema import mentions_json, openai_response_format
 from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 
@@ -84,16 +79,12 @@ def _build_vision_content(
     return parts
 
 
-if TYPE_CHECKING:
-    import instructor
-
-
 class OpenAICompatProvider(LLMProvider):
     """Provider for OpenAI API and compatible services (DeepSeek, Mistral).
 
     Uses the same OpenAI SDK with different ``base_url`` per provider.
-    Structured output uses ``instructor`` for tool-based schema
-    enforcement with automatic validation retry.
+    Structured output is the ``response_format`` that :meth:`complete`
+    sends when the request carries a schema mode.
 
     When multiple API keys are provided, SDK clients are
     pre-created and rotated in round-robin order per request.
@@ -120,11 +111,6 @@ class OpenAICompatProvider(LLMProvider):
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
         )
-        # Instructor clients and exception class created lazily
-        # on first complete_structured() call to avoid slow startup.
-        self._instructor_clients: tuple[instructor.AsyncInstructor, ...] | None = None
-        self._instructor_cycle: Iterator[instructor.AsyncInstructor] | None = None
-        self._retry_exc_cls: type[Exception] = Exception
 
     def _next_client(self) -> openai.AsyncOpenAI:
         return next(self._client_cycle)
@@ -195,33 +181,6 @@ class OpenAICompatProvider(LLMProvider):
             return ErrorCategory.SEMANTIC
         return super().classify_error(exc)
 
-    def _ensure_instructor(self) -> None:
-        """Lazily create instructor-patched clients on first use."""
-        if self._instructor_clients is not None:
-            return
-        import instructor as _instructor
-        from instructor.exceptions import (
-            InstructorRetryException,
-        )
-
-        self._instructor_clients = tuple(
-            _instructor.from_openai(
-                openai.AsyncOpenAI(
-                    api_key=k,
-                    base_url=self._base_url,
-                    timeout=_DEFAULT_HTTP_TIMEOUT,
-                )
-            )
-            for k in self._api_keys
-        )
-        self._instructor_cycle = itertools.cycle(self._instructor_clients)
-        self._retry_exc_cls = InstructorRetryException
-
-    def _next_instructor_client(self) -> instructor.AsyncInstructor:
-        self._ensure_instructor()
-        # _ensure_instructor guarantees these are set
-        return next(self._instructor_cycle)  # type: ignore[arg-type]
-
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API.
 
@@ -274,63 +233,3 @@ class OpenAICompatProvider(LLMProvider):
             finish_reason=_normalize_choice_finish(choice.finish_reason),
             latency_ms=timer.elapsed_ms,
         )
-
-    async def complete_structured(
-        self,
-        request: LLMRequest,
-        response_schema: type[BaseModel],
-    ) -> tuple[Any, LLMResponse]:
-        """Generate structured output via instructor (tool/function calling).
-
-        Instructor handles schema enforcement via tool definitions and
-        automatic retry with Pydantic validation error feedback.
-        Falls back to StructuredOutputError on persistent failure.
-        """
-        model = request.model or self._default_model
-        messages: list[ChatCompletionMessageParam] = []
-        if request.system_prompt:
-            messages.append({"role": "system", "content": request.system_prompt})
-        messages.append({"role": "user", "content": request.prompt})
-
-        client = self._next_instructor_client()
-        with self._measure_latency() as timer:
-            try:
-                (
-                    result,
-                    completion,
-                ) = await client.chat.completions.create_with_completion(
-                    model=model,
-                    messages=messages,
-                    response_model=response_schema,
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens,
-                    max_retries=2,
-                    **self._extra_create_kwargs(),
-                )
-            except Exception as exc:
-                if not isinstance(exc, self._retry_exc_cls):
-                    raise
-                raise StructuredOutputError(
-                    provider=self.provider_name,
-                    raw_content=str(exc),
-                    schema_name=response_schema.__name__,
-                    cause=exc,
-                ) from exc
-
-        usage = completion.usage
-        llm_response = LLMResponse(
-            content=completion.choices[0].message.content or ""
-            if completion.choices
-            else "",
-            provider=self.provider_name,
-            model_id=model,
-            tokens_in=usage.prompt_tokens if usage else None,
-            tokens_out=usage.completion_tokens if usage else None,
-            finish_reason=(
-                _normalize_choice_finish(completion.choices[0].finish_reason)
-                if completion.choices
-                else FinishReason.UNKNOWN
-            ),
-            latency_ms=timer.elapsed_ms,
-        )
-        return result, llm_response

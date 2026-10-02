@@ -31,9 +31,12 @@ Interface:
     stage list that may have changed since — see its docstring.
 
 Extending:
-    A new freeze reason is a member of :class:`FreezeReason` and a reaction to
-    it in the body; nothing else here changes. A new field is a field with a
-    default, so a checkpoint written before it still reads.
+    A new freeze reason is a member of :class:`FreezeReason`. One a ladder's
+    ending brings is mapped in :data:`FREEZE_REASON_FOR_LADDER_STOP`; one a
+    stage decides on is returned by its executor
+    (``StageOutcome.freezes``), and the body holds the revision the same way
+    for both. A new field is a field with a default, so a checkpoint written
+    before it still reads.
 """
 
 from __future__ import annotations
@@ -106,6 +109,14 @@ class FreezeReason(StrEnum):
 
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     """Every rung failed for reasons that may pass — worth retrying."""
+
+    CRITERIA_UNAVAILABLE = "criteria_unavailable"
+    """No criteria list is in force for the task; the review waits for one.
+
+    Asked for by a stage (``StageOutcome.freezes``), not by a ladder: the
+    evaluation stage holds the revision before any paid call of its own
+    (task 09b, decision 6).
+    """
 
 
 FREEZE_REASON_FOR_LADDER_STOP: Final[dict[LadderStop, FreezeReason]] = {

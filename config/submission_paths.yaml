@@ -96,6 +96,62 @@ stages:
         reasoning: null
         max_output_tokens: null
 
+  # Verdicts on the criteria of a text task (mentor-rebuild task 09b): one
+  # request about the whole list, one repeat about the verdicts that cannot
+  # stand, on the rung that answered (homework/criteria_evaluation.py). Not on
+  # any path yet: the paths of `task` and `short_task` take it in commit K6.
+  criteria_evaluation:
+    # The same input twice must give the same verdicts (TASK.md lock 9);
+    # qwen3.7-max answered byte for byte the same on the same input, live.
+    deterministic: true
+    prompt_ref: "prompts/criteria_evaluation/v1.md"
+    # The answer goes out with its schema (task 09a): strict on qwen3.7-max,
+    # which holds one, JSON mode on DeepSeek, which answers 400 to a schema.
+    requires: [json_mode]
+    input_budget_ratio: 0.5
+    # Quotes of students' work stay out of the call register.
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      # The DeepSeek rung's pin, below. On deepseek_thinking the reasoning is
+      # counted inside max_output_tokens: at 8192 a rung of the 1A stage with
+      # 37 criteria answered an EMPTY body (ladders_mentor.yaml), and on a path
+      # stage an empty answer at the ceiling is a stop without descent
+      # (PRE-FLIGHT.md 9.6 (a), ratified 2026-10-01).
+      output_tokens: 32768
+      # не калібровано (PRE-FLIGHT.md 9.6, ratified 2026-10-01). The sum of the
+      # dearest attempts of the stage at its largest realistic input — about
+      # 56 021 tokens: the work at its budget of 131 072 characters, a task of
+      # ~20 000 characters, a list of 37 criteria, the prompt — at the registry
+      # rates (config/external_services.yaml, read 2026-10-01):
+      #   qwen3.7-max, 16 384 out:            56 021 x 0.00165/1k + 16 384 x 0.004951/1k = 0.173551
+      #   deepseek-v4-pro, 32 768 out:        56 021 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.101854
+      #   the repeat on qwen3.7-max:                                                        0.173551
+      #   qwen's reasoning, 10 000 tokens on each of its two requests: 2 x 0.049510      = 0.099020
+      #   total 0.547976, rounded up.
+      # Why the reserve for qwen's reasoning: it is not bounded by the output
+      # ceiling, and the router's estimate of an attempt does not count it
+      # (DD-SP-CM). Measured live after task 09a (sprint/cloud/pr-592/
+      # POST-MERGE-LIVE.md, 2026-10-02): at an output ceiling of 16 the
+      # estimate for qwen3.7-max was $0.000281 against $0.002905 actually
+      # billed — 10.3 times under; at a ceiling of 512 the two were close. The
+      # number above stands until the measurement of this stage calibrates it.
+      # DeepSeek is priced off-peak; peak hours bill twice that (DD-SP-BG).
+      money_usd: 0.55
+    ladder:
+      # PRE-PLAN.md decision 8: qwen3.7-max first — a strict schema on the
+      # wire and the same answer to the same input, measured live.
+      - provider: dashscope
+        model: qwen3.7-max
+        reasoning: null
+        max_output_tokens: 16384
+      # The fallback, with its reasoning on: the pin leaves room for the
+      # reasoning that shares it with the answer.
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        reasoning: null
+        max_output_tokens: 32768
+
 task_types:
   # A test makes no model call on any path. On the new path since task 07:
   # answered with its answers and scored against the author's key

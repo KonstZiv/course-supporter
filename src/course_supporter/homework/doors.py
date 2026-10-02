@@ -14,6 +14,9 @@ Interface:
     * :func:`assemble_submission_text` — a finished Stage 1 result in, the text
       the Mentor reads plus the entries it will not see out. Raises
       ``SecurityRejectedError`` when nothing survives the reading budget.
+      :func:`assemble_submission_work` is the same for the new path, with the
+      text file by file beside it (task 09b); today's Mentor keeps calling the
+      first, unchanged.
     * :class:`DoorReading` — what the doors read, as both bodies carry it on:
       the text, what was not opened, how the file was read, and what the
       signal screen noticed (task 11). :func:`carry_door_reading` puts the
@@ -47,6 +50,7 @@ from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.homework.criteria_verdicts import WorkFile
     from course_supporter.security.exceptions import SecurityRejectedError
     from course_supporter.security.schemas import SafetyResult
     from course_supporter.security.stage1 import Stage1Result
@@ -68,12 +72,16 @@ class DoorReading:
             question does not apply (archive, document, project, test).
         flags: What the signal screen noticed -- in the files, their names and
             the comment. For Stage 2 and the trace only (task 11, decision 2).
+        files: ``text`` file by file, for the quotes of the evaluation stage
+            (task 09b); empty where nothing was read as files (a test, a
+            project).
     """
 
     text: str
     not_opened: tuple[NotOpenedEntry, ...] = ()
     recovered_encoding: str | None = None
     flags: tuple[ScreenFlag, ...] = ()
+    files: tuple[WorkFile, ...] = ()
 
 
 def carry_door_reading(verdict: SafetyResult, reading: DoorReading) -> None:
@@ -162,6 +170,48 @@ def assemble_submission_text(
     reasons a file went unread: the checker could not open it, or it did not
     fit.
     """
+    text, not_opened, _files = _assemble(
+        result, file_bytes=file_bytes, filename=filename
+    )
+    return text, not_opened
+
+
+def assemble_submission_work(
+    result: Stage1Result, *, file_bytes: bytes, filename: str
+) -> tuple[str, tuple[NotOpenedEntry, ...], tuple[WorkFile, ...]]:
+    """:func:`assemble_submission_text`, with the same text file by file.
+
+    The new path's door (task 09b, ``PRE-FLIGHT.md`` 9.3): the text and what
+    was not opened are exactly what :func:`assemble_submission_text` returns,
+    and beside them is each file the text carries — its name and its own text,
+    without the frame — so the evaluation stage looks for a quote inside one
+    file and can say where it stands. A document (docx, pdf) has no lines a
+    student would recognise, so its quotes are placed by the file alone.
+    """
+    from course_supporter.homework.criteria_verdicts import WorkFile
+
+    text, not_opened, files = _assemble(
+        result, file_bytes=file_bytes, filename=filename
+    )
+    return (
+        text,
+        not_opened,
+        tuple(WorkFile(name, body, _has_lines(name)) for name, body in files),
+    )
+
+
+def _has_lines(filename: str) -> bool:
+    """Whether a file's lines are the student's: not for an extracted document."""
+    from course_supporter.security.file_type import extension_of
+    from course_supporter.security.policies import HOMEWORK_CONVEYORS
+
+    return HOMEWORK_CONVEYORS.get(extension_of(filename)) != "document"
+
+
+def _assemble(
+    result: Stage1Result, *, file_bytes: bytes, filename: str
+) -> tuple[str, tuple[NotOpenedEntry, ...], tuple[tuple[str, str], ...]]:
+    """The text, what was not opened, and each read file's name and text."""
     from course_supporter.homework.text_budget import (
         ensure_single_file_fits,
         fit_archive_entries,
@@ -186,6 +236,7 @@ def assemble_submission_text(
                 ErrorCategory.OVER_BUDGET,
                 f"no file in {filename!r} fits the {budget}-character review",
             )
+        files = fitted.files
     else:
         body = (
             result.nfc_text
@@ -194,8 +245,9 @@ def assemble_submission_text(
         )
         ensure_single_file_fits(body, filename=filename, budget_chars=budget)
         not_opened = result.not_opened
+        files = ((filename, body),)
 
-    return body + not_opened_block(not_opened), not_opened
+    return body + not_opened_block(not_opened), not_opened, files
 
 
 def not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:

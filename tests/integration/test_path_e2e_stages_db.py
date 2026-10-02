@@ -49,7 +49,9 @@ from course_supporter.homework.path_config import (
     PathConfig,
     ServedBy,
     SubmissionState,
+    load_path_config,
 )
+from course_supporter.homework.path_stages import CRITERIA_EVALUATION
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
@@ -61,6 +63,7 @@ from course_supporter.storage.orm import (
     HomeworkSubmission,
     Job,
     Student,
+    SubmissionCriterionVerdict,
     Tenant,
 )
 
@@ -1023,3 +1026,84 @@ class TestTheMoneyCeilingSkipsBeforeItSpends:
         assert checkpoint.frozen_reason is None
         submission = await _submission(session_factory, seed["submission_id"])
         assert submission.status == "delivered"
+
+
+def _config_with_evaluation() -> PathConfig:
+    """``task`` on the new path through safety and the REAL evaluation stage.
+
+    The evaluation stage is the one described in ``config/submission_paths.yaml``
+    and its executor is the registered one; only the router is a double.
+    """
+    shipped = load_path_config(
+        Path(__file__).resolve().parents[2] / "config" / "submission_paths.yaml"
+    )
+    listed = ["safety", CRITERIA_EVALUATION]
+    return PathConfig.model_validate(
+        {
+            "stages": {
+                "safety": _stage(),
+                CRITERIA_EVALUATION: shipped.stages[CRITERIA_EVALUATION].model_dump(),
+            },
+            "task_types": {
+                "task": {
+                    "served_by": ServedBy.NEW_PATH.value,
+                    "paths": {state.value: listed for state in SubmissionState},
+                },
+                "test": {"served_by": "todays_mentor", "paths": {}},
+                "short_task": {"served_by": "todays_mentor", "paths": {}},
+                "project": {"served_by": "todays_mentor", "paths": {}},
+            },
+        }
+    )
+
+
+class TestTheEvaluationStageHoldsWithoutAList:
+    """Lock 6 through the body (task 09b, K3).
+
+    The seeded task was never ingested, so the production list service answers
+    ``task_not_ready`` without composing. The stage asks the body to hold the
+    revision; the body keeps it unfinished at that stage and pays for nothing.
+    """
+
+    async def test_the_revision_is_held_at_the_stage_without_a_call(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        port = _PortDouble()
+
+        await _run(
+            session_factory,
+            router,
+            port,
+            seed,
+            _answers(tmp_path),
+            config=_config_with_evaluation(),
+        )
+
+        assert router.calls == ["safety"]
+        checkpoint = await _checkpoint(session_factory, seed["job_id"])
+        assert checkpoint.stages == {
+            "safety": StageState.DONE,
+            CRITERIA_EVALUATION: StageState.PENDING,
+        }
+        assert checkpoint.frozen_stage == CRITERIA_EVALUATION
+        assert checkpoint.frozen_reason is FreezeReason.CRITERIA_UNAVAILABLE
+        job = await _job(session_factory, seed["job_id"])
+        assert job.current_stage == CRITERIA_EVALUATION
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "received"
+        # Held, not ended: the port hears nothing about the remainder.
+        assert port.released == []
+        async with session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(SubmissionCriterionVerdict).where(
+                        SubmissionCriterionVerdict.submission_id
+                        == seed["submission_id"]
+                    )
+                )
+            ).all()
+        assert rows == []

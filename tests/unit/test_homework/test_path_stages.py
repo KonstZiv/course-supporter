@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
     PathKey,
     PathStage,
@@ -23,6 +24,7 @@ from course_supporter.homework.path_config import (
 )
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
+    CRITERIA_EVALUATION,
     SAFETY,
     StageContext,
     StageOutcome,
@@ -82,6 +84,7 @@ def _context(stage_name: str = SAFETY) -> StageContext:
         path_key=_KEY,
         stage_name=stage_name,
         stage=_stage(),
+        session_factory=AsyncMock(),
     )
 
 
@@ -117,7 +120,15 @@ class TestRegistry:
             validate_stage_executors([SAFETY, "verdicts"])
 
     def test_the_shipped_stages_pass_the_check(self) -> None:
-        validate_stage_executors([SAFETY, ATTEMPT_CLASSIFIER])
+        validate_stage_executors([SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION])
+
+    def test_every_stage_the_shipped_file_describes_has_an_executor(self) -> None:
+        """Task 09b: the evaluation stage is described before any path uses it."""
+        config = load_path_config(
+            Path(__file__).resolve().parents[3] / "config" / "submission_paths.yaml"
+        )
+        assert CRITERIA_EVALUATION in config.stages
+        validate_stage_executors(config.stages)
 
     async def test_an_executor_can_be_replaced_under_its_name(
         self, _restore_registry: None
@@ -132,6 +143,21 @@ class TestRegistry:
         outcome = await get_stage_executor(SAFETY)(_context())
 
         assert outcome.reason_code == "swapped"
+
+
+class TestTheThreeOutcomes:
+    def test_a_hold_names_its_reason_and_neither_carries_on_nor_ends(self) -> None:
+        """Task 09b: a stage that cannot run yet asks the body to hold it."""
+        outcome = StageOutcome.freezes(FreezeReason.CRITERIA_UNAVAILABLE)
+
+        assert outcome.carry_on is False
+        assert outcome.terminal_status is None
+        assert outcome.reason_code is None
+        assert outcome.freeze_reason is FreezeReason.CRITERIA_UNAVAILABLE
+
+    def test_the_other_two_hold_nothing(self) -> None:
+        assert StageOutcome.ok().freeze_reason is None
+        assert StageOutcome.ends_path("mismatch", "mismatch").freeze_reason is None
 
 
 def _no_course_nodes(monkeypatch: pytest.MonkeyPatch) -> None:

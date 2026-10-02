@@ -7,7 +7,7 @@ and ``&`` stay as they are, only ``<`` and ``>`` are escaped (``\\u003c`` /
 
 * Static lock: no prompt template uses Jinja2's stock ``tojson``, which
   escapes every non-ASCII letter — unless it is allowed below with a reason.
-* Dynamic lock: the function itself, and each of the seven places that put
+* Dynamic lock: the function itself, and each of the eight places that put
   JSON into a prompt, driven through the code that builds the prompt (the
   agent or pipeline step, then the stage's own template rendered from the
   render context the step handed to the router — what ``StageRouter`` does).
@@ -30,15 +30,31 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.agents.criteria_evaluator import (
+    CriteriaEvaluatorAgent,
+    EvaluationInput,
+)
 from course_supporter.agents.methodist import MethodistAgent, OwnDocument
+from course_supporter.homework.criteria_form import Criterion
+from course_supporter.homework.criteria_verdicts import (
+    EvaluationAnswer,
+    RepeatItem,
+    RepeatReason,
+)
+from course_supporter.homework.path_config import load_path_config
+from course_supporter.homework.path_stages import CRITERIA_EVALUATION
 from course_supporter.ingestion.audio import AudioProcessor
 from course_supporter.ingestion.schemas import DocumentSegmentDraft
 from course_supporter.ingestion.video_pipeline import steps
 from course_supporter.ingestion.video_pipeline.schemas import SttResult, SttWord
-from course_supporter.llm.ladder_config import load_ladder_config
+from course_supporter.llm.ladder_config import (
+    LadderEntry,
+    StageConfig,
+    load_ladder_config,
+)
 from course_supporter.llm.prompt_json import prompt_json
 from course_supporter.llm.prompt_loader_md import load_prompt
-from course_supporter.llm.stage_router import StageResult
+from course_supporter.llm.stage_router import StageExecution, StageResult
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -516,3 +532,111 @@ async def test_criteria_composition_prompt() -> None:
     assert f"<node_concepts>\n{fragment}\n</node_concepts>" in text
     assert f"<course_concepts>\n{fragment}\n</course_concepts>" in text
     assert text.count("\\u") == 2 * _ANGLES_PER_LIST
+
+
+# ── Dynamic lock: criteria evaluation (tojson_unicode in the template, 09b) ──
+
+
+def _hostile_criteria() -> tuple[Criterion, ...]:
+    """A criterion and a criterion checked by points, every text hostile."""
+    hostile = " ".join(_HOSTILE)
+    return (
+        Criterion(
+            id="c1",
+            text=hostile,
+            evidence=hostile,
+            weight="must",
+            check_method="model_verdict",
+            soft_descent=False,
+            concepts=(),
+            mandatory_points=(),
+        ),
+        Criterion.model_validate(
+            {
+                "id": "c2",
+                "text": hostile,
+                "evidence": hostile,
+                "weight": "may",
+                "check_method": "mandatory_points",
+                "soft_descent": False,
+                "concepts": [],
+                "mandatory_points": [{"id": "c2.p1", "text": hostile}],
+            }
+        ),
+    )
+
+
+def _evaluation_reply(context: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "verdicts": [
+                {"id": item, "verdict": "met", "quote": "x" * 9, "missing": None}
+                for item in context["items"]
+            ]
+        }
+    )
+
+
+async def test_criteria_evaluation_prompt() -> None:
+    stage = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml").stages[
+        CRITERIA_EVALUATION
+    ]
+    execution = StageExecution(
+        stage=StageConfig(
+            prompt_ref=stage.prompt_ref,
+            ladder=[LadderEntry(provider="p", model="m")],
+        ),
+        stage_name=CRITERIA_EVALUATION,
+    )
+    shown = EvaluationInput(
+        task_title="Числа",
+        task_description="Рекурсія.",
+        task_text="Напишіть функцію.",
+        criteria=_hostile_criteria(),
+        submission_text="def f(): pass",
+        language="Ukrainian",
+    )
+    given = EvaluationAnswer.model_validate(
+        {
+            "verdicts": [
+                {
+                    "id": "c1",
+                    "verdict": "met",
+                    "quote": " ".join(_HOSTILE),
+                    "missing": None,
+                },
+                {"id": "c2.p1", "verdict": "met", "quote": "x" * 9, "missing": None},
+            ]
+        }
+    )
+    router = _CapturingRouter(_evaluation_reply)
+    agent = CriteriaEvaluatorAgent(router)  # type: ignore[arg-type]
+
+    await agent.evaluate(shown, execution=execution)
+    await agent.ask_again(
+        shown,
+        [RepeatItem("c1", RepeatReason.QUOTE_NOT_FOUND)],
+        given,
+        execution=execution,
+    )
+
+    template = load_prompt(stage.prompt_ref, base_path=_REPO_ROOT)
+    (_, first), (_, again) = router.calls
+    for context, slots in (
+        (first, ("criteria", "items")),
+        (again, ("criteria", "items", "repeat")),
+    ):
+        rendered = template.render(**context)
+        text = (rendered.system or "") + "\n" + (rendered.user or "")
+        tags = {
+            "criteria": "criteria",
+            "items": "items_to_judge",
+            "repeat": "previous_problems",
+        }
+        for slot in slots:
+            fragment = _expected(context[slot], sort_keys=True)
+            assert f"<{tags[slot]}>\n{fragment}\n</{tags[slot]}>" in text
+        criteria_fragment = _expected(context["criteria"], sort_keys=True)
+        _assert_fragment(criteria_fragment, context["criteria"])
+    repeat_fragment = _expected(again["repeat"], sort_keys=True)
+    _assert_fragment(repeat_fragment, again["repeat"])

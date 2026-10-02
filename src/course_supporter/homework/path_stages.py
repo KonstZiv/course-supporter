@@ -10,8 +10,9 @@ Purpose:
 Interface:
     An executor is ``async (StageContext) -> StageOutcome``. It receives the
     stage's own description from ``config/submission_paths.yaml`` — ladder,
-    ceilings, prompt, limits — and returns either "carry on" or "the path ends
-    here, in this state, for this reason". It writes its own verdict and nothing
+    ceilings, prompt, limits — and returns one of three answers: "carry on",
+    "the path ends here, in this state, for this reason", or "hold the revision
+    here, for this reason" (task 09b). It writes its own verdict and nothing
     else: the submission's state and the run's checkpoint are the body's, and
     what happens next is the body's decision, never the executor's.
 
@@ -24,11 +25,14 @@ Interface:
 Replacing one:
     Register a different function under the same name before the first
     submission is routed — the body resolves the name at each stage, so nothing
-    else changes. The two executors here are thin on purpose: each asks today's
-    own function to do the work, through the ONE additive argument that function
-    grew (:class:`~course_supporter.llm.stage_router.StageExecution`), so the
-    new path and today's Mentor cannot drift into two ideas of what a safety
-    check or an attempt classifier is.
+    else changes. The executors here are thin on purpose. The first two ask
+    today's own function to do the work, through the ONE additive argument that
+    function grew (:class:`~course_supporter.llm.stage_router.StageExecution`),
+    so the new path and today's Mentor cannot drift into two ideas of what a
+    safety check or an attempt classifier is. The evaluation of a text task's
+    criteria has no counterpart in today's Mentor; its work lives in
+    :mod:`course_supporter.homework.criteria_evaluation`, handed the same
+    argument.
 
 Extending:
     A new stage is a definition in the configuration plus a function registered
@@ -44,14 +48,16 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.llm.ladder_config import LadderEntry, StageConfig
 from course_supporter.llm.stage_router import StageExecution
 
 if TYPE_CHECKING:
     from collections.abc import Collection
 
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from course_supporter.homework.criteria_verdicts import WorkFile
     from course_supporter.homework.doors import DoorReading
     from course_supporter.homework.path_config import PathKey, PathStage
     from course_supporter.llm.stage_router import StageRouter
@@ -62,6 +68,7 @@ logger = structlog.get_logger(__name__)
 
 SAFETY = "safety"
 ATTEMPT_CLASSIFIER = "attempt_classifier"
+CRITERIA_EVALUATION = "criteria_evaluation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,15 +76,22 @@ class StageContext:
     """Everything an executor is given, and nothing it is not.
 
     No job id: an executor records its OWN verdict — the safety result, the
-    classifier's verdict — because that trace belongs to the stage that produced
-    it and to nothing else. What it must NOT touch is the submission's state or
-    the run's checkpoint: those say where the whole path stands, and the body
-    writes them in one place so they cannot be written from two.
+    classifier's verdict, the verdicts on criteria — because that trace belongs
+    to the stage that produced it and to nothing else. What it must NOT touch
+    is the submission's state or the run's checkpoint: those say where the
+    whole path stands, and the body writes them in one place so they cannot be
+    written from two.
+
+    ``session_factory`` is for work that must not run inside the body's
+    session: the criteria list is composed in short sessions of its own, none
+    held across the model call (task 08).
 
     ``door`` is what the doors read (task 11, decision 9): ``submission_text``
     is its text, and the rest -- what was not opened, how the file was read,
     what the signal screen noticed -- is for the safety stage and the trace,
-    never for a stage that reviews the work.
+    never for a stage that reviews the work. ``work`` is the same text file by
+    file, for a stage that has to find a quote in it (task 09b); empty where
+    the doors read no files (a test, a project).
     """
 
     session: AsyncSession
@@ -88,22 +102,29 @@ class StageContext:
     path_key: PathKey
     stage_name: str
     stage: PathStage
+    session_factory: async_sessionmaker[AsyncSession]
     door: DoorReading | None = None
+    work: tuple[WorkFile, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class StageOutcome:
-    """What a stage decided: carry on, or end the path here.
+    """What a stage decided: carry on, end the path here, or hold it here.
 
     ``terminal_status`` is a stored submission status (``mismatch``,
     ``rejected``…) and means the path is finished — not frozen, not failed:
     the stage reached an answer and that answer ends the submission.
     ``reason_code`` travels with it to the surface, which picks the words.
+
+    ``freeze_reason`` means the stage cannot run YET and has spent nothing: the
+    body holds the revision at this stage, unfinished, exactly as it holds one
+    at a spent ceiling, and a continuation runs the stage again later.
     """
 
     carry_on: bool
     terminal_status: str | None = None
     reason_code: str | None = None
+    freeze_reason: FreezeReason | None = None
 
     @classmethod
     def ok(cls) -> StageOutcome:
@@ -114,6 +135,11 @@ class StageOutcome:
     def ends_path(cls, status: str, reason_code: str) -> StageOutcome:
         """The stage reached an answer that finishes the submission."""
         return cls(carry_on=False, terminal_status=status, reason_code=reason_code)
+
+    @classmethod
+    def freezes(cls, reason: FreezeReason) -> StageOutcome:
+        """The stage cannot run yet: hold the revision here, for ``reason``."""
+        return cls(carry_on=False, freeze_reason=reason)
 
 
 StageExecutor = Callable[[StageContext], Awaitable[StageOutcome]]
@@ -314,5 +340,18 @@ async def run_attempt_classifier_stage(context: StageContext) -> StageOutcome:
     return StageOutcome.ends_path("mismatch", "mismatch")
 
 
+async def run_criteria_evaluation_stage(context: StageContext) -> StageOutcome:
+    """Verdicts on the criteria of a text task, as a stage of the path (09b).
+
+    The work is ``criteria_evaluation.evaluate_criteria``; this function hands
+    it the stage's description translated for the router, as the two executors
+    above hand theirs to today's functions.
+    """
+    from course_supporter.homework.criteria_evaluation import evaluate_criteria
+
+    return await evaluate_criteria(context, execution=_execution(context))
+
+
 register_stage_executor(SAFETY, run_safety_stage)
 register_stage_executor(ATTEMPT_CLASSIFIER, run_attempt_classifier_stage)
+register_stage_executor(CRITERIA_EVALUATION, run_criteria_evaluation_stage)

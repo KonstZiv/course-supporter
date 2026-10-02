@@ -77,10 +77,18 @@ _ENTRY_FRAME = "--- {name} ---\n"
 
 @dataclass(frozen=True, slots=True)
 class FittedBody:
-    """The body that fits, and what had to be left out to make it fit."""
+    """The body that fits, and what had to be left out to make it fit.
+
+    ``files`` is the same body file by file: each kept member's name and its
+    text, without the frame, in the order of ``text``. A quote is looked for
+    inside one file's text (task 09b), and recovering the files from ``text``
+    by its frames would be ambiguous — a work may itself contain a line that
+    looks like one.
+    """
 
     text: str
     over_budget: tuple[NotOpenedEntry, ...]
+    files: tuple[tuple[str, str], ...] = ()
 
 
 @lru_cache(maxsize=1)
@@ -244,10 +252,12 @@ def fit_archive_entries(
     the Mentor should see the work laid out as the student packed it, not
     sorted by length.
     """
-    rendered = {
-        entry.arcname: _ENTRY_FRAME.format(name=entry.arcname)
-        + entry.content.decode("utf-8", errors="replace")
+    bodies = {
+        entry.arcname: entry.content.decode("utf-8", errors="replace")
         for entry in entries
+    }
+    rendered = {
+        name: _ENTRY_FRAME.format(name=name) + body for name, body in bodies.items()
     }
 
     kept: set[str] = set()
@@ -269,5 +279,10 @@ def fit_archive_entries(
                 )
             )
 
-    body = "\n".join(rendered[e.arcname] for e in entries if e.arcname in kept)
-    return FittedBody(text=body, over_budget=tuple(over))
+    in_order = [e.arcname for e in entries if e.arcname in kept]
+    body = "\n".join(rendered[name] for name in in_order)
+    return FittedBody(
+        text=body,
+        over_budget=tuple(over),
+        files=tuple((name, bodies[name]) for name in in_order),
+    )

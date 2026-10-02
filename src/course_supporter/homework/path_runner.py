@@ -49,6 +49,7 @@ from course_supporter.funds_port import (
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
+    FreezeReason,
     PathCheckpoint,
     load_checkpoint,
     save_checkpoint,
@@ -300,6 +301,7 @@ async def _run_path(
                 outcome = await _run_stage(
                     session,
                     router,
+                    session_factory=ctx["session_factory"],
                     submission=submission,
                     reading=reading,
                     language=language,
@@ -319,6 +321,18 @@ async def _run_path(
                     stage_name=stage_name,
                     stop=exhausted.stop,
                     job_try=int(ctx.get("job_try", 1)),
+                    log=log,
+                )
+                return
+            if outcome.freeze_reason is not None:
+                # Before the stage is marked done: it has not run, and the
+                # continuation must start from it.
+                await _hold_at_stage(
+                    session,
+                    job_id,
+                    checkpoint,
+                    stage_name,
+                    outcome.freeze_reason,
                     log=log,
                 )
                 return
@@ -406,7 +420,7 @@ async def _open_the_doors(
     doors refused and already wrote why.
     """
     from course_supporter.homework.doors import (
-        assemble_submission_text,
+        assemble_submission_work,
         extract_document_text,
         persist_door_refusal,
         screen_student_note,
@@ -491,7 +505,7 @@ async def _open_the_doors(
             archive_skip_matcher=denylist_prefix,
             document_extractor=extract_document_text,
         )
-        text, not_opened = assemble_submission_text(
+        text, not_opened, files = assemble_submission_work(
             stage1_result,
             file_bytes=file_bytes,
             filename=(submission.original_filename or file_path.name),
@@ -505,6 +519,7 @@ async def _open_the_doors(
         not_opened=not_opened,
         recovered_encoding=stage1_result.recovered_encoding,
         flags=(*stage1_result.flags, *note_flags),
+        files=files,
     )
     return file_path, reading, review_language.code
 
@@ -513,6 +528,7 @@ async def _run_stage(
     session: AsyncSession,
     router: StageRouter,
     *,
+    session_factory: async_sessionmaker[AsyncSession],
     submission: HomeworkSubmission,
     reading: DoorReading,
     language: str | None,
@@ -532,7 +548,9 @@ async def _run_stage(
             path_key=choice.key,
             stage_name=stage_name,
             stage=config.stages[stage_name],
+            session_factory=session_factory,
             door=reading,
+            work=reading.files,
         )
     )
 
@@ -617,8 +635,7 @@ async def _stage_produced_nothing(
     held = checkpoint.frozen(stage_name, reason)
 
     if stop is not LadderStop.EXHAUSTED:
-        await save_checkpoint(session, job_id, held, current_stage=stage_name)
-        log.info("path_frozen", stage=stage_name, reason=reason.value)
+        await _hold_at_stage(session, job_id, checkpoint, stage_name, reason, log=log)
         return
 
     settings = get_settings()
@@ -648,6 +665,28 @@ async def _stage_produced_nothing(
     )
 
 
+async def _hold_at_stage(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    checkpoint: PathCheckpoint,
+    stage_name: str,
+    reason: FreezeReason,
+    *,
+    log: Any,
+) -> None:
+    """Hold the revision at an unfinished stage, for ``reason``.
+
+    One reaction for every hold between stages, whoever decided it — a ceiling
+    the ladder met, or a stage that cannot run yet (``StageOutcome.freezes``).
+    The revision stays in ``received`` and the funds port is not told: the
+    submission has not ended. The checkpoint says where and why, which is what
+    a continuation reads.
+    """
+    held = checkpoint.frozen(stage_name, reason)
+    await save_checkpoint(session, job_id, held, current_stage=stage_name)
+    log.info("path_frozen", stage=stage_name, reason=reason.value)
+
+
 async def _hold_for_funds(
     session: AsyncSession,
     hw_repo: HomeworkRepository,
@@ -663,8 +702,6 @@ async def _hold_for_funds(
     The hold is lifted by the continuation, not from here: a new job asks the
     port again and the body writes ``received`` before it runs anything.
     """
-    from course_supporter.homework.path_checkpoint import FreezeReason
-
     held = checkpoint.frozen(
         checkpoint.first_unfinished(list(checkpoint.stages)) or "",
         FreezeReason.AWAITING_FUNDS,

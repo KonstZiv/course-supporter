@@ -85,7 +85,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Run tests
-        run: uv run pytest --run-db --run-redis --tb=short -q -rs
+        run: uv run pytest --run-db --run-redis --tb=short -q -rfEs
         env:
           ENVIRONMENT: testing
           TEST_REDIS_DB: "15"

@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import base64
 import itertools
-import json
 import re
 from collections.abc import Iterator, Sequence
 from typing import Any
@@ -66,7 +65,6 @@ from dashscope.common.error import (
     InvalidParameter,
     UnsupportedModel,
 )
-from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
@@ -555,32 +553,3 @@ class DashScopeProvider(LLMProvider):
             finish_reason=self._extract_finish_reason(response),
             latency_ms=timer.elapsed_ms,
         )
-
-    async def complete_structured(
-        self,
-        request: LLMRequest,
-        response_schema: type[BaseModel],
-    ) -> tuple[Any, LLMResponse]:
-        """Generate structured output via system-prompt JSON injection.
-
-        Qwen3-VL does not expose OpenAI-style tool calling through
-        DashScope MultiModalConversation, so we mirror the pattern
-        used by AnthropicProvider: inject the JSON schema into the
-        system prompt and parse the response, stripping markdown
-        fences if the model emits them.
-        """
-        schema_json = json.dumps(
-            response_schema.model_json_schema(), ensure_ascii=False
-        )
-        structured_system = (
-            f"{request.system_prompt or ''}\n\n"
-            f"Respond ONLY with raw JSON matching this schema, "
-            f"no markdown fences:\n{schema_json}"
-        )
-        modified_request = request.model_copy(
-            update={"system_prompt": structured_system}
-        )
-        llm_response = await self.complete(modified_request)
-        raw = strip_markdown_json(llm_response.content)
-        parsed = self._parse_structured(raw, response_schema)
-        return parsed, llm_response

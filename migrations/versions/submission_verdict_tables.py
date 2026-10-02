@@ -194,8 +194,10 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("false"),
             comment=(
-                "The quote was not found at first and the model was asked once "
-                "more for this item alone."
+                "The model was asked once more for this item alone, its first "
+                "verdict unable to stand for any reason: a 'met' without a "
+                "quote, or with one of several lines, too long, too short or "
+                "not found in the work; a 'not_met' without a sentence."
             ),
         ),
         sa.Column(

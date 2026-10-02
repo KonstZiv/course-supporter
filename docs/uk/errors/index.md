@@ -13,6 +13,7 @@ error_codes:
   - STUDENT_NOTE_REJECTED
   - path_failed
   - test_not_ready
+  - review_parts_missing
   - TEST_YAML_UNREADABLE
   - TEST_YAML_DUPLICATE_KEY
   - TEST_YAML_ALIAS
@@ -50,7 +51,7 @@ keywords:
   - YAML
   - коментар
   - критерії
-last_updated: 2026-09-30
+last_updated: 2026-10-02
 ---
 
 # Коди помилок
@@ -92,6 +93,7 @@ last_updated: 2026-09-30
 |---|---|---|
 | [`path_failed`](../api/index.md#path_failed) | збій на нашому боці, рецензії не буде | запропонувати студентові надіслати відповіді ще раз |
 | [`test_not_ready`](../api/index.md#test_not_ready) | **для тестів, створених у системі, не надходить** | якщо платформа вже обробляє причину — запропонувати спробувати пізніше |
+| `review_parts_missing` | **сьогодні не надходить**: з'явиться для текстових завдань, коли їх перевірятимуть за вердиктами по кожному критерію; означатиме, що рецензію не вдалося скласти через збій на нашому боці, і її не буде | сказати студентові, що роботу не вдалося перевірити з нашої вини, і запропонувати надіслати її ще раз; якщо причина повторюється — повідомити адміністратора системи |
 
 ## Тест, створений у системі
 
@@ -158,7 +160,7 @@ last_updated: 2026-09-30
 |---|---|---|---|
 | [`NOT_A_TEXT_TASK`](../authors/index.md#NOT_A_TEXT_TASK) | 422 | матеріал — тест або не завдання | для тесту — позначки правильних відповідей у редакторі тесту |
 | [`TASK_NOT_READY`](../authors/index.md#TASK_NOT_READY) | 422 | завдання ще обробляється або його прибрано з курсу | дочекатися кінця обробки й повторити запит |
-| [`AWAITING_FIRST_SUBMISSION`](../authors/index.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає: його складуть після першої подачі | дочекатися першої подачі роботи студентом і тоді правити |
+| [`AWAITING_FIRST_SUBMISSION`](../authors/index.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає | прочитати перелік: `status` і `message` кажуть, чому його немає й що робити (див. [Коли переліку немає](../authors/index.md#criteria-none)); правити, коли `status` — `ready` |
 | [`UNKNOWN_CRITERION_ID`](../authors/index.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
 | [`CHECK_METHOD_NOT_ADMITTED`](../authors/index.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
 | [`UNKNOWN_CONCEPT`](../authors/index.md#UNKNOWN_CONCEPT) | 422 | концепт не з `concepts` читання | вибрати концепт із `concepts` або прибрати його |

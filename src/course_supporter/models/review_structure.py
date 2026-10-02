@@ -6,10 +6,11 @@ Purpose:
     review be written in sixty languages, be re-read years later, and be
     checked by a test instead of by reading it.
 
-    This module defines the shape. It does not fill it: a test's result
-    builder (task 07) and the stages of tasks 08-13 do that, and today every
-    stored review is pre-rebuild, so the field is empty on every row in
-    production.
+    This module defines the shape. It does not fill it: the result builders
+    of the new path do — a test's since task 07, a text task's since task 09b
+    (``homework/text_result.py``), from what its stages wrote. A review of a
+    type that today's Mentor serves (``config/submission_paths.yaml``,
+    ``served_by``) is pre-rebuild and has no structure.
 
 Interface:
     :class:`ReviewStructureV1` — the whole review. Subclass of

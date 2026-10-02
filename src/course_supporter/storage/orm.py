@@ -2319,8 +2319,10 @@ class SubmissionCriterionVerdict(Base):
         Boolean,
         default=False,
         server_default=text("false"),
-        comment="The quote was not found at first and the model was asked "
-        "once more for this item alone.",
+        comment="The model was asked once more for this item alone, its first "
+        "verdict unable to stand for any reason: a 'met' without a quote, or "
+        "with one of several lines, too long, too short or not found in the "
+        "work; a 'not_met' without a sentence.",
     )
     quote_not_found: Mapped[bool] = mapped_column(
         Boolean,

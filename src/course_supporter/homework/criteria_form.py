@@ -2,8 +2,8 @@
 
 Purpose:
     A task version's criteria list is composed once, by a model, and then read
-    by every review of that version, by the author's edit routes and — from
-    task 09 on — by verdicts that point at single criteria and points. All of
+    by every review of that version, by the author's edit routes and by the
+    verdicts of task 09b, which point at single criteria and points. All of
     them read the one form defined here: data models and pure functions, no
     session and no model call, so the agent that composes a list, the service
     that stores it and the routes that edit it judge a document the same way.

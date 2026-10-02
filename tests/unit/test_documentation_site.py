@@ -14,6 +14,12 @@ about the comment — has a section for each. So are the refusals of the
 criteria routes (task 08): the errors page lists each with a row that leads to
 its anchor on the authors' page.
 
+Task 09b adds two. The authors' page names every state of a reading without a
+list and every reason code, and quotes every sentence the reading carries word
+for word: the texts were approved as they stand in the code, and a page that
+retold them would drift unseen. The errors page lists the reason a text task's
+review fails with, ``review_parts_missing``, with a row.
+
 That each link finds its anchor is the site build's to prove: ``mkdocs build
 --strict`` fails on a link to an anchor a page does not have
 (``validation.links.anchors`` in ``mkdocs.yml``).
@@ -31,11 +37,19 @@ import yaml
 # ``api/__init__`` eagerly imports the FastAPI app -- so importing the door
 # module first hits a pre-existing circular import (``test_policies.py``).
 import course_supporter.api  # noqa: F401
-from course_supporter.homework.criteria_edit_service import CriteriaRefusalCode
+from course_supporter.homework.criteria_edit_service import (
+    AWAITING_FIRST_SUBMISSION_MESSAGE,
+    COMPOSING_MESSAGE,
+    NOT_COMPOSED_MESSAGES,
+    CriteriaReasonCode,
+    CriteriaRefusalCode,
+    CriteriaStatus,
+)
 from course_supporter.homework.submission_core import (
     STUDENT_NOTE_REJECTED,
     STUDENT_NOTE_TOO_LONG,
 )
+from course_supporter.homework.text_result import REVIEW_PARTS_MISSING
 from tests._helpers.written_test_codes import written_test_codes
 
 _PAGES = pathlib.Path(__file__).parents[2] / "docs" / "uk"
@@ -45,6 +59,9 @@ _API = _PAGES / "api" / "index.md"
 
 # The first cell of a table row: the code, linked or as it is.
 _ROW_CODE = re.compile(r"^\| \[?`([A-Z][A-Z0-9_]+)`", re.MULTILINE)
+# The first cell of a row whose code is a lower-case reason of the webhook's
+# ``failed`` event, linked or as it is.
+_ROW_REASON = re.compile(r"^\| \[?`([a-z][a-z0-9_]+)`", re.MULTILINE)
 # The first cell of a row whose code links to its own anchor on the authors'
 # page. ``TASK_NOT_READY`` also has an unlinked row among the answer-key codes,
 # which :data:`_ROW_CODE` would count for the criteria routes too.
@@ -122,3 +139,40 @@ class TestTheSiteNamesEveryCodeOfTheCriteriaRoutes:
 
         missing = self._CODES - anchors
         assert not missing, f"no anchor on the authors' page: {sorted(missing)}"
+
+
+class TestTheSiteSaysWhyATaskHasNoList:
+    def test_the_authors_page_names_every_state_and_reason(self) -> None:
+        text = _AUTHORS.read_text(encoding="utf-8")
+        codes = {status.value for status in CriteriaStatus} | {
+            reason.value for reason in CriteriaReasonCode
+        }
+
+        assert codes, "the vocabulary under test is not empty"
+        missing = sorted(code for code in codes if f"`{code}`" not in text)
+        assert not missing, f"not on the authors' page: {missing}"
+
+    def test_the_authors_page_gives_each_sentence_word_for_word(self) -> None:
+        text = _AUTHORS.read_text(encoding="utf-8")
+        # Each advice in the row of its own reason: a page that kept every
+        # sentence but under the wrong code would mislead as surely as one
+        # that retold them.
+        rows = [
+            f"| `{reason.value}` | {NOT_COMPOSED_MESSAGES[reason]} |"
+            for reason in CriteriaReasonCode
+        ]
+        quotes = [f"> {AWAITING_FIRST_SUBMISSION_MESSAGE}", f"> {COMPOSING_MESSAGE}"]
+
+        assert rows, "there are reasons to advise on"
+        missing = [line[:60] for line in (*rows, *quotes) if line not in text]
+        assert not missing, f"not word for word on the authors' page: {missing}"
+
+
+class TestTheSiteNamesTheFailureOfATextTasksReview:
+    def test_the_errors_page_lists_it_with_a_row(self) -> None:
+        text = _ERRORS.read_text(encoding="utf-8")
+        rows = set(_ROW_REASON.findall(text))
+
+        assert REVIEW_PARTS_MISSING in _front_matter(text)["error_codes"]
+        assert rows, "the page has rows of lower-case reasons"
+        assert REVIEW_PARTS_MISSING in rows, f"no row on the errors page: {rows}"

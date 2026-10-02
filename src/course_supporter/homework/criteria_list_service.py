@@ -12,7 +12,8 @@ Interface:
     :func:`choose_in_force` — the rule "the author's edit for this version,
     else the model's ready list for this version", on rows already read. The
     one place the rule lives; :func:`load_in_force` reads the rows and applies
-    it, and task 09 calls the same function.
+    it. The author's routes call it directly; today's review and the
+    evaluation stage of task 09b, through :meth:`CriteriaListService.get_or_compose`.
     :meth:`CriteriaListService.get_or_compose` — for a review: the list in
     force, composed on a miss, or :class:`CriteriaUnavailable` with a reason.
     :func:`build_criteria_list_service` — the production wiring.

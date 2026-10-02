@@ -2399,8 +2399,9 @@ class PortalSubmissionDetail(BaseModel):
         default=None,
         description=(
             "The review as data, in the student's language (schema version 1). "
-            "Null for every submission today: no stage writes one yet, and a "
-            "pre-rebuild review has no structure to project."
+            "Written by the new path's result builders — a test's, and a text "
+            "task's once its type is switched; null for a pre-rebuild review, "
+            "which has no structure to project."
         ),
     )
     review_markdown: str | None = Field(

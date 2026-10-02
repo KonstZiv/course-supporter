@@ -24,6 +24,7 @@ from course_supporter.homework.criteria_edit_service import (
     CriteriaReasonCode,
     CriteriaRefusalCode,
     CriteriaRefusedError,
+    CriteriaStatus,
     apply_edit,
 )
 from course_supporter.homework.criteria_form import (
@@ -373,6 +374,18 @@ class TestTheReadme:
     def test_every_refusal_code_of_the_criteria_routes_is_documented(self) -> None:
         text = self._README.read_text(encoding="utf-8")
         real = {code.value for code in CriteriaRefusalCode}
+
+        assert real, "the vocabulary under test is not empty"
+        undocumented = sorted(code for code in real if f"`{code}`" not in text)
+        assert not undocumented, f"undocumented: {undocumented}"
+
+    def test_every_state_and_reason_of_a_reading_without_a_list_is_documented(
+        self,
+    ) -> None:
+        text = self._README.read_text(encoding="utf-8")
+        real = {status.value for status in CriteriaStatus} | {
+            reason.value for reason in CriteriaReasonCode
+        }
 
         assert real, "the vocabulary under test is not empty"
         undocumented = sorted(code for code in real if f"`{code}`" not in text)

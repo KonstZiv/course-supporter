@@ -4,45 +4,8 @@ import abc
 import time
 from typing import Any
 
-import structlog
-from pydantic import BaseModel, ValidationError
-
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
-
-logger = structlog.get_logger()
-
-
-class StructuredOutputError(Exception):
-    """Raised when LLM response cannot be parsed into expected schema.
-
-    Attributes:
-        provider: Name of the provider that returned invalid output.
-        raw_content: The raw LLM response text that failed validation.
-        schema_name: Name of the expected Pydantic model.
-    """
-
-    def __init__(
-        self,
-        provider: str,
-        raw_content: str,
-        schema_name: str,
-        cause: ValidationError | Exception,
-    ) -> None:
-        self.provider = provider
-        self.raw_content = raw_content
-        self.schema_name = schema_name
-        if isinstance(cause, ValidationError):
-            error_summary = "; ".join(
-                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-                for e in cause.errors()[:5]
-            )
-        else:
-            error_summary = str(cause)[:500]
-        super().__init__(
-            f"{provider}: failed to parse response as {schema_name}: {error_summary}"
-        )
-        self.__cause__ = cause
 
 
 class RequestConfigError(ValueError):
@@ -57,9 +20,10 @@ class RequestConfigError(ValueError):
 class LLMProvider(abc.ABC):
     """Base class for all LLM providers.
 
-    Each provider implements two methods:
-    - complete(): free-form text generation
-    - complete_structured(): generation with Pydantic schema validation
+    Each provider implements one call method, :meth:`complete`. Structured
+    output goes through it too: the stage sets ``response_schema`` on the
+    request, the router picks the schema mode, and the stage's
+    ``response_validator`` checks the reply (task 09a).
 
     Providers support runtime enable/disable for handling
     rate limits, quota exhaustion, or API outages.
@@ -91,20 +55,6 @@ class LLMProvider(abc.ABC):
     @abc.abstractmethod
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion."""
-        ...
-
-    @abc.abstractmethod
-    async def complete_structured(
-        self,
-        request: LLMRequest,
-        response_schema: type[BaseModel],
-    ) -> tuple[Any, LLMResponse]:
-        """Generate structured output validated against Pydantic schema.
-
-        Returns:
-            Tuple of (parsed_object, raw_llm_response).
-            parsed_object is an instance of response_schema.
-        """
         ...
 
     def check_request(self, request: LLMRequest) -> None:
@@ -144,42 +94,6 @@ class LLMProvider(abc.ABC):
         never duplicated in the validator.
         """
         return False
-
-    def _parse_structured(
-        self,
-        raw_json: str,
-        response_schema: type[BaseModel],
-    ) -> Any:
-        """Parse raw JSON into a Pydantic model with error logging.
-
-        Raises:
-            StructuredOutputError: If the response is not valid JSON
-                or doesn't match the schema. Retry logic is handled
-                by StageRouter (S1-009), not individual providers.
-        """
-        try:
-            return response_schema.model_validate_json(raw_json)
-        except ValidationError as exc:
-            # Log enough context to diagnose: first/last 2K chars of
-            # raw response + full validation error details.
-            raw_len = len(raw_json)
-            preview = raw_json[:2000]
-            tail = raw_json[-1000:] if raw_len > 3000 else ""
-            logger.error(
-                "structured_output_parse_failed",
-                provider=self.provider_name,
-                schema=response_schema.__name__,
-                raw_length=raw_len,
-                raw_head=preview,
-                raw_tail=tail,
-                validation_errors=exc.errors(),
-            )
-            raise StructuredOutputError(
-                provider=self.provider_name,
-                raw_content=raw_json,
-                schema_name=response_schema.__name__,
-                cause=exc,
-            ) from exc
 
     def _measure_latency(self) -> "_LatencyTimer":
         """Context manager for measuring call latency."""

@@ -15,9 +15,8 @@ The two test modules together pin the contract: schema-bound stays on
 :class:`DeepSeekProvider` (thinking off), reasoning-tier stays on
 :class:`DeepSeekThinkingProvider` (thinking on).
 
-The tests use light fakes for the OpenAI client cycle and the
-instructor cycle so we can capture the kwargs passed into
-``chat.completions.create`` / ``create_with_completion`` without
+The tests use a light fake for the OpenAI client cycle so we can
+capture the kwargs passed into ``chat.completions.create`` without
 hitting the real DeepSeek API.
 """
 
@@ -28,7 +27,6 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
@@ -56,22 +54,6 @@ def _stub_completion_response() -> MagicMock:
     response.choices = [choice]
     response.usage = MagicMock(prompt_tokens=42, completion_tokens=7)
     return response
-
-
-def _stub_structured_completion() -> MagicMock:
-    """Mock returned alongside the parsed instance from instructor."""
-    completion = MagicMock()
-    choice = MagicMock()
-    choice.message.content = '{"ok": true}'
-    completion.choices = [choice]
-    completion.usage = MagicMock(prompt_tokens=42, completion_tokens=7)
-    return completion
-
-
-class _SchemaForTest(BaseModel):
-    """Minimal schema used as ``response_model`` placeholder."""
-
-    ok: bool
 
 
 class TestDeepSeekProviderExtraBody:
@@ -130,38 +112,6 @@ class TestDeepSeekProviderExtraBody:
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hello"},
         ]
-
-    @pytest.mark.asyncio
-    async def test_complete_structured_passes_thinking_disabled(self) -> None:
-        """instructor's ``create_with_completion`` also receives ``extra_body``."""
-        provider = _make_provider()
-
-        fake_instructor = MagicMock()
-        parsed_instance = _SchemaForTest(ok=True)
-        fake_instructor.chat.completions.create_with_completion = AsyncMock(
-            return_value=(parsed_instance, _stub_structured_completion())
-        )
-        # Skip the lazy instructor bootstrap; install our fake cycle directly.
-        provider._instructor_clients = (fake_instructor,)  # type: ignore[assignment]
-        provider._instructor_cycle = itertools.cycle((fake_instructor,))
-
-        request = LLMRequest(
-            prompt="hello",
-            system_prompt=None,
-            model="deepseek-v4-flash",
-            temperature=0.0,
-            max_tokens=256,
-        )
-
-        await provider.complete_structured(request, _SchemaForTest)
-
-        instructor_create = fake_instructor.chat.completions.create_with_completion
-        instructor_create.assert_awaited_once()
-        kwargs = instructor_create.await_args.kwargs
-        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-        assert kwargs["model"] == "deepseek-v4-flash"
-        assert kwargs["max_retries"] == 2
-        assert kwargs["response_model"] is _SchemaForTest
 
     @pytest.mark.asyncio
     async def test_openai_compat_complete_omits_extra_body(self) -> None:

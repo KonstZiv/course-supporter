@@ -3,7 +3,7 @@
 DashScope SDK 1.25.18 exposes the Qwen multimodal endpoint through
 ``AioMultiModalConversation.call`` and surfaces most failures as
 non-200 ``DashScopeAPIResponse`` objects rather than raising
-exceptions. Tests cover the four behaviour clusters that bridge that
+exceptions. Tests cover the three behaviour clusters that bridge that
 SDK shape to the project's :class:`LLMProvider` contract:
 
 1. Pure helpers — MIME detection, markdown fence stripping, message
@@ -14,7 +14,6 @@ SDK shape to the project's :class:`LLMProvider` contract:
    ``AioMultiModalConversation.call`` — success extraction, non-200
    wrapping into :class:`DashScopeResponseError`, multi-key
    round-robin via the per-call ``api_key`` kwarg.
-4. ``complete_structured`` async path with markdown-fenced JSON.
 
 All SDK access is mocked; no real DashScope API call is made.
 """
@@ -25,7 +24,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.dashscope import (
@@ -117,12 +115,6 @@ def _error_response(status_code: int, code: str = "", message: str = "") -> Magi
     response.output = None
     response.usage = None
     return response
-
-
-class _SchemaForTest(BaseModel):
-    """Minimal schema used as ``response_model`` placeholder."""
-
-    ok: bool
 
 
 # Minimal PNG magic header used to flip the ``_has_image_bytes`` detector
@@ -1100,36 +1092,6 @@ class TestCompleteRouting:
         )
         fake_vl.assert_awaited_once()
         fake_text.assert_not_awaited()
-
-
-# ── complete_structured() async ─────────────────────────────────
-
-
-class TestCompleteStructuredAsync:
-    """Schema injection + markdown fence stripping for JSON output."""
-
-    @pytest.mark.asyncio
-    async def test_markdown_fenced_json_parses(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from course_supporter.llm.providers import dashscope as ds_module
-
-        provider = _make_provider()
-        fenced = '```json\n{"ok": true}\n```'
-        fake_call = AsyncMock(return_value=_success_response(text=fenced))
-        monkeypatch.setattr(ds_module.AioMultiModalConversation, "call", fake_call)
-
-        request = LLMRequest(prompt="ask", system_prompt="be terse", contents=[_VL_PNG])
-        parsed, raw = await provider.complete_structured(request, _SchemaForTest)
-        assert isinstance(parsed, _SchemaForTest)
-        assert parsed.ok is True
-        # Sanity: schema was injected into the system prompt that reached the SDK.
-        sys_msg = fake_call.await_args.kwargs["messages"][0]
-        assert sys_msg["role"] == "system"
-        sys_text = sys_msg["content"][0]["text"]
-        assert "Respond ONLY with raw JSON" in sys_text
-        # The original ``LLMResponse`` is returned verbatim alongside the parsed object.
-        assert raw.content == fenced
 
 
 # ── Registry + factory wiring ───────────────────────────────────

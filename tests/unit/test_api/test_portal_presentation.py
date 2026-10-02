@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from course_supporter.api.routes._portal_shared import (
+    AWAITING_CRITERIA_REASON_CODE,
     AWAITING_FUNDS_REASON_CODE,
     FAILED_REASON_CODE,
     curated_presentation,
@@ -44,8 +45,8 @@ class TestEveryStoredStatusHasExactlyOneState:
             "reviewed",
         }
 
-    def test_all_ten_statuses_are_covered(self) -> None:
-        assert len(list(HomeworkStatus)) == 10
+    def test_all_eleven_statuses_are_covered(self) -> None:
+        assert len(list(HomeworkStatus)) == 11
 
     @pytest.mark.parametrize(
         ("status", "state"),
@@ -54,6 +55,7 @@ class TestEveryStoredStatusHasExactlyOneState:
             ("failed", "not_opened"),
             ("mismatch", "not_an_attempt"),
             ("awaiting_funds", "awaiting_funds"),
+            ("awaiting_criteria", "in_progress"),
             ("received", "in_progress"),
             ("safety_ok", "in_progress"),
             ("sanity_ok", "in_progress"),
@@ -103,6 +105,19 @@ class TestReasonCodes:
             curated_presentation(_submission("awaiting_funds")).reason_code
             == AWAITING_FUNDS_REASON_CODE
         )
+
+    def test_awaiting_criteria_is_being_checked_with_its_own_code(self) -> None:
+        """True to say today, and the code lets the portal say why (task 09b).
+
+        ``in_progress`` rather than a state of its own (decided 2026-10-02): a
+        state the portal has no phrase for would reach the student as "Стан
+        невідомий".
+        """
+        presentation = curated_presentation(_submission("awaiting_criteria"))
+
+        assert presentation.state == "in_progress"
+        assert presentation.reason_code == AWAITING_CRITERIA_REASON_CODE
+        assert AWAITING_CRITERIA_REASON_CODE == "awaiting_criteria"
 
     @pytest.mark.parametrize(
         "status", ["received", "safety_ok", "sanity_ok", "reviewing", "delivered"]

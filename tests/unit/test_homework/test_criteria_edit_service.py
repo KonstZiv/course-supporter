@@ -20,6 +20,8 @@ from course_supporter.api.app import app
 from course_supporter.api.schemas import CriteriaOverrideRequest
 from course_supporter.homework import criteria_edit_service
 from course_supporter.homework.criteria_edit_service import (
+    NOT_COMPOSED_MESSAGES,
+    CriteriaReasonCode,
     CriteriaRefusalCode,
     CriteriaRefusedError,
     apply_edit,
@@ -34,6 +36,7 @@ from course_supporter.homework.criteria_form import (
     CriterionEdit,
     criteria_from_document,
 )
+from course_supporter.llm.error_categories import LadderStop
 
 _CONCEPTS = ["Recursion", "Base Case", "HTML Template"]
 
@@ -122,6 +125,26 @@ def test_the_module_examples_run() -> None:
 
     assert result.attempted > 0, "the module has examples to run"
     assert result.failed == 0
+
+
+class TestEveryReasonHasItsAdvice:
+    """Task 09b, ``PRE-FLIGHT.md`` 9.2: a reason with nothing to do is unfinished.
+
+    The module refuses to import without these (a guard at import), and these
+    say so in the suite, where a change to the vocabulary shows by name.
+    """
+
+    def test_every_reason_code_has_a_message(self) -> None:
+        assert set(NOT_COMPOSED_MESSAGES) == set(CriteriaReasonCode)
+        assert all(message.strip() for message in NOT_COMPOSED_MESSAGES.values())
+
+    def test_every_way_a_composition_ends_has_a_reason(self) -> None:
+        reasons = criteria_edit_service._REASON_FOR_STOP
+
+        assert set(reasons) == set(LadderStop)
+        assert reasons[LadderStop.EXHAUSTED] is CriteriaReasonCode.MODELS_UNAVAILABLE
+        assert reasons[LadderStop.OUTPUT_CEILING] is CriteriaReasonCode.LIMIT_REACHED
+        assert reasons[LadderStop.MONEY_CEILING] is CriteriaReasonCode.LIMIT_REACHED
 
 
 class TestIdentifiers:

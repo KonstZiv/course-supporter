@@ -36,6 +36,10 @@ logger = structlog.get_logger()
 # ``failed`` edge is not decorative — a frozen submission can still be broken by
 # something else, and the state machine's rule is that every non-terminal state
 # can fail.
+# ``awaiting_criteria`` (task 09b) is the second hold, of the same shape: the
+# evaluation stage found no criteria list in force and the path waits for one
+# before it pays for anything; a continuation takes it back through
+# ``received``.
 # The new path (mentor-rebuild task 03) adds two edges OUT of ``received`` and
 # changes none. It walks a stage list it deliberately cannot read — the body
 # knows names, not meanings (architectural invariant 2) — so it never writes the
@@ -50,12 +54,14 @@ HOMEWORK_TRANSITIONS: dict[str, set[str]] = {
         "rejected",
         "failed",
         "awaiting_funds",
+        "awaiting_criteria",
         # New path only: a stage decided the submission is off-task …
         "mismatch",
         # … or every stage passed and the review may be written.
         "reviewing",
     },
     "awaiting_funds": {"received", "failed"},
+    "awaiting_criteria": {"received", "failed"},
     "safety_ok": {"sanity_ok", "mismatch", "failed"},
     "sanity_ok": {"reviewing", "failed"},
     "reviewing": {"completed", "failed"},
@@ -324,6 +330,28 @@ class HomeworkRepository:
                 HomeworkSubmission.deleted_at.is_(None),
             )
             .order_by(HomeworkSubmission.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def held_for_criteria(
+        self, *, tenant_id: uuid.UUID, authored_document_id: uuid.UUID
+    ) -> list[HomeworkSubmission]:
+        """The live revisions of a task waiting for its criteria list, oldest first.
+
+        The status says it — ``awaiting_criteria`` — so the question is one
+        indexed read, not a walk over every job's checkpoint. Oldest first: the
+        continuations are queued in the order the students sent their work.
+        """
+        stmt = (
+            select(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                HomeworkSubmission.status == "awaiting_criteria",
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .order_by(HomeworkSubmission.created_at, HomeworkSubmission.id)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

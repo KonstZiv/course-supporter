@@ -172,6 +172,10 @@ _PRESENTATION_STATE: Final[dict[str, str]] = {
     HomeworkStatus.AWAITING_FUNDS.value: "awaiting_funds",
     # Being checked. WHICH gate it has passed is internal.
     HomeworkStatus.RECEIVED.value: "in_progress",
+    # Waiting for its task's criteria list (task 09b): still being checked, and
+    # true to say so; the reason code below lets the surface say why it takes
+    # longer, once it has words for it.
+    HomeworkStatus.AWAITING_CRITERIA.value: "in_progress",
     HomeworkStatus.SAFETY_OK.value: "in_progress",
     HomeworkStatus.SANITY_OK.value: "in_progress",
     HomeworkStatus.REVIEWING.value: "in_progress",
@@ -230,6 +234,15 @@ FAILED_REASON_CODE: Final = "processing_failed"
 AWAITING_FUNDS_REASON_CODE: Final = "awaiting_funds"
 """The code for a revision held before its first paid call."""
 
+AWAITING_CRITERIA_REASON_CODE: Final = "awaiting_criteria"
+"""The code for a revision whose review waits for its task's criteria list.
+
+Paired with the state ``in_progress`` rather than a state of its own (task 09b,
+decided 2026-10-02): a state the portal has no phrase for would reach the
+student as "Стан невідомий", while "being checked" is true today and the code
+gets its sentence in the portal's own small request.
+"""
+
 
 def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
     """The one answer to "what do we say about this attempt?" (task 03).
@@ -248,6 +261,8 @@ def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
     * ``failed`` — a new code, because a run that broke told the student
       nothing before: the surface pairs it with "send it again";
     * ``awaiting_funds`` — a new code for a state that did not exist;
+    * ``awaiting_criteria`` — the code of the second hold, on the state
+      ``in_progress`` (see :data:`AWAITING_CRITERIA_REASON_CODE`);
     * everything in flight, and everything reviewed — no code: the state is the
       whole answer.
     """
@@ -256,6 +271,10 @@ def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
         return PortalPresentation(state=state, reason_code=FAILED_REASON_CODE)
     if submission.status == HomeworkStatus.AWAITING_FUNDS.value:
         return PortalPresentation(state=state, reason_code=AWAITING_FUNDS_REASON_CODE)
+    if submission.status == HomeworkStatus.AWAITING_CRITERIA.value:
+        return PortalPresentation(
+            state=state, reason_code=AWAITING_CRITERIA_REASON_CODE
+        )
     rejection = curated_rejection(submission)
     if rejection is not None and rejection.code == OFF_TOPIC_REASON_CODE:
         # The one case where the code decides the state rather than the status

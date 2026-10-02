@@ -15,7 +15,10 @@ section 5:
 * lock 6 — without a list the revision is held and no evaluation call is
   made;
 * an answer cut off at the output ceiling stops the stage after one paid call
-  and writes nothing.
+  and writes nothing;
+* K4 — a stage that got the list puts back the task's revisions that wait for
+  it, in a session of its own, and a queue that refuses costs this submission
+  nothing.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -24,13 +27,15 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from course_supporter.criteria_kinds import (
@@ -609,6 +614,93 @@ class TestWithoutAList:
         assert source.asked == [submission.authored_document_id]
         assert router.requests == []
         assert await _rows(db_session, submission) == {}
+
+
+class TestTheWaitingRevisionsAreContinued:
+    """Entry 1 of the continuation (task 09b, K4; ``PRE-FLIGHT.md`` 9.2)."""
+
+    _RESUME = "course_supporter.homework.criteria_evaluation.resume_awaiting_criteria"
+
+    @staticmethod
+    def _with_a_queue(context: StageContext, session: AsyncSession) -> StageContext:
+        @asynccontextmanager
+        async def own_session() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        # Stands in for a session factory: opened and closed, nothing else.
+        factory = cast("async_sessionmaker[AsyncSession]", own_session)
+        return replace(context, arq=MagicMock(), session_factory=factory)
+
+    async def _evaluate_with_a_queue(
+        self,
+        session: AsyncSession,
+        submission: HomeworkSubmission,
+        source: _Source,
+    ) -> StageOutcome:
+        context = self._with_a_queue(
+            _context(session, _Router(_ALL_STAND), submission), session
+        )
+        return await evaluate_criteria(
+            context, execution=_execution(context), criteria_source=source
+        )
+
+    async def test_the_list_the_stage_got_continues_its_tasks_revisions(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        with patch(self._RESUME, new=AsyncMock(return_value=2)) as resume:
+            outcome = await self._evaluate_with_a_queue(
+                db_session, submission, _Source(_in_force())
+            )
+
+        assert outcome == StageOutcome.ok()
+        resume.assert_awaited_once()
+        assert resume.await_args is not None
+        assert resume.await_args.kwargs == {
+            "tenant_id": submission.tenant_id,
+            "authored_document_id": submission.authored_document_id,
+        }
+
+    async def test_no_list_continues_nothing(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        source = _Source(CriteriaUnavailable(UnavailableReason.COMPOSITION_FAILED))
+        with patch(self._RESUME, new=AsyncMock()) as resume:
+            outcome = await self._evaluate_with_a_queue(db_session, submission, source)
+
+        assert outcome == StageOutcome.freezes(FreezeReason.CRITERIA_UNAVAILABLE)
+        resume.assert_not_awaited()
+
+    async def test_a_queue_that_refuses_costs_this_submission_nothing(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        failing = AsyncMock(side_effect=ConnectionError("the queue is away"))
+        with (
+            patch(self._RESUME, new=failing),
+            capture_logs() as logs,
+        ):
+            outcome = await self._evaluate_with_a_queue(
+                db_session, submission, _Source(_in_force())
+            )
+
+        assert outcome == StageOutcome.ok()
+        assert set(await _rows(db_session, submission)) == {
+            "c1",
+            "c2",
+            "c2.p1",
+            "c2.p2",
+        }
+        assert [
+            e for e in logs if e["event"] == "criteria_evaluation_continuation_failed"
+        ]
+
+    async def test_without_a_queue_nothing_is_tried(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        with patch(self._RESUME, new=AsyncMock()) as resume:
+            outcome = await _evaluate(db_session, _Router(_ALL_STAND), submission)
+
+        assert outcome == StageOutcome.ok()
+        resume.assert_not_awaited()
 
 
 def _provider(*responses: LLMResponse) -> Any:

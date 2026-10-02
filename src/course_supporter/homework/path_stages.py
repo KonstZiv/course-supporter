@@ -14,7 +14,9 @@ Interface:
     "the path ends here, in this state, for this reason", or "hold the revision
     here, for this reason" (task 09b). It writes its own verdict and nothing
     else: the submission's state and the run's checkpoint are the body's, and
-    what happens next is the body's decision, never the executor's.
+    what happens next is the body's decision, never the executor's. The one
+    thing beyond its verdict an executor may do is put OTHER revisions back in
+    the queue (``StageContext.arq``; the evaluation stage, task 09b).
 
     :func:`register_stage_executor` adds one under a name,
     :func:`get_stage_executor` resolves one, and
@@ -55,6 +57,7 @@ from course_supporter.llm.stage_router import StageExecution
 if TYPE_CHECKING:
     from collections.abc import Collection
 
+    from arq.connections import ArqRedis
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from course_supporter.homework.criteria_verdicts import WorkFile
@@ -92,6 +95,14 @@ class StageContext:
     never for a stage that reviews the work. ``work`` is the same text file by
     file, for a stage that has to find a quote in it (task 09b); empty where
     the doors read no files (a test, a project).
+
+    ``arq`` is the queue, for the one thing an executor may do beyond its own
+    verdict: put OTHER revisions back in it. The evaluation stage, having got
+    the criteria list its task waited for, continues the revisions of the same
+    task held for that list (task 09b, ``PRE-FLIGHT.md`` 9.2, entry 1). It is
+    never used for this submission, whose state stays the body's. ``None``
+    where no queue is at hand (a test that does not need one); the stage then
+    leaves the others to the other two entries.
     """
 
     session: AsyncSession
@@ -105,6 +116,7 @@ class StageContext:
     session_factory: async_sessionmaker[AsyncSession]
     door: DoorReading | None = None
     work: tuple[WorkFile, ...] = ()
+    arq: ArqRedis | None = None
 
 
 @dataclass(frozen=True, slots=True)

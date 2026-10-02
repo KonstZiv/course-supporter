@@ -1377,10 +1377,16 @@ class HomeworkStatus(StrEnum):
     (mentor-rebuild task 03, KD19 "a short balance blocks the start"), so
     nothing was spent and nothing was decided. A top-up re-activates the
     submission through ``received``, the way ``failed`` does.
+
+    ``awaiting_criteria`` is the second hold (task 09b, decision 6): the
+    evaluation stage found no criteria list in force for the task and asked
+    the path to wait for one before it paid for anything. A continuation takes
+    the submission back through ``received`` once a list is in force.
     """
 
     RECEIVED = "received"
     AWAITING_FUNDS = "awaiting_funds"
+    AWAITING_CRITERIA = "awaiting_criteria"
     SAFETY_OK = "safety_ok"
     SANITY_OK = "sanity_ok"
     REVIEWING = "reviewing"
@@ -1530,7 +1536,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         "rejected (safety) | mismatch (sanity) | failed (error). "
         "awaiting_funds (mentor-rebuild task 03) is a hold, not a milestone: "
         "the funds port refused before the new path's first paid call, so "
-        "nothing was spent; a top-up re-activates it through received.",
+        "nothing was spent; a top-up re-activates it through received. "
+        "awaiting_criteria (task 09b) is the second hold: no criteria list is "
+        "in force for the task, so the review waits for one; a continuation "
+        "re-activates it through received.",
     )
 
     # Results (JSONB)

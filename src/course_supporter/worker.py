@@ -212,8 +212,9 @@ async def startup(ctx: WorkerCtx) -> None:
             log.exception("orphaned_in_flight_jobs_reconcile_failed")
         # A second, separate pass: an orphan is a job nobody is running, this is
         # a REVISION nobody is running — held by a limit an edit of the path
-        # configuration may just have raised (mentor-rebuild task 03). Guarded
-        # like the sweep above: neither may stop the worker from starting.
+        # configuration may just have raised (mentor-rebuild task 03), or
+        # waiting for its task's criteria list (task 09b). Guarded like the
+        # sweep above: neither may stop the worker from starting.
         try:
             from course_supporter.homework.path_continuation import (
                 sweep_frozen_revisions,

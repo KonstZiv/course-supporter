@@ -28,7 +28,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_process_homework
@@ -55,6 +55,7 @@ from course_supporter.homework.path_stages import CRITERIA_EVALUATION
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
+from course_supporter.models.source import AssignmentType
 from course_supporter.service_logging import _persist
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -74,7 +75,7 @@ _STAGES = ["safety", "attempt_classifier"]
 
 # What each stage's double "costs". Different on purpose: the body reads the
 # price back per stage, so equal numbers would not show which row it summed.
-_PRICE = {"safety": 0.004, "attempt_classifier": 0.006}
+_PRICE = {"safety": 0.004, "attempt_classifier": 0.006, "criteria_evaluation": 0.02}
 
 # Valid verdicts for the two shipped executors, so the real parsing runs.
 _CONTENT = {
@@ -361,6 +362,7 @@ def _ctx(
     answers: Path,
     *,
     job_try: int = 1,
+    arq: Any = None,
 ) -> dict[str, Any]:
     def _download(_key: str) -> Path:
         # The body owns the temp file's lifetime and deletes it on the way out,
@@ -372,12 +374,16 @@ def _ctx(
     s3 = MagicMock()
     s3.extract_key = MagicMock(return_value="homework/answers.py")
     s3.download_file = AsyncMock(side_effect=_download)
-    return {
+    ctx: dict[str, Any] = {
         "session_factory": session_factory,
         "stage_router": router,
         "s3_client": s3,
         "job_try": job_try,
     }
+    if arq is not None:
+        # The worker's queue, as ARQ hands it to every task.
+        ctx["redis"] = arq
+    return ctx
 
 
 def _answers(tmp_path: Path) -> Path:
@@ -396,17 +402,24 @@ async def _run(
     job_id: uuid.UUID | None = None,
     job_try: int = 1,
     config: PathConfig | None = None,
+    arq: Any = None,
 ) -> None:
     """Run the ARQ task through the seam, with the two doubles wired in.
 
     Patched: the path configuration (the switch lives in a file nobody edits in
-    a test), the port constructor (the ARQ task takes no port argument — this
-    is the one wiring point the body offers), and the webhook.
+    a test — read by the body and by the continuations alike), the port
+    constructor (the ARQ task takes no port argument — this is the one wiring
+    point the body offers), and the webhook.
     """
+    config = config or _config()
     with (
         patch(
             "course_supporter.homework.path_runner.get_path_config",
-            return_value=config or _config(),
+            return_value=config,
+        ),
+        patch(
+            "course_supporter.homework.path_continuation.get_path_config",
+            return_value=config,
         ),
         patch(
             "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
@@ -418,7 +431,7 @@ async def _run(
         ),
     ):
         await arq_process_homework(
-            _ctx(session_factory, router, answers, job_try=job_try),
+            _ctx(session_factory, router, answers, job_try=job_try, arq=arq),
             str(job_id or seed["job_id"]),
             str(seed["submission_id"]),
         )
@@ -1071,6 +1084,8 @@ class TestTheEvaluationStageHoldsWithoutAList:
         seed: dict[str, uuid.UUID],
         tmp_path: Path,
     ) -> None:
+        from course_supporter.api.routes._portal_shared import curated_presentation
+
         router = _RouterDouble(session_factory)
         port = _PortDouble()
 
@@ -1093,8 +1108,13 @@ class TestTheEvaluationStageHoldsWithoutAList:
         assert checkpoint.frozen_reason is FreezeReason.CRITERIA_UNAVAILABLE
         job = await _job(session_factory, seed["job_id"])
         assert job.current_stage == CRITERIA_EVALUATION
+        # The hold has a status of its own (K4), which the student reads as
+        # "being checked", with a code the portal can phrase.
         submission = await _submission(session_factory, seed["submission_id"])
-        assert submission.status == "received"
+        assert submission.status == "awaiting_criteria"
+        presentation = curated_presentation(submission)
+        assert presentation.state == "in_progress"
+        assert presentation.reason_code == "awaiting_criteria"
         # Held, not ended: the port hears nothing about the remainder.
         assert port.released == []
         async with session_factory() as session:
@@ -1107,3 +1127,459 @@ class TestTheEvaluationStageHoldsWithoutAList:
                 )
             ).all()
         assert rows == []
+
+
+# ── Task 09b, K4: the wait for a list, its end, and two defects of the body ──
+
+_IN_FORCE_ID = uuid.UUID("01999999-0000-7000-8000-0000000000b1")
+_SOLVED = (
+    '{"verdicts": [{"id": "c1", "verdict": "met", '
+    '"quote": "def solve(n):", "missing": null}]}'
+)
+
+
+def _list_in_force() -> Any:
+    from course_supporter.criteria_kinds import CriteriaLayer
+    from course_supporter.homework.criteria_form import Criterion
+    from course_supporter.homework.criteria_list_service import CriteriaInForce
+
+    criterion = Criterion.model_validate(
+        {
+            "id": "c1",
+            "text": "Defines solve",
+            "evidence": "a function named solve",
+            "weight": "must",
+            "check_method": "model_verdict",
+            "soft_descent": False,
+            "concepts": [],
+            "mandatory_points": [],
+        }
+    )
+    return CriteriaInForce(
+        criteria=(criterion,), layer=CriteriaLayer.MODEL, source_id=_IN_FORCE_ID
+    )
+
+
+class _ListSource:
+    """The criteria source: none until the test says a list has appeared."""
+
+    def __init__(self) -> None:
+        from course_supporter.homework.criteria_list_service import (
+            CriteriaUnavailable,
+            UnavailableReason,
+        )
+
+        self.answer: Any = CriteriaUnavailable(UnavailableReason.COMPOSITION_FAILED)
+        self.asked = 0
+
+    def appears(self) -> None:
+        self.answer = _list_in_force()
+
+    async def get_or_compose(self, authored_document_id: uuid.UUID) -> Any:
+        self.asked += 1
+        return self.answer
+
+
+def _queue() -> MagicMock:
+    arq = MagicMock()
+    arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-k4"))
+    return arq
+
+
+async def _jobs(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> list[Job]:
+    async with session_factory() as session:
+        return list(
+            (
+                await session.execute(
+                    select(Job)
+                    .where(Job.subject_id == submission_id)
+                    .order_by(Job.queued_at.asc(), Job.id.asc())
+                )
+            ).scalars()
+        )
+
+
+async def _verdict_rows(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> list[Any]:
+    async with session_factory() as session:
+        return list(
+            (
+                await session.execute(
+                    select(SubmissionCriterionVerdict).where(
+                        SubmissionCriterionVerdict.submission_id == submission_id
+                    )
+                )
+            ).scalars()
+        )
+
+
+async def _second_revision(
+    session_factory: async_sessionmaker[AsyncSession], seed: dict[str, uuid.UUID]
+) -> dict[str, uuid.UUID]:
+    """Another student's work on the same task, with its first job queued."""
+    async with session_factory() as session:
+        first = await session.get(HomeworkSubmission, seed["submission_id"])
+        assert first is not None
+        student = Student(
+            tenant_id=seed["tenant_id"], external_id=f"stu-{uuid.uuid4().hex[:6]}"
+        )
+        session.add(student)
+        await session.flush()
+        submission = HomeworkSubmission(
+            tenant_id=seed["tenant_id"],
+            student_id=student.id,
+            course_node_id=first.course_node_id,
+            node_id=first.node_id,
+            authored_document_id=first.authored_document_id,
+            file_url="s3://bucket/homework/answers.py",
+            file_type="text/plain",
+            original_filename="answers.py",
+            webhook_url=_WEBHOOK_URL,
+            response_language="en",
+            status="received",
+        )
+        session.add(submission)
+        await session.flush()
+        job = Job(
+            tenant_id=seed["tenant_id"],
+            course_node_id=first.course_node_id,
+            job_type="homework_processing",
+            subject_type="homework_submission",
+            subject_id=submission.id,
+            input_params={"submission_id": str(submission.id)},
+            status="queued",
+        )
+        session.add(job)
+        await session.commit()
+        return {
+            **seed,
+            "student_id": student.id,
+            "submission_id": submission.id,
+            "job_id": job.id,
+        }
+
+
+async def _drop(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> None:
+    async with session_factory() as session:
+        job_ids = list(
+            (
+                await session.execute(
+                    select(Job.id).where(Job.subject_id == submission_id)
+                )
+            ).scalars()
+        )
+        await session.execute(
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id.in_(job_ids))
+        )
+        await session.execute(
+            delete(HomeworkSubmission).where(HomeworkSubmission.id == submission_id)
+        )
+        await session.execute(delete(Job).where(Job.subject_id == submission_id))
+        await session.commit()
+
+
+class TestAListThatAppearsEndsTheWaitOnce:
+    """Lock 6 through the body: the review runs exactly once, when a list exists."""
+
+    async def test_an_entry_continues_the_revision_and_a_later_one_finds_nothing(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        from course_supporter.homework.path_continuation import (
+            resume_awaiting_criteria,
+        )
+
+        answers = _answers(tmp_path)
+        config = _config_with_evaluation()
+        source = _ListSource()
+        router = _RouterDouble(session_factory, content={CRITERIA_EVALUATION: _SOLVED})
+        port = _PortDouble()
+        arq = _queue()
+
+        async def entry() -> int:
+            async with session_factory() as session:
+                return await resume_awaiting_criteria(
+                    session,
+                    arq,
+                    tenant_id=seed["tenant_id"],
+                    authored_document_id=(
+                        await _submission(session_factory, seed["submission_id"])
+                    ).authored_document_id,
+                    config=config,
+                )
+
+        with patch(
+            "course_supporter.homework.criteria_evaluation.build_criteria_list_service",
+            return_value=source,
+        ):
+            await _run(session_factory, router, port, seed, answers, config=config)
+            held = await _submission(session_factory, seed["submission_id"])
+            assert held.status == "awaiting_criteria"
+            assert router.count(CRITERIA_EVALUATION) == 0
+
+            source.appears()
+            # Two entries in a row — the author's edit, say, then a worker start.
+            assert await entry() == 1
+            assert await entry() == 0
+            [_, continuation] = await _jobs(session_factory, seed["submission_id"])
+
+            await _run(
+                session_factory,
+                router,
+                port,
+                seed,
+                answers,
+                job_id=continuation.id,
+                config=config,
+            )
+            # Once reviewed, nothing waits: a later entry makes no job at all.
+            assert await entry() == 0
+
+        assert router.count(CRITERIA_EVALUATION) == 1
+        assert router.count("safety") == 1
+        [row] = await _verdict_rows(session_factory, seed["submission_id"])
+        assert row.item_id == "c1"
+        assert len(await _jobs(session_factory, seed["submission_id"])) == 2
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"
+
+    async def test_the_stage_that_gets_the_list_continues_the_others(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        """Entry 1: the waiting revision is continued by its neighbour's stage."""
+        answers = _answers(tmp_path)
+        config = _config_with_evaluation()
+        source = _ListSource()
+        router = _RouterDouble(session_factory, content={CRITERIA_EVALUATION: _SOLVED})
+        port = _PortDouble()
+        arq = _queue()
+        other = await _second_revision(session_factory, seed)
+        try:
+            with patch(
+                "course_supporter.homework.criteria_evaluation."
+                "build_criteria_list_service",
+                return_value=source,
+            ):
+                await _run(session_factory, router, port, other, answers, config=config)
+                assert (
+                    await _submission(session_factory, other["submission_id"])
+                ).status == "awaiting_criteria"
+
+                source.appears()
+                await _run(
+                    session_factory, router, port, seed, answers, config=config, arq=arq
+                )
+
+                arq.enqueue_job.assert_awaited_once()
+                [_, continuation] = await _jobs(session_factory, other["submission_id"])
+                await _run(
+                    session_factory,
+                    router,
+                    port,
+                    other,
+                    answers,
+                    job_id=continuation.id,
+                    config=config,
+                    arq=arq,
+                )
+
+            assert router.count(CRITERIA_EVALUATION) == 2
+            for revision in (seed, other):
+                done = await _submission(session_factory, revision["submission_id"])
+                assert done.status == "delivered"
+                assert len(await _verdict_rows(session_factory, done.id)) == 1
+            # The second evaluation found nobody waiting: no further job.
+            arq.enqueue_job.assert_awaited_once()
+        finally:
+            await _drop(session_factory, other["submission_id"])
+
+
+class _BuilderDouble:
+    """A result builder that counts what it builds; free, like a real one."""
+
+    def __init__(self) -> None:
+        self.built = 0
+
+    async def build(self, context: Any) -> Any:
+        from course_supporter.homework.result_builders import BuiltResult
+
+        self.built += 1
+        structure = MagicMock()
+        structure.model_dump = MagicMock(return_value={"version": 1})
+        return BuiltResult(structure=structure, markdown="# Review", score=None)
+
+    async def after_delivery(self, context: Any) -> None:
+        return None
+
+
+async def _all_stages_behind(
+    session_factory: async_sessionmaker[AsyncSession],
+    seed: dict[str, uuid.UUID],
+    status: str,
+) -> None:
+    """The record a worker leaves when it dies after the last stage."""
+    from course_supporter.homework.path_checkpoint import save_checkpoint
+    from course_supporter.homework.path_config import PathKey
+
+    checkpoint = PathCheckpoint.started(
+        PathKey(AssignmentType.TASK, SubmissionState.FIRST), _STAGES
+    )
+    for name in _STAGES:
+        checkpoint = checkpoint.with_stage_done(name)
+    async with session_factory() as session:
+        await save_checkpoint(
+            session, seed["job_id"], checkpoint, current_stage=_STAGES[-1]
+        )
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == seed["submission_id"])
+            .values(status=status)
+        )
+        await session.commit()
+
+
+class TestARunReenteredAfterItsLastStage:
+    """``PRE-FLIGHT.md`` 9.11 (2), with the finish decided 2026-10-02.
+
+    A stage marked done is never run, or paid for, twice; the finish starts
+    where the first run stopped.
+    """
+
+    @pytest.mark.parametrize(
+        ("entered_as", "builds"),
+        [("received", 1), ("reviewing", 1), ("completed", 0)],
+    )
+    async def test_no_stage_runs_again_and_the_review_is_delivered(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+        entered_as: str,
+        builds: int,
+    ) -> None:
+        await _all_stages_behind(session_factory, seed, entered_as)
+        router = _RouterDouble(session_factory)
+        builder = _BuilderDouble()
+
+        with patch(
+            "course_supporter.homework.path_runner.get_result_builder",
+            return_value=builder,
+        ):
+            await _run(session_factory, router, _PortDouble(), seed, _answers(tmp_path))
+
+        assert router.calls == []
+        assert builder.built == builds
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"
+
+    async def test_a_delivered_revision_is_left_as_it_is(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        """Nothing to run, to pay for, to build or to deliver — not even asked."""
+        await _all_stages_behind(session_factory, seed, "delivered")
+        router = _RouterDouble(session_factory)
+        builder = _BuilderDouble()
+        port = _PortDouble()
+
+        with patch(
+            "course_supporter.homework.path_runner.get_result_builder",
+            return_value=builder,
+        ):
+            await _run(session_factory, router, port, seed, _answers(tmp_path))
+
+        assert router.calls == []
+        assert builder.built == 0
+        assert port.reserved == []
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"
+
+
+def _task_switched_back() -> PathConfig:
+    """``task`` back on today's Mentor, its paths kept; ``test`` still switched."""
+    return PathConfig.model_validate(
+        {
+            "stages": {name: _stage() for name in _STAGES},
+            "task_types": {
+                "task": {
+                    "served_by": ServedBy.TODAYS_MENTOR.value,
+                    "paths": {state.value: _STAGES for state in SubmissionState},
+                },
+                "test": {
+                    "served_by": ServedBy.NEW_PATH.value,
+                    "paths": {state.value: [] for state in SubmissionState},
+                },
+                "short_task": {"served_by": "todays_mentor", "paths": {}},
+                "project": {"served_by": "todays_mentor", "paths": {}},
+            },
+        }
+    )
+
+
+class TestATypeSwitchedBackIsNotContinuedOnTheNewPath:
+    """``PRE-FLIGHT.md`` 9.11 (1), with the hold decided 2026-10-02."""
+
+    @pytest.mark.parametrize(
+        ("held_as", "reason"),
+        [
+            ("awaiting_criteria", FreezeReason.CRITERIA_UNAVAILABLE),
+            ("received", FreezeReason.STAGE_MONEY_CEILING),
+        ],
+    )
+    async def test_it_is_left_to_todays_mentor_from_received(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+        held_as: str,
+        reason: FreezeReason,
+    ) -> None:
+        from course_supporter.homework.path_checkpoint import save_checkpoint
+        from course_supporter.homework.path_config import PathKey
+        from course_supporter.homework.path_runner import run_new_path_if_switched
+
+        frozen = (
+            PathCheckpoint.started(
+                PathKey(AssignmentType.TASK, SubmissionState.FIRST), _STAGES
+            )
+            .with_stage_done("safety")
+            .frozen("attempt_classifier", reason)
+        )
+        async with session_factory() as session:
+            await save_checkpoint(
+                session, seed["job_id"], frozen, current_stage="attempt_classifier"
+            )
+            await session.execute(
+                update(HomeworkSubmission)
+                .where(HomeworkSubmission.id == seed["submission_id"])
+                .values(status=held_as)
+            )
+            await session.commit()
+        router = _RouterDouble(session_factory)
+
+        with patch(
+            "course_supporter.homework.path_runner.get_path_config",
+            return_value=_task_switched_back(),
+        ):
+            handled = await run_new_path_if_switched(
+                _ctx(session_factory, router, _answers(tmp_path)),
+                seed["job_id"],
+                seed["submission_id"],
+            )
+
+        assert handled is False
+        assert router.calls == []
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "received"

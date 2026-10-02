@@ -9,12 +9,15 @@ Purpose:
     is a NEW job for the same revision, and this module is where one is made.
 
 Interface:
-    Three events, one mechanism underneath:
+    Several events, one mechanism underneath:
 
     * :func:`resume_after_top_up` — the account was funded. The entry a billing
       adapter will call; nothing calls it yet, by design.
     * :func:`sweep_frozen_revisions` — the worker started, and a revision is
-      held by a limit that an edit of the configuration may have raised.
+      held by a limit that an edit of the configuration may have raised, or
+      waits for its task's criteria list.
+    * :func:`resume_awaiting_criteria` — a criteria list is in force for a
+      task: the evaluation stage got one, or the author edited it (task 09b).
     * the retry of a provider's bad minute is NOT here: the body re-queues
       itself while its job is still running (``arq.Retry``), so no new job is
       needed and no one has to find it.
@@ -41,11 +44,23 @@ from course_supporter.homework.path_checkpoint import (
     FreezeReason,
     PathCheckpoint,
 )
+from course_supporter.homework.path_config import (
+    PathConfig,
+    ServedBy,
+    get_path_config,
+)
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
+from course_supporter.models.source import AssignmentType
+from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.job_repository import (
     IN_FLIGHT_STATUSES,
 )
-from course_supporter.storage.orm import Job
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    HomeworkStatus,
+    HomeworkSubmission,
+    Job,
+)
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
@@ -73,6 +88,7 @@ async def start_continuation_job(
     *,
     tenant_id: uuid.UUID,
     submission_id: uuid.UUID,
+    leave_hold: bool = False,
 ) -> bool:
     """Make and dispatch a new job for a held revision, if it may have one.
 
@@ -80,6 +96,12 @@ async def start_continuation_job(
     refuse the insert (``uq_jobs_subject_in_flight``), and asking first is how
     an expected state stays out of the error log. That is also why a hold ends
     its job rather than keeping it — see the module docstring.
+
+    ``leave_hold`` writes ``received`` in the same transaction as the job, and
+    only when the job is made: for a revision that today's Mentor will go on
+    with, which starts from ``received`` and knows nothing of holds. A revision
+    the new path goes on with keeps its hold until its run starts — a dispatch
+    that never reaches the queue then leaves it where the next pass finds it.
 
     Commits before dispatching, so the worker can only ever read durable rows
     (``DD-3.2.6-A``, the order the first dispatch uses too).
@@ -101,6 +123,8 @@ async def start_continuation_job(
         )
         return False
 
+    if leave_hold:
+        await HomeworkRepository(session).update_status(submission_id, "received")
     job = await create_homework_job(
         session=session, tenant_id=tenant_id, submission_id=submission_id
     )
@@ -134,8 +158,6 @@ async def resume_after_top_up(
     ``False`` when the revision is not held for funds at all, or already has a
     job in flight.
     """
-    from course_supporter.storage.homework_repository import HomeworkRepository
-
     submission = await HomeworkRepository(session).get_by_id(submission_id)
     if submission is None or submission.status != "awaiting_funds":
         return False
@@ -147,8 +169,84 @@ async def resume_after_top_up(
     )
 
 
+async def resume_awaiting_criteria(
+    session: AsyncSession,
+    arq: ArqRedis,
+    *,
+    tenant_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+    config: PathConfig | None = None,
+    first_only: bool = False,
+) -> int:
+    """Continue the revisions of a task that wait for its criteria list.
+
+    Called where a list has just come into force — by the evaluation stage
+    that got one, and by the author's edit of one — and at worker start (task
+    09b, ``PRE-FLIGHT.md`` 9.2). Each revision gets a new job through
+    :func:`start_continuation_job`, so two entries in a row make one job, not
+    two: the second finds the first one's job in flight. Once that run starts,
+    it takes the revision out of ``awaiting_criteria`` before anything else,
+    and no entry finds it again.
+
+    A task whose type is no longer on the new path is left to today's Mentor,
+    which reviews without a list (decided 2026-10-02): the hold is lifted with
+    the job, because today's Mentor starts only from ``received``.
+
+    ``config`` is the path configuration; ``None`` reads the one the process
+    serves.
+
+    ``first_only`` continues the oldest revision and leaves the rest to it: at
+    worker start the list is usually still missing, so the one continuation
+    tries to compose it, and if it succeeds its evaluation stage continues the
+    others. A composition is not tried once per waiting revision. A task left
+    to today's Mentor gets all of them: nothing there continues the rest.
+
+    Returns how many were dispatched.
+    """
+    document = await session.get(AuthoredDocument, authored_document_id)
+    waiting = await HomeworkRepository(session).held_for_criteria(
+        tenant_id=tenant_id, authored_document_id=authored_document_id
+    )
+    if document is None or not waiting:
+        return 0
+    leave_hold = not _on_the_new_path(
+        config if config is not None else get_path_config(), document.task_type
+    )
+    if first_only and not leave_hold:
+        waiting = waiting[:1]
+    dispatched = 0
+    for submission in waiting:
+        if await start_continuation_job(
+            session,
+            arq,
+            tenant_id=tenant_id,
+            submission_id=submission.id,
+            leave_hold=leave_hold,
+        ):
+            dispatched += 1
+    if dispatched:
+        logger.info(
+            "awaiting_criteria_continued",
+            authored_document_id=str(authored_document_id),
+            count=dispatched,
+            to_todays_mentor=leave_hold,
+        )
+    return dispatched
+
+
+def _on_the_new_path(config: PathConfig, task_type: str | None) -> bool:
+    """Is a task of this type served by the new path today?"""
+    if task_type not in set(AssignmentType):
+        return False
+    declared = config.task_types.get(AssignmentType(task_type))
+    return declared is not None and declared.served_by is ServedBy.NEW_PATH
+
+
 async def sweep_frozen_revisions(
-    session_factory: async_sessionmaker[AsyncSession], arq: ArqRedis
+    session_factory: async_sessionmaker[AsyncSession],
+    arq: ArqRedis,
+    *,
+    config: PathConfig | None = None,
 ) -> int:
     """Put back the revisions a configuration edit may have unblocked.
 
@@ -161,9 +259,16 @@ async def sweep_frozen_revisions(
     so is every job of today's Mentor — those write no checkpoint at all, which
     is what makes them invisible here without a single special case.
 
+    Then the revisions that wait for their task's criteria list (task 09b):
+    one per task (:func:`resume_awaiting_criteria`, ``first_only``), so a
+    composition that failed is tried again at most once per start and task
+    version. ``config`` is the path configuration; ``None`` reads the one the
+    worker serves.
+
     Returns how many were dispatched. Best-effort by construction: a revision
     that cannot be continued now is simply not, and the next start tries again.
     """
+    config = config if config is not None else get_path_config()
     dispatched = 0
     async with session_factory() as session:
         rows = await session.execute(
@@ -197,6 +302,26 @@ async def sweep_frozen_revisions(
                 submission_id=job.subject_id,
             ):
                 dispatched += 1
+
+        tasks = await session.execute(
+            select(
+                HomeworkSubmission.tenant_id, HomeworkSubmission.authored_document_id
+            )
+            .where(
+                HomeworkSubmission.status == HomeworkStatus.AWAITING_CRITERIA.value,
+                HomeworkSubmission.deleted_at.is_(None),
+            )
+            .distinct()
+        )
+        for tenant_id, authored_document_id in tasks.all():
+            dispatched += await resume_awaiting_criteria(
+                session,
+                arq,
+                tenant_id=tenant_id,
+                authored_document_id=authored_document_id,
+                config=config,
+                first_only=True,
+            )
 
     if dispatched:
         logger.info("frozen_revisions_swept", count=dispatched)

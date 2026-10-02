@@ -21,8 +21,8 @@ Interface:
 Steps:
     1. The list in force, composed on a miss. None — the revision is held with
        :attr:`FreezeReason.CRITERIA_UNAVAILABLE` before this stage pays for
-       anything (decision 6); the continuation that runs it again when a list
-       appears is the next commit's (K4).
+       anything (decision 6). One — the other revisions of the task held for
+       it are put back in the queue (``PRE-FLIGHT.md`` 9.2, entry 1).
     2. One request about every item of the list.
     3. The verdicts that cannot stand as given — a quote not found, too long,
        too short, of several lines, missing; a "not met" without a sentence —
@@ -71,6 +71,7 @@ from course_supporter.homework.criteria_verdicts import (
     settle_verdicts,
 )
 from course_supporter.homework.path_checkpoint import FreezeReason
+from course_supporter.homework.path_continuation import resume_awaiting_criteria
 from course_supporter.homework.path_stages import StageOutcome
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.language import display_name
@@ -136,6 +137,7 @@ async def evaluate_criteria(
     if not isinstance(listed, CriteriaInForce):
         log.info("criteria_evaluation_awaiting_criteria", reason=listed.reason.value)
         return StageOutcome.freezes(FreezeReason.CRITERIA_UNAVAILABLE)
+    await _continue_the_waiting(context, log=log)
 
     if not context.work:
         msg = (
@@ -189,6 +191,33 @@ async def evaluate_criteria(
     )
     _log_settled(log, records, first)
     return StageOutcome.ok()
+
+
+async def _continue_the_waiting(context: StageContext, *, log: Any) -> None:
+    """Put back the task's revisions that wait for the list this stage just got.
+
+    Entry 1 of three (``PRE-FLIGHT.md`` 9.2): the composition that ends their
+    wait is usually this very stage's. Right after the list is got, not after
+    the verdicts: the list is in force whatever this evaluation's fate.
+
+    In a session of its own: the body's carries this stage's verdict rows to
+    the commit that marks the stage done. Best-effort: a queue that refuses
+    must not cost this submission its review — the author's edit and the
+    worker's start are the other two entries.
+    """
+    if context.arq is None:
+        return
+    submission = context.submission
+    try:
+        async with context.session_factory() as session:
+            await resume_awaiting_criteria(
+                session,
+                context.arq,
+                tenant_id=submission.tenant_id,
+                authored_document_id=submission.authored_document_id,
+            )
+    except Exception:
+        log.warning("criteria_evaluation_continuation_failed", exc_info=True)
 
 
 def _on_the_rung(execution: StageExecution, evaluated: Evaluated) -> StageExecution:

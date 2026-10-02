@@ -109,6 +109,15 @@ ceilings stay ``received``: they are lifted by an edit of the configuration and
 found by the startup pass through the checkpoint.
 """
 
+_LIFTED_BY_THE_RUN: frozenset[str] = frozenset(
+    {HomeworkStatus.AWAITING_CRITERIA.value, HomeworkStatus.AWAITING_FUNDS.value}
+)
+"""The holds a run takes the revision out of before anything else.
+
+Both lead only to ``received`` or ``failed``, so every other status a run
+writes — the hold again included — is reachable only once the hold is gone.
+"""
+
 _RESULT_UNDER_WAY: frozenset[str] = frozenset(
     {HomeworkStatus.REVIEWING.value, HomeworkStatus.COMPLETED.value}
 )
@@ -156,11 +165,11 @@ async def run_new_path_if_switched(
     opens a session and reads its row, its checkpoint and its task before the
     answer.
 
-    One write may come before the answer: a revision held for its criteria
-    list is taken out of the hold first (``awaiting_criteria`` →
-    ``received``), whichever Mentor goes on with it — the new path, or today's
-    if its type has been switched back (decided 2026-10-02), which can start
-    only from ``received``.
+    One write may come before the answer: a held revision — for its criteria
+    list or for funds — is taken out of the hold first (``awaiting_criteria``
+    / ``awaiting_funds`` → ``received``), whichever Mentor goes on with it —
+    the new path, or today's if its type has been switched back (decided
+    2026-10-02), which can start only from ``received``.
     """
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     config = get_path_config()
@@ -172,10 +181,15 @@ async def run_new_path_if_switched(
         submission = await hw_repo.get_by_id(submission_id)
         if submission is None:
             return False
-        if submission.status == HomeworkStatus.AWAITING_CRITERIA.value:
+        if submission.status in _LIFTED_BY_THE_RUN:
             # The run is what ends the wait, not the entry that queued it: a
             # dispatch that never reached the queue leaves the revision held,
-            # where the next entry or the startup pass finds it again.
+            # where the next entry or the startup pass finds it again. Funds
+            # too (DD-SP-CS): lifted here, before the port is asked again, a
+            # second refusal holds the revision from `received`, an edge the
+            # table has. Lifted only once the port allowed, it was written
+            # over itself — `awaiting_funds → awaiting_funds` is no edge — and
+            # the revision failed where it should have waited.
             await hw_repo.update_status(submission_id, "received")
             await session.commit()
         # A revision that has already walked part of a path continues on the
@@ -327,17 +341,6 @@ async def _run_path(
                 session, hw_repo, submission_id, job_id, checkpoint, answer, log=log
             )
             return
-        if submission.status == "awaiting_funds":
-            # A hold is a state the revision has to LEAVE before it can reach
-            # any other. `awaiting_funds` leads only to `received` or `failed`,
-            # so a continuation that walked straight on would run every stage,
-            # pay for every stage, and then be refused its own result at the
-            # finish — the submission stranded on the hold for good, because the
-            # startup pass deliberately never touches one. The edge back to
-            # `received` exists for exactly this moment: take it first, before
-            # anything is written or spent.
-            await hw_repo.update_status(submission_id, "received")
-            await session.commit()
         await save_checkpoint(session, job_id, checkpoint, current_stage=None)
 
         # ── The stages of the path, one after another ──
@@ -781,8 +784,11 @@ async def _hold_for_funds(
 ) -> None:
     """The port refused: hold the revision, having spent nothing.
 
-    The hold is lifted by the continuation, not from here: a new job asks the
-    port again and the body writes ``received`` before it runs anything.
+    The hold is lifted by the continuation, not from here: the run of a new
+    job writes ``received`` before it reads anything else
+    (:func:`run_new_path_if_switched`), so the revision is always held from
+    ``received`` — on the first refusal and on every one after a top-up that
+    was not enough.
     """
     held = checkpoint.frozen(
         checkpoint.first_unfinished(list(checkpoint.stages)) or "",

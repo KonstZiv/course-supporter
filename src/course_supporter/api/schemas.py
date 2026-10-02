@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.homework.criteria_edit_service import CriteriaStatus
 from course_supporter.homework.criteria_form import (
@@ -26,7 +27,6 @@ from course_supporter.homework.criteria_form import (
     Criterion,
     CriterionEdit,
 )
-from course_supporter.homework.criteria_list_service import CriteriaLayer
 from course_supporter.homework.test_completeness import IncompleteCode
 from course_supporter.homework.test_object import PublicationState
 from course_supporter.homework.test_object_service import DraftCheckState

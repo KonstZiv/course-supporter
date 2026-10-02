@@ -13,13 +13,13 @@ from typing import Any
 
 import pytest
 
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_list_service import (
     CLAIM_POLL_INTERVAL,
     CLAIM_SILENCE_LIMIT,
     CLAIM_WAIT_LIMIT,
     HEARTBEAT_INTERVAL,
-    CriteriaLayer,
     choose_in_force,
     input_fingerprint,
 )

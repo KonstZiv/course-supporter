@@ -70,6 +70,7 @@ import structlog
 from sqlalchemy import func, select
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CRITERIA_FORM_VERSION,
@@ -143,13 +144,6 @@ five in a row; a claimer that is gone (a deploy that recreated its worker, a
 crash, a cancelled job) misses all of them, and its task version waits five
 minutes for a new claimer instead of a job's timeout.
 """
-
-
-class CriteriaLayer(StrEnum):
-    """Which layer a list in force comes from."""
-
-    AUTHOR = "author"
-    MODEL = "model"
 
 
 @dataclass(frozen=True, slots=True)

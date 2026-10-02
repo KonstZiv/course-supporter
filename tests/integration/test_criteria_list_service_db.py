@@ -39,6 +39,7 @@ from course_supporter.agents.criteria_decomposer import (
     STAGE_NAME,
     CriteriaDecomposerAgent,
 )
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CriteriaComposition,
@@ -47,7 +48,6 @@ from course_supporter.homework.criteria_form import (
 )
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
-    CriteriaLayer,
     CriteriaListService,
     CriteriaUnavailable,
     UnavailableReason,

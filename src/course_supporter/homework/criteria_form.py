@@ -49,6 +49,11 @@ from pydantic import (
 )
 
 from course_supporter.concept_dedup import normalization_key
+from course_supporter.criteria_kinds import (
+    CRITERION_ID_PATTERN,
+    POINT_ID_PATTERN,
+    WeightCategory,
+)
 from course_supporter.models.source import AssignmentType
 
 CRITERIA_FORM_VERSION: Final = 2
@@ -72,20 +77,6 @@ MAX_POINTS: Final = 10
 MAX_POINT_CHARS: Final = 300
 MAX_CONCEPTS: Final = 10
 """Concepts of one criterion."""
-
-
-class WeightCategory(StrEnum):
-    """How much a criterion matters (``TASK.md`` 3.1).
-
-    The category is what the author edits; the number it counts for is the
-    code's (:data:`WEIGHT_NUMBERS`), so stored lists hold no numbers and a new
-    scale re-weighs every list at once. The values are the English labels the
-    model is given (decision 18) and stay so in storage.
-    """
-
-    MUST = "must"
-    SHOULD = "should"
-    MAY = "may"
 
 
 WEIGHT_NUMBERS: Final[Mapping[WeightCategory, int]] = MappingProxyType(
@@ -146,9 +137,6 @@ def point_id(criterion: str, number: int) -> str:
     return f"{criterion}.p{number}"
 
 
-_CRITERION_ID = r"^c[1-9][0-9]*$"
-_POINT_ID = r"^c[1-9][0-9]*\.p[1-9][0-9]*$"
-
 _Text = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TEXT_CHARS),
@@ -178,7 +166,7 @@ class MandatoryPoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    id: Annotated[str, StringConstraints(pattern=_POINT_ID)]
+    id: Annotated[str, StringConstraints(pattern=POINT_ID_PATTERN)]
     text: _PointText
 
 
@@ -206,7 +194,7 @@ class Criterion(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    id: Annotated[str, StringConstraints(pattern=_CRITERION_ID)]
+    id: Annotated[str, StringConstraints(pattern=CRITERION_ID_PATTERN)]
     text: _Text
     evidence: _Text
     weight: WeightCategory
@@ -285,7 +273,7 @@ class MandatoryPointEdit(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    id: Annotated[str, StringConstraints(pattern=_POINT_ID)] | None = None
+    id: Annotated[str, StringConstraints(pattern=POINT_ID_PATTERN)] | None = None
     text: _PointText
 
 
@@ -305,7 +293,7 @@ class CriterionEdit(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    id: Annotated[str, StringConstraints(pattern=_CRITERION_ID)] | None = None
+    id: Annotated[str, StringConstraints(pattern=CRITERION_ID_PATTERN)] | None = None
     text: _Text
     evidence: _Text
     weight: WeightCategory

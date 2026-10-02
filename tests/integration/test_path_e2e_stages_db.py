@@ -866,6 +866,103 @@ class TestARefusedPortHoldsTheRevision:
         ]
 
 
+async def _top_up(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> uuid.UUID:
+    """The billing adapter's entry, then the job it made."""
+    from course_supporter.homework.path_continuation import resume_after_top_up
+
+    async with session_factory() as session:
+        assert await resume_after_top_up(
+            arq=_queue(), session=session, submission_id=submission_id
+        )
+    return (await _jobs(session_factory, submission_id))[-1].id
+
+
+class TestATopUpThatWasNotEnoughHoldsAgain:
+    """DD-SP-CS: a second refusal of the port is a wait, not a failure."""
+
+    async def test_the_revision_waits_again_with_the_same_checkpoint(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        answers = _answers(tmp_path)
+        router = _RouterDouble(session_factory)
+        port = _PortDouble(refuse_first_n=2)
+        await _run(session_factory, router, port, seed, answers)
+        first_hold = await _checkpoint(session_factory, seed["job_id"])
+
+        continuation = await _top_up(session_factory, seed["submission_id"])
+        await _run(session_factory, router, port, seed, answers, job_id=continuation)
+
+        # The port was asked again and refused again: nothing was paid for.
+        assert len(port.reserved) == 2
+        assert router.calls == []
+        assert port.accounted == []
+        assert port.released == []
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "awaiting_funds"
+        assert submission.error_message is None
+        assert (await _job(session_factory, continuation)).status == "complete"
+        second_hold = await _checkpoint(session_factory, continuation)
+        assert second_hold.frozen_reason is FreezeReason.AWAITING_FUNDS
+        assert second_hold.frozen_stage == first_hold.frozen_stage
+        assert second_hold.stages == first_hold.stages
+
+    async def test_the_next_top_up_finishes_without_running_a_done_stage_again(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        from course_supporter.homework.path_checkpoint import save_checkpoint
+        from course_supporter.homework.path_config import PathKey
+
+        # Held for funds with a stage behind it: a continuation after a
+        # ceiling, say, that the port refused.
+        async with session_factory() as session:
+            await save_checkpoint(
+                session,
+                seed["job_id"],
+                PathCheckpoint.started(
+                    PathKey(AssignmentType.TASK, SubmissionState.FIRST), _STAGES
+                ).with_stage_done("safety"),
+                current_stage="safety",
+            )
+            await session.commit()
+        answers = _answers(tmp_path)
+        router = _RouterDouble(session_factory)
+        port = _PortDouble(refuse_first_n=2)
+        await _run(session_factory, router, port, seed, answers)
+        assert (
+            await _submission(session_factory, seed["submission_id"])
+        ).status == "awaiting_funds"
+
+        too_little = await _top_up(session_factory, seed["submission_id"])
+        await _run(session_factory, router, port, seed, answers, job_id=too_little)
+        held = await _checkpoint(session_factory, too_little)
+        assert held.frozen_reason is FreezeReason.AWAITING_FUNDS
+        assert held.frozen_stage == "attempt_classifier"
+        assert held.stages["safety"] is StageState.DONE
+
+        enough = await _top_up(session_factory, seed["submission_id"])
+        await _run(session_factory, router, port, seed, answers, job_id=enough)
+
+        assert len(port.reserved) == 3
+        assert router.calls == ["attempt_classifier"]
+        assert (await _checkpoint(session_factory, enough)).stages == {
+            "safety": StageState.DONE,
+            "attempt_classifier": StageState.DONE,
+        }
+        submission = await _submission(session_factory, seed["submission_id"])
+        assert submission.status == "delivered"
+        assert [outcome for _, outcome in port.released] == [
+            SubmissionOutcome.COMPLETED
+        ]
+
+
 def _priced_registry(per_1k: float) -> Any:
     """A registry that prices both rungs, so a ceiling can be below an attempt."""
     from course_supporter.llm.registry import ModelRegistryConfig
@@ -1547,6 +1644,7 @@ class TestATypeSwitchedBackIsNotContinuedOnTheNewPath:
         ("held_as", "reason"),
         [
             ("awaiting_criteria", FreezeReason.CRITERIA_UNAVAILABLE),
+            ("awaiting_funds", FreezeReason.AWAITING_FUNDS),
             ("received", FreezeReason.STAGE_MONEY_CEILING),
         ],
     )

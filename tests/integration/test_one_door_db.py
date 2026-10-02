@@ -459,6 +459,14 @@ async def _run(
                     return_value=_new_path_config(w.task_type),
                 )
             )
+            # The door is under test, not the result: these paths list neither
+            # stage a text task's builder reads (task 09b), so it would refuse.
+            stack.enter_context(
+                patch(
+                    "course_supporter.homework.path_runner.get_result_builder",
+                    return_value=None,
+                )
+            )
         await arq_process_homework(
             ctx, str(w.ids["job_id"]), str(w.ids["submission_id"])
         )

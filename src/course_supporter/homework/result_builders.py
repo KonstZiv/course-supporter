@@ -3,10 +3,11 @@
 Purpose:
     The new path's body ends every revision the same way: it writes a result and
     delivers it. What that result IS depends on the task type — a test's is
-    computed from its answers and its key, with no model call; the types whose
-    stages judge will build theirs from what their stages wrote. The body asks
-    this module for the type's builder and knows its name, not its content
-    (task 07, decision 6).
+    computed from its answers and its key, with no model call; a text task's
+    (``task``, ``short_task``) is laid out from what its stages wrote, the
+    verdicts and their explanation (task 09b). The body asks this module for
+    the type's builder and knows its name, not its content (task 07,
+    decision 6).
 
 Interface:
     :class:`BuildContext` — what a builder is handed.
@@ -116,13 +117,16 @@ class ResultBuilder(Protocol):
 def get_result_builder(task_type: AssignmentType) -> ResultBuilder | None:
     """The builder of ``task_type``'s result, or ``None`` when it has none.
 
-    The table is built on call rather than at import: the test builder imports
-    this module for its types, and a table at import time would make the two
-    modules import each other.
+    The table is built on call rather than at import: the builders import
+    this module for its types, and a table at import time would make them
+    import each other.
     """
     from course_supporter.homework.test_result import TestResultBuilder
+    from course_supporter.homework.text_result import TextResultBuilder
 
     builders: dict[AssignmentType, ResultBuilder] = {
         AssignmentType.TEST: TestResultBuilder(),
+        AssignmentType.SHORT_TASK: TextResultBuilder(),
+        AssignmentType.TASK: TextResultBuilder(),
     }
     return builders.get(task_type)

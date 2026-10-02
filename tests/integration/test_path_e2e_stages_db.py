@@ -403,19 +403,30 @@ async def _run(
     job_try: int = 1,
     config: PathConfig | None = None,
     arq: Any = None,
+    builder: Any = None,
 ) -> None:
     """Run the ARQ task through the seam, with the two doubles wired in.
 
     Patched: the path configuration (the switch lives in a file nobody edits in
     a test — read by the body and by the continuations alike), the port
     constructor (the ARQ task takes no port argument — this is the one wiring
-    point the body offers), and the webhook.
+    point the body offers), the webhook, and the result builder.
+
+    The builder is ``None`` unless a test hands one: these walks are about
+    the skeleton — checkpoints, prices, holds — and their paths list neither
+    stage a ``task``'s shipped builder reads (task 09b), so it would refuse.
+    With none, the path ends as a ``task``'s did before it had a builder.
+    The walk with the real builder is ``test_text_review_e2e_db.py``.
     """
     config = config or _config()
     with (
         patch(
             "course_supporter.homework.path_runner.get_path_config",
             return_value=config,
+        ),
+        patch(
+            "course_supporter.homework.path_runner.get_result_builder",
+            return_value=builder,
         ),
         patch(
             "course_supporter.homework.path_continuation.get_path_config",
@@ -1471,11 +1482,14 @@ class TestARunReenteredAfterItsLastStage:
         router = _RouterDouble(session_factory)
         builder = _BuilderDouble()
 
-        with patch(
-            "course_supporter.homework.path_runner.get_result_builder",
-            return_value=builder,
-        ):
-            await _run(session_factory, router, _PortDouble(), seed, _answers(tmp_path))
+        await _run(
+            session_factory,
+            router,
+            _PortDouble(),
+            seed,
+            _answers(tmp_path),
+            builder=builder,
+        )
 
         assert router.calls == []
         assert builder.built == builds
@@ -1494,11 +1508,9 @@ class TestARunReenteredAfterItsLastStage:
         builder = _BuilderDouble()
         port = _PortDouble()
 
-        with patch(
-            "course_supporter.homework.path_runner.get_result_builder",
-            return_value=builder,
-        ):
-            await _run(session_factory, router, port, seed, _answers(tmp_path))
+        await _run(
+            session_factory, router, port, seed, _answers(tmp_path), builder=builder
+        )
 
         assert router.calls == []
         assert builder.built == 0

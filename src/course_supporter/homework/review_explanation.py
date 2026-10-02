@@ -7,7 +7,7 @@ Purpose:
     to a model that writes the review's reason, the remarks on the criteria
     that are not met, and the Mentor's own word — and may not contradict any
     of them (decision 5). The answer is kept for the builder of the review
-    (commit K6).
+    (``homework/text_result.py``).
 
 Interface:
     :func:`explain_verdicts` — what the stage executor

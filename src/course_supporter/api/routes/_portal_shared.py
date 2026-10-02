@@ -115,8 +115,10 @@ def version_1_outcome(
     * ``correctness`` comes from the score column, the same number the caller
       is sent as ``score``: 100 correct, 0 incorrect, anything between
       partially correct. A row without a score reads as 0, as the webhook's
-      ``score`` does. For a version-1 review that is not a test, this is the
-      rule only until task 09, which revisits it.
+      ``score`` does. A text task's review reads by the same rule (task 09b,
+      decision 17): its score is the share of the met criteria's weights, so
+      100 means every criterion is met, while ``passed`` — every "must" met —
+      is its verdict, shown apart.
     """
     if structure.verdict is not None:
         passed = structure.verdict.passed

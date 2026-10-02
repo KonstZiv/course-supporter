@@ -98,8 +98,8 @@ stages:
 
   # Verdicts on the criteria of a text task (mentor-rebuild task 09b): one
   # request about the whole list, one repeat about the verdicts that cannot
-  # stand, on the rung that answered (homework/criteria_evaluation.py). Not on
-  # any path yet: the paths of `task` and `short_task` take it in commit K6.
+  # stand, on the rung that answered (homework/criteria_evaluation.py). On
+  # every path of `task` and `short_task`.
   criteria_evaluation:
     # The same input twice must give the same verdicts (TASK.md lock 9);
     # qwen3.7-max answered byte for byte the same on the same input, live.
@@ -155,7 +155,8 @@ stages:
   # The verdicts of a text task, explained to its student (mentor-rebuild task
   # 09b, PRE-PLAN.md decision 13): one request; an answer that contradicts the
   # code's facts is retried with the reason (homework/review_explanation.py).
-  # Not on any path yet: the paths of `task` and `short_task` take it in K6.
+  # Last on every path of `task` and `short_task`: the review is laid out from
+  # its answer and the verdicts (homework/text_result.py).
   review_explanation:
     # Nothing downstream needs the same text twice: what must not change — the
     # verdicts, the score, the pass — is the code's, and the text is checked
@@ -220,17 +221,23 @@ task_types:
       repeat_without_replies: []
       repeat_with_replies: []
 
-  # Declared with its switch; no path is described yet.
+  # The two text types (mentor-rebuild task 09b): verdicts on the criteria,
+  # their explanation, and the review laid out from both by code
+  # (homework/text_result.py). Both stay on today's Mentor: the switch comes
+  # after tasks 10, 12 and 13 (09b TASK.md, section 6).
   short_task:
     served_by: todays_mentor
-    paths: {}
+    paths:
+      first: [safety, attempt_classifier, criteria_evaluation, review_explanation]
+      repeat_without_replies: [safety, criteria_evaluation, review_explanation]
+      repeat_with_replies: [safety, criteria_evaluation, review_explanation]
 
   task:
     served_by: todays_mentor
     paths:
-      first: [safety, attempt_classifier]
-      repeat_without_replies: [safety]
-      repeat_with_replies: [safety]
+      first: [safety, attempt_classifier, criteria_evaluation, review_explanation]
+      repeat_without_replies: [safety, criteria_evaluation, review_explanation]
+      repeat_with_replies: [safety, criteria_evaluation, review_explanation]
 
   project:
     served_by: todays_mentor

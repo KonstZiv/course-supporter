@@ -290,7 +290,8 @@ class CriterionRemark(BaseModel):
 class ExplanationAnswer(BaseModel):
     """The model's explanation of the verdicts, as the stage keeps it.
 
-    The review's builder turns it into the review's structure (commit K6).
+    The review's builder turns it into the review's structure
+    (``homework/text_result.py``).
 
     Attributes:
         passed: The code's pass, repeated: the check compares the two.

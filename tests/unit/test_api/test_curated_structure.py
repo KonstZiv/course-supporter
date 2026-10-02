@@ -264,3 +264,57 @@ class TestTheOutcomeOfATest:
         assert webhook[1] == expected
         assert portal is not None
         assert portal.correctness == expected
+
+
+def _a_text_review(*, passed: bool) -> dict[str, Any]:
+    """A version-1 review of a text task, as its builder stores it (task 09b)."""
+    return ReviewStructureV1(
+        schema_version=REVIEW_SCHEMA_VERSION,
+        language="ukr",
+        verdict=Verdict(passed=passed, why="Причина вердикту за курсом."),
+        new_remarks=[
+            review_structure.Remark(
+                what="Тестів немає.",
+                why="Не видно, що крайній випадок працює.",
+                todo="Додайте тест для порожнього списку.",
+            )
+        ],
+    ).model_dump()
+
+
+class TestTheOutcomeOfATextTask:
+    """Task 09b, decision 17: a text task's review reads by the rule of a test.
+
+    ``passed`` is its verdict — every "must" met — and ``correctness`` its
+    score, the share of the met criteria's weights; the two are shown apart,
+    so an accepted work with a criterion left undone is not "correct".
+    """
+
+    def test_accepted_with_a_criterion_undone_is_partially_correct(self) -> None:
+        webhook, portal = _outcome(_a_text_review(passed=True), 66)
+
+        assert webhook == (True, "partially_correct")
+        assert portal == PortalVerdict(passed=True, correctness="partially_correct")
+
+    def test_not_accepted_reads_its_verdict_not_its_score(self) -> None:
+        """Every "must" undone and the rest done: not passed, yet not zero."""
+        webhook, portal = _outcome(_a_text_review(passed=False), 40)
+
+        assert webhook == (False, "partially_correct")
+        assert portal == PortalVerdict(passed=False, correctness="partially_correct")
+
+    @pytest.mark.parametrize(
+        ("passed", "score", "expected"),
+        [
+            (True, 100, "correct"),
+            (False, 0, "incorrect"),
+            (True, 1, "partially_correct"),
+        ],
+    )
+    def test_correctness_follows_the_score(
+        self, passed: bool, score: int, expected: str
+    ) -> None:
+        webhook, portal = _outcome(_a_text_review(passed=passed), score)
+
+        assert webhook == (passed, expected)
+        assert portal == PortalVerdict(passed=passed, correctness=expected)

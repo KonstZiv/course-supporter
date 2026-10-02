@@ -39,6 +39,7 @@ from course_supporter.agents.criteria_decomposer import (
     STAGE_NAME,
     CriteriaDecomposerAgent,
 )
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CriteriaComposition,
@@ -47,14 +48,18 @@ from course_supporter.homework.criteria_form import (
 )
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
-    CriteriaLayer,
     CriteriaListService,
     CriteriaUnavailable,
     UnavailableReason,
     input_fingerprint,
     load_in_force,
+    recorded_stop,
 )
-from course_supporter.llm.error_categories import ErrorCategory, LadderExhaustedError
+from course_supporter.llm.error_categories import (
+    ErrorCategory,
+    LadderExhaustedError,
+    LadderStop,
+)
 from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.providers.base import LLMProvider
@@ -488,6 +493,39 @@ class TestFailure:
         [row] = await _rows(session_factory, course["task"])
         assert row.state == CriteriaListState.FAILED.value
         assert row.failure_reason == "error: RuntimeError"
+
+    @pytest.mark.parametrize("stop", list(LadderStop))
+    async def test_the_reader_reads_how_the_writer_recorded_the_ending(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        course: dict[str, uuid.UUID],
+        stop: LadderStop,
+    ) -> None:
+        """``recorded_stop`` against the very row a failed composition writes.
+
+        The author's advice is chosen by it (task 09b): a writer that changed
+        its form would otherwise turn every reason into "an internal error".
+        """
+        composer = _FakeComposer(
+            error=LadderExhaustedError(STAGE_NAME, [("p", "m", "x: y")], stop=stop)
+        )
+        await _service(session_factory, composer).get_or_compose(course["task"])
+
+        [row] = await _rows(session_factory, course["task"])
+        assert row.state == CriteriaListState.FAILED.value
+        assert recorded_stop(row.failure_reason) is stop
+
+    async def test_a_defect_reads_as_no_ending(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        course: dict[str, uuid.UUID],
+    ) -> None:
+        composer = _FakeComposer(error=KeyError("exhausted"))
+        with pytest.raises(KeyError):
+            await _service(session_factory, composer).get_or_compose(course["task"])
+
+        [row] = await _rows(session_factory, course["task"])
+        assert recorded_stop(row.failure_reason) is None
 
 
 def _provider(content: str, finish: FinishReason, *, tokens_out: int) -> AsyncMock:

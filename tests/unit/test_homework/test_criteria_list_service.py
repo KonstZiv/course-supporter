@@ -7,19 +7,21 @@ itself runs against a real database in ``test_criteria_list_service_db.py``.
 
 from __future__ import annotations
 
+import doctest
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
+from course_supporter.homework import criteria_list_service
 from course_supporter.homework.criteria_list_service import (
     CLAIM_POLL_INTERVAL,
     CLAIM_SILENCE_LIMIT,
     CLAIM_WAIT_LIMIT,
     HEARTBEAT_INTERVAL,
-    CriteriaLayer,
     choose_in_force,
     input_fingerprint,
 )
@@ -186,3 +188,11 @@ def test_a_live_claim_cannot_look_abandoned() -> None:
     assert CLAIM_SILENCE_LIMIT >= 3 * HEARTBEAT_INTERVAL
     assert CLAIM_WAIT_LIMIT > CLAIM_SILENCE_LIMIT
     assert CLAIM_POLL_INTERVAL < CLAIM_SILENCE_LIMIT
+
+
+def test_the_module_examples_run() -> None:
+    """The docstring examples are executed, not prose (task 09b adds the first)."""
+    result = doctest.testmod(criteria_list_service)
+
+    assert result.attempted > 0, "the module has examples to run"
+    assert result.failed == 0

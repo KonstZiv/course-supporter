@@ -49,6 +49,7 @@ from course_supporter.funds_port import (
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
+    FreezeReason,
     PathCheckpoint,
     load_checkpoint,
     save_checkpoint,
@@ -73,10 +74,12 @@ from course_supporter.homework.result_builders import (
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.orm import HomeworkStatus
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from arq.connections import ArqRedis
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from course_supporter.funds_port import FundsPort
@@ -93,6 +96,28 @@ PATH_FAILED = "path_failed"
 
 A builder that refuses names its own code (:class:`ResultNotBuiltError`); this
 one covers everything else — a defect, a storage error, a delivery that raised.
+"""
+
+_HOLD_STATUS: dict[FreezeReason, HomeworkStatus] = {
+    FreezeReason.CRITERIA_UNAVAILABLE: HomeworkStatus.AWAITING_CRITERIA,
+}
+"""The holds between stages the submission's own status names (task 09b).
+
+Only the wait for a criteria list: it is the one a continuation has to FIND —
+by the status, one indexed read — when a list comes into force. The two
+ceilings stay ``received``: they are lifted by an edit of the configuration and
+found by the startup pass through the checkpoint.
+"""
+
+_RESULT_UNDER_WAY: frozenset[str] = frozenset(
+    {HomeworkStatus.REVIEWING.value, HomeworkStatus.COMPLETED.value}
+)
+"""Statuses a run can only be re-entered in after its last stage.
+
+The worker died while the result was being built (``reviewing``) or delivered
+(``completed``), and an orphaned job is run again from its checkpoint. Neither
+may be entered a second time, so the finish starts from where the first run
+stopped (task 09b, ``PRE-FLIGHT.md`` 9.11 (2), decided 2026-10-02).
 """
 
 
@@ -122,13 +147,20 @@ async def run_new_path_if_switched(
 
     ``False`` means the submission's type is not on the new path — or the
     submission, or its task, is no longer there — and the caller runs today's
-    body unchanged; nothing is written on the way to that answer.
+    body unchanged; nothing is written on the way to that answer but the one
+    write named below.
 
     What the answer costs depends on the switches. With no type switched it is
     one look at the configuration already in memory. Once a type is switched
     (``test``, since task 07), every submission — today's Mentor's included —
     opens a session and reads its row, its checkpoint and its task before the
     answer.
+
+    One write may come before the answer: a revision held for its criteria
+    list is taken out of the hold first (``awaiting_criteria`` →
+    ``received``), whichever Mentor goes on with it — the new path, or today's
+    if its type has been switched back (decided 2026-10-02), which can start
+    only from ``received``.
     """
     session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     config = get_path_config()
@@ -136,9 +168,16 @@ async def run_new_path_if_switched(
         return False
 
     async with session_factory() as session:
-        submission = await HomeworkRepository(session).get_by_id(submission_id)
+        hw_repo = HomeworkRepository(session)
+        submission = await hw_repo.get_by_id(submission_id)
         if submission is None:
             return False
+        if submission.status == HomeworkStatus.AWAITING_CRITERIA.value:
+            # The run is what ends the wait, not the entry that queued it: a
+            # dispatch that never reached the queue leaves the revision held,
+            # where the next entry or the startup pass finds it again.
+            await hw_repo.update_status(submission_id, "received")
+            await session.commit()
         # A revision that has already walked part of a path continues on the
         # one it was given, never on one chosen again: the state it was chosen
         # from may have changed since (its own first review, for one), and a
@@ -203,7 +242,11 @@ def _choice_from(checkpoint: PathCheckpoint, config: PathConfig) -> PathChoice |
     from course_supporter.homework.path_selection import PathChoice
 
     declared = config.task_types.get(checkpoint.task_type)
-    if declared is None or checkpoint.submission_state not in declared.paths:
+    if (
+        declared is None
+        or declared.served_by is not ServedBy.NEW_PATH
+        or checkpoint.submission_state not in declared.paths
+    ):
         return None
     return PathChoice(
         key=checkpoint.path_key,
@@ -247,6 +290,13 @@ async def _run_path(
         msg = f"HomeworkSubmission {submission_id} not found"
         raise ValueError(msg)
     student, tenant = await _student_and_tenant(session, submission)
+    if submission.status == HomeworkStatus.DELIVERED.value:
+        # Re-entered after the review reached the caller: the worker died
+        # between the delivery and the seam's end of the job. Nothing is left
+        # to run, to pay for or to deliver.
+        log.info("path_already_delivered")
+        return
+    entered_as = submission.status
 
     # ── Doors: free, synchronous, and the same functions today's Mentor uses ──
     file_path, reading, language = await _open_the_doors(
@@ -291,15 +341,22 @@ async def _run_path(
         await save_checkpoint(session, job_id, checkpoint, current_stage=None)
 
         # ── The stages of the path, one after another ──
+        # From the first one not done — and none at all when every stage is
+        # behind the run, as it is for a run re-entered after its last stage:
+        # a stage marked done is never run, or paid for, twice.
         start_from = checkpoint.first_unfinished(list(choice.stages))
-        for stage_name in choice.stages:
-            if start_from is not None and stage_name != start_from:
-                continue
-            start_from = None
+        remaining = (
+            choice.stages[choice.stages.index(start_from) :]
+            if start_from is not None
+            else ()
+        )
+        for stage_name in remaining:
             try:
                 outcome = await _run_stage(
                     session,
                     router,
+                    session_factory=ctx["session_factory"],
+                    arq=ctx.get("redis"),
                     submission=submission,
                     reading=reading,
                     language=language,
@@ -322,6 +379,20 @@ async def _run_path(
                     log=log,
                 )
                 return
+            if outcome.freeze_reason is not None:
+                # Before the stage is marked done: it has not run, and the
+                # continuation must start from it.
+                await _hold_at_stage(
+                    session,
+                    hw_repo,
+                    submission_id,
+                    job_id,
+                    checkpoint,
+                    stage_name,
+                    outcome.freeze_reason,
+                    log=log,
+                )
+                return
             checkpoint = checkpoint.with_stage_done(stage_name)
             await save_checkpoint(session, job_id, checkpoint, current_stage=stage_name)
             await port.account_stage_cost(
@@ -333,8 +404,13 @@ async def _run_path(
                 return
 
         # ── The result, then the finish ──
-        await hw_repo.update_status(submission_id, "reviewing")
-        await session.commit()
+        # A run re-entered after its last stage starts the finish where the
+        # first run stopped: from ``reviewing`` it builds the result again (no
+        # model is asked — the stages are behind it), from ``completed`` it
+        # only delivers what is stored.
+        if entered_as not in _RESULT_UNDER_WAY:
+            await hw_repo.update_status(submission_id, "reviewing")
+            await session.commit()
         builder = get_result_builder(choice.key.task_type)
         build_context = BuildContext(
             session=session,
@@ -344,7 +420,7 @@ async def _run_path(
             review_language=language,
             redis=ctx.get("redis"),
         )
-        if builder is not None:
+        if builder is not None and entered_as != HomeworkStatus.COMPLETED.value:
             built = await builder.build(build_context)
             await hw_repo.store_review_result(
                 submission_id,
@@ -359,6 +435,7 @@ async def _run_path(
             submission=submission,
             student=student,
             tenant=tenant,
+            completed=entered_as == HomeworkStatus.COMPLETED.value,
             log=log,
         )
         await port.release_remainder(context, SubmissionOutcome.COMPLETED)
@@ -406,7 +483,7 @@ async def _open_the_doors(
     doors refused and already wrote why.
     """
     from course_supporter.homework.doors import (
-        assemble_submission_text,
+        assemble_submission_work,
         extract_document_text,
         persist_door_refusal,
         screen_student_note,
@@ -491,7 +568,7 @@ async def _open_the_doors(
             archive_skip_matcher=denylist_prefix,
             document_extractor=extract_document_text,
         )
-        text, not_opened = assemble_submission_text(
+        text, not_opened, files = assemble_submission_work(
             stage1_result,
             file_bytes=file_bytes,
             filename=(submission.original_filename or file_path.name),
@@ -505,6 +582,7 @@ async def _open_the_doors(
         not_opened=not_opened,
         recovered_encoding=stage1_result.recovered_encoding,
         flags=(*stage1_result.flags, *note_flags),
+        files=files,
     )
     return file_path, reading, review_language.code
 
@@ -513,6 +591,8 @@ async def _run_stage(
     session: AsyncSession,
     router: StageRouter,
     *,
+    session_factory: async_sessionmaker[AsyncSession],
+    arq: ArqRedis | None,
     submission: HomeworkSubmission,
     reading: DoorReading,
     language: str | None,
@@ -532,7 +612,10 @@ async def _run_stage(
             path_key=choice.key,
             stage_name=stage_name,
             stage=config.stages[stage_name],
+            session_factory=session_factory,
             door=reading,
+            work=reading.files,
+            arq=arq,
         )
     )
 
@@ -599,9 +682,10 @@ async def _stage_produced_nothing(
     (``worker_max_tries``) is the one it lives in, and the body must never be
     the reason it runs out: on the FINAL queue attempt the seam turns a re-queue
     into a terminal ``failed`` on the JOB and re-raises — and a revision left
-    ``received`` behind a failed job is reachable by none of the three
-    continuations (the orphan sweep sees only jobs in flight; the frozen-revision
-    pass sees only the two ceilings). So the body ends the submission ITSELF
+    ``received`` behind a failed job is reachable by no continuation (the
+    orphan sweep sees only jobs in flight; the frozen-revision pass sees only
+    the two ceilings and the revisions in ``awaiting_criteria``, and so do the
+    entries a criteria list brings). So the body ends the submission ITSELF
     while it still can.
 
     Checking ``job_try`` rather than only comparing the two settings at startup
@@ -617,8 +701,16 @@ async def _stage_produced_nothing(
     held = checkpoint.frozen(stage_name, reason)
 
     if stop is not LadderStop.EXHAUSTED:
-        await save_checkpoint(session, job_id, held, current_stage=stage_name)
-        log.info("path_frozen", stage=stage_name, reason=reason.value)
+        await _hold_at_stage(
+            session,
+            hw_repo,
+            submission_id,
+            job_id,
+            checkpoint,
+            stage_name,
+            reason,
+            log=log,
+        )
         return
 
     settings = get_settings()
@@ -648,6 +740,35 @@ async def _stage_produced_nothing(
     )
 
 
+async def _hold_at_stage(
+    session: AsyncSession,
+    hw_repo: HomeworkRepository,
+    submission_id: uuid.UUID,
+    job_id: uuid.UUID,
+    checkpoint: PathCheckpoint,
+    stage_name: str,
+    reason: FreezeReason,
+    *,
+    log: Any,
+) -> None:
+    """Hold the revision at an unfinished stage, for ``reason``.
+
+    One reaction for every hold between stages, whoever decided it — a ceiling
+    the ladder met, or a stage that cannot run yet (``StageOutcome.freezes``).
+    The funds port is not told: the submission has not ended. The checkpoint
+    says where and why, which is what a continuation reads; the revision stays
+    in ``received``, unless its hold has a status of its own
+    (:data:`_HOLD_STATUS`) — written in the same transaction as the checkpoint,
+    so neither is ever seen without the other.
+    """
+    held_status = _HOLD_STATUS.get(reason)
+    if held_status is not None:
+        await hw_repo.update_status(submission_id, held_status.value)
+    held = checkpoint.frozen(stage_name, reason)
+    await save_checkpoint(session, job_id, held, current_stage=stage_name)
+    log.info("path_frozen", stage=stage_name, reason=reason.value)
+
+
 async def _hold_for_funds(
     session: AsyncSession,
     hw_repo: HomeworkRepository,
@@ -663,8 +784,6 @@ async def _hold_for_funds(
     The hold is lifted by the continuation, not from here: a new job asks the
     port again and the body writes ``received`` before it runs anything.
     """
-    from course_supporter.homework.path_checkpoint import FreezeReason
-
     held = checkpoint.frozen(
         checkpoint.first_unfinished(list(checkpoint.stages)) or "",
         FreezeReason.AWAITING_FUNDS,
@@ -708,6 +827,7 @@ async def _finish(
     submission: HomeworkSubmission,
     student: Student | None,
     tenant: Tenant | None,
+    completed: bool = False,
     log: Any,
 ) -> None:
     """Complete the revision and deliver its result, with today's own code.
@@ -716,6 +836,9 @@ async def _finish(
     type's builder built, and a type without one has none, so the webhook
     builds from its own defaults. The delivery half is deliberately the same
     calls today's body makes: the external contract is not this task's to move.
+
+    ``completed`` — the revision is already complete (a run re-entered after
+    it was), so only the delivery is left.
     """
     from course_supporter.homework.webhook import (
         build_reviewed_payload,
@@ -723,8 +846,9 @@ async def _finish(
         resolve_webhook_url,
     )
 
-    await hw_repo.update_status(submission.id, "completed")
-    await session.commit()
+    if not completed:
+        await hw_repo.update_status(submission.id, "completed")
+        await session.commit()
 
     webhook_url = resolve_webhook_url(submission, tenant)
     if webhook_url and student:

@@ -68,6 +68,32 @@ class TaskCriteriaListRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def get_latest_for_version(
+        self,
+        authored_document_id: uuid.UUID,
+        *,
+        source_content_hash: str,
+        source_task_type: str,
+    ) -> TaskCriteriaList | None:
+        """Return a task version's most recent row, history included (task 09b).
+
+        What the author's reading asks while no list is in force: is one being
+        composed for this version, or did the last attempt fail — and why. A
+        failed attempt is history (never live), so :meth:`get_live` cannot say.
+        """
+        stmt = (
+            select(TaskCriteriaList)
+            .where(
+                TaskCriteriaList.authored_document_id == authored_document_id,
+                TaskCriteriaList.source_content_hash == source_content_hash,
+                TaskCriteriaList.source_task_type == source_task_type,
+            )
+            .order_by(TaskCriteriaList.created_at.desc(), TaskCriteriaList.id.desc())
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def claim(
         self,
         *,

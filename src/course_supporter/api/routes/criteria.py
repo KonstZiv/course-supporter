@@ -11,6 +11,11 @@ What the routes answer is decided in
 :class:`~course_supporter.homework.criteria_edit_service.CriteriaEditService`;
 what lives here is HTTP: who may knock (``PrepDep`` — the author's scope, and
 only it), whose task it is, and how a refusal becomes a status code.
+
+A write that leaves a list in force puts back in the queue the students' works
+of the task that wait for one (task 09b, ``PRE-FLIGHT.md`` 9.2, entry 2) —
+after the write is committed, so a continuation reads the list it was queued
+for.
 """
 
 from __future__ import annotations
@@ -19,10 +24,11 @@ import uuid
 from typing import Annotated, Final
 
 import structlog
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.api.deps import get_session
+from course_supporter.api.deps import get_arq_redis, get_session
 from course_supporter.api.schemas import (
     CriteriaInForceResponse,
     CriteriaOverrideRequest,
@@ -36,6 +42,7 @@ from course_supporter.homework.criteria_edit_service import (
     CriteriaRefusedError,
     CriteriaView,
 )
+from course_supporter.homework.path_continuation import resume_awaiting_criteria
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -47,6 +54,7 @@ router = APIRouter(tags=["criteria"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
 
 _DOCUMENT_NOT_FOUND: Final[str] = "Document not found"
 """The one answer for a task that is not there and for a task that is not yours.
@@ -69,6 +77,33 @@ async def _require_tenant_task(
         raise HTTPException(status_code=404, detail=_DOCUMENT_NOT_FOUND)
 
 
+async def _continue_the_waiting(
+    session: AsyncSession,
+    arq: ArqRedis,
+    *,
+    tenant_id: uuid.UUID,
+    document_id: uuid.UUID,
+    view: CriteriaView,
+) -> None:
+    """Put back the works that wait for the list this write left in force.
+
+    Best-effort: the author's write is committed and stays so whatever the
+    queue says — the worker's start finds whatever this misses.
+    """
+    if view.in_force is None or view.waiting_submissions == 0:
+        return
+    try:
+        await resume_awaiting_criteria(
+            session, arq, tenant_id=tenant_id, authored_document_id=document_id
+        )
+    except Exception:
+        logger.warning(
+            "criteria_waiting_continuation_failed",
+            document_id=str(document_id),
+            exc_info=True,
+        )
+
+
 def _refusal(exc: CriteriaRefusedError) -> HTTPException:
     """Turn a service refusal into the 422 the author reads; the code says which."""
     return HTTPException(
@@ -85,11 +120,12 @@ async def get_criteria(
 ) -> CriteriaViewResponse:
     """The criteria of the task's current version: each layer apart.
 
-    A task whose list is not composed yet answers **200** with
-    ``status = "awaiting_first_submission"`` and a message saying when it will
-    be, not 404: no route composes a list — the first submission of a
-    student's work does (``TASK.md`` section 9, decision 1). Reading writes
-    nothing.
+    A task whose list is not composed yet answers **200**, not 404: no route
+    composes a list — the first submission of a student's work does
+    (``TASK.md`` section 9, decision 1). The status says why there is none —
+    ``awaiting_first_submission``, ``composing`` or ``not_composed`` with its
+    ``reason_code`` — beside how many works wait and a message saying what the
+    author can do (task 09b). Reading writes nothing.
     """
     await _require_tenant_task(session, document_id, tenant.tenant_id)
     try:
@@ -105,6 +141,7 @@ async def put_criteria_override(
     body: CriteriaOverrideRequest,
     tenant: PrepDep,
     session: SessionDep,
+    arq: ArqDep,
 ) -> CriteriaViewResponse:
     """Replace the author's edit whole; it is in force for this task version.
 
@@ -125,6 +162,13 @@ async def put_criteria_override(
         document_id=str(document_id),
         criteria=len(body.criteria),
     )
+    await _continue_the_waiting(
+        session,
+        arq,
+        tenant_id=tenant.tenant_id,
+        document_id=document_id,
+        view=view,
+    )
     return _response(view)
 
 
@@ -133,6 +177,7 @@ async def delete_criteria_override(
     document_id: uuid.UUID,
     tenant: PrepDep,
     session: SessionDep,
+    arq: ArqDep,
 ) -> CriteriaViewResponse:
     """Reset the author's edit; the model's list, if any, is in force again.
 
@@ -147,6 +192,13 @@ async def delete_criteria_override(
         raise _refusal(exc) from exc
     await session.commit()
     logger.info("criteria_override_reset", document_id=str(document_id))
+    await _continue_the_waiting(
+        session,
+        arq,
+        tenant_id=tenant.tenant_id,
+        document_id=document_id,
+        view=view,
+    )
     return _response(view)
 
 
@@ -155,6 +207,8 @@ def _response(view: CriteriaView) -> CriteriaViewResponse:
     in_force = view.in_force
     return CriteriaViewResponse(
         status=view.status,
+        reason_code=view.reason_code,
+        waiting_submissions=view.waiting_submissions,
         message=view.message,
         model=list(view.model) if view.model is not None else None,
         author=list(view.author) if view.author is not None else None,

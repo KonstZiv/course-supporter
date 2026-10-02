@@ -20,10 +20,11 @@ question from students, nothing more (task 07, invariant 2; ``03-BINDING.md``
 
 Coverage is checked in CODE, not asked for politely. The prompt describes the
 shape and the validator enforces it: both fields carry exactly the question
-numbers of the key, and every explanation is non-empty. Schema enforcement at
-the router level is task 09; until then a violation is a
-:class:`StructuralRetryError`, which the router answers with its
-instructor-style retry and then with the next rung.
+numbers of the key, and every explanation is non-empty. The router asks for
+JSON (``expects_json``) but is handed no schema to put on the wire — a stage
+may hand one since task 09a (``response_schema``), and this agent does not — so
+a violation is a :class:`StructuralRetryError`, which the router answers with
+its instructor-style retry and then with the next rung.
 """
 
 from __future__ import annotations

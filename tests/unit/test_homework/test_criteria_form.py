@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from course_supporter.criteria_kinds import WeightCategory
 from course_supporter.homework import criteria_form
 from course_supporter.homework.criteria_form import (
     MAX_CONCEPTS,
@@ -24,7 +25,6 @@ from course_supporter.homework.criteria_form import (
     CheckMethod,
     Criterion,
     CriterionDraft,
-    WeightCategory,
     check_methods_for,
     compose_criteria,
     criteria_from_document,

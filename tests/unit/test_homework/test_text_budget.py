@@ -108,6 +108,25 @@ class TestArchiveFitting:
         assert fitted.text == ""
         assert [n.arcname for n in fitted.over_budget] == ["huge.py"]
 
+    def test_the_kept_files_are_given_file_by_file_without_frames(self) -> None:
+        """Task 09b: the quotes of a verdict are looked for inside one file."""
+        entries = [
+            ExtractedFile(arcname="z.py", content=b"--- a.py ---\nz = 1\n", depth=0),
+            _entry("big.py", 5000),
+            ExtractedFile(arcname="a.py", content="а = 'ї'\n".encode(), depth=0),
+        ]
+        fitted = fit_archive_entries(entries, budget_chars=300)
+
+        # Archive order, the dropped file left out, each body exactly as read
+        # — a frame-like line inside a file is still that file's text.
+        assert fitted.files == (
+            ("z.py", "--- a.py ---\nz = 1\n"),
+            ("a.py", "а = 'ї'\n"),
+        )
+        assert fitted.text == "\n".join(
+            f"--- {name} ---\n{body}" for name, body in fitted.files
+        )
+
     def test_the_frame_counts_against_the_budget(self) -> None:
         # The separator is characters the model pays for like any other.
         entry = _entry("a.py", 10)

@@ -53,9 +53,11 @@ class WebhookReviewedPayload(BaseModel):
     this payload.
 
     ``structure`` is the one field added since the set was locked, by the
-    decision ratified 2026-09-17 (mentor-rebuild task 04): optional, versioned
-    inside itself, and null on every payload today because no stage writes a
-    structure yet. A consumer reading only the fields it knows is unaffected;
+    decision ratified 2026-09-17 (mentor-rebuild task 04): optional and
+    versioned inside itself. It is written by the result builders of the new
+    path — a test's since task 07, a text task's since task 09b once its type
+    is switched — and is null on a review of today's Mentor, which has no
+    structure to send. A consumer reading only the fields it knows is unaffected;
     the rule above says what kind of addition this is and what kind is not.
     """
 
@@ -65,7 +67,7 @@ class WebhookReviewedPayload(BaseModel):
     review: ReviewSummary
     structure: ReviewStructureV1 | None = Field(
         default=None,
-        description="Versioned review structure; null until a stage writes one.",
+        description="Versioned review structure; null when the review has none.",
     )
     timestamp: datetime
 

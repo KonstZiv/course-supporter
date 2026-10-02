@@ -360,6 +360,27 @@ class TestHomeworkStatusEnum:
         for source in ("safety_ok", "sanity_ok", "reviewing", "completed"):
             assert "awaiting_funds" not in HOMEWORK_TRANSITIONS[source]
 
+    def test_awaiting_criteria_hangs_off_received_and_leads_back(self) -> None:
+        """The second hold's three edges (task 09b), named for the same reason.
+
+        The evaluation stage holds the revision before it pays for anything,
+        from ``received`` — the new path writes no milestone before review —
+        and a continuation takes it back through ``received``.
+        """
+        assert "awaiting_criteria" in HOMEWORK_TRANSITIONS["received"]
+        assert HOMEWORK_TRANSITIONS["awaiting_criteria"] == {"received", "failed"}
+
+    def test_awaiting_criteria_is_not_reachable_from_a_milestone(self) -> None:
+        """Nor from the other hold: a held revision is lifted before it runs."""
+        for source in (
+            "awaiting_funds",
+            "safety_ok",
+            "sanity_ok",
+            "reviewing",
+            "completed",
+        ):
+            assert "awaiting_criteria" not in HOMEWORK_TRANSITIONS[source]
+
     def test_any_active_state_can_fail(self) -> None:
         """All non-terminal states can transition to failed."""
         excluded = {

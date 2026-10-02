@@ -12,10 +12,14 @@ Interface:
     :func:`choose_in_force` — the rule "the author's edit for this version,
     else the model's ready list for this version", on rows already read. The
     one place the rule lives; :func:`load_in_force` reads the rows and applies
-    it, and task 09 calls the same function.
+    it. The author's routes call it directly; today's review and the
+    evaluation stage of task 09b, through :meth:`CriteriaListService.get_or_compose`.
     :meth:`CriteriaListService.get_or_compose` — for a review: the list in
     force, composed on a miss, or :class:`CriteriaUnavailable` with a reason.
     :func:`build_criteria_list_service` — the production wiring.
+    :func:`has_ready_summary` and :func:`recorded_stop` — two facts the
+    author's reading of a task without a list states (task 09b): whether the
+    task is processed, and how its last composition gave up.
 
 Replacing it:
     The service needs a session factory and a composer — anything with the
@@ -70,6 +74,7 @@ import structlog
 from sqlalchemy import func, select
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CRITERIA_FORM_VERSION,
@@ -80,7 +85,7 @@ from course_supporter.homework.criteria_form import (
 )
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.language import display_name
-from course_supporter.llm.error_categories import LadderExhaustedError
+from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
@@ -143,13 +148,6 @@ five in a row; a claimer that is gone (a deploy that recreated its worker, a
 crash, a cancelled job) misses all of them, and its task version waits five
 minutes for a new claimer instead of a job's timeout.
 """
-
-
-class CriteriaLayer(StrEnum):
-    """Which layer a list in force comes from."""
-
-    AUTHOR = "author"
-    MODEL = "model"
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +297,44 @@ def input_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+async def has_ready_summary(
+    session: AsyncSession, authored_document_id: uuid.UUID
+) -> bool:
+    """Is the task processed — does it have a ready summary to compose from?
+
+    The content guard of today's cache, and the one reason a list cannot even
+    be tried: a task that is not ingested has nothing to compose from.
+    """
+    ready_summary = await session.scalar(
+        select(DocumentSummary.id).where(
+            DocumentSummary.authored_document_id == authored_document_id,
+            DocumentSummary.deleted_at.is_(None),
+            DocumentSummary.status == "ready",
+        )
+    )
+    return ready_summary is not None
+
+
+def recorded_stop(failure_reason: str | None) -> LadderStop | None:
+    """How a failed composition ended, as its row recorded it; None for a defect.
+
+    The reading half of what :meth:`CriteriaListService._compose` writes —
+    ``"<ending>: <message>"`` when the model's ladder gave up, ``"error:
+    <type>"`` when the code broke — kept beside the writer, and locked against
+    it by a test that fails a composition each way and reads the row back.
+
+    >>> recorded_stop("output_ceiling: the answer was cut at its ceiling")
+    <LadderStop.OUTPUT_CEILING: 'output_ceiling'>
+    >>> recorded_stop("error: KeyError") is None
+    True
+    """
+    head = (failure_reason or "").partition(":")[0]
+    try:
+        return LadderStop(head)
+    except ValueError:
+        return None
+
+
 def _is_current(
     row: TaskCriteriaList | TaskCriteriaOverride, document: AuthoredDocument
 ) -> bool:
@@ -442,16 +478,7 @@ class CriteriaListService:
         task_type, content_hash = document.task_type, document.content_hash
         if task_type is None or content_hash is None:
             return None
-        # The content guard of today's cache: a task that is not ingested has
-        # nothing to compose from.
-        ready_summary = await session.scalar(
-            select(DocumentSummary.id).where(
-                DocumentSummary.authored_document_id == authored_document_id,
-                DocumentSummary.deleted_at.is_(None),
-                DocumentSummary.status == "ready",
-            )
-        )
-        if ready_summary is None:
+        if not await has_ready_summary(session, authored_document_id):
             return None
         finals = NodeSummaryFinalRepository(session)
         node_final = await finals.get_by_course_node_id(document.course_node_id)

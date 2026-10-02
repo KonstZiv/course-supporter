@@ -23,10 +23,10 @@ from course_supporter.agents.mentor_review import (
     NodeCourseEvaluation,
     ReconciliationMatch,
 )
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
-    CriteriaLayer,
     CriteriaUnavailable,
     UnavailableReason,
 )

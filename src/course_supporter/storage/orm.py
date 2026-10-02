@@ -27,6 +27,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
+from course_supporter.criteria_kinds import (
+    CRITERION_ID_PATTERN,
+    POINT_ID_PATTERN,
+    CriteriaLayer,
+    VerdictItemKind,
+    VerdictValue,
+    WeightCategory,
+)
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.feedback_kinds import (
     FeedbackKind,
@@ -1369,10 +1377,16 @@ class HomeworkStatus(StrEnum):
     (mentor-rebuild task 03, KD19 "a short balance blocks the start"), so
     nothing was spent and nothing was decided. A top-up re-activates the
     submission through ``received``, the way ``failed`` does.
+
+    ``awaiting_criteria`` is the second hold (task 09b, decision 6): the
+    evaluation stage found no criteria list in force for the task and asked
+    the path to wait for one before it paid for anything. A continuation takes
+    the submission back through ``received`` once a list is in force.
     """
 
     RECEIVED = "received"
     AWAITING_FUNDS = "awaiting_funds"
+    AWAITING_CRITERIA = "awaiting_criteria"
     SAFETY_OK = "safety_ok"
     SANITY_OK = "sanity_ok"
     REVIEWING = "reviewing"
@@ -1522,7 +1536,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         "rejected (safety) | mismatch (sanity) | failed (error). "
         "awaiting_funds (mentor-rebuild task 03) is a hold, not a milestone: "
         "the funds port refused before the new path's first paid call, so "
-        "nothing was spent; a top-up re-activates it through received.",
+        "nothing was spent; a top-up re-activates it through received. "
+        "awaiting_criteria (task 09b) is the second hold: no criteria list is "
+        "in force for the task, so the review waits for one; a continuation "
+        "re-activates it through received.",
     )
 
     # Results (JSONB)
@@ -2097,6 +2114,320 @@ class StudentFeedback(Base):
             f"StudentFeedback(id={self.id!r}, target={self.target_kind!r}:"
             f"{self.target_id!r}, student_id={self.student_id!r}, "
             f"value={self.value!r})"
+        )
+
+
+# ──────────────────────────────────────────────
+# Verdicts on criteria — mentor-rebuild task 09b
+# ──────────────────────────────────────────────
+
+_MET = VerdictValue.MET.value
+_NOT_MET = VerdictValue.NOT_MET.value
+_CRITERION = VerdictItemKind.CRITERION.value
+_POINT = VerdictItemKind.POINT.value
+
+
+class SubmissionCriterionVerdict(Base):
+    """One verdict of a submission's review on one criterion or one point (task 09b).
+
+    A row per (submission, criterion) and per (submission, mandatory point):
+    the machine verdict in full, with its evidence — for the author, for tests
+    and for a later look; the student never reads it raw (``PRE-PLAN.md``,
+    decision 5). The score and "passed" are NOT stored: the code recounts them
+    from these rows, so a stored number cannot disagree with its own source.
+
+    **Address.** A verdict names its criterion by the list it was judged
+    against — ``criteria_layer`` + ``criteria_source_id`` — together with
+    ``item_id``: identifiers are stable within one list, not across the lists
+    of one task version (task 08, decision 21). The list id carries no foreign
+    key: it points at ``task_criteria_overrides`` or ``task_criteria_lists`` by
+    layer, and both keep their old rows as soft-deleted history, so the address
+    stays resolvable after an edit.
+
+    **Proposal and decision** (KD20, extended from a person's correction to the
+    code's): ``model_verdict`` is what the model said, ``verdict`` what stands.
+    They part in two places — a quote the code could not find in the work turns
+    "met" into "not met" (``quote_not_found``), and the resubmission safeguard
+    keeps a past "met" whose quote is still in the work (``safeguard_fired``,
+    ``safeguard_submission_id``). A criterion checked by mandatory points has no
+    model verdict of its own: the code derives it from its points.
+
+    No soft-delete and no cascade, as on ``student_feedback``: the rows go with
+    a hard delete of their submission (``ON DELETE CASCADE``), and the reads
+    filter on the live submission. Every read is scoped by ``tenant_id``.
+    """
+
+    __tablename__ = "submission_criterion_verdicts"
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("criteria_layer", CriteriaLayer),
+            name="ck_submission_criterion_verdicts_criteria_layer",
+        ),
+        CheckConstraint(
+            _one_of("item_kind", VerdictItemKind),
+            name="ck_submission_criterion_verdicts_item_kind",
+        ),
+        # A CHECK whose body is NULL passes (SQL's three-valued logic), so every
+        # rule on a nullable column below says IS NOT NULL where it means it.
+        # The two per-kind rules are implications, not "kind AND shape": a row
+        # of an unknown kind then breaks ck_..._item_kind alone. PostgreSQL
+        # tests CHECKs in alphabetical order and names only the first broken
+        # one, so a rule that also failed on an unknown kind would mask it.
+        CheckConstraint(
+            f"(item_kind <> '{_CRITERION}' OR item_id ~ '{CRITERION_ID_PATTERN}') "
+            f"AND (item_kind <> '{_POINT}' OR item_id ~ '{POINT_ID_PATTERN}')",
+            name="ck_submission_criterion_verdicts_item_id_shape",
+        ),
+        CheckConstraint(
+            f"(item_kind <> '{_CRITERION}' "
+            f"OR (weight IS NOT NULL AND {_one_of('weight', WeightCategory)})) "
+            f"AND (item_kind <> '{_POINT}' OR weight IS NULL)",
+            name="ck_submission_criterion_verdicts_weight_of_criterion",
+        ),
+        CheckConstraint(
+            _one_of("verdict", VerdictValue),
+            name="ck_submission_criterion_verdicts_verdict",
+        ),
+        CheckConstraint(
+            _nullable_in("model_verdict", VerdictValue),
+            name="ck_submission_criterion_verdicts_model_verdict",
+        ),
+        CheckConstraint(
+            f"item_kind = '{_CRITERION}' OR model_verdict IS NOT NULL",
+            name="ck_submission_criterion_verdicts_point_judged_by_model",
+        ),
+        CheckConstraint(
+            f"verdict <> '{_MET}' OR model_verdict IS NULL OR quote IS NOT NULL",
+            name="ck_submission_criterion_verdicts_met_has_quote",
+        ),
+        CheckConstraint(
+            "quote_file IS NULL OR quote IS NOT NULL",
+            name="ck_submission_criterion_verdicts_place_of_a_quote",
+        ),
+        CheckConstraint(
+            "(quote_line_start IS NULL AND quote_line_end IS NULL) "
+            "OR (quote_file IS NOT NULL AND quote_line_start IS NOT NULL "
+            "AND quote_line_end IS NOT NULL AND quote_line_start >= 1 "
+            "AND quote_line_end >= quote_line_start)",
+            name="ck_submission_criterion_verdicts_lines",
+        ),
+        CheckConstraint(
+            "safeguard_fired = (safeguard_submission_id IS NOT NULL)",
+            name="ck_submission_criterion_verdicts_safeguard_source",
+        ),
+        CheckConstraint(
+            f"NOT safeguard_fired OR verdict = '{_MET}'",
+            name="ck_submission_criterion_verdicts_safeguard_keeps_met",
+        ),
+        CheckConstraint(
+            f"NOT quote_not_found OR verdict = '{_NOT_MET}' OR safeguard_fired",
+            name="ck_submission_criterion_verdicts_unfound_quote_not_met",
+        ),
+        Index(
+            "uq_submission_criterion_verdicts_submission_item",
+            "submission_id",
+            "item_id",
+            unique=True,
+        ),
+        {
+            "comment": "Verdicts of a submission's review on criteria and "
+            "mandatory points (mentor-rebuild task 09b). One row per "
+            "(submission, item); the score and the pass are recounted from "
+            "these rows by the code, never stored."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Tenant. Every read and write of verdicts is scoped by it.",
+    )
+    # No standalone index: uq_submission_criterion_verdicts_submission_item
+    # starts with this column and serves every lookup by submission.
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="CASCADE"),
+        comment="FK → HomeworkSubmission whose review this verdict is part of.",
+    )
+    criteria_layer: Mapped[str] = mapped_column(
+        String(16),
+        comment="Which list the verdict was judged against (CriteriaLayer): "
+        "'author' — task_criteria_overrides, 'model' — task_criteria_lists.",
+    )
+    criteria_source_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        comment="Id of the list's row in the table criteria_layer names. NO "
+        "foreign key: it addresses one of two tables, whose old rows stay as "
+        "soft-deleted history.",
+    )
+    item_id: Mapped[str] = mapped_column(
+        String(32),
+        comment="The criterion ('c3') or the mandatory point ('c3.p2') judged, "
+        "as identified within the list.",
+    )
+    item_kind: Mapped[str] = mapped_column(
+        String(16),
+        comment="What was judged (VerdictItemKind): 'criterion' or 'point'.",
+    )
+    weight: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="The criterion's weight category when judged (WeightCategory); "
+        "NULL for a point, which has no weight of its own.",
+    )
+    verdict: Mapped[str] = mapped_column(
+        String(16),
+        comment="The verdict that stands (VerdictValue): 'met' or 'not_met'.",
+    )
+    model_verdict: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="What the model said (VerdictValue), kept beside the verdict "
+        "that stands; NULL for a criterion derived from its points.",
+    )
+    quote: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="The evidence: the short quote from the work that a 'met' "
+        "stands on, or the model's quote that was not found in the work.",
+    )
+    quote_file: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="The file the quote was found in: the archive member, or the "
+        "submitted file's own name. NULL when there is no quote, or it was not "
+        "found in the work.",
+    )
+    quote_line_start: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="First line of the quote in quote_file, from 1; NULL for a "
+        "document (docx, pdf), whose lines are an artefact of extraction.",
+    )
+    quote_line_end: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Last line of the quote in quote_file; NULL with quote_line_start.",
+    )
+    missing: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="One sentence on what is missing, for a 'not_met' the model "
+        "gave; in the language of the course.",
+    )
+    retried: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="The model was asked once more for this item alone, its first "
+        "verdict unable to stand for any reason: a 'met' without a quote, or "
+        "with one of several lines, too long, too short or not found in the "
+        "work; a 'not_met' without a sentence.",
+    )
+    quote_not_found: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="The model said 'met' but its quote was not in the work even "
+        "after the repeat — a flag for the author. The item reads 'not_met' "
+        "unless the safeguard kept an earlier 'met'.",
+    )
+    safeguard_fired: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="The resubmission safeguard kept an earlier 'met' of the same "
+        "item of the same list, whose quote is still in the work.",
+    )
+    safeguard_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        comment="The earlier submission whose verdict the safeguard kept. NO "
+        "foreign key: a trace that outlives a hard delete of that submission.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the verdict was written.",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"SubmissionCriterionVerdict(submission_id={self.submission_id!r}, "
+            f"item_id={self.item_id!r}, verdict={self.verdict!r})"
+        )
+
+
+class SubmissionExplanation(Base):
+    """What the explanation stage wrote for one submission (task 09b).
+
+    The stage that explains the machine verdict to the student runs before the
+    builder that assembles the review, and a path's checkpoint keeps no stage
+    output (``homework/path_checkpoint.py``) — so the stage's validated answer
+    waits here, one row per submission, until the builder reads it. ``body``
+    is that answer as the stage's own model dumps it, criterion identifiers
+    included; the builder turns it into the review structure.
+
+    A repeat run of the stage replaces the row: one per submission, which the
+    unique index on ``submission_id`` holds. No soft-delete and no cascade, as
+    on the verdicts.
+    """
+
+    __tablename__ = "submission_explanations"
+    __table_args__ = (
+        CheckConstraint(
+            "language ~ '^[a-z]{3}$'",
+            name="ck_submission_explanations_language",
+        ),
+        Index(
+            "uq_submission_explanations_submission_id",
+            "submission_id",
+            unique=True,
+        ),
+        {
+            "comment": "The explanation stage's answer for one submission "
+            "(mentor-rebuild task 09b), kept for the builder of the review. "
+            "One row per submission; a repeat run replaces it."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Tenant. Every read and write of explanations is scoped by it.",
+    )
+    # No standalone index: uq_submission_explanations_submission_id serves it.
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="CASCADE"),
+        comment="FK → HomeworkSubmission the explanation is written for.",
+    )
+    language: Mapped[str] = mapped_column(
+        String(3),
+        comment="ISO 639-3 code of the language the explanation is written in.",
+    )
+    body: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        comment="The stage's validated answer, as its own model dumps it.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the explanation was first written.",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="When it was last replaced. On the ON CONFLICT DO UPDATE path "
+        "this column is set EXPLICITLY: SQLAlchemy does not apply a "
+        "Python-side onupdate to an upsert (dialects/postgresql/dml.py).",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"SubmissionExplanation(submission_id={self.submission_id!r}, "
+            f"language={self.language!r})"
         )
 
 

@@ -23,6 +23,10 @@ The rules:
       section 9, decision 1): it is composed at the first submission of a
       student's work, and until then the reading says so and an edit is
       refused — there is nothing to edit yet.
+    * While no list is in force, the reading says truthfully why — not yet
+      asked for, being composed, or not composed and for what reason — how
+      many students' works wait for it, and what the author can do
+      (:class:`CriteriaReasonCode`; task 09b, ``PRE-FLIGHT.md`` 9.2).
     * Which list is in force is
       :func:`~course_supporter.homework.criteria_list_service.choose_in_force`
       — the rule a review applies. Each layer is shown as that rule sees it on
@@ -46,6 +50,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from course_supporter.concept_dedup import normalization_key
+from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CheckMethod,
     Criterion,
@@ -60,12 +65,16 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
     choose_in_force,
+    has_ready_summary,
+    recorded_stop,
 )
+from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
+from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
-from course_supporter.storage.orm import AuthoredDocument, NodeSummaryFinal
+from course_supporter.storage.orm import AuthoredDocument, CourseNode, NodeSummaryFinal
 from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
@@ -102,7 +111,7 @@ class CriteriaRefusalCode(StrEnum):
     """The task has not finished processing: it has no version yet."""
 
     AWAITING_FIRST_SUBMISSION = "AWAITING_FIRST_SUBMISSION"
-    """No list is in force yet; it is composed at the first submission."""
+    """No list is in force yet: there is nothing to edit (the reading says why)."""
 
     UNKNOWN_CRITERION_ID = "UNKNOWN_CRITERION_ID"
     """An identifier the list being edited does not have — a criterion's or
@@ -129,10 +138,47 @@ class CriteriaRefusedError(Exception):
 
 
 class CriteriaStatus(StrEnum):
-    """Whether a list is in force for the task's current version."""
+    """Whether a list is in force for the task's current version, and if not, why."""
 
     AWAITING_FIRST_SUBMISSION = "awaiting_first_submission"
+    """None yet, and nothing has asked for one: no student's work waits."""
+
+    COMPOSING = "composing"
+    """One is being composed for this version right now (task 09b)."""
+
+    NOT_COMPOSED = "not_composed"
+    """None, though students' works wait for one, or the last attempt failed;
+    the reason code says why (task 09b)."""
+
     READY = "ready"
+
+
+class CriteriaReasonCode(StrEnum):
+    """Why no list is composed for the task's version — the key of the advice.
+
+    A code, not a sentence: the surface picks its own words by it
+    (language-rules); the reading carries the Ukrainian sentence of
+    :data:`NOT_COMPOSED_MESSAGES` beside it, for the author who reads the
+    response as it is. Every advice leads somewhere in this system — none
+    suggests editing the task's text, which makes a new version and leaves the
+    works already waiting where they are.
+    """
+
+    TASK_NOT_PROCESSED = "task_not_processed"
+    """The task's text has no ready summary: there is nothing to compose from."""
+
+    MODELS_UNAVAILABLE = "models_unavailable"
+    """The last attempt's ladder gave up for reasons that may pass."""
+
+    LIMIT_REACHED = "limit_reached"
+    """The last attempt met a ceiling — of output or of money; the same input
+    meets it again until the configuration changes."""
+
+    COMPOSITION_ERROR = "composition_error"
+    """The last attempt broke on a defect, not on a model's answer."""
+
+    NOT_ATTEMPTED = "not_attempted"
+    """Works wait, and no attempt was made for this version yet."""
 
 
 AWAITING_FIRST_SUBMISSION_MESSAGE: Final = (
@@ -143,14 +189,89 @@ AWAITING_FIRST_SUBMISSION_MESSAGE: Final = (
 decision 1) — a sentence in Ukrainian, as the decision sets it; the status
 beside it is the code a surface picks its own words by."""
 
+COMPOSING_MESSAGE: Final = (
+    "Перелік критеріїв складається зараз. Роботи студентів, що чекають на "
+    "нього, буде перевірено, щойно він буде готовий; після цього перелік можна "
+    "поправити."
+)
+"""What the author reads while a list is being composed (task 09b)."""
+
+# The texts the operator and vision-side approved, verbatim (2026-10-02).
+# A retry comes without anyone's hand only with a new work's evaluation
+# (PRE-FLIGHT.md 9.2, entry 1); otherwise the advice names the one who can
+# start it — an administrator, whose restart of the worker runs the startup
+# pass (entry 3).
+NOT_COMPOSED_MESSAGES: Final[dict[CriteriaReasonCode, str]] = {
+    CriteriaReasonCode.TASK_NOT_PROCESSED: (
+        "Перелік критеріїв ще не складено: обробку тексту завдання не завершено. Якщо "
+        "обробка ще триває — дочекайтеся її завершення; якщо вона завершилася з "
+        "помилкою — запустіть її знову. Після цього перелік складеться автоматично, "
+        "щойно хтось зі студентів подасть роботу на це завдання, і тоді ж буде "
+        "перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде — "
+        "зверніться до адміністратора системи, і він запустить повторну спробу."
+    ),
+    CriteriaReasonCode.MODELS_UNAVAILABLE: (
+        "Перелік критеріїв не вдалося скласти: сервіс, що його складає, був тимчасово "
+        "недоступний. Від вас нічого не потрібно: повторна спроба відбудеться "
+        "автоматично, щойно хтось зі студентів подасть роботу на це завдання, і тоді ж "
+        "буде перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде "
+        "або стан не зміниться — зверніться до адміністратора системи."
+    ),
+    CriteriaReasonCode.LIMIT_REACHED: (
+        "Перелік критеріїв не вдалося скласти: завдання завелике для обмежень, що "
+        "зараз діють у системі. Зверніться до адміністратора системи: після зміни "
+        "обмежень він запустить повторну спробу, і тоді ж буде перевірено роботи, що "
+        "чекають. Не правте заради цього текст завдання: правка створить нову версію "
+        "завдання й не допоможе роботам, що вже чекають."
+    ),
+    CriteriaReasonCode.COMPOSITION_ERROR: (
+        "Перелік критеріїв не вдалося скласти через внутрішню помилку системи. "
+        "Зверніться до адміністратора системи: після виправлення він запустить "
+        "повторну спробу, і тоді ж буде перевірено роботи, що чекають."
+    ),
+    CriteriaReasonCode.NOT_ATTEMPTED: (
+        "Перелік критеріїв для поточної версії завдання ще не складався, а роботи "
+        "студентів уже чекають на нього. Він складеться автоматично, щойно хтось зі "
+        "студентів подасть роботу на це завдання, і тоді ж буде перевірено роботи, що "
+        "чекають. Якщо нових робіт найближчим часом не буде — зверніться до "
+        "адміністратора системи, і він запустить повторну спробу."
+    ),
+}
+"""What the author reads when no list is composed — the state and what to do.
+
+Total over :class:`CriteriaReasonCode`, and guarded below: a reason without
+an advice would reach the author as a state with nothing to do about it.
+"""
+
+_unadvised = set(CriteriaReasonCode) - set(NOT_COMPOSED_MESSAGES)
+if _unadvised:  # pragma: no cover — test-locked
+    msg = f"Reason codes without an advice: {sorted(c.value for c in _unadvised)}"
+    raise RuntimeError(msg)
+
+_REASON_FOR_STOP: Final[dict[LadderStop, CriteriaReasonCode]] = {
+    LadderStop.EXHAUSTED: CriteriaReasonCode.MODELS_UNAVAILABLE,
+    LadderStop.OUTPUT_CEILING: CriteriaReasonCode.LIMIT_REACHED,
+    LadderStop.MONEY_CEILING: CriteriaReasonCode.LIMIT_REACHED,
+}
+"""How a composition's ending becomes the author's reason; a defect has none."""
+
+_unread_stops = set(LadderStop) - set(_REASON_FOR_STOP)
+if _unread_stops:  # pragma: no cover — test-locked
+    msg = f"Ladder endings without a reason: {sorted(s.value for s in _unread_stops)}"
+    raise RuntimeError(msg)
+
 
 @dataclass(frozen=True, slots=True)
 class CriteriaView:
     """What the author reads about the criteria of a task's current version.
 
     Attributes:
-        status: Whether a list is in force.
-        message: While none is, when it will be; None otherwise.
+        status: Whether a list is in force, and if not, why.
+        reason_code: Why none is composed (``not_composed`` only).
+        waiting_submissions: How many students' works wait for a list — live
+            revisions of the task held in ``awaiting_criteria``.
+        message: While none is in force, the state and what to do; None
+            otherwise.
         model: The model's list for this version, if it is composed.
         author: The author's edit for this version, if there is one.
         in_force: The list a review uses — the edit if there is one, else the
@@ -163,6 +284,8 @@ class CriteriaView:
     """
 
     status: CriteriaStatus
+    reason_code: CriteriaReasonCode | None
+    waiting_submissions: int
     message: str | None
     model: tuple[Criterion, ...] | None
     author: tuple[Criterion, ...] | None
@@ -215,9 +338,8 @@ class CriteriaEditService:
         if before.in_force is None:
             raise CriteriaRefusedError(
                 CriteriaRefusalCode.AWAITING_FIRST_SUBMISSION,
-                "no criteria list is in force for this version of the task: one "
-                "is composed after the first submission of a student's work, and "
-                "an edit edits it",
+                "no criteria list is in force for this version of the task — the "
+                "reading says why — and an edit edits one",
             )
         criteria = apply_edit(
             edits,
@@ -282,11 +404,17 @@ class CriteriaEditService:
             if model is not None and live is not None
             else ()
         )
-        return CriteriaView(
-            status=CriteriaStatus.READY
+        waiting = await self._waiting(document)
+        status, reason = (
+            (CriteriaStatus.READY, None)
             if in_force is not None
-            else CriteriaStatus.AWAITING_FIRST_SUBMISSION,
-            message=None if in_force is not None else AWAITING_FIRST_SUBMISSION_MESSAGE,
+            else await self._why_none(task, waiting=waiting)
+        )
+        return CriteriaView(
+            status=status,
+            reason_code=reason,
+            waiting_submissions=waiting,
+            message=_message(status, reason),
             model=model.criteria if model is not None else None,
             author=author.criteria if author is not None else None,
             in_force=in_force,
@@ -296,6 +424,54 @@ class CriteriaEditService:
                 (layer.criteria for layer in (in_force, model) if layer is not None),
             ),
         )
+
+    async def _why_none(
+        self, task: _Task, *, waiting: int
+    ) -> tuple[CriteriaStatus, CriteriaReasonCode | None]:
+        """Why no list is in force for the task's version, read from its rows.
+
+        In this order: an attempt under way; the last attempt failed — by how
+        it ended; works wait with no attempt — by whether the task is
+        processed; otherwise nothing has asked for a list yet.
+        """
+        attempt = await TaskCriteriaListRepository(
+            self._session
+        ).get_latest_for_version(
+            task.document.id,
+            source_content_hash=task.content_hash,
+            source_task_type=task.task_type,
+        )
+        if (
+            attempt is not None
+            and attempt.deleted_at is None
+            and attempt.state == CriteriaListState.PENDING
+        ):
+            return CriteriaStatus.COMPOSING, None
+        if attempt is not None and attempt.state == CriteriaListState.FAILED:
+            stop = recorded_stop(attempt.failure_reason)
+            return CriteriaStatus.NOT_COMPOSED, (
+                _REASON_FOR_STOP[stop]
+                if stop is not None
+                else CriteriaReasonCode.COMPOSITION_ERROR
+            )
+        if waiting:
+            processed = await has_ready_summary(self._session, task.document.id)
+            return CriteriaStatus.NOT_COMPOSED, (
+                CriteriaReasonCode.NOT_ATTEMPTED
+                if processed
+                else CriteriaReasonCode.TASK_NOT_PROCESSED
+            )
+        return CriteriaStatus.AWAITING_FIRST_SUBMISSION, None
+
+    async def _waiting(self, document: AuthoredDocument) -> int:
+        """How many live revisions of the task wait for its criteria list."""
+        node = await self._session.get(CourseNode, document.course_node_id)
+        if node is None:  # pragma: no cover — a document always has its node
+            return 0
+        waiting = await HomeworkRepository(self._session).held_for_criteria(
+            tenant_id=node.tenant_id, authored_document_id=document.id
+        )
+        return len(waiting)
 
     async def _course_concepts(self, document: AuthoredDocument) -> list[str]:
         """The main concepts of the task's node and its course root.
@@ -311,6 +487,17 @@ class CriteriaEditService:
             else await finals.get_by_course_node_id(document.course_root_id)
         )
         return [*_main_concepts(node), *_main_concepts(root)]
+
+
+def _message(status: CriteriaStatus, reason: CriteriaReasonCode | None) -> str | None:
+    """The sentence the author reads for a state; None when a list is in force."""
+    if status is CriteriaStatus.READY:
+        return None
+    if status is CriteriaStatus.COMPOSING:
+        return COMPOSING_MESSAGE
+    if reason is not None:
+        return NOT_COMPOSED_MESSAGES[reason]
+    return AWAITING_FIRST_SUBMISSION_MESSAGE
 
 
 def apply_edit(

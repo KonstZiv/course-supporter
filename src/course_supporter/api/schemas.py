@@ -15,8 +15,12 @@ from pydantic import (
     model_validator,
 )
 
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
-from course_supporter.homework.criteria_edit_service import CriteriaStatus
+from course_supporter.homework.criteria_edit_service import (
+    CriteriaReasonCode,
+    CriteriaStatus,
+)
 from course_supporter.homework.criteria_form import (
     MAX_CONCEPTS,
     MAX_CRITERIA,
@@ -26,7 +30,6 @@ from course_supporter.homework.criteria_form import (
     Criterion,
     CriterionEdit,
 )
-from course_supporter.homework.criteria_list_service import CriteriaLayer
 from course_supporter.homework.test_completeness import IncompleteCode
 from course_supporter.homework.test_object import PublicationState
 from course_supporter.homework.test_object_service import DraftCheckState
@@ -1184,14 +1187,32 @@ class CriteriaViewResponse(BaseModel):
     status: CriteriaStatus = Field(
         description=(
             "``ready`` — a list is in force; ``awaiting_first_submission`` — none "
-            "yet: it is composed after the first submission of a student's work."
+            "yet, and no student's work waits for one: it is composed after the "
+            "first submission; ``composing`` — one is being composed now; "
+            "``not_composed`` — none, though works wait for one or the last "
+            "attempt failed: ``reason_code`` says why."
         )
+    )
+    reason_code: CriteriaReasonCode | None = Field(
+        default=None,
+        description=(
+            "Why no list is composed — the key a surface picks its advice by; "
+            "null unless ``status`` is ``not_composed``."
+        ),
+    )
+    waiting_submissions: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many students' works of this task wait for a criteria list "
+            "before they can be reviewed."
+        ),
     )
     message: str | None = Field(
         default=None,
         description=(
-            "While no list is in force, when it will be — for the author, in "
-            "Ukrainian; null otherwise."
+            "While no list is in force, the state and what the author can do — "
+            "in Ukrainian; null otherwise."
         ),
     )
     model: list[Criterion] | None = Field(
@@ -2204,8 +2225,8 @@ class PortalPresentation(BaseModel):
 
     Five states, because that is how many different things a student can be
     told: it was not opened, it did not look like an attempt, it is waiting for
-    the account to be funded, it is being checked, it has been reviewed. The ten
-    stored lifecycle milestones map onto them; which milestone it was is an
+    the account to be funded, it is being checked, it has been reviewed. The
+    eleven stored lifecycle statuses map onto them; which one it was is an
     internal fact and stays one (language-rules).
 
     ``reason_code`` is a service key, not a sentence: the surface picks its own
@@ -2378,8 +2399,9 @@ class PortalSubmissionDetail(BaseModel):
         default=None,
         description=(
             "The review as data, in the student's language (schema version 1). "
-            "Null for every submission today: no stage writes one yet, and a "
-            "pre-rebuild review has no structure to project."
+            "Written by the new path's result builders — a test's, and a text "
+            "task's once its type is switched; null for a pre-rebuild review, "
+            "which has no structure to project."
         ),
     )
     review_markdown: str | None = Field(

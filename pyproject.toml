@@ -124,6 +124,9 @@ ignore = [
 # subject matter, not a mistake.
 "src/course_supporter/linguistics.py" = ["RUF001", "RUF002", "RUF003"]
 "src/course_supporter/services/email_text.py" = ["RUF001"]
+# Ukrainian sentences the author reads (task 09b): words like "або" are all
+# confusable letters, and the rule cannot tell a sentence from a spoof.
+"src/course_supporter/homework/criteria_edit_service.py" = ["RUF001"]
 "src/course_supporter/auth/recovery_tokens.py" = ["RUF001"]
 "src/course_supporter/security/regex_patterns.py" = ["RUF001", "RUF002"]
 # Answer-key examples: the option labels of a Ukrainian test ARE Cyrillic,

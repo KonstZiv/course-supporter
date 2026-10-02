@@ -12,28 +12,48 @@ of an earlier version is not in force; a foreign task is the same 404 as a
 missing one; a test is refused with its code; a task without a list awaits the
 first submission.
 
+Task 09b adds the reading of a task without a list — being composed, or not
+composed and why, with how many students' works wait and what the author can
+do — and the second entry of the continuation: a write that leaves a list in
+force puts the waiting works back in the queue, once each (lock 6).
+
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Iterator
+from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_current_tenant
+from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
+from course_supporter.homework.criteria_edit_service import CriteriaReasonCode
+from course_supporter.homework.path_config import (
+    PathConfig,
+    ServedBy,
+    load_path_config,
+)
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.database import get_session
+from course_supporter.storage.document_summary_repository import (
+    DocumentSummaryRepository,
+)
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    HomeworkSubmission,
+    Job,
     NodeSummaryFinal,
+    Student,
     TaskCriteriaOverride,
     Tenant,
 )
@@ -92,6 +112,48 @@ _AWAITING_MESSAGE = (
     "Перелік критеріїв буде складено після першої подачі роботи студентом на "
     "перевірку, після цього його можна поправити."
 )
+# The sentences of task 09b, written out here for the same reason.
+_COMPOSING_MESSAGE = (
+    "Перелік критеріїв складається зараз. Роботи студентів, що чекають на нього, "
+    "буде перевірено, щойно він буде готовий; після цього перелік можна поправити."
+)
+# Approved verbatim by the operator and vision-side (2026-10-02).
+_ADVICE: dict[CriteriaReasonCode, str] = {
+    CriteriaReasonCode.TASK_NOT_PROCESSED: (
+        "Перелік критеріїв ще не складено: обробку тексту завдання не завершено. Якщо "
+        "обробка ще триває — дочекайтеся її завершення; якщо вона завершилася з "
+        "помилкою — запустіть її знову. Після цього перелік складеться автоматично, "
+        "щойно хтось зі студентів подасть роботу на це завдання, і тоді ж буде "
+        "перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде — "
+        "зверніться до адміністратора системи, і він запустить повторну спробу."
+    ),
+    CriteriaReasonCode.MODELS_UNAVAILABLE: (
+        "Перелік критеріїв не вдалося скласти: сервіс, що його складає, був тимчасово "
+        "недоступний. Від вас нічого не потрібно: повторна спроба відбудеться "
+        "автоматично, щойно хтось зі студентів подасть роботу на це завдання, і тоді ж "
+        "буде перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде "
+        "або стан не зміниться — зверніться до адміністратора системи."
+    ),
+    CriteriaReasonCode.LIMIT_REACHED: (
+        "Перелік критеріїв не вдалося скласти: завдання завелике для обмежень, що "
+        "зараз діють у системі. Зверніться до адміністратора системи: після зміни "
+        "обмежень він запустить повторну спробу, і тоді ж буде перевірено роботи, що "
+        "чекають. Не правте заради цього текст завдання: правка створить нову версію "
+        "завдання й не допоможе роботам, що вже чекають."
+    ),
+    CriteriaReasonCode.COMPOSITION_ERROR: (
+        "Перелік критеріїв не вдалося скласти через внутрішню помилку системи. "
+        "Зверніться до адміністратора системи: після виправлення він запустить "
+        "повторну спробу, і тоді ж буде перевірено роботи, що чекають."
+    ),
+    CriteriaReasonCode.NOT_ATTEMPTED: (
+        "Перелік критеріїв для поточної версії завдання ще не складався, а роботи "
+        "студентів уже чекають на нього. Він складеться автоматично, щойно хтось зі "
+        "студентів подасть роботу на це завдання, і тоді ж буде перевірено роботи, що "
+        "чекають. Якщо нових робіт найближчим часом не буде — зверніться до "
+        "адміністратора системи, і він запустить повторну спробу."
+    ),
+}
 
 
 def _key_context(tenant_id: uuid.UUID, *scopes: str) -> TenantContext:
@@ -179,6 +241,8 @@ async def world(
         ids = {
             "owner_id": owner.id,
             "stranger_id": stranger.id,
+            "root": root.id,
+            "node": node.id,
             "text_task": text_task.id,
             "project_task": project_task.id,
             "test_task": test_task.id,
@@ -189,6 +253,14 @@ async def world(
     yield ids
 
     async with session_factory() as session:
+        # Jobs outlive their tenant (SET NULL), so they go first, after the
+        # works that point at them.
+        await session.execute(
+            delete(HomeworkSubmission).where(
+                HomeworkSubmission.tenant_id == ids["owner_id"]
+            )
+        )
+        await session.execute(delete(Job).where(Job.tenant_id == ids["owner_id"]))
         # Nodes, tasks, their lists, edits and summaries go with the tenant.
         for tenant_id in (ids["owner_id"], ids["stranger_id"]):
             await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
@@ -196,9 +268,40 @@ async def world(
 
 
 @pytest.fixture()
+def queue() -> MagicMock:
+    """The queue double the write routes put waiting works back in."""
+    arq = MagicMock()
+    arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq-criteria"))
+    return arq
+
+
+@pytest.fixture()
+def task_on_the_new_path() -> Iterator[None]:
+    """The shipped configuration with ``task`` switched to the new path.
+
+    A continuation of a type left to today's Mentor lifts the hold with its
+    job (decided 2026-10-02); these tests are about the new path's.
+    """
+    shipped = load_path_config(
+        Path(__file__).resolve().parents[2] / "config" / "submission_paths.yaml"
+    )
+    task_types = dict(shipped.task_types)
+    task_types[AssignmentType.TASK] = task_types[AssignmentType.TASK].model_copy(
+        update={"served_by": ServedBy.NEW_PATH}
+    )
+    config: PathConfig = shipped.model_copy(update={"task_types": task_types})
+    with patch(
+        "course_supporter.homework.path_continuation.get_path_config",
+        return_value=config,
+    ):
+        yield
+
+
+@pytest.fixture()
 async def client(
     world: dict[str, uuid.UUID],
     session_factory: async_sessionmaker[AsyncSession],
+    queue: MagicMock,
 ) -> AsyncGenerator[tuple[AsyncClient, Callable[[TenantContext], None]]]:
     """A live client and a switch of the key context it knocks with."""
 
@@ -207,6 +310,7 @@ async def client(
             yield session
 
     app.dependency_overrides[get_session] = _yield_session
+    app.dependency_overrides[get_arq_redis] = lambda: queue
     app.dependency_overrides[get_current_tenant] = lambda: _key_context(
         world["owner_id"], "prep"
     )
@@ -293,6 +397,8 @@ class TestAwaitingTheFirstSubmission:
         assert resp.status_code == 200, resp.text
         assert resp.json() == {
             "status": "awaiting_first_submission",
+            "reason_code": None,
+            "waiting_submissions": 0,
             "message": _AWAITING_MESSAGE,
             "model": None,
             "author": None,
@@ -301,12 +407,13 @@ class TestAwaitingTheFirstSubmission:
             "concepts": _COURSE_CONCEPTS,
         }
 
-    async def test_a_list_being_composed_is_still_awaited(
+    async def test_a_list_being_composed_is_said_to_be_composed(
         self,
         client: tuple[AsyncClient, Callable[[TenantContext], None]],
         world: dict[str, uuid.UUID],
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
+        """Not "after the first submission": one has come, and it is composing."""
         async with session_factory() as session:
             claim = await TaskCriteriaListRepository(session).claim(
                 authored_document_id=world["text_task"],
@@ -320,7 +427,9 @@ class TestAwaitingTheFirstSubmission:
 
         body = (await ac.get(_read(world["text_task"]))).json()
 
-        assert body["status"] == "awaiting_first_submission"
+        assert body["status"] == "composing"
+        assert body["message"] == _COMPOSING_MESSAGE
+        assert body["reason_code"] is None
         assert body["model"] is None
         assert body["in_force"] is None
 
@@ -354,6 +463,8 @@ class TestTheLayersAreReadApart:
         assert resp.status_code == 200, resp.text
         assert resp.json() == {
             "status": "ready",
+            "reason_code": None,
+            "waiting_submissions": 0,
             "message": None,
             "model": _MODEL,
             "author": None,
@@ -804,3 +915,282 @@ async def _knock(ac: AsyncClient, method: str, document_id: uuid.UUID) -> Respon
             _write(document_id), json={"criteria": [_edited(_MODEL[0])]}
         )
     return await ac.delete(_write(document_id))
+
+
+# ── Task 09b: why there is no list, and the works that wait for one ───
+
+
+async def _waiting(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, uuid.UUID],
+    task_id: uuid.UUID,
+    *,
+    count: int = 1,
+    status: str = "awaiting_criteria",
+    deleted: bool = False,
+) -> list[uuid.UUID]:
+    """Students' works of the task, held — by default — for its criteria list."""
+    async with session_factory() as session:
+        ids: list[uuid.UUID] = []
+        for _ in range(count):
+            student = Student(
+                tenant_id=world["owner_id"], external_id=f"s-{uuid.uuid4().hex[:8]}"
+            )
+            session.add(student)
+            await session.flush()
+            submission = HomeworkSubmission(
+                tenant_id=world["owner_id"],
+                student_id=student.id,
+                course_node_id=world["node"],
+                node_id=world["node"],
+                authored_document_id=task_id,
+                file_url="s3://bucket/work.py",
+                file_type="text/plain",
+                original_filename="work.py",
+                status=status,
+            )
+            session.add(submission)
+            await session.flush()
+            if deleted:
+                await session.execute(
+                    update(HomeworkSubmission)
+                    .where(HomeworkSubmission.id == submission.id)
+                    .values(deleted_at=submission.created_at)
+                )
+            ids.append(submission.id)
+        await session.commit()
+        return ids
+
+
+async def _failed_attempt(
+    session_factory: async_sessionmaker[AsyncSession],
+    task_id: uuid.UUID,
+    failure_reason: str,
+    *,
+    content_hash: str = _HASH,
+) -> None:
+    """A composition of the version that gave up, as the service records one."""
+    async with session_factory() as session:
+        repo = TaskCriteriaListRepository(session)
+        row = await repo.claim(
+            authored_document_id=task_id,
+            source_content_hash=content_hash,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert row is not None
+        assert await repo.mark_failed(
+            row.id, claimed_at=row.claimed_at, failure_reason=failure_reason
+        )
+        await session.commit()
+
+
+async def _ready_summary(
+    session_factory: async_sessionmaker[AsyncSession], task_id: uuid.UUID
+) -> None:
+    """The task's text processed: the one thing a composition needs first."""
+    async with session_factory() as session:
+        await DocumentSummaryRepository(session).create(
+            authored_document_id=task_id,
+            title="The Task",
+            description="Task description.",
+            main_concepts=[],
+            secondary_concepts=[],
+            content_char_count=10,
+        )
+        await session.commit()
+
+
+async def _jobs_of(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> list[Job]:
+    async with session_factory() as session:
+        rows = await session.execute(select(Job).where(Job.subject_id == submission_id))
+        return list(rows.scalars())
+
+
+class TestWhyThereIsNoList:
+    """Task 09b, ``PRE-FLIGHT.md`` 9.2: the state, the waiting works, the advice."""
+
+    @pytest.mark.parametrize(
+        ("failure_reason", "code"),
+        [
+            ("exhausted: every rung had a bad minute", "models_unavailable"),
+            ("output_ceiling: the answer was cut", "limit_reached"),
+            ("money_ceiling: no rung could pay", "limit_reached"),
+            ("error: KeyError", "composition_error"),
+        ],
+    )
+    async def test_a_failed_composition_says_why_and_what_to_do(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        failure_reason: str,
+        code: str,
+    ) -> None:
+        """Not "after the first submission" — the old answer here was untrue."""
+        await _failed_attempt(session_factory, world["text_task"], failure_reason)
+        await _waiting(session_factory, world, world["text_task"], count=2)
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["status"] == "not_composed"
+        assert body["reason_code"] == code
+        assert body["waiting_submissions"] == 2
+        assert body["message"] == _ADVICE[CriteriaReasonCode(code)]
+        assert body["in_force"] is None
+
+    async def test_works_waiting_on_an_unprocessed_task_say_so(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The task's text has no ready summary: nothing to compose from yet."""
+        await _waiting(session_factory, world, world["text_task"])
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["status"] == "not_composed"
+        assert body["reason_code"] == "task_not_processed"
+        assert body["waiting_submissions"] == 1
+        assert body["message"] == _ADVICE[CriteriaReasonCode.TASK_NOT_PROCESSED]
+
+    async def test_works_waiting_with_no_attempt_for_the_version_say_so(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An attempt of an earlier version is not this version's."""
+        await _ready_summary(session_factory, world["text_task"])
+        await _failed_attempt(
+            session_factory,
+            world["text_task"],
+            "exhausted: long ago",
+            content_hash=_NEW_HASH,
+        )
+        await _waiting(session_factory, world, world["text_task"])
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["status"] == "not_composed"
+        assert body["reason_code"] == "not_attempted"
+        assert body["message"] == _ADVICE[CriteriaReasonCode.NOT_ATTEMPTED]
+
+    async def test_only_this_tasks_live_waiting_works_are_counted(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _waiting(session_factory, world, world["text_task"], count=2)
+        await _waiting(session_factory, world, world["text_task"], status="received")
+        await _waiting(session_factory, world, world["text_task"], deleted=True)
+        await _waiting(session_factory, world, world["project_task"])
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["waiting_submissions"] == 2
+
+    async def test_a_list_in_force_has_no_reason_and_no_message(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["status"] == "ready"
+        assert body["reason_code"] is None
+        assert body["message"] is None
+        assert body["waiting_submissions"] == 0
+
+
+@pytest.mark.usefixtures("task_on_the_new_path")
+class TestAWriteContinuesTheWaitingWorks:
+    """Entry 2 of the continuation (``PRE-FLIGHT.md`` 9.2); lock 6."""
+
+    async def test_a_replacement_puts_each_waiting_work_back_once(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        """Two writes in a row: one job per work — the second finds it in flight."""
+        await _compose(session_factory, world["text_task"])
+        waiting = await _waiting(session_factory, world, world["text_task"], count=2)
+        ac, _ = client
+        edit = {"criteria": [_edited(_MODEL[0])]}
+
+        first = await ac.put(_write(world["text_task"]), json=edit)
+        second = await ac.put(_write(world["text_task"]), json=edit)
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert queue.enqueue_job.await_count == 2
+        for submission_id in waiting:
+            assert len(await _jobs_of(session_factory, submission_id)) == 1
+        # Still waiting until its run starts: the run, not the entry, lifts it.
+        assert second.json()["waiting_submissions"] == 2
+
+    async def test_a_reset_puts_the_waiting_works_back(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        [work] = await _waiting(session_factory, world, world["text_task"])
+        ac, _ = client
+
+        resp = await ac.delete(_write(world["text_task"]))
+
+        assert resp.status_code == 200, resp.text
+        queue.enqueue_job.assert_awaited_once()
+        assert len(await _jobs_of(session_factory, work)) == 1
+
+    async def test_a_refused_write_queues_nothing(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        [work] = await _waiting(session_factory, world, world["text_task"])
+        ac, _ = client
+
+        resp = await ac.put(_write(world["text_task"]), json={"criteria": [_new()]})
+
+        assert resp.status_code == 422, resp.text
+        queue.enqueue_job.assert_not_awaited()
+        assert await _jobs_of(session_factory, work) == []
+
+    async def test_a_queue_that_refuses_does_not_undo_the_edit(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        await _waiting(session_factory, world, world["text_task"])
+        queue.enqueue_job.side_effect = ConnectionError("the queue is away")
+        ac, _ = client
+
+        resp = await ac.put(
+            _write(world["text_task"]), json={"criteria": [_edited(_MODEL[0])]}
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert len(await _edits(session_factory, world["text_task"])) == 1

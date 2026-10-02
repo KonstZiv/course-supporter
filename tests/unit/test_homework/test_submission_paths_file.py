@@ -87,34 +87,60 @@ class TestCheckedInPaths:
             AssignmentType.PROJECT: ServedBy.TODAYS_MENTOR,
         }
 
-    def test_nine_paths_are_described_and_short_task_has_none(
-        self, config: PathConfig
-    ) -> None:
+    def test_every_type_describes_all_three_paths(self, config: PathConfig) -> None:
+        """Twelve: four types by three states, ``short_task`` included (09b)."""
         described = [
             PathKey(t, s) for t, d in config.task_types.items() for s in d.paths
         ]
-        assert len(described) == 9
-        assert config.task_types[AssignmentType.SHORT_TASK].paths == {}
+        assert len(described) == 12
 
     def test_test_paths_make_no_model_call(self, config: PathConfig) -> None:
         paths = config.task_types[AssignmentType.TEST].paths
         assert paths == {state: [] for state in SubmissionState}
 
-    @pytest.mark.parametrize("task_type", [AssignmentType.TASK, AssignmentType.PROJECT])
-    def test_classifier_on_first_submission_only(
-        self, config: PathConfig, task_type: AssignmentType
+    def test_a_project_has_the_classifier_on_its_first_submission_only(
+        self, config: PathConfig
     ) -> None:
-        paths = config.task_types[task_type].paths
+        paths = config.task_types[AssignmentType.PROJECT].paths
         assert paths[SubmissionState.FIRST] == ["safety", "attempt_classifier"]
         assert paths[SubmissionState.REPEAT_WITHOUT_REPLIES] == ["safety"]
         assert paths[SubmissionState.REPEAT_WITH_REPLIES] == ["safety"]
 
     @pytest.mark.parametrize(
+        "task_type", [AssignmentType.TASK, AssignmentType.SHORT_TASK]
+    )
+    def test_a_text_task_is_judged_then_explained_on_every_path(
+        self, config: PathConfig, task_type: AssignmentType
+    ) -> None:
+        """Task 09b: the verdicts, then their explanation, last on each path;
+        the classifier on the first submission only."""
+        paths = config.task_types[task_type].paths
+        assert paths[SubmissionState.FIRST] == [
+            "safety",
+            "attempt_classifier",
+            "criteria_evaluation",
+            "review_explanation",
+        ]
+        for state in (
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            SubmissionState.REPEAT_WITH_REPLIES,
+        ):
+            assert paths[state] == [
+                "safety",
+                "criteria_evaluation",
+                "review_explanation",
+            ]
+
+    @pytest.mark.parametrize(
         ("task_type", "state", "estimate"),
         [
             (AssignmentType.TEST, SubmissionState.FIRST, 0.0),
-            (AssignmentType.TASK, SubmissionState.FIRST, 0.10),
-            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.05),
+            # 0.05 + 0.05 + 0.55 + 0.18: safety, the classifier, the
+            # evaluation and the explanation.
+            (AssignmentType.TASK, SubmissionState.FIRST, 0.83),
+            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.78),
+            (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.83),
+            (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.78),
             (AssignmentType.PROJECT, SubmissionState.FIRST, 0.10),
             (AssignmentType.PROJECT, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.05),
         ],

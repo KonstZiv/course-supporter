@@ -66,10 +66,29 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group dev
 
+      # The requires_ffmpeg tests run here, as in the local full gate.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg
+
+      # Local test values only (no secrets): read by the app settings and by
+      # docker compose for the services below.
+      - name: Create .env
+        run: cp .env.example .env
+
+      # Same images, settings and health checks as the local gate, from one file.
+      - name: Start Postgres, Redis and SeaweedFS
+        run: docker compose up -d --wait postgres redis seaweedfs
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
       - name: Run tests
-        run: uv run pytest --tb=short -q
+        run: uv run pytest --run-db --run-redis --tb=short -q -rfEs
         env:
           ENVIRONMENT: testing
+          TEST_REDIS_DB: "15"
 
 
   ai-review:

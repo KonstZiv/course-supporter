@@ -72,6 +72,7 @@ from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.response_schema import openai_response_format
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 
 # HTTP status codes returned in DashScopeAPIResponse.status_code.
@@ -498,6 +499,13 @@ class DashScopeProvider(LLMProvider):
         # refuses to boot a config carrying a form this connector cannot
         # translate.
         kwargs.update(self._translate_reasoning_to_native(request.reasoning))
+        # Task 09a: DashScope takes the OpenAI-shaped ``response_format`` as a
+        # kwarg that the SDK forwards into ``parameters`` on both task-groups
+        # (measured live 2026-10-01 on qwen3.7-max, text branch, strict). No
+        # schema mode -> no kwarg, the wire stays as before.
+        response_format = openai_response_format(request)
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
         with self._measure_latency() as timer:
             if has_images:

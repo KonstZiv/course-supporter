@@ -33,7 +33,7 @@ stages:
   # Phase 2.1 concern.
   safety_check:
     prompt_ref: "prompts/safety_check/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     # Student-chain oversize guard (step E). Declared on every stage the
     # student's submission reaches, so an oversize context skips a rung whose
     # window cannot hold it instead of paying for the refusal: without the
@@ -67,7 +67,7 @@ stages:
   # off_topic is high-bar. Injection / policy / suspicious preserved.
   safety_check_authored:
     prompt_ref: "prompts/safety_check_authored/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     # F6 (task-code-materials, ratified 2026-07-12): oversize authored
     # input (large code/text/web surfaces) skips the mistral-small rung
     # and lands on rung 2, deepseek-flash (1 048 576 context), instead of
@@ -102,7 +102,7 @@ stages:
   # rungs ("latest stable") per the safety_check convention.
   sanity_check:
     prompt_ref: "prompts/sanity_check/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: mistral
@@ -132,7 +132,7 @@ stages:
   # methodist stages (the closest comparable synthesis workload). Cost is
   # amortised across every attempt at the task (cache hit ⇒ zero further
   # LLM calls), so a capable primary is justified; deepseek-v4-flash is a
-  # competent cheap floor. ``requires: [structured_output]`` only —
+  # competent cheap floor. ``requires: [json_mode]`` only —
   # ``long_context`` is deliberately NOT required: the input is a single
   # task document, not a subtree (the methodist_topdown rationale), so
   # requiring it would falsely exclude legitimate rungs. ``input_budget_ratio``
@@ -142,7 +142,7 @@ stages:
   # the ratio like the rest of the student chain.
   criteria_decomposition:
     prompt_ref: "prompts/criteria_decomposition/v2.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 1,
@@ -209,7 +209,7 @@ stages:
   # register rows of their jobs name it.
   key_explanation:
     prompt_ref: "prompts/key_explanation/v2.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: deepseek_thinking
@@ -231,11 +231,11 @@ stages:
   # Phase 1A — node + course layers (D8). Rubric application grounded in the
   # node/course NodeSummaryFinal + the cached criteria. DEEP reasoning tier
   # (the heaviest judgement: apply two rubrics against an untrusted submission),
-  # mirroring criteria_decomposition. structured_output only; the input is one
+  # mirroring criteria_decomposition. json_mode only; the input is one
   # submission + summaries, not a subtree, so no long_context requirement.
   mentor_layered_evaluation_node_course:
     prompt_ref: "prompts/mentor_layered_evaluation_node_course/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 2,
@@ -270,7 +270,7 @@ stages:
   # layer un-anchored from the course rubric (decision 1, anti-anchoring).
   mentor_layered_evaluation_industry:
     prompt_ref: "prompts/mentor_layered_evaluation_industry/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       # Rung 1 ceiling: 32768 (hotfix 2, ratified 2026-09-17 — DD-SP-AY).
@@ -292,10 +292,10 @@ stages:
 
   # Phase 3 — denoising (D10): semantic recidivism/correction matching against
   # history + a bounded delta. MEDIUM tier — comparison, lighter than the
-  # layered judgement. structured_output (strict JSON outcome).
+  # layered judgement. json_mode (strict JSON outcome).
   mentor_denoising:
     prompt_ref: "prompts/mentor_denoising/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: dashscope
@@ -310,7 +310,7 @@ stages:
 
   # Synthesis — the single human review (review_markdown). MEDIUM strong-
   # generation tier; this is writing quality, not reasoning depth. Plain
-  # Markdown output, so `requires: []` (no structured_output) — mirrors the
+  # Markdown output, so `requires: []` (no json_mode) — mirrors the
   # pass_2c denoise text stages.
   mentor_synthesis:
     prompt_ref: "prompts/mentor_synthesis/v1.md"

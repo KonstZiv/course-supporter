@@ -34,7 +34,7 @@ stages:
   # existing repo convention).
   pass_2a_mapping:
     prompt_ref: "prompts/pass_2a_mapping/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     ladder:
       - provider: deepseek
         model: deepseek-flash

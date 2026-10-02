@@ -45,6 +45,15 @@ class StructuredOutputError(Exception):
         self.__cause__ = cause
 
 
+class RequestConfigError(ValueError):
+    """A request its connector cannot send as configured (task 09a).
+
+    Raised by :meth:`LLMProvider.check_request` BEFORE any call, so nothing is
+    paid for. The router lets it propagate instead of descending the ladder:
+    the next rung would be built from the same stage configuration.
+    """
+
+
 class LLMProvider(abc.ABC):
     """Base class for all LLM providers.
 
@@ -97,6 +106,16 @@ class LLMProvider(abc.ABC):
             parsed_object is an instance of response_schema.
         """
         ...
+
+    def check_request(self, request: LLMRequest) -> None:
+        """Refuse a request this connector cannot send as configured.
+
+        Called by the router after building the request and before the call.
+        Default: every request is sendable. A connector whose vendor rejects a
+        combination at the API (and would bill or fail late for it) overrides
+        and raises :class:`RequestConfigError`.
+        """
+        return None
 
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Classify provider exception into a ladder fallback category.

@@ -82,8 +82,8 @@ from course_supporter.llm.input_hash import (
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
-from course_supporter.llm.registry import ModelRegistryConfig
-from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.registry import Capability, ModelRegistryConfig
+from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 from course_supporter.llm.token_budget import estimate_tokens
 from course_supporter.service_logging import _persist
 
@@ -132,7 +132,7 @@ class _StageRecord:
 class _Attempt:
     """What one ladder entry produced, for the ladder loop to act on.
 
-    A named structure rather than a widening tuple: ``empty_at_ceiling`` is the
+    A named structure rather than a widening tuple: ``at_ceiling`` is the
     third thing a failed attempt can say beyond "it failed" and "why", and a
     fourth positional element would be the kind of thing a later reader gets
     wrong silently.
@@ -141,23 +141,52 @@ class _Attempt:
         response: The successful response, or ``None`` when the entry failed.
         attempts_used: Calls made on this entry, including retries.
         reason: Why the entry was abandoned; ``""`` on success.
-        empty_at_ceiling: The provider returned nothing AND reported that the
-            output ceiling was spent (``FinishReason.OUTPUT_CEILING``). The
-            ladder loop uses it to decide whether descending is worth paying
-            for; the register learns the same fact independently, through
-            :func:`_attempt_outcome`.
+        at_ceiling: The provider reported the output ceiling as spent
+            (``FinishReason.OUTPUT_CEILING``) and the answer is unusable for
+            that reason: it came back empty, or -- on a schema request of a
+            path stage (task 09a) -- non-empty but cut off. The ladder loop
+            uses it to decide whether descending is worth paying for; the
+            register learns the same fact independently, through
+            :func:`_attempt_outcome` and the row's ``finish_reason``.
     """
 
     response: LLMResponse | None
     attempts_used: int
     reason: str
-    empty_at_ceiling: bool = False
+    at_ceiling: bool = False
+
+
+# Register text of an attempt cut off at the output ceiling under a schema.
+_TRUNCATED_MESSAGE = "output ceiling: truncated response"
+
+
+def _truncated_under_schema(
+    request: LLMRequest, response: LLMResponse, stop_on_output_ceiling: bool
+) -> bool:
+    """A schema answer of a path stage that the output ceiling cut off (09a).
+
+    Under a schema the answer is one JSON document, so a non-empty body that
+    stopped at the ceiling is a cut document: it cannot be accepted, and a
+    structural retry would ask the same rung the same question under the same
+    ceiling -- a second payment for a second cut. It is treated like an empty
+    answer at the ceiling instead. Only where the caller asked for that stop
+    (``stop_on_output_ceiling``, the path stages); requests without a schema
+    and the by-name entry keep validating what came back.
+    """
+    return (
+        stop_on_output_ceiling
+        and request.response_schema is not None
+        and bool(response.content)
+        and response.finish_reason is FinishReason.OUTPUT_CEILING
+    )
 
 
 def _attempt_outcome(
     provider: LLMProvider,
     response: LLMResponse | None,
     raised: Exception | None,
+    *,
+    truncated: bool = False,
 ) -> CallOutcome:
     """Classify one attempt for the register. Mirrors, never drives, the ladder.
 
@@ -171,6 +200,10 @@ def _attempt_outcome(
     * no response + anything else -> ``PROVIDER_REFUSAL`` (not retried);
     * an empty response -> ``EMPTY_AT_OUTPUT_CEILING`` when the provider
       reported the ceiling, ``EMPTY`` otherwise;
+    * a schema answer cut off at the ceiling (``truncated``) ->
+      ``INVALID_CONTENT``: content the stage cannot accept. No value of its
+      own and no migration -- the same row's ``finish_reason`` is
+      ``output_ceiling``, which tells the cut apart from an off-schema answer;
     * otherwise ``SUCCESS``.
     """
     if isinstance(raised, StructuralRetryError):
@@ -187,7 +220,7 @@ def _attempt_outcome(
         if category is ErrorCategory.INPUT_OVERFLOW:
             return CallOutcome.INPUT_OVERFLOW
         return CallOutcome.PROVIDER_REFUSAL
-    if raised is not None:
+    if raised is not None or truncated:
         return CallOutcome.INVALID_CONTENT
     if not response.content:
         if response.finish_reason is FinishReason.OUTPUT_CEILING:
@@ -228,6 +261,7 @@ class StageExecution:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute this stage on ``router``, passing the caller's own arguments."""
@@ -237,6 +271,7 @@ class StageExecution:
             response_validator=response_validator,
             contents=contents,
             expects_json=expects_json,
+            response_schema=response_schema,
             stop_on_output_ceiling=self.stop_on_output_ceiling,
             money_ceiling_usd=self.money_ceiling_usd,
             **render_context,
@@ -292,6 +327,7 @@ class StageRouter:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a named stage.
@@ -321,6 +357,14 @@ class StageRouter:
                 provider returns bare JSON (native JSON mode and/or
                 markdown-fence stripping). Leave ``False`` for
                 plain-text stages (e.g. Pass 2c denoise).
+            response_schema: Optional JSON Schema of the answer, built by
+                the stage with ``response_schema.strict_json_schema``;
+                requires ``expects_json=True``. Per rung the router decides
+                how it reaches the wire: the schema itself for a
+                ``schema_strict`` model, the provider's JSON mode for a
+                ``json_mode`` one, nothing for a model with neither.
+                ``response_validator`` runs in every case. ``None`` (default)
+                leaves every connector's wire exactly as before.
             **render_context: Variables for the prompt template's
                 Jinja2 placeholders.
 
@@ -340,6 +384,7 @@ class StageRouter:
             response_validator=response_validator,
             contents=contents,
             expects_json=expects_json,
+            response_schema=response_schema,
             **render_context,
         )
 
@@ -352,6 +397,7 @@ class StageRouter:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
         **render_context: Any,
@@ -382,6 +428,7 @@ class StageRouter:
             response_validator: As on :meth:`execute_for_stage`.
             contents: As on :meth:`execute_for_stage`.
             expects_json: As on :meth:`execute_for_stage`.
+            response_schema: As on :meth:`execute_for_stage`.
             stop_on_output_ceiling: Stop instead of descending when a rung
                 returns nothing AND reports the output ceiling as spent. The
                 next rung would be asked the same question with the same input,
@@ -391,7 +438,11 @@ class StageRouter:
                 default, and what :meth:`execute_for_stage` always passes --
                 keeps the KD16 table's behaviour: an empty response falls back
                 immediately. Used by the rebuilt Mentor's path stages
-                (mentor-rebuild task 03).
+                (mentor-rebuild task 03). With a ``response_schema`` it also
+                stops on a NON-empty answer cut off at the ceiling (task 09a):
+                the cut document is neither accepted nor retried on the rung;
+                its row is ``INVALID_CONTENT`` with ``finish_reason``
+                ``output_ceiling``.
             money_ceiling_usd: What the stage may spend, in dollars. A rung
                 whose single attempt is estimated to cost more than what is left
                 of it is skipped WITHOUT a call, with a skip trace naming the
@@ -417,6 +468,9 @@ class StageRouter:
             FileNotFoundError: if the stage's prompt file is missing.
             jinja2.UndefinedError: if a template variable is missing.
             LadderExhaustedError: if every ladder entry failed.
+            RequestConfigError: if a rung's connector cannot send the request
+                as configured (e.g. JSON mode without the word "json"); raised
+                before that rung's call, so nothing is paid for it.
         """
         # KD-1.2-H Variant A — observability log line at the start of
         # every stage execution. Correlates with caller-side logs (e.g.
@@ -550,10 +604,25 @@ class StageRouter:
                     continue
 
             request = self._build_request(
-                prompt, entry, stage_name, contents=contents, expects_json=expects_json
+                prompt,
+                entry,
+                stage_name,
+                contents=contents,
+                expects_json=expects_json,
+                response_schema=response_schema,
             )
+            # Before the call, outside the attempt's ``except``: a request the
+            # connector cannot send is a configuration fault, and the next
+            # rung is built from the same configuration -- descending would
+            # hide it behind a fallback.
+            provider.check_request(request)
             attempt = await self._attempt_entry(
-                provider, entry, request, record, response_validator
+                provider,
+                entry,
+                request,
+                record,
+                response_validator,
+                stop_on_output_ceiling,
             )
             total_attempt_count += attempt.attempts_used
             if money_left is not None and attempt_cost is not None:
@@ -573,8 +642,9 @@ class StageRouter:
             attempts.append((entry.provider, entry.model, attempt.reason))
             await self._record_trace(record, entry, CallOutcome.ABANDONED)
 
-            if stop_on_output_ceiling and attempt.empty_at_ceiling:
-                # The rung had room to answer and spent it all on nothing. The
+            if stop_on_output_ceiling and attempt.at_ceiling:
+                # The rung had room to answer and spent it all on nothing (or,
+                # under a schema, on a document it could not finish). The
                 # next rung would be asked the same question with the same
                 # input, so descending buys a second empty answer at a second
                 # price. Stop here and let the caller decide what an unfinished
@@ -626,6 +696,7 @@ class StageRouter:
         *,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
     ) -> LLMRequest:
         """Map StagePrompt + LadderEntry to the legacy LLMRequest.
 
@@ -650,6 +721,17 @@ class StageRouter:
         registry_max_tokens = (
             registry_model.max_output_tokens if registry_model else None
         )
+        # Task 09a — the stage hands over a schema; the rung's model decides
+        # how far the provider can hold it. Strict where measured to work,
+        # plain JSON mode where only that is known to work, and otherwise the
+        # wire stays as it is without a schema. The registry is the one place
+        # that knows, so the decision is made here and not in a connector.
+        schema_mode: SchemaMode | None = None
+        if response_schema is not None and registry_model is not None:
+            if Capability.SCHEMA_STRICT in registry_model.capabilities:
+                schema_mode = SchemaMode.STRICT
+            elif Capability.JSON_MODE in registry_model.capabilities:
+                schema_mode = SchemaMode.JSON
         return LLMRequest(
             prompt=prompt.user or "",
             system_prompt=prompt.system,
@@ -660,6 +742,8 @@ class StageRouter:
             reasoning=entry.reasoning,
             max_tokens=entry.max_output_tokens or registry_max_tokens,
             expects_json=expects_json,
+            response_schema=response_schema,
+            schema_mode=schema_mode,
         )
 
     async def _attempt_entry(
@@ -669,6 +753,7 @@ class StageRouter:
         request: LLMRequest,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
+        stop_on_output_ceiling: bool = False,
     ) -> _Attempt:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
 
@@ -682,11 +767,22 @@ class StageRouter:
             attempts_used += 1
             try:
                 response = await self._call_with_log(
-                    provider, entry, request, record, response_validator
+                    provider,
+                    entry,
+                    request,
+                    record,
+                    response_validator,
+                    stop_on_output_ceiling,
                 )
             except StructuralRetryError as exc:
                 retry = await self._structural_retry(
-                    provider, entry, request, exc, record, response_validator
+                    provider,
+                    entry,
+                    request,
+                    exc,
+                    record,
+                    response_validator,
+                    stop_on_output_ceiling,
                 )
                 attempts_used += retry.attempts_used
                 if retry.response is not None:
@@ -695,7 +791,7 @@ class StageRouter:
                     None,
                     attempts_used,
                     retry.reason,
-                    empty_at_ceiling=retry.empty_at_ceiling,
+                    at_ceiling=retry.at_ceiling,
                 )
             except Exception as exc:
                 category = provider.classify_error(exc)
@@ -723,9 +819,16 @@ class StageRouter:
                         None,
                         attempts_used,
                         "SEMANTIC: empty response",
-                        empty_at_ceiling=(
+                        at_ceiling=(
                             response.finish_reason is FinishReason.OUTPUT_CEILING
                         ),
+                    )
+                if _truncated_under_schema(request, response, stop_on_output_ceiling):
+                    return _Attempt(
+                        None,
+                        attempts_used,
+                        f"OUTPUT_CEILING: {_TRUNCATED_MESSAGE}",
+                        at_ceiling=True,
                     )
                 return _Attempt(response, attempts_used, "")
 
@@ -740,6 +843,7 @@ class StageRouter:
         exc: StructuralRetryError,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
+        stop_on_output_ceiling: bool = False,
     ) -> _Attempt:
         """Single retry attempt with feedback appended to the user prompt."""
         retry_request = original_request.model_copy(
@@ -753,7 +857,12 @@ class StageRouter:
         )
         try:
             response = await self._call_with_log(
-                provider, entry, retry_request, record, response_validator
+                provider,
+                entry,
+                retry_request,
+                record,
+                response_validator,
+                stop_on_output_ceiling,
             )
         except Exception as retry_exc:
             return _Attempt(None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}")
@@ -762,9 +871,11 @@ class StageRouter:
                 None,
                 1,
                 "SEMANTIC: empty response after structural retry",
-                empty_at_ceiling=(
-                    response.finish_reason is FinishReason.OUTPUT_CEILING
-                ),
+                at_ceiling=(response.finish_reason is FinishReason.OUTPUT_CEILING),
+            )
+        if _truncated_under_schema(retry_request, response, stop_on_output_ceiling):
+            return _Attempt(
+                None, 1, f"OUTPUT_CEILING: {_TRUNCATED_MESSAGE}", at_ceiling=True
             )
         return _Attempt(response, 1, "")
 
@@ -775,6 +886,7 @@ class StageRouter:
         request: LLMRequest,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
+        stop_on_output_ceiling: bool = False,
     ) -> LLMResponse:
         """One LLM call. Persists ESC for the attempt in ``finally``.
 
@@ -790,14 +902,25 @@ class StageRouter:
         ``success=True`` with ``error_message`` naming the SEMANTIC
         abandonment. ``outcome`` tells these cases apart without reading
         the text (:func:`_attempt_outcome`).
+
+        A schema answer of a path stage cut off at the output ceiling
+        (:func:`_truncated_under_schema`, task 09a) is NOT shown to the
+        validator: whatever it said would start a structural retry under the
+        same ceiling. The row says why the answer was dropped instead.
         """
         start = time.perf_counter()
         response: LLMResponse | None = None
         error_message: str | None = None
         raised: Exception | None = None
+        truncated = False
         try:
             response = await provider.complete(request)
-            if response_validator is not None and response.content:
+            truncated = _truncated_under_schema(
+                request, response, stop_on_output_ceiling
+            )
+            if truncated:
+                error_message = _TRUNCATED_MESSAGE
+            elif response_validator is not None and response.content:
                 response_validator(response.content)
             if not response.content:
                 # This rung is about to be abandoned by ``_attempt_entry`` as
@@ -861,7 +984,9 @@ class StageRouter:
                         cost_usd=computed_cost,
                         success=response is not None,
                         error_message=error_message,
-                        outcome=_attempt_outcome(provider, response, raised),
+                        outcome=_attempt_outcome(
+                            provider, response, raised, truncated=truncated
+                        ),
                         finish_reason=response.finish_reason if response else None,
                         prompt_ref=record.prompt_ref,
                         prompt_hash=record.prompt_hash,

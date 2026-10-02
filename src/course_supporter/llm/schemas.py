@@ -1,11 +1,28 @@
 """Shared schemas for LLM infrastructure."""
 
 from datetime import datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from course_supporter.llm.finish_reason import FinishReason
+
+
+class SchemaMode(StrEnum):
+    """How a connector puts a response schema on the wire (task 09a).
+
+    Chosen by the router from the rung model's registry capabilities, never by
+    the stage: the stage only hands over the schema.
+
+    * ``STRICT`` — the schema itself goes on the wire in the provider's form;
+      the rung's model declares ``schema_strict``.
+    * ``JSON`` — the provider's JSON mode without the schema (``json_object`` /
+      ``response_mime_type``); the model declares ``json_mode`` only.
+    """
+
+    STRICT = "strict"
+    JSON = "json"
 
 
 class LLMRequest(BaseModel):
@@ -31,6 +48,28 @@ class LLMRequest(BaseModel):
     # ``response_mime_type``), and/or stripping markdown fences. Default
     # ``False`` leaves plain-text stages (e.g. Pass 2c denoise) untouched.
     expects_json: bool = False
+    # Task 09a. The JSON Schema the stage's answer must follow, built by the
+    # stage from its pydantic model (``strict_json_schema``). ``schema_mode``
+    # says how the connector enforces it; the router sets it from the rung
+    # model's capabilities, and ``None`` with a schema means "the model can
+    # do neither" -- the wire is then exactly what it is without a schema. The
+    # stage's own validator runs in every case: a schema holds the form of
+    # the answer, not its content.
+    response_schema: dict[str, Any] | None = None
+    schema_mode: SchemaMode | None = None
+
+    @model_validator(mode="after")
+    def _schema_needs_json(self) -> Self:
+        # A schema describes a JSON answer, so it implies the JSON contract the
+        # connectors already honour (fence stripping, Gemini mime type). Saying
+        # one without the other is a caller bug, not a request to guess.
+        if self.response_schema is not None and not self.expects_json:
+            msg = "response_schema requires expects_json=True"
+            raise ValueError(msg)
+        if self.schema_mode is not None and self.response_schema is None:
+            msg = "schema_mode requires a response_schema"
+            raise ValueError(msg)
+        return self
 
 
 class LLMResponse(BaseModel):

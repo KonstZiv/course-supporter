@@ -16,10 +16,21 @@ from pydantic import BaseModel, model_validator
 
 
 class Capability(StrEnum):
-    """Capabilities a model can have."""
+    """Capabilities a model can have.
+
+    ``JSON_MODE`` and ``SCHEMA_STRICT`` replace the former
+    ``structured_output`` label (task 09a) with two facts the router acts on:
+
+    * ``JSON_MODE`` — the model's connector can switch the provider's JSON
+      mode on, without a schema. Stages whose output must be JSON require it.
+    * ``SCHEMA_STRICT`` — the provider holds a strict JSON Schema on the wire.
+      Granted only to models measured to accept AND follow one; the router
+      sends a stage's schema to these and plain JSON mode to the rest.
+    """
 
     VISION = "vision"
-    STRUCTURED_OUTPUT = "structured_output"
+    JSON_MODE = "json_mode"
+    SCHEMA_STRICT = "schema_strict"
     LONG_CONTEXT = "long_context"
 
 

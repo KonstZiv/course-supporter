@@ -18,8 +18,9 @@ Two requests, one prompt (``prompts/criteria_evaluation/v1.md``):
 
 The answer's form is held twice. On the wire, by the strict schema of
 :class:`~course_supporter.homework.criteria_verdicts.EvaluationAnswer`, without
-its descriptions — the router sends the schema itself to a model that holds
-one and the provider's JSON mode to one that does not (task 09a). In code, by
+its descriptions (:func:`~course_supporter.agents.wire_schema.wire_schema`) —
+the router sends the schema itself to a model that holds one and the
+provider's JSON mode to one that does not (task 09a). In code, by
 :func:`~course_supporter.homework.criteria_verdicts.read_answer`, because a
 schema holds the form and never the content: an item missing, unknown or
 repeated is a structural retry, which the router answers on the same rung and
@@ -39,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 
+from course_supporter.agents.wire_schema import wire_schema
 from course_supporter.homework.criteria_form import CheckMethod
 from course_supporter.homework.criteria_verdicts import (
     MAX_QUOTE_CHARS,
@@ -49,7 +51,6 @@ from course_supporter.homework.criteria_verdicts import (
     read_answer,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
-from course_supporter.llm.response_schema import strict_json_schema
 
 if TYPE_CHECKING:
     from course_supporter.homework.criteria_form import Criterion
@@ -58,34 +59,8 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def _without_descriptions(node: Any) -> Any:
-    """A copy of a schema node with every ``description`` keyword left out.
-
-    Only the keyword: the names under ``properties`` are the answer's fields,
-    and a field called ``description`` would stay one.
-    """
-    if isinstance(node, list):
-        return [_without_descriptions(item) for item in node]
-    if not isinstance(node, dict):
-        return node
-    return {
-        key: (
-            {name: _without_descriptions(sub) for name, sub in value.items()}
-            if key == "properties"
-            else _without_descriptions(value)
-        )
-        for key, value in node.items()
-        if key != "description"
-    }
-
-
-RESPONSE_SCHEMA: Final = _without_descriptions(strict_json_schema(EvaluationAnswer))
-"""The schema of the answer, as the router puts it on the wire (task 09a).
-
-Without descriptions (vision-side, 2026-10-02): pydantic makes them of the
-models' docstrings, which are written for developers — task numbers, Sphinx
-roles — and the prompt is the one source of instructions for the model.
-"""
+RESPONSE_SCHEMA: Final = wire_schema(EvaluationAnswer)
+"""The schema of the answer, as the router puts it on the wire (task 09a)."""
 
 
 @dataclass(frozen=True, slots=True)

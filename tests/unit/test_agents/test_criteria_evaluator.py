@@ -31,13 +31,11 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import BaseModel
 
 from course_supporter.agents.criteria_evaluator import (
     RESPONSE_SCHEMA,
     CriteriaEvaluatorAgent,
     EvaluationInput,
-    _without_descriptions,
     render_context,
 )
 from course_supporter.homework.criteria_form import Criterion
@@ -208,18 +206,6 @@ class TestTheSchemaOnTheWire:
             {"type": "string"},
             {"type": "null"},
         ]
-
-    def test_a_field_named_description_stays_a_field(self) -> None:
-        class _Note(BaseModel):
-            """A docstring that must not reach the wire."""
-
-            description: str
-
-        stripped = _without_descriptions(strict_json_schema(_Note))
-
-        assert stripped["properties"] == {"description": {"type": "string"}}
-        assert stripped["required"] == ["description"]
-        assert "description" not in _keywords(stripped)
 
 
 class TestTheRequest:

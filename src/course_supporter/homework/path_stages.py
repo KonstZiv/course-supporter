@@ -32,8 +32,10 @@ Replacing one:
     function grew (:class:`~course_supporter.llm.stage_router.StageExecution`),
     so the new path and today's Mentor cannot drift into two ideas of what a
     safety check or an attempt classifier is. The evaluation of a text task's
-    criteria has no counterpart in today's Mentor; its work lives in
-    :mod:`course_supporter.homework.criteria_evaluation`, handed the same
+    criteria and the explanation of its verdicts have no counterpart in
+    today's Mentor; their work lives in
+    :mod:`course_supporter.homework.criteria_evaluation` and
+    :mod:`course_supporter.homework.review_explanation`, each handed the same
     argument.
 
 Extending:
@@ -72,6 +74,7 @@ logger = structlog.get_logger(__name__)
 SAFETY = "safety"
 ATTEMPT_CLASSIFIER = "attempt_classifier"
 CRITERIA_EVALUATION = "criteria_evaluation"
+REVIEW_EXPLANATION = "review_explanation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,11 +82,11 @@ class StageContext:
     """Everything an executor is given, and nothing it is not.
 
     No job id: an executor records its OWN verdict — the safety result, the
-    classifier's verdict, the verdicts on criteria — because that trace belongs
-    to the stage that produced it and to nothing else. What it must NOT touch
-    is the submission's state or the run's checkpoint: those say where the
-    whole path stands, and the body writes them in one place so they cannot be
-    written from two.
+    classifier's verdict, the verdicts on criteria, their explanation —
+    because that trace belongs to the stage that produced it and to nothing
+    else. What it must NOT touch is the submission's state or the run's
+    checkpoint: those say where the whole path stands, and the body writes
+    them in one place so they cannot be written from two.
 
     ``session_factory`` is for work that must not run inside the body's
     session: the criteria list is composed in short sessions of its own, none
@@ -364,6 +367,18 @@ async def run_criteria_evaluation_stage(context: StageContext) -> StageOutcome:
     return await evaluate_criteria(context, execution=_execution(context))
 
 
+async def run_review_explanation_stage(context: StageContext) -> StageOutcome:
+    """The explanation of a text task's verdicts, as a stage of the path (09b).
+
+    The work is ``review_explanation.explain_verdicts``; this function hands
+    it the stage's description translated for the router.
+    """
+    from course_supporter.homework.review_explanation import explain_verdicts
+
+    return await explain_verdicts(context, execution=_execution(context))
+
+
 register_stage_executor(SAFETY, run_safety_stage)
 register_stage_executor(ATTEMPT_CLASSIFIER, run_attempt_classifier_stage)
 register_stage_executor(CRITERIA_EVALUATION, run_criteria_evaluation_stage)
+register_stage_executor(REVIEW_EXPLANATION, run_review_explanation_stage)

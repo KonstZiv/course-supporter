@@ -25,6 +25,7 @@ from course_supporter.homework.path_config import (
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
     CRITERIA_EVALUATION,
+    REVIEW_EXPLANATION,
     SAFETY,
     StageContext,
     StageOutcome,
@@ -120,14 +121,17 @@ class TestRegistry:
             validate_stage_executors([SAFETY, "verdicts"])
 
     def test_the_shipped_stages_pass_the_check(self) -> None:
-        validate_stage_executors([SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION])
+        validate_stage_executors(
+            [SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+        )
 
     def test_every_stage_the_shipped_file_describes_has_an_executor(self) -> None:
-        """Task 09b: the evaluation stage is described before any path uses it."""
+        """Task 09b: both stages are described before any path uses them."""
         config = load_path_config(
             Path(__file__).resolve().parents[3] / "config" / "submission_paths.yaml"
         )
         assert CRITERIA_EVALUATION in config.stages
+        assert REVIEW_EXPLANATION in config.stages
         validate_stage_executors(config.stages)
 
     async def test_an_executor_can_be_replaced_under_its_name(

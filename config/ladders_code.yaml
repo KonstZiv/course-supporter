@@ -30,7 +30,7 @@
 stages:
   code_skeleton_extraction:
     prompt_ref: "prompts/code_skeleton_extraction/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: gemini
@@ -42,7 +42,7 @@ stages:
 
   code_segment_description:
     prompt_ref: "prompts/code_segment_description/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: gemini
@@ -54,7 +54,7 @@ stages:
 
   code_summary:
     prompt_ref: "prompts/code_summary/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
       - provider: deepseek_thinking

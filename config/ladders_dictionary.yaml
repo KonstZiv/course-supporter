@@ -39,7 +39,7 @@ stages:
     prompt_ref: "prompts/dictionary_translation/v1.md"
     # The model must be able to hold a declared output shape: the script asks
     # for one JSON object carrying exactly the keys it sent.
-    requires: [structured_output]
+    requires: [json_mode]
     ladder:
       - provider: gemini
         model: gemini-3.8-flash

@@ -143,12 +143,13 @@ class _CapturingRouter:
         response_validator: Any = None,
         expects_json: bool = False,
         contents: Any = None,
+        response_schema: Any = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
         **render_context: Any,
     ) -> StageResult:
         """The entry of a caller holding its own stage — the same capture."""
-        del stage, stop_on_output_ceiling, money_ceiling_usd
+        del stage, response_schema, stop_on_output_ceiling, money_ceiling_usd
         return await self.execute_for_stage(
             stage_name,
             response_validator=response_validator,

@@ -129,6 +129,7 @@ class _RouterDouble:
         response_validator: Callable[[str], None] | None = None,
         contents: list[bytes] | None = None,
         expects_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
         **render_context: Any,

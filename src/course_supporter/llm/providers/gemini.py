@@ -14,7 +14,7 @@ from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.finish_reason import FinishReason, normalize_finish_reason
 from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
-from course_supporter.llm.schemas import LLMRequest, LLMResponse
+from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 
 # Gemini surfaces context overflow as ClientError code=400 with a
 # message describing the limit; HTTP 413 is also possible. Pattern
@@ -228,6 +228,15 @@ class GeminiProvider(LLMProvider):
         }
         if request.expects_json:
             config_kwargs["response_mime_type"] = "application/json"
+        # Task 09a: strict mode adds the schema itself. ``response_json_schema``
+        # (plain JSON Schema), not ``response_schema`` (Gemini's own dialect) --
+        # the SDK forbids both at once and requires the mime type set above,
+        # which a schema always brings (``LLMRequest`` refuses a schema without
+        # ``expects_json``). The canonical schema already uses only keywords
+        # Gemini accepts, so it goes over unchanged. JSON mode needs nothing
+        # beyond the mime type.
+        if request.schema_mode is SchemaMode.STRICT:
+            config_kwargs["response_json_schema"] = request.response_schema
         config = types.GenerateContentConfig(**config_kwargs)
 
         contents = _build_contents(request)

@@ -50,7 +50,7 @@ def _stage() -> PathStage:
         {
             "deterministic": True,
             "prompt_ref": "prompts/safety_check/v1.md",
-            "requires": ["structured_output"],
+            "requires": ["json_mode"],
             "input_budget_ratio": 0.5,
             "record_output": False,
             "ceilings": {"tool_steps": 0, "money_usd": 0.05, "output_tokens": 8192},

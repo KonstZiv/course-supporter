@@ -27,6 +27,21 @@
 #   rows). mistral-small-latest max_context NOT raised to the listed 262144 (it
 #   drives the submission budgets; see the entry). Numbers taken from
 #   the audit's reading of the provider pages on 2026-09-30, not re-fetched.
+#
+# ── Capabilities (task 09a, 2026-10-01) ──
+# The former ``structured_output`` label is split in two wire facts:
+#   json_mode     — the model's connector can switch the provider's JSON mode
+#                   on without a schema (Gemini response_mime_type, OpenAI-
+#                   compatible / DashScope response_format json_object). Set
+#                   on every model whose connector can; NOT on Claude (the
+#                   Anthropic connector has no JSON mode). json_object on
+#                   Mistral and on the qwen vision models is not measured.
+#   schema_strict — the provider holds a strict JSON Schema on the wire.
+#                   Only the three models measured live on 2026-10-01:
+#                   gemini-3.5-flash-lite, gemini-3.8-flash, qwen3.7-max.
+#                   DeepSeek answers json_schema with HTTP 400, so it stays
+#                   json_mode only. A schema holds form, not content: the
+#                   stage's own validator always runs.
 
 providers:
   gemini:
@@ -36,7 +51,7 @@ providers:
       # (paid tier, text input). Registry uses per-1k = per-1M / 1000.
       - id: gemini-3.5-flash
         # Latest Gemini flash (registered 2026-05-23). $1.50 / $9.00 per 1M.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -46,7 +61,7 @@ providers:
         # Cost-tier flash — audio Pass 2a/2c primary rung (registered
         # 2026-05-23; was callable but unregistered → no cost-tracking).
         # $0.25 / $1.50 per 1M.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -55,7 +70,7 @@ providers:
       - id: gemini-3-flash-preview
         # Preview model — relief when gemini-2.5-flash is throttled (503).
         # Still Preview (not GA) as of 2026-08-28.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -68,7 +83,7 @@ providers:
         # the 2.5 models to projects that already used them (Gemini API
         # deprecations page, checked 2026-09-30). Removed from every ladder on
         # 2026-09-30; entry kept for the price of old register rows.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -81,7 +96,7 @@ providers:
         # gemini-2.5-flash above; the prod key has never called it once
         # (audit 2026-09-30). Removed from every ladder on 2026-09-30,
         # replaced by gemini-3.8-flash; entry kept for old register rows.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -96,7 +111,7 @@ providers:
         # introductory discount ($0.75 / $3.75 per 1M) is live through
         # 2026-12-31 and reverts to list on 2027-01-01 — registry pins the
         # durable rate to avoid a self-reverting stamp.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -112,7 +127,7 @@ providers:
         # ceilings computed from it stay safe after the discount ends; bills
         # before 2027 read up to 2x lower. Thinking model: reasoning is billed
         # inside max_output_tokens and the connector cannot limit it.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -125,7 +140,7 @@ providers:
         # updated 2026-09-24). Since 2026-09-30 the third rung of the
         # classifier ladders (safety / sanity / attempt_classifier), of
         # pass_2a_mapping rung 2 and of code_summary.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -143,7 +158,7 @@ providers:
         # replaces the retired 2025-05-14 Sonnet snapshot). $3 / $15 per 1M.
         # (claude-sonnet-4-6 is newer + same price but ships only as a
         # non-date-pinned alias, against the snapshot convention.)
-        capabilities: [structured_output, long_context]
+        capabilities: [long_context]
         max_context: 200000
         max_output_tokens: 16384
         unit_type: tokens
@@ -153,7 +168,7 @@ providers:
         # Haiku 4.5 — cost tier; audio Pass 2a/2c rung 3 (registered
         # 2026-05-23 → closes DD-2.3-Z; was callable but unregistered).
         # $1 / $5 per 1M.
-        capabilities: [structured_output, long_context]
+        capabilities: [long_context]
         max_context: 200000
         max_output_tokens: 16384
         unit_type: tokens
@@ -167,7 +182,7 @@ providers:
         # $0.15/$0.60 per 1M; legacy models absent from the main
         # pricing page; source: OpenAI model catalog (developers.openai.com),
         # cross-checked 2026-08-28.
-        capabilities: [vision, structured_output]
+        capabilities: [vision, json_mode]
         max_context: 128000
         max_output_tokens: 16384
         unit_type: tokens
@@ -177,7 +192,7 @@ providers:
         # $2/$8 per 1M; legacy models absent from the main
         # pricing page; source: OpenAI model catalog (developers.openai.com),
         # cross-checked 2026-08-28.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1047576
         max_output_tokens: 32768
         unit_type: tokens
@@ -186,7 +201,7 @@ providers:
       - id: gpt-4o
         # Rates verified 2026-08-28 against the model page
         # (developers.openai.com). $2.50/$10 per 1M.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 128000
         max_output_tokens: 16384
         unit_type: tokens
@@ -210,7 +225,7 @@ providers:
         # Peak hours, context and output maximum are carried over from the
         # deepseek-v4-flash entry: peak = 01:00-04:00 & 06:00-10:00 UTC
         # Mon-Fri, context 1M, output maximum 384K. Classifier rungs pin 8192.
-        capabilities: [structured_output, long_context]
+        capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
@@ -240,7 +255,7 @@ providers:
         # provider's published output maximum; stages needing a tighter cap
         # pin it on the rung — the three classifier rungs in
         # ladders_mentor.yaml pin 8192.
-        capabilities: [structured_output, long_context]
+        capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
@@ -275,7 +290,7 @@ providers:
         # 2a) so the thinking-on default is preserved; the ``deepseek`` provider
         # (KD-2.4-S) still applies thinking-disabled for schema-bound consumers
         # and can be used with this model when that contract is required.
-        capabilities: [structured_output, long_context]
+        capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -296,7 +311,7 @@ providers:
         # verified 2026-08-28; unchanged per the 2026-09-30 audit. Previous $2/$6 was the Large 2 rate.
         # max_output_tokens left at 8192: first-party ceiling is not published
         # (Bedrock's 32K is a different platform).
-        capabilities: [structured_output, long_context]
+        capabilities: [json_mode, long_context]
         max_context: 262144
         max_output_tokens: 8192
         unit_type: tokens
@@ -332,7 +347,7 @@ providers:
         # lifts the dearest safety / attempt_classifier attempt to ~$0.060,
         # over their $0.05 ceiling. Follow-up, not part of the 2026-09-30
         # hotfix. The window is under-stated, which is the safe direction.
-        capabilities: [vision, structured_output]
+        capabilities: [vision, json_mode]
         max_context: 131072
         max_output_tokens: 8192
         unit_type: tokens
@@ -366,7 +381,7 @@ providers:
         # higher rate ($2.50/$7.50) — do NOT use it; aggregators (OpenRouter)
         # also quote non-Global numbers. Canonical alias resolves to the dated
         # snapshot per the console card; the alias may advance silently.
-        capabilities: [structured_output, long_context]
+        capabilities: [json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -385,7 +400,7 @@ providers:
         # qwen3.5-flash; entry kept as the rollback target while the
         # replacement accrues production mileage. Remove at the first
         # 15-day registry revision after 2026-10-10.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 131072
         max_output_tokens: 8192
         unit_type: tokens
@@ -399,7 +414,7 @@ providers:
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
         # $0.115/$1.147, 256k–1M $0.172/$1.72; alias ≡ snapshot
         # qwen3.5-flash-2026-02-23.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -411,7 +426,7 @@ providers:
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M $0.66/$3.961.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -424,7 +439,7 @@ providers:
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
         # $0.287/$1.72, 256k–1M $0.573/$3.44.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
@@ -437,7 +452,7 @@ providers:
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M
         # $1.101/$6.602; alias ≡ snapshot qwen3.6-plus-2026-04-02.
-        capabilities: [vision, structured_output, long_context]
+        capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens

@@ -12,7 +12,7 @@ from course_supporter.llm.input_hash import (
     canonical_attempt_input,
     hash_attempt_input,
 )
-from course_supporter.llm.schemas import LLMRequest
+from course_supporter.llm.schemas import LLMRequest, SchemaMode
 
 _BASE: dict[str, Any] = {
     "prompt": "user text",
@@ -24,6 +24,9 @@ _BASE: dict[str, Any] = {
     "expects_json": True,
     "contents": [b"\x89PNG-one", b"\x89PNG-two"],
 }
+
+_SCHEMA_A: dict[str, Any] = {"type": "object", "properties": {"a": {"type": "string"}}}
+_SCHEMA_B: dict[str, Any] = {"type": "object", "properties": {"b": {"type": "string"}}}
 
 
 def _hash(provider: str = "deepseek_thinking", **overrides: Any) -> str:
@@ -51,6 +54,7 @@ class TestHashAttemptInput:
             ("deepseek_thinking", {"prompt": "user text\n\n[feedback]"}),
             ("deepseek_thinking", {"contents": [b"\x89PNG-one"]}),
             ("deepseek_thinking", {"contents": [b"\x89PNG-two", b"\x89PNG-one"]}),
+            ("deepseek_thinking", {"response_schema": _SCHEMA_A}),
         ],
         ids=[
             "provider",
@@ -63,12 +67,38 @@ class TestHashAttemptInput:
             "user",
             "attachment-set",
             "attachment-order",
+            "response-schema",
         ],
     )
     def test_every_output_affecting_part_changes_the_hash(
         self, provider: str, overrides: dict[str, Any]
     ) -> None:
         assert _hash(provider, **overrides) != _hash()
+
+    def test_two_schemas_hash_apart(self) -> None:
+        assert _hash(response_schema=_SCHEMA_A) != _hash(response_schema=_SCHEMA_B)
+
+    def test_schema_mode_is_part_of_the_input(self) -> None:
+        strict = _hash(response_schema=_SCHEMA_A, schema_mode=SchemaMode.STRICT)
+        json_mode = _hash(response_schema=_SCHEMA_A, schema_mode=SchemaMode.JSON)
+        assert len({strict, json_mode, _hash(response_schema=_SCHEMA_A)}) == 3
+
+    def test_no_schema_hashes_as_before_task_09a(self) -> None:
+        """Rows already in the register stay comparable with new ones."""
+        document = json.loads(
+            canonical_attempt_input(LLMRequest(**_BASE), provider="p")
+        )
+        assert set(document) == {
+            "provider",
+            "model",
+            "temperature",
+            "max_tokens",
+            "reasoning",
+            "expects_json",
+            "system",
+            "user",
+            "attachments",
+        }
 
     def test_hash_is_sha256_of_the_canonical_text(self) -> None:
         request = LLMRequest(**_BASE)

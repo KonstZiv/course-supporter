@@ -25,7 +25,7 @@ stages:
     # Mentor lives). The name differs on purpose — a path stage may not reuse a
     # ladder stage's name, because the call register keys a call's cost on it.
     prompt_ref: "prompts/safety_check/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     record_output: false
     ceilings:
@@ -67,7 +67,7 @@ stages:
     deterministic: true
     # Copied from `sanity_check` in ladders_mentor.yaml, as above.
     prompt_ref: "prompts/sanity_check/v1.md"
-    requires: [structured_output]
+    requires: [json_mode]
     input_budget_ratio: 0.5
     record_output: false
     ceilings:

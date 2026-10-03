@@ -115,7 +115,7 @@ last_updated: 2026-10-03
 | [`GENERATION_IN_PROGRESS`](../authors/api.md#GENERATION_IN_PROGRESS) | 409 | система саме пише пояснення до тесту | дочекатися, доки вона закінчить, і повторити перевірку чи публікацію |
 | [`TEST_FILE_NOT_YAML`](../authors/api.md#TEST_FILE_NOT_YAML) | 422 | матеріал із видом «Тест» — не YAML-файл | записати тест у YAML і завантажити файлом |
 | [`TEST_OBJECT_SOURCE_RESERVED`](../authors/api.md#TEST_OBJECT_SOURCE_RESERVED) | 422 | запит сам вказав вид джерела `test_object` | не вказувати його: завантажити YAML-файл або створити тест запитом |
-| [`TEST_OBJECT_TYPE_FIXED`](../authors/api.md#TEST_OBJECT_TYPE_FIXED) | 422 | спроба змінити вид завдання тесту | створити новий матеріал |
+| [`TEST_OBJECT_TYPE_FIXED`](../authors/api.md#TEST_OBJECT_TYPE_FIXED) | 422 | спроба змінити тип завдання тесту | створити новий матеріал |
 | [`TEST_OBJECT_ROLE_FIXED`](../authors/api.md#TEST_OBJECT_ROLE_FIXED) | 422 | спроба зробити тест методичним матеріалом: тест завжди навчальний | лишити роль навчальною; щоб прибрати тест від студентів — приховати його |
 | [`TEST_IS_AN_OBJECT`](../authors/api.md#TEST_IS_AN_OBJECT) | 422 | спроба зробити тестом наявний матеріал | створити тест із YAML |
 | [`TEST_OBJECT_NOT_PROCESSED`](../authors/api.md#TEST_OBJECT_NOT_PROCESSED) | 422 | повторна обробка чи ролі файлів для тесту | змінити чернетку й опублікувати |
@@ -163,4 +163,4 @@ last_updated: 2026-10-03
 | [`AWAITING_FIRST_SUBMISSION`](../authors/api.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає | прочитати перелік: `status` і `message` кажуть, чому його немає й що робити (див. [Коли переліку немає](../authors/api.md#criteria-none)); правити, коли `status` — `ready` |
 | [`UNKNOWN_CRITERION_ID`](../authors/api.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
 | [`CHECK_METHOD_NOT_ADMITTED`](../authors/api.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
-| [`UNKNOWN_CONCEPT`](../authors/api.md#UNKNOWN_CONCEPT) | 422 | концепт не з `concepts` читання | вибрати концепт із `concepts` або прибрати його |
+| [`UNKNOWN_CONCEPT`](../authors/api.md#UNKNOWN_CONCEPT) | 422 | поняття не з `concepts` читання | вибрати поняття з `concepts` або прибрати його |

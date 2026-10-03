@@ -29,7 +29,10 @@ not_in_nav: |
 
 nav:
   - Головна: uk/index.md
-  - Для авторів: uk/authors/index.md
+  - Для авторів:
+      - Огляд: uk/authors/index.md
+      - Тести: uk/authors/tests.md
+      - Тести й критерії через API: uk/authors/api.md
   - Для студентів: uk/students/index.md
   - Коди помилок: uk/errors/index.md
   - API: uk/api/index.md

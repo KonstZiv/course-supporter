@@ -51,7 +51,7 @@ keywords:
   - YAML
   - коментар
   - критерії
-last_updated: 2026-10-02
+last_updated: 2026-10-03
 ---
 
 # Коди помилок
@@ -99,46 +99,46 @@ last_updated: 2026-10-02
 
 Коди, які отримує автор, створюючи, змінюючи, перевіряючи й публікуючи тест. Нічого з відмовленого
 запиту не зберігається. Відмови формату несуть ще й `place` — місце помилки, а відмова незавершеної
-чернетки — перелік `incomplete` (див. [Коли тест відмовлено](../authors/index.md#refusals)).
+чернетки — перелік `incomplete` (див. [Коли тест відмовлено](../authors/api.md#refusals)).
 
 | код | стан | причина | що робити |
 |---|---|---|---|
-| [`TEST_YAML_UNREADABLE`](../authors/index.md#TEST_YAML_UNREADABLE) | 422 | YAML чи JSON не читається | виправити запис у місці, яке називає `place` |
-| [`TEST_YAML_DUPLICATE_KEY`](../authors/index.md#TEST_YAML_DUPLICATE_KEY) | 422 | те саме поле двічі в одному місці | лишити одне |
-| [`TEST_YAML_ALIAS`](../authors/index.md#TEST_YAML_ALIAS) | 422 | якір чи посилання YAML (`&`, `*`) | записати текст повністю |
-| [`TEST_FIELD_INVALID`](../authors/index.md#TEST_FIELD_INVALID) | 422 | поле невідоме чи відсутнє, назва порожня, поле не того виду чи задовге | виправити поле за `details` і таблицею формату |
-| [`TEST_OPTIONS_COUNT`](../authors/index.md#TEST_OPTIONS_COUNT) | 422 | у питанні понад 26 варіантів | розділити питання на кілька |
-| [`TEST_TOO_LARGE`](../authors/index.md#TEST_TOO_LARGE) | 413 | файл чи запит понад 256 КБ | розділити тест на кілька |
-| [`SECURITY_REJECTED`](../authors/index.md#SECURITY_REJECTED) | 400 | невидимі символи, фрази, схожі на вказівки, чи файл, який не вдалося прочитати як текст | набрати текст заново чи зберегти файл в UTF-8 |
-| [`NOT_A_TEST_OBJECT`](../authors/index.md#NOT_A_TEST_OBJECT) | 422 | ідентифікатор веде не до тесту, створеного в системі | перевірити ідентифікатор; старий текстовий тест створити заново з YAML |
-| [`TEST_DRAFT_INCOMPLETE`](../authors/index.md#TEST_DRAFT_INCOMPLETE) | 422 | перевірка чи публікація незавершеної чернетки; `incomplete` називає кожне місце, яке лишилось завершити | завершити кожне місце з переліку, зберегти чернетку й повторити |
-| [`GENERATION_IN_PROGRESS`](../authors/index.md#GENERATION_IN_PROGRESS) | 409 | система саме пише пояснення до тесту | дочекатися, доки вона закінчить, і повторити перевірку чи публікацію |
-| [`TEST_FILE_NOT_YAML`](../authors/index.md#TEST_FILE_NOT_YAML) | 422 | матеріал із видом «Тест» — не YAML-файл | записати тест у YAML і завантажити файлом |
-| [`TEST_OBJECT_SOURCE_RESERVED`](../authors/index.md#TEST_OBJECT_SOURCE_RESERVED) | 422 | запит сам вказав вид джерела `test_object` | не вказувати його: завантажити YAML-файл або створити тест запитом |
-| [`TEST_OBJECT_TYPE_FIXED`](../authors/index.md#TEST_OBJECT_TYPE_FIXED) | 422 | спроба змінити вид завдання тесту | створити новий матеріал |
-| [`TEST_OBJECT_ROLE_FIXED`](../authors/index.md#TEST_OBJECT_ROLE_FIXED) | 422 | спроба зробити тест методичним матеріалом: тест завжди навчальний | лишити роль навчальною; щоб прибрати тест від студентів — приховати його |
-| [`TEST_IS_AN_OBJECT`](../authors/index.md#TEST_IS_AN_OBJECT) | 422 | спроба зробити тестом наявний матеріал | створити тест із YAML |
-| [`TEST_OBJECT_NOT_PROCESSED`](../authors/index.md#TEST_OBJECT_NOT_PROCESSED) | 422 | повторна обробка чи ролі файлів для тесту | змінити чернетку й опублікувати |
-| [`KEY_LIVES_IN_TEST`](../authors/index.md#KEY_LIVES_IN_TEST) | 422 | заміна чи скидання ключа відповідей для тесту | змінити позначки в чернетці й опублікувати |
+| [`TEST_YAML_UNREADABLE`](../authors/api.md#TEST_YAML_UNREADABLE) | 422 | YAML чи JSON не читається | виправити запис у місці, яке називає `place` |
+| [`TEST_YAML_DUPLICATE_KEY`](../authors/api.md#TEST_YAML_DUPLICATE_KEY) | 422 | те саме поле двічі в одному місці | лишити одне |
+| [`TEST_YAML_ALIAS`](../authors/api.md#TEST_YAML_ALIAS) | 422 | якір чи посилання YAML (`&`, `*`) | записати текст повністю |
+| [`TEST_FIELD_INVALID`](../authors/api.md#TEST_FIELD_INVALID) | 422 | поле невідоме чи відсутнє, назва порожня, поле не того виду чи задовге | виправити поле за `details` і таблицею формату |
+| [`TEST_OPTIONS_COUNT`](../authors/api.md#TEST_OPTIONS_COUNT) | 422 | у питанні понад 26 варіантів | розділити питання на кілька |
+| [`TEST_TOO_LARGE`](../authors/api.md#TEST_TOO_LARGE) | 413 | файл чи запит понад 256 КБ | розділити тест на кілька |
+| [`SECURITY_REJECTED`](../authors/api.md#SECURITY_REJECTED) | 400 | невидимі символи, фрази, схожі на вказівки, чи файл, який не вдалося прочитати як текст | набрати текст заново чи зберегти файл в UTF-8 |
+| [`NOT_A_TEST_OBJECT`](../authors/api.md#NOT_A_TEST_OBJECT) | 422 | ідентифікатор веде не до тесту, створеного в системі | перевірити ідентифікатор; старий текстовий тест створити заново з YAML |
+| [`TEST_DRAFT_INCOMPLETE`](../authors/api.md#TEST_DRAFT_INCOMPLETE) | 422 | перевірка чи публікація незавершеної чернетки; `incomplete` називає кожне місце, яке лишилось завершити | завершити кожне місце з переліку, зберегти чернетку й повторити |
+| [`GENERATION_IN_PROGRESS`](../authors/api.md#GENERATION_IN_PROGRESS) | 409 | система саме пише пояснення до тесту | дочекатися, доки вона закінчить, і повторити перевірку чи публікацію |
+| [`TEST_FILE_NOT_YAML`](../authors/api.md#TEST_FILE_NOT_YAML) | 422 | матеріал із видом «Тест» — не YAML-файл | записати тест у YAML і завантажити файлом |
+| [`TEST_OBJECT_SOURCE_RESERVED`](../authors/api.md#TEST_OBJECT_SOURCE_RESERVED) | 422 | запит сам вказав вид джерела `test_object` | не вказувати його: завантажити YAML-файл або створити тест запитом |
+| [`TEST_OBJECT_TYPE_FIXED`](../authors/api.md#TEST_OBJECT_TYPE_FIXED) | 422 | спроба змінити вид завдання тесту | створити новий матеріал |
+| [`TEST_OBJECT_ROLE_FIXED`](../authors/api.md#TEST_OBJECT_ROLE_FIXED) | 422 | спроба зробити тест методичним матеріалом: тест завжди навчальний | лишити роль навчальною; щоб прибрати тест від студентів — приховати його |
+| [`TEST_IS_AN_OBJECT`](../authors/api.md#TEST_IS_AN_OBJECT) | 422 | спроба зробити тестом наявний матеріал | створити тест із YAML |
+| [`TEST_OBJECT_NOT_PROCESSED`](../authors/api.md#TEST_OBJECT_NOT_PROCESSED) | 422 | повторна обробка чи ролі файлів для тесту | змінити чернетку й опублікувати |
+| [`KEY_LIVES_IN_TEST`](../authors/api.md#KEY_LIVES_IN_TEST) | 422 | заміна чи скидання ключа відповідей для тесту | змінити позначки в чернетці й опублікувати |
 
 Незавершену чернетку система зберігає, а місця, які лишилось завершити, називає переліком
 `incomplete` — у читанні чернетки й у відмові `TEST_DRAFT_INCOMPLETE`. Кожне місце — код, номер
-питання й номер варіанта (див. [Незавершена чернетка](../authors/index.md#incomplete)).
+питання й номер варіанта (див. [Незавершена чернетка](../authors/api.md#incomplete)).
 
 | код | місце | що не так | що робити |
 |---|---|---|---|
-| [`TEST_NO_QUESTIONS`](../authors/index.md#TEST_NO_QUESTIONS) | тест | питань немає | додати питання |
-| [`TEST_TEXT_EMPTY`](../authors/index.md#TEST_TEXT_EMPTY) | питання чи варіант | порожній текст | написати текст |
-| [`TEST_OPTIONS_COUNT`](../authors/index.md#TEST_OPTIONS_COUNT) | питання | менше двох варіантів | додати варіанти |
-| [`TEST_NO_CORRECT_OPTION`](../authors/index.md#TEST_NO_CORRECT_OPTION) | питання | жоден варіант не позначено правильним | позначити хоча б один `correct: true` |
+| [`TEST_NO_QUESTIONS`](../authors/api.md#TEST_NO_QUESTIONS) | тест | питань немає | додати питання |
+| [`TEST_TEXT_EMPTY`](../authors/api.md#TEST_TEXT_EMPTY) | питання чи варіант | порожній текст | написати текст |
+| [`TEST_OPTIONS_COUNT`](../authors/api.md#TEST_OPTIONS_COUNT) | питання | менше двох варіантів | додати варіанти |
+| [`TEST_NO_CORRECT_OPTION`](../authors/api.md#TEST_NO_CORRECT_OPTION) | питання | жоден варіант не позначено правильним | позначити хоча б один `correct: true` |
 
 ## Запити ключа відповідей
 
 Для тесту, створеного в системі, запити ключа відповідей (`…/reference/override`) відмовляють кодом
-[`KEY_LIVES_IN_TEST`](../authors/index.md#KEY_LIVES_IN_TEST). Коди нижче видають ці запити для
+[`KEY_LIVES_IN_TEST`](../authors/api.md#KEY_LIVES_IN_TEST). Коди нижче видають ці запити для
 тесту, завантаженого текстом до появи тестів, створених у системі, і для матеріалу, що не є тестом.
 Тест, завантажений текстом, відповідей більше не приймає — створіть його заново з YAML (див.
-[Як створити тест](../authors/index.md#create)). Нічого з відмовленого запиту не зберігається.
+[Як створити тест](../authors/api.md#create)). Нічого з відмовленого запиту не зберігається.
 
 | код | стан | причина | що робити |
 |---|---|---|---|
@@ -153,14 +153,14 @@ last_updated: 2026-10-02
 ## Запити переліку критеріїв
 
 Коди, які видають запити переліку критеріїв текстового завдання (`…/criteria` і `…/criteria/override`,
-див. [Критерії текстового завдання](../authors/index.md#criteria)). Нічого з відмовленого запиту не
+див. [Критерії текстового завдання](../authors/api.md#criteria)). Нічого з відмовленого запиту не
 зберігається.
 
 | код | стан | причина | що робити |
 |---|---|---|---|
-| [`NOT_A_TEXT_TASK`](../authors/index.md#NOT_A_TEXT_TASK) | 422 | матеріал — тест або не завдання | для тесту — позначки правильних відповідей у редакторі тесту |
-| [`TASK_NOT_READY`](../authors/index.md#TASK_NOT_READY) | 422 | завдання ще обробляється або його прибрано з курсу | дочекатися кінця обробки й повторити запит |
-| [`AWAITING_FIRST_SUBMISSION`](../authors/index.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає | прочитати перелік: `status` і `message` кажуть, чому його немає й що робити (див. [Коли переліку немає](../authors/index.md#criteria-none)); правити, коли `status` — `ready` |
-| [`UNKNOWN_CRITERION_ID`](../authors/index.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
-| [`CHECK_METHOD_NOT_ADMITTED`](../authors/index.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
-| [`UNKNOWN_CONCEPT`](../authors/index.md#UNKNOWN_CONCEPT) | 422 | концепт не з `concepts` читання | вибрати концепт із `concepts` або прибрати його |
+| [`NOT_A_TEXT_TASK`](../authors/api.md#NOT_A_TEXT_TASK) | 422 | матеріал — тест або не завдання | для тесту — позначки правильних відповідей у редакторі тесту |
+| [`TASK_NOT_READY`](../authors/api.md#TASK_NOT_READY) | 422 | завдання ще обробляється або його прибрано з курсу | дочекатися кінця обробки й повторити запит |
+| [`AWAITING_FIRST_SUBMISSION`](../authors/api.md#AWAITING_FIRST_SUBMISSION) | 422 | переліку ще немає | прочитати перелік: `status` і `message` кажуть, чому його немає й що робити (див. [Коли переліку немає](../authors/api.md#criteria-none)); правити, коли `status` — `ready` |
+| [`UNKNOWN_CRITERION_ID`](../authors/api.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
+| [`CHECK_METHOD_NOT_ADMITTED`](../authors/api.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
+| [`UNKNOWN_CONCEPT`](../authors/api.md#UNKNOWN_CONCEPT) | 422 | концепт не з `concepts` читання | вибрати концепт із `concepts` або прибрати його |

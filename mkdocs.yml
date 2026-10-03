@@ -18,7 +18,7 @@ plugins:
 
 # A link to an anchor its page does not have fails `mkdocs build --strict`
 # (the default only logs it): the errors page links every code to its section
-# on the authors' page.
+# on the authors' API page.
 validation:
   links:
     anchors: warn

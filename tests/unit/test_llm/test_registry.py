@@ -257,12 +257,19 @@ class TestGetAvailableStrategies:
             cfg.get_available_strategies("nonexistent")
 
 
+def _with_catalog(config: dict, version: str = "v1") -> dict:
+    """The config with a catalog block whose fingerprint matches its prices."""
+    fingerprint = ModelRegistryConfig.model_validate(config).pricing_fingerprint()
+    return {**config, "catalog": {"version": version, "pricing_sha256": fingerprint}}
+
+
 class TestLoadRegistry:
     def test_load_from_file(self, valid_config: dict, tmp_path: Path) -> None:
         p = tmp_path / "services.yaml"
-        p.write_text(yaml.dump(valid_config), encoding="utf-8")
+        p.write_text(yaml.dump(_with_catalog(valid_config)), encoding="utf-8")
         cfg = load_registry(p)
         assert len(cfg.models) == 2
+        assert cfg.catalog_version == "v1"
 
     def test_missing_file(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
@@ -281,3 +288,123 @@ class TestLoadRegistry:
             cfg = load_registry(cfg_path)
             assert len(cfg.models) > 0
             assert len(cfg.actions) > 0
+
+
+class TestCatalogVersion:
+    """BIL-C decision 1: a price cannot change without a new catalog version.
+
+    Lock: red if ``load_registry`` stops comparing the recorded fingerprint
+    with the price data (the changed-price case below then loads).
+    """
+
+    def _write(self, tmp_path: Path, config: dict) -> Path:
+        p = tmp_path / "services.yaml"
+        p.write_text(yaml.dump(config), encoding="utf-8")
+        return p
+
+    def test_price_changed_without_new_version_is_refused(
+        self, valid_config: dict, tmp_path: Path
+    ) -> None:
+        config = _with_catalog(valid_config)
+        config["providers"]["gemini"]["models"][0]["cost_per_1k_in"] = 0.0011
+        fresh = ModelRegistryConfig.model_validate(config).pricing_fingerprint()
+        with pytest.raises(ValueError, match=f"pricing_sha256: {fresh}"):
+            load_registry(self._write(tmp_path, config))
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("cost_per_1k_in_cached", 0.0001),
+            ("price_effective_from", "2027-01-01"),
+            ("price_holds_to_input_tokens", 128000),
+        ],
+    )
+    def test_every_pricing_rule_is_in_the_fingerprint(
+        self, valid_config: dict, field: str, value: object
+    ) -> None:
+        before = ModelRegistryConfig.model_validate(valid_config).pricing_fingerprint()
+        valid_config["providers"]["gemini"]["models"][0][field] = value
+        after = ModelRegistryConfig.model_validate(valid_config).pricing_fingerprint()
+        assert before != after
+
+    def test_capabilities_are_not_in_the_fingerprint(self, valid_config: dict) -> None:
+        before = ModelRegistryConfig.model_validate(valid_config).pricing_fingerprint()
+        valid_config["providers"]["gemini"]["models"][0]["max_context"] = 1
+        after = ModelRegistryConfig.model_validate(valid_config).pricing_fingerprint()
+        assert before == after
+
+    def test_file_without_catalog_is_refused(
+        self, valid_config: dict, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="no 'catalog' block"):
+            load_registry(self._write(tmp_path, valid_config))
+
+    def test_real_catalog_matches_its_fingerprint(self) -> None:
+        cfg = load_registry(Path("config/external_services.yaml"))
+        assert cfg.catalog is not None
+        assert cfg.pricing_fingerprint() == cfg.catalog.pricing_sha256
+
+    def test_real_catalog_binds_deepseek_to_the_peak_tariff(self) -> None:
+        cfg = load_registry(Path("config/external_services.yaml"))
+        bound = sorted(m.model_id for m in cfg.models.values() if m.tariff)
+        assert bound == ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]
+        tariff = cfg.tariffs["deepseek_peak"]
+        assert tariff.peak_multiplier == 2
+        assert tariff.peak.hours == ["01:00-04:00", "06:00-10:00"]
+
+
+class TestTariffConfig:
+    def _tariff(self, **overrides: object) -> dict:
+        tariff: dict = {
+            "timezone": "UTC",
+            "catalog_prices": "off_peak",
+            "peak_multiplier": 2,
+            "peak": {"weekdays": ["mon"], "hours": ["01:00-04:00"]},
+        }
+        tariff.update(overrides)
+        return tariff
+
+    def test_model_naming_an_unknown_tariff_is_refused(
+        self, valid_config: dict
+    ) -> None:
+        valid_config["providers"]["gemini"]["models"][0]["tariff"] = "nope"
+        with pytest.raises(ValueError, match="unknown tariff: 'nope'"):
+            ModelRegistryConfig.model_validate(valid_config)
+
+    def test_tariff_is_attached_to_its_models(self, valid_config: dict) -> None:
+        valid_config["tariffs"] = {"t": self._tariff()}
+        valid_config["providers"]["gemini"]["models"][0]["tariff"] = "t"
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["model-a"].tariff is not None
+        assert cfg.models["model-b"].tariff is None
+
+    @pytest.mark.parametrize("span", ["04:00-01:00", "1-4", "01:00", "00:00-24:01"])
+    def test_malformed_hour_span_is_refused(
+        self, valid_config: dict, span: str
+    ) -> None:
+        valid_config["tariffs"] = {
+            "t": self._tariff(peak={"weekdays": ["mon"], "hours": [span]})
+        }
+        with pytest.raises(ValueError, match="HH:MM-HH:MM"):
+            ModelRegistryConfig.model_validate(valid_config)
+
+    def test_unknown_timezone_is_refused(self, valid_config: dict) -> None:
+        valid_config["tariffs"] = {"t": self._tariff(timezone="Mars/Olympus")}
+        with pytest.raises(ValueError, match="unknown timezone"):
+            ModelRegistryConfig.model_validate(valid_config)
+
+    def test_only_off_peak_catalog_prices_are_understood(
+        self, valid_config: dict
+    ) -> None:
+        valid_config["tariffs"] = {"t": self._tariff(catalog_prices="peak")}
+        with pytest.raises(ValueError):
+            ModelRegistryConfig.model_validate(valid_config)
+
+
+class TestExactPrices:
+    def test_prices_are_the_decimals_as_written(self, valid_config: dict) -> None:
+        from decimal import Decimal
+
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        assert cfg.models["model-b"].prices.in_per_1k == Decimal("0.0001")
+        assert cfg.models["model-b"].prices.in_cached_per_1k is None

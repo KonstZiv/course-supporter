@@ -27,6 +27,13 @@
 #   rows). mistral-small-latest max_context NOT raised to the listed 262144 (it
 #   drives the submission budgets; see the entry). Numbers taken from
 #   the audit's reading of the provider pages on 2026-09-30, not re-fetched.
+# 2026-10-29 BIL-C (billing-grade cost accounting): the catalog is versioned
+#   (``catalog`` below); DeepSeek's peak/off-peak rule moved from the comments
+#   into data (``tariffs.deepseek_peak``, bound to the three DeepSeek models);
+#   the new optional pricing fields are added EMPTY on every model — their
+#   values are the operator's next revision (DeepSeek changed its lineup and
+#   prices on 2026-09-10, so the numbers in the comments may be stale). NO
+#   price number changed.
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -43,6 +50,49 @@
 #                   json_mode only. A schema holds form, not content: the
 #                   stage's own validator always runs.
 
+# ── Catalog version (BIL-C, decision 1) ──
+# Every register row stores the version it was priced under, beside the unit
+# prices it applied. ``pricing_sha256`` is the fingerprint of the price data
+# below (every model's prices and pricing rules, and the tariffs); the registry
+# loader recomputes it and REFUSES TO START when they differ. Changing a price,
+# a pricing rule or a tariff therefore means: give the catalog a new version,
+# and paste the fingerprint the loader's error message prints.
+catalog:
+  version: "2026-10-29.1"
+  pricing_sha256: "58c806cf2e2cb963768962f3af571aefbab2d073f376e93e486974454de1be50"
+
+# ── Time-of-day tariffs (BIL-C, decision 3) ──
+# A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
+# tariff's off-peak prices, and a call SENT inside the peak window pays them
+# times ``peak_multiplier``. Hour spans are half-open: "01:00-04:00" is peak
+# from 01:00:00 up to 03:59:59.
+tariffs:
+  deepseek_peak:
+    # DeepSeek peak/off-peak billing (since 2026-08-16; rule verified
+    # vision-side 2026-10-29): peak 01:00-04:00 and 06:00-10:00 UTC,
+    # Monday-Friday; every other hour and the weekends are off-peak; the
+    # off-peak price is half the peak price.
+    timezone: UTC
+    catalog_prices: off_peak
+    peak_multiplier: 2
+    peak:
+      weekdays: [mon, tue, wed, thu, fri]
+      hours: ["01:00-04:00", "06:00-10:00"]
+
+# ── Optional pricing fields (BIL-C) — empty means "the rule does not apply" ──
+#   cost_per_1k_in_cached        price of input tokens served from the
+#                                provider's cache; empty → cached tokens are
+#                                priced at cost_per_1k_in and the row is
+#                                "estimated"
+#   price_effective_from         the listed prices are in force from this date
+#                                (YYYY-MM-DD); before it rows are "estimated"
+#   price_holds_to_input_tokens  the listed prices hold for prompts up to this
+#                                many input tokens; above it rows are
+#                                "estimated"
+#   billing_granularity_sec      (speech-to-text) the provider bills audio in
+#                                whole multiples of this many seconds; empty →
+#                                the sum is "estimated"
+
 providers:
   gemini:
     type: llm
@@ -57,6 +107,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0015
         cost_per_1k_out: 0.009
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-3.1-flash-lite
         # Cost-tier flash — audio Pass 2a/2c primary rung (registered
         # 2026-05-23; was callable but unregistered → no cost-tracking).
@@ -67,6 +120,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00025
         cost_per_1k_out: 0.0015
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-3-flash-preview
         # Preview model — relief when gemini-2.5-flash is throttled (503).
         # Still Preview (not GA) as of 2026-08-28.
@@ -77,6 +133,9 @@ providers:
         # Official rate: $0.50 / $3.00 per 1M.
         cost_per_1k_in: 0.0005
         cost_per_1k_out: 0.003
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-2.5-flash
         # UNAVAILABLE TO OUR KEY (2026-09-30): the prod key gets 404 "no longer
         # available to new users" since at least 2026-07-09 — Google restricted
@@ -91,6 +150,9 @@ providers:
         # understated output ~4×): official $0.30 / $2.50 per 1M.
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-2.5-pro
         # UNAVAILABLE TO OUR KEY (2026-09-30): same 2.5 restriction as
         # gemini-2.5-flash above; the prod key has never called it once
@@ -105,6 +167,9 @@ providers:
         # $2.50 / $15.00 per 1M (re-confirmed live 2026-08-28).
         cost_per_1k_in: 0.00125
         cost_per_1k_out: 0.010
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-3.6-flash
         # ai.google.dev/gemini-api/docs/pricing + model page, verified
         # 2026-08-28. $1.50 / $7.50 per 1M is the durable list rate; an
@@ -117,6 +182,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0015
         cost_per_1k_out: 0.0075
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-3.8-flash
         # Registered 2026-09-30 as the replacement for gemini-2.5-pro rungs
         # (unavailable to our key). ai.google.dev/gemini-api/docs/pricing
@@ -133,6 +201,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0015
         cost_per_1k_out: 0.0075
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gemini-3.5-flash-lite
         # ai.google.dev/gemini-api/docs/pricing + model page, verified
         # 2026-08-28. Single input rate for text/image/video/audio.
@@ -146,6 +217,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   anthropic:
     type: llm
@@ -164,6 +238,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.003
         cost_per_1k_out: 0.015
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: claude-haiku-4-5-20251001
         # Haiku 4.5 — cost tier; audio Pass 2a/2c rung 3 (registered
         # 2026-05-23 → closes DD-2.3-Z; was callable but unregistered).
@@ -174,6 +251,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.001
         cost_per_1k_out: 0.005
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   openai:
     type: llm
@@ -188,6 +268,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gpt-4.1
         # $2/$8 per 1M; legacy models absent from the main
         # pricing page; source: OpenAI model catalog (developers.openai.com),
@@ -198,6 +281,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.002
         cost_per_1k_out: 0.008
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: gpt-4o
         # Rates verified 2026-08-28 against the model page
         # (developers.openai.com). $2.50/$10 per 1M.
@@ -207,6 +293,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0025
         cost_per_1k_out: 0.01
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   deepseek:
     type: llm
@@ -229,10 +318,16 @@ providers:
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
+        tariff: deepseek_peak
         # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
-        #   rate = LOWER BOUND; peak-hour calls bill 2x.
+        #   rate, the base of tariff deepseek_peak: the register prices a
+        #   peak-hour call at 2x (BIL-C). Money ceilings still estimate with
+        #   this base rate, so for peak-hour calls they are a lower bound.
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: deepseek-v4-flash
         # DEPRECATED NAME (2026-09-30): since 2026-09-10 DeepSeek routes it
         # "temporarily" to V4.1 Flash; the new name is deepseek-flash above and
@@ -259,13 +354,18 @@ providers:
         max_context: 1048576
         max_output_tokens: 384000
         unit_type: tokens
+        tariff: deepseek_peak
         # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
-        #   rate = LOWER BOUND. Peak bills 2× during 01:00-04:00 & 06:00-10:00
-        #   UTC, Monday-Friday (off-peak = all other hours + weekends);
-        #   DeepSeek introduced this split 2026-08-16. A bill reconciled
-        #   against this number reads up to 2× higher for peak-hour calls.
+        #   rate, the base of tariff deepseek_peak (peak 2× during 01:00-04:00
+        #   & 06:00-10:00 UTC, Monday-Friday; DeepSeek introduced this split
+        #   2026-08-16). The register prices peak-hour calls at 2× (BIL-C);
+        #   money ceilings still estimate with this base rate, so for
+        #   peak-hour calls they are a lower bound.
         cost_per_1k_in: 0.00022
         cost_per_1k_out: 0.00066
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: deepseek-v4-pro
         # "Smart" / deep-reasoning tier — Methodist ladder PRIMARY (bottomup +
         # topdown). DeepSeek moved to peak/off-peak billing + raised list rates
@@ -294,13 +394,18 @@ providers:
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
+        tariff: deepseek_peak
         # NOTE — TIME-OF-DAY PRICE: the cost_per_1k_* below is the OFF-PEAK
-        #   rate = LOWER BOUND. Peak bills 2× during 01:00-04:00 & 06:00-10:00
-        #   UTC, Monday-Friday (off-peak = all other hours + weekends);
-        #   DeepSeek introduced this split 2026-08-16. A bill reconciled
-        #   against this number reads up to 2× higher for peak-hour calls.
+        #   rate, the base of tariff deepseek_peak (peak 2× during 01:00-04:00
+        #   & 06:00-10:00 UTC, Monday-Friday; DeepSeek introduced this split
+        #   2026-08-16). The register prices peak-hour calls at 2× (BIL-C);
+        #   money ceilings still estimate with this base rate, so for
+        #   peak-hour calls they are a lower bound.
         cost_per_1k_in: 0.00066
         cost_per_1k_out: 0.00198
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   mistral:
     type: llm
@@ -317,6 +422,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0005
         cost_per_1k_out: 0.0015
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: mistral-small-latest
         # Alias now resolves to Mistral Small 4; rates per mistral.ai/pricing/api,
         # verified 2026-08-28.
@@ -353,6 +461,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   dashscope:
     type: llm
@@ -387,6 +498,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00165
         cost_per_1k_out: 0.004951
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: qwen3-vl-32b-instruct
         # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
         # Pricing verified 2026-08-28 against DashScope Model Studio (workspace
@@ -406,6 +520,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00016
         cost_per_1k_out: 0.00064
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: qwen3.5-flash
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -420,6 +537,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.000029
         cost_per_1k_out: 0.000287
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: qwen3.6-flash
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -432,6 +552,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.000165
         cost_per_1k_out: 0.00099
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: qwen3.5-plus
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -445,6 +568,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.000115
         cost_per_1k_out: 0.000688
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: qwen3.6-plus
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -458,6 +584,9 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.000276
         cost_per_1k_out: 0.001651
+        cost_per_1k_in_cached: null
+        price_effective_from: null
+        price_holds_to_input_tokens: null
 
   whisper:
     type: transcription
@@ -481,6 +610,7 @@ providers:
         # (routing change, out of scope for a price-only revision).
         unit_type: minutes
         cost_per_minute: 0.0037
+        billing_granularity_sec: null
 
   openai_stt:
     type: stt
@@ -490,6 +620,7 @@ providers:
         # verified 2026-08-28 ($1.25/$5 per 1M tokens).
         unit_type: minutes
         cost_per_minute: 0.003
+        billing_granularity_sec: null
 
   deepgram:
     type: stt
@@ -501,6 +632,7 @@ providers:
         # tier for reference: monolingual/English pre-recorded $0.0043/min.
         unit_type: minutes
         cost_per_minute: 0.0052
+        billing_granularity_sec: null
 
 strategies:
   transcription:

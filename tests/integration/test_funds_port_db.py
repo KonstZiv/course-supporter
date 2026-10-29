@@ -8,7 +8,6 @@ asks the port, and reads the row the answer left in the call register.
 from __future__ import annotations
 
 import uuid
-from collections import Counter
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -237,7 +236,10 @@ class TestCeilingEditReachesTheRecord:
                 )
 
         rows = await _register_rows(session_factory, committed_job_id)
-        assert Counter(row.ceiling_estimate_usd for row in rows) == Counter(estimates)
+        # NUMERIC(18,12) keeps the estimate to twelve places (BIL-C).
+        assert sorted(
+            float(row.ceiling_estimate_usd or 0) for row in rows
+        ) == pytest.approx(sorted(estimates))
         assert estimates[1] - estimates[0] == pytest.approx(0.03)
 
 
@@ -274,7 +276,7 @@ class TestWorkThatIsNotASubmission:
         (row,) = await _register_rows(session_factory, committed_job_id)
         assert row.action == FUNDS_PORT_ACTION
         assert row.job_id == committed_job_id, "the row belongs to the work's job"
-        assert row.ceiling_estimate_usd == pytest.approx(0.03)
+        assert float(row.ceiling_estimate_usd or 0) == pytest.approx(0.03)
         assert row.funds_decision == FundsDecision.ALLOWED
         assert row.funds_refusal_reason is None
         assert row.path_key is None, "a work-once-per-version takes no path"
@@ -337,7 +339,7 @@ class TestThreeOperationsOnAnArtificialPath:
         # One row: nothing was held, so the stage price and the outcome add none.
         (row,) = await _register_rows(session_factory, committed_job_id)
         assert row.action == FUNDS_PORT_ACTION
-        assert row.ceiling_estimate_usd == estimate
+        assert float(row.ceiling_estimate_usd or 0) == pytest.approx(estimate)
         assert estimate == pytest.approx(0.05)
         assert row.funds_decision == FundsDecision.ALLOWED
         assert row.funds_refusal_reason is None
@@ -375,7 +377,7 @@ class TestThreeOperationsOnAnArtificialPath:
         (row,) = await _register_rows(session_factory, committed_job_id)
         assert row.funds_decision == FundsDecision.REFUSED
         assert row.funds_refusal_reason == FundsRefusalReason.INSUFFICIENT_FUNDS
-        assert row.ceiling_estimate_usd == estimate
+        assert float(row.ceiling_estimate_usd or 0) == pytest.approx(estimate)
         assert row.error_message is None
 
         async with session_factory() as session:

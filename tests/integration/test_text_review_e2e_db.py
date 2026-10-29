@@ -108,6 +108,7 @@ from course_supporter.storage.submission_verdict_repository import (
 from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
+from tests._helpers.priced import priced_exact
 
 pytestmark = pytest.mark.requires_db
 
@@ -251,7 +252,7 @@ class _RouterDouble:
             provider=rung.provider,
             model_id=rung.model,
             unit_type="tokens",
-            cost_usd=_PRICE[stage_name],
+            priced=priced_exact(_PRICE[stage_name]),
         )
         content = self.content[stage_name]
         if response_validator is not None:

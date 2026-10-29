@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -38,9 +39,9 @@ if TYPE_CHECKING:
     from course_supporter.funds_port import FundsAnswer, FundsRefusalReason
     from course_supporter.homework.path_config import PathKey
     from course_supporter.llm.finish_reason import FinishReason
-    from course_supporter.llm.schemas import LLMResponse
+    from course_supporter.llm.pricing import PricedCall
     from course_supporter.review_metrics import ReviewMetrics
-    from course_supporter.stt.schemas import STTResult
+    from course_supporter.stt.router import STTAttempt
 
 logger = structlog.get_logger()
 
@@ -210,10 +211,12 @@ async def _persist(
     model_id: str | None,
     unit_type: str | None = None,
     unit_in: int | None = None,
+    unit_in_cached: int | None = None,
+    unit_in_estimate: int | None = None,
     unit_out: int | None = None,
     unit_out_reasoning: int | None = None,
     latency_ms: int | None = None,
-    cost_usd: float | None = None,
+    priced: PricedCall | None = None,
     success: bool | None = True,
     error_message: str | None = None,
     outcome: CallOutcome | None = None,
@@ -240,6 +243,11 @@ async def _persist(
     funds-port row. The last two leave ``provider`` and ``model_id`` ``None``
     too; a trace names the rung it skipped or abandoned. Column meanings:
     ``storage.orm.ExternalServiceCall``.
+
+    ``priced`` is the price of a paid call (``llm/pricing.py``) and fills every
+    price column at once: sum, kind, catalog version, tariff window, the
+    instant the attempt was sent and the applied unit prices. A row without it
+    records no paid call and carries none of them (BIL-C).
 
     Two-layer guard for ``job_id`` (KD5 — only mandatory FK):
     1. Read ``job_id`` from contextvar (set at ARQ task entry).
@@ -271,10 +279,23 @@ async def _persist(
         model_id=model_id,
         unit_type=unit_type,
         unit_in=unit_in,
+        unit_in_cached=unit_in_cached,
+        unit_in_estimate=unit_in_estimate,
         unit_out=unit_out,
+        unit_out_estimate=priced.unit_out_estimate if priced else None,
         unit_out_reasoning=unit_out_reasoning,
         latency_ms=latency_ms,
-        cost_usd=cost_usd,
+        cost_usd=priced.cost_usd if priced else None,
+        cost_kind=priced.cost_kind if priced else None,
+        catalog_version=priced.catalog_version if priced else None,
+        tariff_window=priced.tariff_window if priced else None,
+        call_started_at=priced.call_started_at if priced else None,
+        price_in_per_1k_usd=priced.price_in_per_1k_usd if priced else None,
+        price_in_cached_per_1k_usd=(
+            priced.price_in_cached_per_1k_usd if priced else None
+        ),
+        price_out_per_1k_usd=priced.price_out_per_1k_usd if priced else None,
+        price_per_minute_usd=priced.price_per_minute_usd if priced else None,
         success=success,
         error_message=error_message,
         outcome=outcome,
@@ -287,7 +308,13 @@ async def _persist(
         output_text=output_text,
         authenticity=authenticity,
         completeness=completeness,
-        ceiling_estimate_usd=ceiling_estimate_usd,
+        # NUMERIC column: the float the port speaks in, as the decimal it
+        # prints as (BIL-C, decision P5).
+        ceiling_estimate_usd=(
+            Decimal(repr(ceiling_estimate_usd))
+            if ceiling_estimate_usd is not None
+            else None
+        ),
         funds_decision=funds_decision,
         funds_refusal_reason=funds_refusal_reason,
         path_key=path_key,
@@ -377,91 +404,39 @@ async def record_funds_decision(
     )
 
 
-# ── LLM callback ──
-
-
-def create_llm_log_callback(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> LLMLogCallback:
-    """Create a LogCallback for ModelRouter.
-
-    Reads tenant_id from ContextVar at call time (not at creation time).
-    """
-
-    async def _log(
-        response: LLMResponse,
-        success: bool,
-        error_message: str | None,
-    ) -> None:
-        await _persist(
-            session_factory,
-            action=response.action,
-            strategy=response.strategy,
-            provider=response.provider,
-            model_id=response.model_id,
-            unit_type="tokens",
-            unit_in=response.tokens_in,
-            unit_out=response.tokens_out,
-            latency_ms=response.latency_ms,
-            cost_usd=response.cost_usd,
-            success=success,
-            error_message=error_message,
-        )
-
-    return _log
-
-
-# Type alias matching ModelRouter's LogCallback signature
-from collections.abc import Awaitable, Callable  # noqa: E402
-
-LLMLogCallback = Callable[["LLMResponse", bool, str | None], Awaitable[None]]
-
-
 # ── STT callback ──
 
 
 def create_stt_log_callback(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> STTLogCallback:
-    """Create a LogCallback for STTRouter."""
+    """Create the register callback for STTRouter: one row per attempt.
 
-    async def _log(
-        result: STTResult | None,
-        error_message: str | None,
-    ) -> None:
-        if result is None:
-            if error_message:
-                await _persist(
-                    session_factory,
-                    action="transcribe",
-                    strategy="unknown",
-                    provider="unknown",
-                    model_id="unknown",
-                    success=False,
-                    error_message=error_message,
-                    outcome=CallOutcome.TRANSPORT_ERROR,
-                )
-            return
+    The router prices the attempt (``llm/pricing.py``) from the audio duration
+    known before the call and hands the finished record over; this callback
+    only writes it.
+    """
+
+    async def _log(attempt: STTAttempt) -> None:
+        priced = attempt.priced
         await _persist(
             session_factory,
-            action=result.action,
-            strategy=result.strategy,
-            provider=result.provider,
-            model_id=result.model_id,
+            action=attempt.action,
+            strategy=attempt.strategy,
+            provider=attempt.provider,
+            model_id=attempt.model_id,
             unit_type="seconds",
-            unit_in=(
-                round(result.audio_duration_sec) if result.audio_duration_sec else None
-            ),
+            unit_in=priced.billed_seconds,
             unit_out=None,
-            latency_ms=result.latency_ms,
-            cost_usd=result.cost_usd,
-            success=error_message is None,
-            error_message=error_message,
+            latency_ms=attempt.latency_ms,
+            priced=priced,
+            success=attempt.error_message is None,
+            error_message=attempt.error_message,
             # A transcription has no response body to judge: only transport
             # success or failure apply.
             outcome=(
                 CallOutcome.SUCCESS
-                if error_message is None
+                if attempt.error_message is None
                 else CallOutcome.TRANSPORT_ERROR
             ),
         )
@@ -469,4 +444,4 @@ def create_stt_log_callback(
     return _log
 
 
-STTLogCallback = Callable[["STTResult | None", str | None], Awaitable[None]]
+STTLogCallback = Callable[["STTAttempt"], Awaitable[None]]

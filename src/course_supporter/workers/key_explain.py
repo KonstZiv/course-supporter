@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -326,12 +327,14 @@ async def _spent_on(session: AsyncSession, job_id: uuid.UUID) -> float:
 
     The register is the authority on cost, not the estimate and not the agent:
     a rung that failed and a rung that succeeded both left a row, and the port
-    is owed the sum of them. Rows of this job that record no call — the
-    funds-port row itself — carry NULL and are skipped by the sum.
+    is owed the sum of them — exact and estimated sums alike (BIL-C). Rows with
+    no sum are skipped: those that record no call (the funds-port row itself)
+    and those whose cost is unknown. The register keeps NUMERIC; the port
+    speaks in float.
     """
-    stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0)).where(
+    stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
         ExternalServiceCall.job_id == job_id,
         ExternalServiceCall.action == STAGE_NAME,
     )
-    spent: float | None = (await session.execute(stmt)).scalar_one()
-    return float(spent or 0.0)
+    spent: Decimal | None = (await session.execute(stmt)).scalar_one()
+    return float(spent or 0)

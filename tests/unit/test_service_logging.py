@@ -384,36 +384,35 @@ class TestSTTLogCallbackOutcome:
     """A speech-to-text row knows transport only: success or transport error."""
 
     @pytest.mark.parametrize(
-        ("result", "error_message", "expected"),
-        [
-            ("result", None, "success"),
-            ("result", "provider 503", "transport_error"),
-            (None, "all providers failed", "transport_error"),
-        ],
+        ("error_message", "expected"),
+        [(None, "success"), ("provider 503", "transport_error")],
     )
     async def test_outcome_follows_transport(
-        self, result: str | None, error_message: str | None, expected: str
+        self, error_message: str | None, expected: str
     ) -> None:
+        from course_supporter.cost_kinds import CostKind
         from course_supporter.service_logging import create_stt_log_callback
+        from course_supporter.stt.router import STTAttempt
+        from tests._helpers.priced import priced_as
 
-        stt_result = (
-            MagicMock(
-                action="transcribe",
-                strategy="default",
-                provider="deepgram",
-                model_id="nova-3",
-                audio_duration_sec=12.0,
-                latency_ms=5,
-                cost_usd=0.001,
-            )
-            if result
-            else None
+        attempt = STTAttempt(
+            action="transcribe",
+            strategy="default",
+            provider="deepgram",
+            model_id="nova-3",
+            latency_ms=5,
+            priced=priced_as(CostKind.ESTIMATED, "0.001"),
+            error_message=error_message,
         )
         with patch(
             "course_supporter.service_logging._persist", new_callable=AsyncMock
         ) as persist:
-            await create_stt_log_callback(MagicMock())(stt_result, error_message)
-        assert persist.await_args.kwargs["outcome"] == expected
+            await create_stt_log_callback(MagicMock())(attempt)
+        kwargs = persist.await_args.kwargs
+        assert kwargs["outcome"] == expected
+        assert kwargs["unit_type"] == "seconds"
+        assert kwargs["priced"] is attempt.priced
+        assert kwargs["provider"] == "deepgram"
 
 
 class TestDroppedRowsLeaveATrace:

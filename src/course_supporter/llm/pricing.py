@@ -127,13 +127,15 @@ class PricedCall:
     for ``tariff_window`` — so the row's sum can be recomputed from the row.
     ``unit_out_estimate`` is set only when our output count went into the sum
     (a response without the provider's output count); ``billed_seconds`` only
-    on a speech-to-text row.
+    on a speech-to-text row. ``call_started_at`` is the instant the window was
+    chosen by.
     """
 
     cost_usd: Decimal | None
     cost_kind: CostKind
     catalog_version: str | None
     tariff_window: TariffWindow | None
+    call_started_at: datetime | None = None
     price_in_per_1k_usd: Decimal | None = None
     price_in_cached_per_1k_usd: Decimal | None = None
     price_out_per_1k_usd: Decimal | None = None
@@ -205,6 +207,7 @@ def _token_row(
     kind: CostKind,
     *,
     catalog_version: str | None,
+    started_at: datetime,
     window: TariffWindow | None,
     prices: _TokenPrices,
     unit_out_estimate: int | None = None,
@@ -214,6 +217,7 @@ def _token_row(
         cost_kind=_settled(kind, catalog_version),
         catalog_version=catalog_version,
         tariff_window=window,
+        call_started_at=started_at,
         price_in_per_1k_usd=prices.in_per_1k,
         price_in_cached_per_1k_usd=prices.in_cached_per_1k,
         price_out_per_1k_usd=prices.out_per_1k,
@@ -263,6 +267,7 @@ def price_token_call(
             Decimal(0),
             CostKind.EXACT,
             catalog_version=catalog_version,
+            started_at=started_at,
             window=window,
             prices=prices,
         )
@@ -273,6 +278,7 @@ def price_token_call(
             None,
             CostKind.UNKNOWN,
             catalog_version=catalog_version,
+            started_at=started_at,
             window=None,
             prices=_TokenPrices(None, None, None),
         )
@@ -282,6 +288,7 @@ def price_token_call(
             None,
             CostKind.UNKNOWN,
             catalog_version=catalog_version,
+            started_at=started_at,
             window=window,
             prices=prices,
         )
@@ -293,6 +300,7 @@ def price_token_call(
             input_estimate * p_in / _PER_1K,
             CostKind.ESTIMATED,
             catalog_version=catalog_version,
+            started_at=started_at,
             window=window,
             prices=prices,
         )
@@ -335,6 +343,7 @@ def price_token_call(
         cost,
         CostKind.ESTIMATED if approximated else CostKind.EXACT,
         catalog_version=catalog_version,
+        started_at=started_at,
         window=window,
         prices=prices,
         unit_out_estimate=used_output_estimate,
@@ -370,6 +379,7 @@ def price_audio_call(
             cost_kind=_settled(CostKind.EXACT, catalog_version),
             catalog_version=catalog_version,
             tariff_window=window,
+            call_started_at=started_at,
             price_per_minute_usd=per_minute,
         )
     if model is None or per_minute is None or duration_sec is None:
@@ -378,6 +388,7 @@ def price_audio_call(
             cost_kind=CostKind.UNKNOWN,
             catalog_version=catalog_version,
             tariff_window=window if per_minute is not None else None,
+            call_started_at=started_at,
             price_per_minute_usd=per_minute,
         )
 
@@ -392,6 +403,7 @@ def price_audio_call(
         cost_kind=_settled(kind, catalog_version),
         catalog_version=catalog_version,
         tariff_window=window,
+        call_started_at=started_at,
         price_per_minute_usd=per_minute,
         billed_seconds=billed,
     )

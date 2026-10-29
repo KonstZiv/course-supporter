@@ -306,6 +306,34 @@ async def probe_metadata(path: Path) -> VideoFileMetadata:
     return _parse_probe(data, source_name=path.name)
 
 
+async def probe_duration_sec(path: Path) -> float:
+    """Duration of any local media file in seconds, via ffprobe; no video needed.
+
+    The pure-audio path calls it before speech-to-text, so the transcription is
+    priced from a duration known before the call (BIL-C, decision 6). Raises
+    :class:`UnsupportedFormatError` when ffprobe cannot read a duration, and
+    :class:`ProcessingError` (from ``_run``) when ffprobe is missing or times out.
+    """
+    rc, out, err = await _run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
+        timeout_sec=_PROBE_TIMEOUT_SEC,
+    )
+    if rc != 0:
+        raise UnsupportedFormatError(
+            f"ffprobe failed (code {rc}) on {path.name}: "
+            f"{err.decode(errors='replace')[-_ERR_TAIL:]}"
+        )
+    try:
+        duration = (json.loads(out).get("format") or {}).get("duration")
+    except json.JSONDecodeError as exc:
+        raise UnsupportedFormatError(
+            f"ffprobe returned invalid JSON for {path.name}: {exc}."
+        ) from exc
+    if duration is None:
+        raise UnsupportedFormatError(f"Could not determine duration for {path.name}.")
+    return float(duration)
+
+
 def _parse_probe(data: dict[str, Any], *, source_name: str) -> VideoFileMetadata:
     """Map ffprobe ``-show_format -show_streams`` JSON to ``VideoFileMetadata``.
 

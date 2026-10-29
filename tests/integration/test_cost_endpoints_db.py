@@ -161,6 +161,7 @@ async def cost_seed(
                 provider=provider,
                 model_id=model_id,
                 cost_usd=cost,
+                cost_kind="estimated" if cost is not None else None,
                 action=action,
                 created_at=SAMPLE_TIMESTAMP,
             )
@@ -361,6 +362,7 @@ class TestCostSummaryE2E:
                         provider=f"prov-{i:03d}",
                         model_id=f"model-{i:03d}",
                         cost_usd=float(75 - i),
+                        cost_kind="estimated",
                         created_at=SAMPLE_TIMESTAMP,
                     )
                     for i in range(75)
@@ -526,6 +528,7 @@ class TestCostCourseE2E:
                     provider="anthropic",
                     model_id="claude-sonnet-4",
                     cost_usd=999.0,
+                    cost_kind="estimated",
                     created_at=SAMPLE_TIMESTAMP,
                 )
             )

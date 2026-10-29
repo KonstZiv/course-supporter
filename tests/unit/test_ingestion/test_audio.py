@@ -252,6 +252,43 @@ class TestProcessRaw:
         # cache populated
         assert len(redis._store) == 1
 
+    async def test_duration_is_probed_before_the_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BIL-C, decision 6: the transcription is priced from a duration
+        known before it is paid for. Lock: red if the probe is dropped and
+        ``duration_sec`` goes back to ``None``."""
+        from course_supporter.ingestion.video_pipeline import media
+
+        probe = AsyncMock(return_value=61.25)
+        monkeypatch.setattr(media, "probe_duration_sec", probe)
+        router = _mock_stt_router(_stt_result([_word("Hi", 0.0, 0.3)]))
+        proc = AudioProcessor(stt_router=router, redis=_mock_redis())
+        set_job_from_arq(uuid.uuid4())
+
+        await proc.process_raw(_mock_authored_document(source_url="/tmp/a.mp3"))
+
+        assert str(probe.await_args.args[0]) == "/tmp/a.mp3"
+        assert router.transcribe.await_args.kwargs["duration_sec"] == 61.25
+
+    async def test_unreadable_duration_leaves_it_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.ingestion.video_pipeline import media
+
+        monkeypatch.setattr(
+            media,
+            "probe_duration_sec",
+            AsyncMock(side_effect=UnsupportedFormatError("no duration")),
+        )
+        router = _mock_stt_router(_stt_result([_word("Hi", 0.0, 0.3)]))
+        proc = AudioProcessor(stt_router=router, redis=_mock_redis())
+        set_job_from_arq(uuid.uuid4())
+
+        await proc.process_raw(_mock_authored_document())
+
+        assert router.transcribe.await_args.kwargs["duration_sec"] is None
+
     async def test_entry_guard_empty_words_raises(self) -> None:
         """KD-2.2-C — provider must surface word-level alignment."""
         result = STTResult(

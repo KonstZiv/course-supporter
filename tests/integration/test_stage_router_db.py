@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -241,6 +242,9 @@ class TestStageRouterDB:
         assert first.success is False
         assert first.error_message is not None
         assert "rate limited" in first.error_message
+        # BIL-C, P4: a 429 is not billed — an exact zero, not a NULL.
+        assert first.cost_kind == "exact"
+        assert first.cost_usd == Decimal(0)
 
         assert second.action == "demo_stage"
         assert second.strategy == "default"
@@ -250,7 +254,12 @@ class TestStageRouterDB:
         # from the registry pricing above (F(a)), not from the response.
         assert second.unit_in == 12
         assert second.unit_out == 34
-        assert second.cost_usd == pytest.approx(0.008)
+        assert second.cost_usd == Decimal("0.008")
+        assert second.cost_kind == "exact"
+        assert second.catalog_version == "test-catalog"
+        assert second.tariff_window == "flat"
+        assert second.price_in_per_1k_usd == Decimal("0.1")
+        assert second.call_started_at is not None
         # The mocked response reports no reasoning tokens → new column is NULL.
         assert second.unit_out_reasoning is None
 

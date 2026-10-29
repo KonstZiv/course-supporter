@@ -9,6 +9,7 @@ orchestration (download / probe / extract) runs in the
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -25,6 +26,7 @@ from course_supporter.ingestion.video_pipeline.media import (
     _parse_probe,
     audio_extract_timeout_for,
     frame_extract_timeout_for,
+    probe_duration_sec,
     probe_intake_duration_from_bytes,
     probe_intake_duration_sec,
 )
@@ -225,3 +227,34 @@ class TestProbeIntakeDurationBytes:
             pytest.raises(UnsupportedFormatError, match="No video stream"),
         ):
             await probe_intake_duration_from_bytes(b"fake", filename="a.mp4")
+
+
+@pytest.fixture
+def tone_mp3(tmp_path: Path) -> Path:
+    """A 3 s audio-only mp3 generated via ffmpeg (requires_ffmpeg only)."""
+    import shutil
+    import subprocess
+
+    out = tmp_path / "tone.mp3"
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
+    subprocess.run(  # noqa: S603
+        [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", str(out)],
+        check=True,
+        capture_output=True,
+    )
+    return out
+
+
+@pytest.mark.requires_ffmpeg
+class TestProbeDurationSec:
+    """BIL-C: the pure-audio path prices speech-to-text from this probe."""
+
+    async def test_reads_an_audio_only_file(self, tone_mp3: Path) -> None:
+        assert await probe_duration_sec(tone_mp3) == pytest.approx(3.0, abs=0.1)
+
+    async def test_unreadable_file_is_refused(self, tmp_path: Path) -> None:
+        junk = tmp_path / "junk.mp3"
+        junk.write_bytes(b"not audio")
+        with pytest.raises(UnsupportedFormatError):
+            await probe_duration_sec(junk)

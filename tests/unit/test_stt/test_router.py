@@ -1,10 +1,18 @@
 """Tests for STTRouter fallback and retry logic."""
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
-from course_supporter.stt.router import AllSTTProvidersFailedError, STTRouter
+from course_supporter.cost_kinds import CostKind
+from course_supporter.llm.registry import ModelConfig, ModelPrices
+from course_supporter.stt.router import (
+    AllSTTProvidersFailedError,
+    STTAttempt,
+    STTRouter,
+)
 from course_supporter.stt.schemas import STTResult
 
 
@@ -12,11 +20,20 @@ def _make_result(provider: str = "test", model_id: str = "m1") -> STTResult:
     return STTResult(text="transcript", provider=provider, model_id=model_id)
 
 
-def _make_model_cfg(model_id: str = "m1", provider: str = "test") -> MagicMock:
-    cfg = MagicMock()
-    cfg.model_id = model_id
-    cfg.provider = provider
-    return cfg
+def _make_model_cfg(
+    model_id: str = "m1",
+    provider: str = "test",
+    *,
+    per_minute: str | None = None,
+    granularity: int | None = None,
+) -> ModelConfig:
+    return ModelConfig(
+        model_id=model_id,
+        provider=provider,
+        unit_type="minutes",
+        prices=ModelPrices(per_minute=Decimal(per_minute) if per_minute else None),
+        billing_granularity_sec=granularity,
+    )
 
 
 def _make_provider(
@@ -32,9 +49,10 @@ def _make_provider(
     return p
 
 
-def _make_registry(chain: list[MagicMock]) -> MagicMock:
+def _make_registry(chain: list[ModelConfig]) -> MagicMock:
     registry = MagicMock()
     registry.get_chain.return_value = chain
+    registry.catalog_version = "test-catalog"
     return registry
 
 
@@ -73,20 +91,33 @@ class TestSTTRouterHappyPath:
         assert result.action == "transcribe"
         assert result.strategy == "quality"
 
-    async def test_cost_calculated_from_cost_per_minute(self) -> None:
-        """STT cost is computed from cost_per_minute when available."""
+    async def test_cost_comes_from_the_duration_known_before_the_call(self) -> None:
+        """BIL-C, decision 6: the provider's reported duration is not used.
+
+        Lock: red if the price is taken from ``audio_duration_sec`` again.
+        """
         stt_result = _make_result()
-        stt_result.audio_duration_sec = 120.0  # 2 minutes
+        stt_result.audio_duration_sec = 999.0  # what the provider says back
         provider = _make_provider(result=stt_result)
-        cfg = _make_model_cfg()
-        cfg.cost_per_minute = 0.006  # $0.006/min
+        cfg = _make_model_cfg(per_minute="0.006", granularity=1)
         registry = _make_registry([cfg])
 
         router = STTRouter({"test": provider}, registry)
+        result = await router.transcribe("transcribe", "/tmp/a.mp3", duration_sec=120.0)
+
+        assert result.cost_usd == pytest.approx(0.012)  # 2 min x $0.006
+
+    async def test_unknown_duration_is_an_unknown_cost(self) -> None:
+        provider = _make_provider()
+        cfg = _make_model_cfg(per_minute="0.006", granularity=1)
+        cb = AsyncMock()
+
+        router = STTRouter({"test": provider}, _make_registry([cfg]), log_callback=cb)
         result = await router.transcribe("transcribe", "/tmp/a.mp3")
 
-        assert result.cost_usd is not None
-        assert result.cost_usd == pytest.approx(0.012, abs=1e-6)  # 2 min x $0.006
+        assert result.cost_usd is None
+        attempt: STTAttempt = cb.call_args.args[0]
+        assert attempt.priced.cost_kind is CostKind.UNKNOWN
 
 
 class TestSTTRouterFallback:
@@ -209,9 +240,10 @@ class TestSTTRouterLogCallback:
         await router.transcribe("transcribe", "/tmp/a.mp3")
 
         cb.assert_awaited_once()
-        result_arg, error_arg = cb.call_args[0]
-        assert isinstance(result_arg, STTResult)
-        assert error_arg is None
+        attempt = cb.call_args.args[0]
+        assert isinstance(attempt, STTAttempt)
+        assert attempt.error_message is None
+        assert attempt.provider == "test"
 
     async def test_log_callback_called_on_failure(self) -> None:
         provider = _make_provider(error=RuntimeError("fail"))
@@ -226,5 +258,29 @@ class TestSTTRouterLogCallback:
             await router.transcribe("transcribe", "/tmp/a.mp3")
 
         cb.assert_awaited_once()
-        _, error_arg = cb.call_args[0]
-        assert error_arg is not None
+        attempt = cb.call_args.args[0]
+        assert attempt.error_message is not None
+
+    async def test_every_retried_attempt_is_written(self) -> None:
+        """BIL-C: a retried failure may have been billed, so it has a row.
+
+        Lock: red if only the last attempt is written again.
+        """
+        request = httpx.Request("POST", "https://api.example/v1")
+        timeout = httpx.ReadTimeout("slow", request=request)
+        provider = _make_provider(error=timeout)
+        cfg = _make_model_cfg(per_minute="0.006", granularity=1)
+        cb = AsyncMock()
+
+        router = STTRouter(
+            {"test": provider}, _make_registry([cfg]), log_callback=cb, max_attempts=2
+        )
+        with pytest.raises(AllSTTProvidersFailedError):
+            await router.transcribe("transcribe", "/tmp/a.mp3", duration_sec=60.0)
+
+        attempts = [call.args[0] for call in cb.call_args_list]
+        assert len(attempts) == 2
+        for attempt in attempts:
+            assert attempt.error_message is not None
+            assert attempt.priced.cost_kind is CostKind.ESTIMATED
+            assert attempt.priced.cost_usd == Decimal("0.006000000000")

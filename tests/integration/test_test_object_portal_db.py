@@ -416,6 +416,7 @@ async def _a_reviewed_and_paid_attempt(
                 provider="deepseek",
                 model_id="deepseek-v4",
                 cost_usd=0.25,
+                cost_kind="estimated",
                 action="review",
                 created_at=_CALLED_AT,
             )

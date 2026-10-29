@@ -4,22 +4,50 @@ Mirrors ModelRouter architecture but simplified for STT:
 - No context window guards (audio has no token limits)
 - Cost calculated per minute of audio, not per token
 - Single ``transcribe()`` method (no structured output)
+
+Every attempt — the first try, each retry, each fallback model — is one row of
+the call register, priced from the audio duration known BEFORE the call
+(BIL-C, decision 6): a retried failure is a request the provider may have
+billed, so it is never left out.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import structlog
 
+from course_supporter.llm.pricing import PricedCall, price_audio_call
 from course_supporter.llm.registry import ModelConfig, ModelRegistryConfig
 from course_supporter.stt.providers.base import STTProvider
 from course_supporter.stt.schemas import STTRequest, STTResult
 
 logger = structlog.get_logger()
 
-LogCallback = Callable[[STTResult | None, str | None], Awaitable[None]]
-"""Optional async callback for DB logging: (result_or_none, error_or_none)."""
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class STTAttempt:
+    """One transcription attempt, as the call register records it."""
+
+    action: str
+    strategy: str
+    provider: str
+    model_id: str
+    latency_ms: int
+    priced: PricedCall
+    error_message: str | None
+
+
+LogCallback = Callable[[STTAttempt], Awaitable[None]]
+"""Optional async callback for DB logging: one call per attempt."""
+
+
+def _utc_now() -> datetime:
+    """When an attempt is sent; a seam the tests freeze."""
+    return datetime.now(UTC)
 
 
 class AllSTTProvidersFailedError(Exception):
@@ -172,14 +200,25 @@ class STTRouter:
         action: str,
         strategy: str,
     ) -> STTResult | None:
-        """Retry transcription up to max_attempts on transient errors."""
+        """Retry transcription up to max_attempts on transient errors.
+
+        Each attempt is written to the register, a failed retry included.
+        """
         for attempt in range(1, self._max_attempts + 1):
+            started_at = _utc_now()
+            started = time.perf_counter()
             try:
                 result = await provider.transcribe(request)
-                self._enrich_result(result, model_cfg, action, strategy)
-                await self._log_success(result)
-                return result
             except Exception as exc:
+                await self._log_attempt(
+                    model_cfg,
+                    request,
+                    action=action,
+                    strategy=strategy,
+                    started_at=started_at,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    failure=exc,
+                )
                 if not self._is_retryable(exc):
                     logger.warning(
                         "stt_call_permanent_error",
@@ -188,7 +227,6 @@ class STTRouter:
                         error=str(exc),
                     )
                     errors.append((model_cfg.model_id, str(exc)))
-                    await self._log_failure(model_cfg, request, str(exc))
                     break
 
                 logger.warning(
@@ -201,7 +239,21 @@ class STTRouter:
                 )
                 if attempt == self._max_attempts:
                     errors.append((model_cfg.model_id, str(exc)))
-                    await self._log_failure(model_cfg, request, str(exc))
+                continue
+
+            priced = self._price(model_cfg, request, started_at, failure=None)
+            self._enrich_result(result, action, strategy, priced)
+            await self._log_attempt(
+                model_cfg,
+                request,
+                action=action,
+                strategy=strategy,
+                started_at=started_at,
+                latency_ms=result.latency_ms,
+                failure=None,
+                priced=priced,
+            )
+            return result
         return None
 
     # -- helpers --------------------------------------------------------
@@ -223,51 +275,72 @@ class STTRouter:
 
         return True
 
-    @staticmethod
-    def _enrich_result(
-        result: STTResult,
-        model_cfg: ModelConfig,
-        action: str,
-        strategy: str,
-    ) -> None:
-        """Set action, strategy, and estimate cost on result."""
-        result.action = action
-        result.strategy = strategy
-
-        if result.audio_duration_sec is not None:
-            cost_per_min = getattr(model_cfg, "cost_per_minute", None)
-            if isinstance(cost_per_min, (int, float)):
-                result.cost_usd = round(
-                    result.audio_duration_sec / 60 * float(cost_per_min), 6
-                )
-
-    async def _log_success(self, result: STTResult) -> None:
-        """Log successful transcription via callback."""
-        if self._log_callback is not None:
-            try:
-                await self._log_callback(result, None)
-            except Exception:
-                logger.exception("stt_log_callback_error")
-
-    async def _log_failure(
+    def _price(
         self,
         model_cfg: ModelConfig,
         request: STTRequest,
-        error_msg: str,
+        started_at: datetime,
+        *,
+        failure: Exception | None,
+    ) -> PricedCall:
+        """Price one attempt from the duration the caller knew before it."""
+        return price_audio_call(
+            model_cfg,
+            catalog_version=self._registry.catalog_version,
+            started_at=started_at,
+            duration_sec=request.duration_sec,
+            succeeded=failure is None,
+            failure=failure,
+        )
+
+    @staticmethod
+    def _enrich_result(
+        result: STTResult,
+        action: str,
+        strategy: str,
+        priced: PricedCall,
     ) -> None:
-        """Log failed transcription via callback."""
-        if self._log_callback is not None:
-            try:
-                partial = STTResult(
-                    text="",
+        """Set action, strategy and the register's price on the result."""
+        result.action = action
+        result.strategy = strategy
+        result.cost_usd = (
+            float(priced.cost_usd) if priced.cost_usd is not None else None
+        )
+
+    async def _log_attempt(
+        self,
+        model_cfg: ModelConfig,
+        request: STTRequest,
+        *,
+        action: str,
+        strategy: str,
+        started_at: datetime,
+        latency_ms: int,
+        failure: Exception | None,
+        priced: PricedCall | None = None,
+    ) -> None:
+        """Write one attempt via the callback; a callback failure is only logged."""
+        if self._log_callback is None:
+            return
+        try:
+            await self._log_callback(
+                STTAttempt(
+                    action=action,
+                    strategy=strategy,
                     provider=model_cfg.provider,
                     model_id=model_cfg.model_id,
-                    action=request.action,
-                    strategy=request.strategy,
+                    latency_ms=latency_ms,
+                    priced=priced
+                    or self._price(model_cfg, request, started_at, failure=failure),
+                    error_message=(
+                        None
+                        if failure is None
+                        else str(failure).strip() or type(failure).__name__
+                    ),
                 )
-                await self._log_callback(partial, error_msg)
-            except Exception:
-                logger.exception("stt_log_callback_error")
+            )
+        except Exception:
+            logger.exception("stt_log_callback_error")
 
     def available_providers(self) -> list[str]:
         """Return names of configured and enabled providers."""

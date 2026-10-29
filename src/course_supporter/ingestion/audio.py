@@ -83,6 +83,7 @@ import bisect
 import json
 import uuid
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
@@ -119,6 +120,19 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import AuthoredDocument
 
 logger = structlog.get_logger()
+
+
+async def _probe_duration(audio_path: str) -> float | None:
+    """The audio's duration before speech-to-text, or ``None`` if unreadable."""
+    from course_supporter.ingestion.video_pipeline import media
+
+    try:
+        return await media.probe_duration_sec(Path(audio_path))
+    except ProcessingError as exc:
+        # UnsupportedFormatError is a ProcessingError: one clause covers both.
+        logger.warning("audio_duration_probe_failed", error=str(exc))
+        return None
+
 
 _WORD_CACHE_KEY_TMPL = "audio_transcription:{job_id}"
 
@@ -332,14 +346,15 @@ class AudioProcessor(MaterialProcessor):
                 "before invocation."
             )
 
-        # duration_sec is omitted (-> None): the pure-audio duration is only
-        # known post-STT (result.audio_duration_sec), so the provider falls
-        # back to the conservative STT timeout cap rather than the dev-flat
-        # floor (task M1, audio leg). The video path passes a probed duration.
+        # The duration is probed BEFORE the call, as the video path does: the
+        # register prices the transcription from it (BIL-C, decision 6) and the
+        # provider sizes its timeout by it (task M1). A probe that fails leaves
+        # it unknown -- the attempt row then says "unknown" rather than guess.
         result = await self._stt_router.transcribe(
             "transcribe",
             source.source_url,
             language=None,
+            duration_sec=await _probe_duration(source.source_url),
         )
 
         if not result.words:

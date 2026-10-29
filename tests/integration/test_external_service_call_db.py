@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -129,6 +130,7 @@ class TestForeignKeyEnforcement:
             provider="anthropic",
             model_id="claude-sonnet-4",
             cost_usd=1.0,
+            cost_kind="estimated",
         )
         db_session.add(esc)
         await db_session.flush()
@@ -150,12 +152,13 @@ class TestForeignKeyEnforcement:
             job_id=job.id,
             provider="anthropic",
             model_id="claude-sonnet-4",
-            cost_usd=2.5,
+            cost_usd=Decimal("2.5"),
+            cost_kind="estimated",
         )
         db_session.add(esc)
         await db_session.flush()
         await db_session.refresh(esc)
-        assert esc.cost_usd == pytest.approx(2.5)
+        assert esc.cost_usd == Decimal("2.5")
 
 
 # ── mentor-rebuild 01: migration ``esc_call_outcome`` ─────────────────
@@ -544,7 +547,7 @@ class TestFundsPortValues:
         assert row.success is None
         assert row.cost_usd is None
         assert row.error_message is None
-        assert row.ceiling_estimate_usd == 0.1
+        assert row.ceiling_estimate_usd == Decimal("0.1")
         assert row.funds_decision == "allowed"
         assert row.funds_refusal_reason is None
         assert row.path_key == "task/first"

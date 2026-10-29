@@ -63,6 +63,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -81,10 +82,14 @@ from course_supporter.llm.input_hash import (
     hash_attempt_input,
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
+from course_supporter.llm.pricing import PricedCall, TokenUsage, price_token_call
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
 from course_supporter.llm.registry import Capability, ModelRegistryConfig
 from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
-from course_supporter.llm.token_budget import estimate_tokens
+from course_supporter.llm.token_budget import (
+    estimate_request_input_tokens,
+    estimate_tokens,
+)
 from course_supporter.service_logging import _persist
 
 if TYPE_CHECKING:
@@ -93,6 +98,12 @@ if TYPE_CHECKING:
     from course_supporter.llm.providers.base import LLMProvider
 
 logger = structlog.get_logger()
+
+
+def _utc_now() -> datetime:
+    """When an attempt is sent; a seam the tests freeze (the tariff window)."""
+    return datetime.now(UTC)
+
 
 # Exponential-backoff schedule clamp; matches KD16 "max 30s".
 _MAX_BACKOFF_SECONDS = 30
@@ -158,6 +169,20 @@ class _Attempt:
 
 # Register text of an attempt cut off at the output ceiling under a schema.
 _TRUNCATED_MESSAGE = "output ceiling: truncated response"
+
+
+def _cached_within_input(response: LLMResponse | None) -> int | None:
+    """The cached-input count the register can store: part of a reported input.
+
+    A cached count without an input count, or above it, is not a usage report
+    the register can hold (``ck_esc_cached_within_input``); the pricing already
+    clamps it the same way.
+    """
+    if response is None or response.tokens_in is None:
+        return None
+    if response.tokens_in_cached is None:
+        return None
+    return max(0, min(response.tokens_in_cached, response.tokens_in))
 
 
 def _truncated_under_schema(
@@ -908,6 +933,7 @@ class StageRouter:
         validator: whatever it said would start a structural retry under the
         same ceiling. The row says why the answer was dropped instead.
         """
+        started_at = _utc_now()
         start = time.perf_counter()
         response: LLMResponse | None = None
         error_message: str | None = None
@@ -949,22 +975,20 @@ class StageRouter:
                 # async-context violation, etc.) so the original LLM
                 # exception always wins propagation.
                 fallback_latency_ms = int((time.perf_counter() - start) * 1000)
-                # F(a) — compute cost_usd from registry pricing (providers
-                # do not set ``response.cost_usd``; pre-2.4.22 every ESC row
-                # carried NULL). Skip the lookup on failed calls (response
-                # None) and zero-token success (NULL is semantically right
-                # for "nothing billable"). Model not in registry, or with no
-                # named price → NULL; the startup ladder check refuses both
-                # for any configured rung, so this is the unvalidated-config
-                # fallback, not a path production takes.
-                computed_cost: float | None = None
-                if response is not None and (response.tokens_in or response.tokens_out):
-                    cost_model = self._registry.models.get(entry.model)
-                    if cost_model is not None:
-                        computed_cost = cost_model.estimate_cost(
-                            response.tokens_in or 0,
-                            response.tokens_out or 0,
-                        )
+                # BIL-C: every attempt is priced — from the provider's usage
+                # when a response came back, from our own input count when it
+                # did not (a failed call the provider may have billed), and
+                # as a known zero for a failure it does not bill. The row then
+                # carries the kind of its sum and the prices it was computed
+                # from (``llm/pricing.py``).
+                input_estimate = estimate_request_input_tokens(request)
+                priced = self._price_attempt(
+                    entry,
+                    response,
+                    raised,
+                    started_at=started_at,
+                    input_estimate=input_estimate,
+                )
                 try:
                     await _persist(
                         self._session_factory,
@@ -974,6 +998,8 @@ class StageRouter:
                         model_id=entry.model,
                         unit_type="tokens",
                         unit_in=response.tokens_in if response else None,
+                        unit_in_cached=_cached_within_input(response),
+                        unit_in_estimate=input_estimate,
                         unit_out=response.tokens_out if response else None,
                         unit_out_reasoning=(
                             response.tokens_reasoning if response else None
@@ -981,7 +1007,7 @@ class StageRouter:
                         latency_ms=(
                             response.latency_ms if response else fallback_latency_ms
                         ),
-                        cost_usd=computed_cost,
+                        priced=priced,
                         success=response is not None,
                         error_message=error_message,
                         outcome=_attempt_outcome(
@@ -1004,6 +1030,37 @@ class StageRouter:
                     )
                 except Exception:
                     logger.exception("stage_router_esc_persist_failed")
+
+    def _price_attempt(
+        self,
+        entry: LadderEntry,
+        response: LLMResponse | None,
+        raised: Exception | None,
+        *,
+        started_at: datetime,
+        input_estimate: int | None,
+    ) -> PricedCall:
+        """The price of one attempt (``llm/pricing.py``), from what it left."""
+        usage = (
+            TokenUsage(
+                tokens_in=response.tokens_in,
+                tokens_in_cached=response.tokens_in_cached,
+                tokens_out=response.tokens_out,
+            )
+            if response is not None
+            else None
+        )
+        return price_token_call(
+            self._registry.models.get(entry.model),
+            catalog_version=self._registry.catalog_version,
+            started_at=started_at,
+            usage=usage,
+            failure=raised,
+            input_estimate=input_estimate,
+            output_estimate=(
+                estimate_tokens(response.content) if response is not None else None
+            ),
+        )
 
     async def _record_trace(
         self,

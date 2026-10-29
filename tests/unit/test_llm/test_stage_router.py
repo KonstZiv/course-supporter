@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
@@ -11,6 +13,7 @@ import openai
 import pytest
 
 from course_supporter.call_outcome import CallOutcome, SkipReason
+from course_supporter.cost_kinds import CostKind, TariffWindow
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -1431,7 +1434,14 @@ class TestLadderEntryOverridesPropagation:
 
 
 class TestRegistryAwareCost:
-    """F(a) — StageRouter computes cost_usd from registry pricing."""
+    """BIL-C — StageRouter prices every attempt from the registry.
+
+    Locks (each with the mutation that turns it red): a failed attempt is
+    estimated from our input count, never NULL (red if the old "no response,
+    no cost" gate returns); a 429 is an exact zero (red if the P4 table loses
+    it); an attempt sent in the peak window records the applied peak prices
+    and a sum recomputable from them (red if the base price is stored instead).
+    """
 
     async def test_cost_populated_from_registry_on_success(
         self,
@@ -1454,9 +1464,14 @@ class TestRegistryAwareCost:
 
         assert len(calls) == 1
         assert calls[0]["success"] is True
-        assert calls[0]["cost_usd"] == pytest.approx(0.00005)
+        priced = calls[0]["priced"]
+        assert priced.cost_usd == Decimal("0.00005")
+        assert priced.cost_kind is CostKind.EXACT
+        assert priced.catalog_version == "test-catalog"
+        assert priced.tariff_window is TariffWindow.FLAT
+        assert calls[0]["unit_in_estimate"] is not None
 
-    async def test_cost_null_when_model_not_in_registry(
+    async def test_unknown_when_model_not_in_registry(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1475,9 +1490,10 @@ class TestRegistryAwareCost:
 
         assert len(calls) == 1
         assert calls[0]["success"] is True
-        assert calls[0]["cost_usd"] is None
+        assert calls[0]["priced"].cost_kind is CostKind.UNKNOWN
+        assert calls[0]["priced"].cost_usd is None
 
-    async def test_cost_null_when_zero_tokens(
+    async def test_reported_zero_tokens_are_an_exact_zero(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1494,7 +1510,6 @@ class TestRegistryAwareCost:
                 tokens_in=0,
                 tokens_out=0,
                 latency_ms=10,
-                cost_usd=None,
             )
         )
         provider.classify_error = lambda _exc: ErrorCategory.SEMANTIC
@@ -1508,11 +1523,10 @@ class TestRegistryAwareCost:
 
         await router.execute_for_stage("demo")
 
-        assert len(calls) == 1
-        assert calls[0]["success"] is True
-        assert calls[0]["cost_usd"] is None
+        assert calls[0]["priced"].cost_usd == Decimal(0)
+        assert calls[0]["priced"].cost_kind is CostKind.EXACT
 
-    async def test_cost_null_on_failed_call(
+    async def test_failed_call_is_estimated_from_our_input_count(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1531,21 +1545,76 @@ class TestRegistryAwareCost:
         with pytest.raises(LadderExhaustedError):
             await router.execute_for_stage("demo")
 
-        # attempt (failed) + trace (rung abandoned); neither is billable
+        # attempt (failed, may have been billed) + trace (rung abandoned)
         assert len(calls) == 2
-        assert calls[0]["success"] is False
-        assert calls[0]["cost_usd"] is None
+        attempt = calls[0]
+        assert attempt["success"] is False
+        estimate = attempt["unit_in_estimate"]
+        assert estimate > 0
+        assert attempt["priced"].cost_kind is CostKind.ESTIMATED
+        assert attempt["priced"].cost_usd == (
+            Decimal(estimate) * Decimal("0.001") / 1000
+        ).quantize(Decimal("1e-12"))
         assert calls[1]["outcome"] is CallOutcome.ABANDONED
-        assert calls[1].get("cost_usd") is None
+        assert calls[1].get("priced") is None
+
+    async def test_rate_limited_call_is_an_exact_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        request = httpx.Request("POST", "https://api.example/v1")
+        rate_limited = httpx.HTTPStatusError(
+            "429", request=request, response=httpx.Response(429, request=request)
+        )
+        provider = _failing_provider(side_effects=[rate_limited])
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(cost_per_1k_in=0.001, cost_per_1k_out=0.002),
+            session_factory=AsyncMock(),
+        )
+
+        with pytest.raises(LadderExhaustedError):
+            await router.execute_for_stage("demo")
+
+        assert calls[0]["priced"].cost_kind is CostKind.EXACT
+        assert calls[0]["priced"].cost_usd == Decimal(0)
+
+    async def test_failed_call_with_attachments_is_unknown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        _capture_sleeps(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+
+        provider = _failing_provider(side_effects=[_semantic_exception()])
+        router = StageRouter(
+            _config(),
+            {"anthropic": provider},
+            registry=_registry_with(cost_per_1k_in=0.001, cost_per_1k_out=0.002),
+            session_factory=AsyncMock(),
+        )
+
+        with pytest.raises(LadderExhaustedError):
+            await router.execute_for_stage("demo", contents=[b"\x89PNG"])
+
+        assert calls[0]["unit_in_estimate"] is None
+        assert calls[0]["priced"].cost_kind is CostKind.UNKNOWN
+        assert calls[0]["priced"].cost_usd is None
 
     async def test_cost_zero_for_zero_priced_model(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Model in registry with an explicit 0.0 price → cost_usd=0.0 (not NULL).
+        """Model in registry with an explicit 0.0 price → an exact zero.
 
         An explicit zero is a named price (free tier, local model). An absent
-        price is no price at all: it yields cost_usd=NULL and the startup
+        price is no price at all: it yields an unknown sum and the startup
         ladder check refuses such a rung (mentor-rebuild 01), so a configured
         ladder never reaches the router with one.
         """
@@ -1563,7 +1632,67 @@ class TestRegistryAwareCost:
         await router.execute_for_stage("demo")
 
         assert len(calls) == 1
-        assert calls[0]["cost_usd"] == 0.0
+        assert calls[0]["priced"].cost_usd == Decimal(0)
+        assert calls[0]["priced"].cost_kind is CostKind.EXACT
+
+    async def test_peak_attempt_records_applied_prices_and_a_recomputable_sum(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        calls = _capture_persist_calls(monkeypatch)
+        # Monday 02:00 UTC: inside the 01:00-04:00 peak span.
+        monkeypatch.setattr(
+            "course_supporter.llm.stage_router._utc_now",
+            lambda: datetime(2026, 10, 26, 2, 0, tzinfo=UTC),
+        )
+        registry = ModelRegistryConfig.model_validate(
+            {
+                "catalog": {"version": "v-peak", "pricing_sha256": "0" * 64},
+                "tariffs": {
+                    "peak": {
+                        "catalog_prices": "off_peak",
+                        "peak_multiplier": 2,
+                        "peak": {"weekdays": ["mon"], "hours": ["01:00-04:00"]},
+                    }
+                },
+                "providers": {
+                    "anthropic": {
+                        "type": "llm",
+                        "models": [
+                            {
+                                "id": "claude-x",
+                                "cost_per_1k_in": 0.001,
+                                "cost_per_1k_out": 0.002,
+                                "tariff": "peak",
+                            }
+                        ],
+                    }
+                },
+                "actions": {},
+            }
+        )
+        router = StageRouter(
+            _config(),
+            {"anthropic": _ok_provider("ok")},
+            registry=registry,
+            session_factory=AsyncMock(),
+        )
+
+        await router.execute_for_stage("demo")
+
+        row = calls[0]
+        priced = row["priced"]
+        assert priced.tariff_window is TariffWindow.PEAK
+        assert priced.price_in_per_1k_usd == Decimal("0.002")
+        assert priced.price_out_per_1k_usd == Decimal("0.004")
+        assert priced.call_started_at == datetime(2026, 10, 26, 2, 0, tzinfo=UTC)
+        # The row's own arithmetic gives its sum back.
+        recomputed = (
+            row["unit_in"] * priced.price_in_per_1k_usd
+            + row["unit_out"] * priced.price_out_per_1k_usd
+        ) / 1000
+        assert priced.cost_usd == recomputed.quantize(Decimal("1e-12"))
 
 
 class TestRegistryAwareMaxTokens:

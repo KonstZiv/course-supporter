@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -15,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -27,6 +29,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
+from course_supporter.cost_kinds import CostKind, TariffWindow
 from course_supporter.criteria_kinds import (
     CRITERION_ID_PATTERN,
     POINT_ID_PATTERN,
@@ -1219,6 +1222,35 @@ class ExternalServiceCall(Base):
             "= (funds_refusal_reason IS NOT NULL)",
             name="ck_esc_funds_refusal_reason",
         ),
+        # ── BIL-C: the price of a paid call ──
+        CheckConstraint(_nullable_in("cost_kind", CostKind), name="ck_esc_cost_kind"),
+        CheckConstraint(
+            _nullable_in("tariff_window", TariffWindow), name="ck_esc_tariff_window"
+        ),
+        # A sum exactly when the kind is one that has a sum. Both sides are
+        # never NULL, so the CHECK cannot pass by evaluating to NULL.
+        CheckConstraint(
+            "(cost_usd IS NOT NULL) = ("
+            f"cost_kind IS NOT DISTINCT FROM '{CostKind.EXACT.value}' "
+            f"OR cost_kind IS NOT DISTINCT FROM '{CostKind.ESTIMATED.value}')",
+            name="ck_esc_cost_kind_amount",
+        ),
+        # A row that counts units is a paid call, and a paid call names the
+        # kind of its sum.
+        CheckConstraint(
+            "unit_type IS NULL OR cost_kind IS NOT NULL", name="ck_esc_priced_call"
+        ),
+        # An exact sum says which catalog and which time-of-day price it is.
+        CheckConstraint(
+            f"cost_kind IS DISTINCT FROM '{CostKind.EXACT.value}' "
+            "OR (catalog_version IS NOT NULL AND tariff_window IS NOT NULL)",
+            name="ck_esc_exact_is_priced",
+        ),
+        CheckConstraint(
+            "unit_in_cached IS NULL "
+            "OR (unit_in IS NOT NULL AND unit_in_cached BETWEEN 0 AND unit_in)",
+            name="ck_esc_cached_within_input",
+        ),
         {"comment": "Audit log of all external API calls (LLM, transcription, etc.)"},
     )
 
@@ -1272,7 +1304,26 @@ class ExternalServiceCall(Base):
     )
     unit_type: Mapped[str | None] = mapped_column(String(20))
     unit_in: Mapped[int | None] = mapped_column(Integer)
+    unit_in_cached: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Input tokens the provider served from its cache, as it reported "
+        "them; part of unit_in, priced at price_in_cached_per_1k_usd. NULL = not "
+        "reported.",
+    )
+    unit_in_estimate: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Our count of the request's input tokens (characters / 3.5, the "
+        "money-ceiling formula), on every LLM attempt without attachments. Stands "
+        "in for unit_in when the provider reported none; beside a reported "
+        "unit_in it measures the count's error.",
+    )
     unit_out: Mapped[int | None] = mapped_column(Integer)
+    unit_out_estimate: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Our count of the response's output tokens. Set only when a "
+        "response came back without the provider's output count, and then part "
+        "of the sum.",
+    )
     unit_out_reasoning: Mapped[int | None] = mapped_column(
         Integer,
         comment=(
@@ -1283,14 +1334,75 @@ class ExternalServiceCall(Base):
             "reasoning that is already counted inside their output tokens — "
             "DashScope reads the number from the nested "
             "usage.output_tokens_details.reasoning_tokens (there is no flat "
-            "key), the OpenAI-compatible ones expose no separate number and "
-            "leave this NULL. Gemini reports reasoning apart from the answer, "
-            "so its connector adds it into unit_out and records it here "
+            "key), the OpenAI-compatible ones from "
+            "usage.completion_tokens_details.reasoning_tokens (DeepSeek thinking "
+            "mode; NULL when absent). Gemini reports reasoning apart from the "
+            "answer, so its connector adds it into unit_out and records it here "
             "(hotfix 3). Anthropic leaves it NULL."
         ),
     )
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column(Float)
+    cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
+        comment="What the call cost, in dollars (BIL-C); how it was obtained is "
+        "cost_kind. NULL exactly when cost_kind is 'unknown' or the row records "
+        "no paid call. Recomputable from the row: tokens — "
+        "((coalesce(unit_in, unit_in_estimate) - coalesce(unit_in_cached, 0)) * "
+        "price_in_per_1k_usd + coalesce(unit_in_cached, 0) * "
+        "coalesce(price_in_cached_per_1k_usd, price_in_per_1k_usd) + "
+        "coalesce(unit_out, unit_out_estimate, 0) * price_out_per_1k_usd) / 1000; "
+        "seconds — unit_in * price_per_minute_usd / 60; rounded half-even to 12 "
+        "places. An exact row of a failed call is the zero of a failure the "
+        "provider does not bill.",
+    )
+    cost_kind: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="How cost_usd was obtained (CostKind). exact — every usage detail "
+        "the provider reported times the prices in force at the call, or the "
+        "known zero of a failure the provider does not bill (429, a connection "
+        "that failed before sending). estimated — computed under a named "
+        "approximation: our input count for a failed call, cached tokens without "
+        "a cached price, a price not yet in force, a prompt above the size the "
+        "price holds for, speech-to-text without a billing granularity. unknown "
+        "— no defensible number; cost_usd is NULL, never a zero. NULL on rows of "
+        "no paid call.",
+    )
+    catalog_version: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="Version of the price catalog (config/external_services.yaml, "
+        "catalog.version) the row was priced under.",
+    )
+    tariff_window: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="Which time-of-day price applied (TariffWindow): flat — the model "
+        "has no tariff; peak / off_peak — the model's tariff at call_started_at. "
+        "NULL when no price applied.",
+    )
+    call_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the attempt was sent. The tariff window and the date a "
+        "price is in force from are judged by it.",
+    )
+    price_in_per_1k_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
+        comment="Applied price of 1000 input tokens not served from cache: the "
+        "catalog price times the tariff multiplier for tariff_window.",
+    )
+    price_in_cached_per_1k_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
+        comment="Applied price of 1000 input tokens served from cache. NULL when "
+        "the catalog names none: cached tokens are then priced at "
+        "price_in_per_1k_usd and the row is estimated.",
+    )
+    price_out_per_1k_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
+        comment="Applied price of 1000 output tokens, reasoning included.",
+    )
+    price_per_minute_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
+        comment="Applied price of one minute of audio (speech-to-text rows, "
+        "where unit_in is the billed seconds).",
+    )
     # No ORM default: a Python-side default fires on an explicit None too, so
     # ``default=True`` turned every no-call row into a "successful call" — the
     # exact lie the nullable column exists to remove. Writers state the value.
@@ -1326,10 +1438,10 @@ class ExternalServiceCall(Base):
         comment="Per-review metric: share of claims covered by a verdict. NULL "
         "on call rows and when the review has no claims.",
     )
-    # Float, as cost_usd: the estimate and the actual cost of the path's calls
+    # NUMERIC, as cost_usd: the estimate and the actual cost of the path's calls
     # add up without conversion.
-    ceiling_estimate_usd: Mapped[float | None] = mapped_column(
-        Float,
+    ceiling_estimate_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 12),
         comment="The path's ceiling estimate in dollars: the sum of its "
         "stages' money ceilings, the same type as cost_usd." + _FUNDS_ROW_COMMENT,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from course_supporter.models.webhook import (
     WebhookMismatchPayload,
     WebhookReviewedPayload,
 )
+from course_supporter.service_logging import job_scope
 
 # --- Helpers ---
 
@@ -209,6 +211,12 @@ class TestBuildFailedPayload:
 
 class TestDeliverWebhook:
     """Webhook delivery with mocked httpx and SSRF validation."""
+
+    @pytest.fixture(autouse=True)
+    def _in_a_job(self) -> Iterator[None]:
+        # A delivery runs inside a homework job; its register row needs one.
+        with job_scope(uuid.uuid4()):
+            yield
 
     @pytest.fixture()
     def mock_session(self) -> MagicMock:
@@ -433,3 +441,36 @@ class TestDeliverWebhook:
         assert result is True
         esc = mock_session.add.call_args[0][0]
         assert esc.action == "webhook_reviewed"
+
+
+class TestDeliveryOutsideAJob:
+    """BIL-C, decision 6: webhook rows go through the shared write path.
+
+    Lock: red if ``_record_attempt`` adds the row straight to the caller's
+    session again — outside a job that row carries ``job_id = NULL`` and fails
+    the caller's commit.
+    """
+
+    @patch(
+        "course_supporter.homework.webhook.validate_webhook_url", new_callable=AsyncMock
+    )
+    async def test_no_row_reaches_the_callers_session(
+        self, mock_validate: AsyncMock
+    ) -> None:
+        mock_validate.side_effect = ValueError("blocked")
+        session = MagicMock()
+        payload = WebhookFailedPayload(
+            submission_id="sub-1",
+            student_external_id="stu-1",
+            reason="x",
+            timestamp=datetime.now(UTC),
+        )
+
+        with patch("course_supporter.service_logging.logger") as mock_logger:
+            delivered = await deliver_webhook(
+                url="https://example.com/hook", payload=payload, session=session
+            )
+
+        assert delivered is False
+        session.add.assert_not_called()
+        assert mock_logger.error.call_args.args[0] == "esc_write_skipped_no_job_id"

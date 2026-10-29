@@ -15,10 +15,15 @@ populated registry inline (see ``TestRegistryAwareCost`` /
 from __future__ import annotations
 
 from course_supporter.llm.registry import (
+    CatalogInfo,
     ModelRegistryConfig,
     ProviderConfig,
     ProviderModelConfig,
 )
+
+# A catalog version for registries built in code: without one nothing is
+# priced "exact" (BIL-C). The fingerprint is only checked when a file is loaded.
+TEST_CATALOG = CatalogInfo(version="test-catalog", pricing_sha256="0" * 64)
 
 
 def empty_registry() -> ModelRegistryConfig:
@@ -46,6 +51,7 @@ def registry_with(
     request's ``model_id`` in ``registry.models``.
     """
     return ModelRegistryConfig(
+        catalog=TEST_CATALOG,
         providers={
             provider: ProviderConfig(
                 type="llm",

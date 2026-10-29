@@ -386,15 +386,21 @@ async def _a_reviewed_and_paid_attempt(
 ) -> None:
     """A reviewed submission to ``task``: its job's paid call and a student's touch."""
     async with session_factory() as session:
+        submission_id = uuid.uuid4()
         job = Job(
             tenant_id=world.tenant,
             course_node_id=world.course,
             job_type="homework_processing",
             status="complete",
+            # The job's subject is the submission, as create_homework_job makes
+            # it: the homework cost reports attribute through it (BIL-C).
+            subject_type="homework_submission",
+            subject_id=submission_id,
         )
         session.add(job)
         await session.flush()
         submission = HomeworkSubmission(
+            id=submission_id,
             tenant_id=world.tenant,
             student_id=world.student,
             course_node_id=world.course,
@@ -416,6 +422,7 @@ async def _a_reviewed_and_paid_attempt(
                 provider="deepseek",
                 model_id="deepseek-v4",
                 cost_usd=0.25,
+                cost_kind="estimated",
                 action="review",
                 created_at=_CALLED_AT,
             )

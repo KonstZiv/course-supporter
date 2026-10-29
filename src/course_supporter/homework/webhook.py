@@ -36,8 +36,7 @@ from course_supporter.models.webhook import (
     WebhookPayload,
     WebhookReviewedPayload,
 )
-from course_supporter.service_logging import get_current_job_id
-from course_supporter.storage.orm import ExternalServiceCall
+from course_supporter.service_logging import add_register_row
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -281,18 +280,22 @@ def _record_attempt(
     success: bool,
     error: str | None = None,
 ) -> None:
-    """Create an ExternalServiceCall audit record for a webhook attempt."""
-    session.add(
-        ExternalServiceCall(
-            job_id=get_current_job_id(),
-            action=f"webhook_{event}",
-            strategy="exponential_backoff",
-            provider="httpx",
-            model_id="webhook_post",
-            latency_ms=latency_ms,
-            success=success,
-            error_message=error,
-            # A delivery has no model: only transport success or failure apply.
-            outcome=CallOutcome.SUCCESS if success else CallOutcome.TRANSPORT_ERROR,
-        )
+    """Stage the register row of a webhook delivery in the caller's session.
+
+    Through the shared write path (BIL-C, decision 6): outside a job context
+    the row is dropped with an ERROR line instead of failing the caller's
+    commit on the NOT NULL ``job_id``. A delivery costs nothing, so the row
+    carries no price.
+    """
+    add_register_row(
+        session,
+        action=f"webhook_{event}",
+        strategy="exponential_backoff",
+        provider="httpx",
+        model_id="webhook_post",
+        latency_ms=latency_ms,
+        success=success,
+        error_message=error,
+        # A delivery has no model: only transport success or failure apply.
+        outcome=CallOutcome.SUCCESS if success else CallOutcome.TRANSPORT_ERROR,
     )

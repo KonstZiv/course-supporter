@@ -77,6 +77,7 @@ from course_supporter.storage.orm import (
 from course_supporter.storage.test_object_repository import TestObjectRepository
 from course_supporter.workers.key_explain import arq_explain_key
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.priced import priced_exact
 
 pytestmark = pytest.mark.requires_db
 
@@ -221,7 +222,7 @@ class _ExplanationsModel:
             provider="deepseek_thinking",
             model_id="deepseek-v4-pro",
             success=True,
-            cost_usd=0.0184,
+            priced=priced_exact(0.0184),
             unit_type="tokens",
             unit_in=900,
             unit_out=300,

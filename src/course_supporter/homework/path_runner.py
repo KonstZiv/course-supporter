@@ -629,15 +629,18 @@ async def _stage_cost(
     """What this job actually paid for this stage, from the call register.
 
     Rows without a call carry a NULL cost and are skipped by the sum, so what
-    comes back is the price of the calls that were made (KD5). The sum can be
-    short without saying so when a register write was skipped — ``DD-SP-AN``,
-    whose visible trace this task adds.
+    comes back is the price of the calls that were made (KD5): exact sums and
+    the estimates of failed attempts the provider may have billed; a call of
+    unknown cost has no sum to add (BIL-C, agreed with the funds port left
+    unchanged). The sum can be short without saying so when a register write
+    was skipped — ``DD-SP-AN``. The register keeps NUMERIC; the port speaks in
+    float.
     """
     from sqlalchemy import func, select
 
     from course_supporter.storage.orm import ExternalServiceCall
 
-    stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0)).where(
+    stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
         ExternalServiceCall.job_id == job_id,
         ExternalServiceCall.action == stage_name,
     )
@@ -645,7 +648,7 @@ async def _stage_cost(
     total = result.scalar_one()
     # coalesce guarantees a number, but the column is nullable and the
     # type checker reads the column, not the SQL around it.
-    return float(total or 0.0)
+    return float(total or 0)
 
 
 async def _stage_produced_nothing(

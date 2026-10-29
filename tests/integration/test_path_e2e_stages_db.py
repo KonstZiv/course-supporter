@@ -67,6 +67,7 @@ from course_supporter.storage.orm import (
     SubmissionCriterionVerdict,
     Tenant,
 )
+from tests._helpers.priced import priced_exact
 
 pytestmark = pytest.mark.requires_db
 
@@ -164,7 +165,7 @@ class _RouterDouble:
             provider="double",
             model_id="m",
             unit_type="tokens",
-            cost_usd=_PRICE[stage_name],
+            priced=priced_exact(_PRICE[stage_name]),
         )
         content = self._content[stage_name]
         if response_validator is not None:
@@ -559,7 +560,11 @@ class TestTwoStagesWalkTheWholePath:
                     )
                 ).scalars()
             )
-        priced = {r.action: r.cost_usd for r in rows if r.action != FUNDS_PORT_ACTION}
+        priced = {
+            r.action: float(r.cost_usd)
+            for r in rows
+            if r.action != FUNDS_PORT_ACTION and r.cost_usd is not None
+        }
         assert priced == {
             "safety": pytest.approx(_PRICE["safety"]),
             "attempt_classifier": pytest.approx(_PRICE["attempt_classifier"]),

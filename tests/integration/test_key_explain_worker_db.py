@@ -92,6 +92,7 @@ from course_supporter.storage.task_reference_repository import TaskReferenceRepo
 from course_supporter.storage.test_object_repository import TestObjectRepository
 from course_supporter.workers.key_explain import arq_explain_key
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.priced import priced_exact
 
 pytestmark = pytest.mark.requires_db
 
@@ -147,7 +148,7 @@ class _RouterDouble:
             provider="deepseek_thinking",
             model_id="deepseek-v4-pro",
             success=True,
-            cost_usd=self._cost,
+            priced=priced_exact(self._cost),
             unit_type="tokens",
             unit_in=1200,
             unit_out=400,
@@ -391,7 +392,7 @@ class TestTheWorkThatSucceeds:
         assert port.accounted and port.accounted[0] > 0, (
             "the work paid, so its sum is above zero; two zeros agree over no rows"
         )
-        assert port.accounted == [pytest.approx(registered)]
+        assert port.accounted == [pytest.approx(float(registered or 0))]
 
 
 class TestTheWorkThatSpendsNothing:

@@ -76,6 +76,21 @@ def _billable_output(
     return (answer or 0) + reasoning, reasoning
 
 
+def _cached_input(
+    usage: types.GenerateContentResponseUsageMetadata | None,
+) -> int | None:
+    """The part of the prompt Gemini served from its context cache.
+
+    Implicit caching is on for the current models: a repeated prompt prefix is
+    billed at the cached price (BIL-C). The count is included in
+    ``prompt_token_count``; absent means not reported, not zero.
+    """
+    if usage is None:
+        return None
+    cached = usage.cached_content_token_count
+    return cached if isinstance(cached, int) else None
+
+
 # Image MIME signatures (magic bytes). Only the formats Gemini accepts
 # and that we actually produce are listed: VD frame_sampler emits JPEG
 # (ffmpeg frame_%06d.jpg), presentation ingestion emits PNG (PyMuPDF
@@ -258,6 +273,7 @@ class GeminiProvider(LLMProvider):
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_token_count if usage else None,
+            tokens_in_cached=_cached_input(usage),
             tokens_out=tokens_out,
             tokens_reasoning=tokens_reasoning,
             finish_reason=_response_finish_reason(response),

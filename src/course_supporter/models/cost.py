@@ -18,12 +18,29 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CostByKind(BaseModel):
+    """A cost figure split by the kind of its register sums (BIL-C, decision 7).
+
+    ``exact_usd`` — sums from every usage detail the provider reported at the
+    prices in force at the call. ``estimated_usd`` — sums computed under a
+    named approximation (a failed call's input counted by us, cached tokens
+    without a cached price, ...). ``unknown_calls`` — paid calls with no
+    defensible sum: counted, never summed as zero. The figure's ``cost_usd`` /
+    ``total_usd`` beside it is ``exact_usd + estimated_usd``.
+    """
+
+    exact_usd: float
+    estimated_usd: float
+    unknown_calls: int
+
+
 class ByCourseEntry(BaseModel):
     """One course root in the by-course breakdown of /cost/summary."""
 
     course_node_id: UUID
     course_title: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class ByProviderEntry(BaseModel):
@@ -32,6 +49,7 @@ class ByProviderEntry(BaseModel):
     provider: str
     model_id: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class ByNodeEntry(BaseModel):
@@ -40,6 +58,7 @@ class ByNodeEntry(BaseModel):
     course_node_id: UUID
     title: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class ByActionEntry(BaseModel):
@@ -47,12 +66,14 @@ class ByActionEntry(BaseModel):
 
     action: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class CostSummaryResponse(BaseModel):
     """Response shape for ``GET /api/v1/cost/summary``.
 
-    Invariant: ``total_usd == sum(by_course.cost_usd) + unattributed_cost_usd``.
+    Invariant: ``total_usd == sum(by_course.cost_usd) + unattributed_cost_usd``,
+    and the same for each field of the ``*_by_kind`` splits.
     ``unattributed_cost_usd`` aggregates ESCs whose ``Job.course_node_id``
     is NULL (orphan jobs without a course attribution).
     """
@@ -62,7 +83,9 @@ class CostSummaryResponse(BaseModel):
     from_: date = Field(alias="from")
     to_: date = Field(alias="to")
     total_usd: float
+    total_by_kind: CostByKind
     unattributed_cost_usd: float
+    unattributed_by_kind: CostByKind
     by_course: list[ByCourseEntry]
     by_provider: list[ByProviderEntry]
 
@@ -81,6 +104,7 @@ class CourseCostResponse(BaseModel):
     from_: date = Field(alias="from")
     to_: date = Field(alias="to")
     total_usd: float
+    total_by_kind: CostByKind
     by_node: list[ByNodeEntry]
     by_action: list[ByActionEntry]
 
@@ -101,6 +125,7 @@ class HomeworkByCourseEntry(BaseModel):
     course_node_id: UUID
     course_title: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class HomeworkByTaskEntry(BaseModel):
@@ -115,6 +140,7 @@ class HomeworkByTaskEntry(BaseModel):
     task_label: str
     is_deleted: bool
     cost_usd: float
+    by_kind: CostByKind
 
 
 class HomeworkByStudentEntry(BaseModel):
@@ -128,6 +154,7 @@ class HomeworkByStudentEntry(BaseModel):
     student_id: UUID
     student_display: str
     cost_usd: float
+    by_kind: CostByKind
 
 
 class HomeworkCostResponse(BaseModel):
@@ -143,6 +170,7 @@ class HomeworkCostResponse(BaseModel):
     from_: date = Field(alias="from")
     to_: date = Field(alias="to")
     total_usd: float
+    total_by_kind: CostByKind
     by_course: list[HomeworkByCourseEntry]
 
 

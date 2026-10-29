@@ -9,8 +9,13 @@ Module-level functions rather than a class — no hidden state, simple
 test ergonomics, explicit Redis client passing for FastAPI DI.
 
 Cache key shapes:
-    cost:summary:{tenant_id}:{from}:{to}:{lc}:{oc}:{lp}:{op}
-    cost:course:{tenant_id}:{course_node_id}:{from}:{to}:{ln}:{on}:{la}:{oa}
+    cost:v2:summary:{tenant_id}:{from}:{to}:{lc}:{oc}:{lp}:{op}
+    cost:v2:course:{tenant_id}:{course_node_id}:{from}:{to}:{ln}:{on}:{la}:{oa}
+
+``v2`` (BIL-C): the responses gained the ``*_by_kind`` splits. A new prefix
+leaves the entries cached in the old shape unread instead of failing to
+re-hydrate them; they expire within the TTL. Bump it again with the next
+change of a response's shape.
 
 Argument order in :func:`make_summary_key` and :func:`make_course_key`
 matches the natural reading order of the cache key string. **Never
@@ -28,6 +33,7 @@ if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
 TTL_SECONDS = 300
+_PREFIX = "cost:v2"
 
 
 def make_summary_key(
@@ -42,7 +48,7 @@ def make_summary_key(
 ) -> str:
     """Build cache key for ``GET /api/v1/cost/summary``."""
     return (
-        f"cost:summary:{tenant_id}:{from_date}:{to_date}"
+        f"{_PREFIX}:summary:{tenant_id}:{from_date}:{to_date}"
         f":{limit_courses}:{offset_courses}"
         f":{limit_providers}:{offset_providers}"
     )
@@ -61,7 +67,7 @@ def make_course_key(
 ) -> str:
     """Build cache key for ``GET /api/v1/cost/course/{course_node_id}``."""
     return (
-        f"cost:course:{tenant_id}:{course_node_id}:{from_date}:{to_date}"
+        f"{_PREFIX}:course:{tenant_id}:{course_node_id}:{from_date}:{to_date}"
         f":{limit_nodes}:{offset_nodes}"
         f":{limit_actions}:{offset_actions}"
     )

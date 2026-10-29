@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 import openai
+from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessageParam
 
 from course_supporter.llm.error_categories import ErrorCategory
@@ -48,6 +49,32 @@ def _normalize_choice_finish(raw: object) -> FinishReason:
     return normalize_finish_reason(
         raw, ceiling=_CEILING_FINISH_REASONS, stop=_STOP_FINISH_REASONS
     )
+
+
+def _count(value: object) -> int | None:
+    """A token count as the SDK model carries it, or ``None`` if absent."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _cached_input(usage: CompletionUsage) -> int | None:
+    """Input tokens served from the provider's cache, or ``None`` if unreported.
+
+    DeepSeek reports them as its own top-level ``prompt_cache_hit_tokens``
+    (beside ``prompt_cache_miss_tokens``; the two add up to ``prompt_tokens``),
+    which the SDK keeps as an extra field. OpenAI-shaped providers report
+    ``prompt_tokens_details.cached_tokens``.
+    """
+    hit = _count(getattr(usage, "prompt_cache_hit_tokens", None))
+    if hit is not None:
+        return hit
+    details = usage.prompt_tokens_details
+    return _count(details.cached_tokens) if details is not None else None
+
+
+def _reasoning_output(usage: CompletionUsage) -> int | None:
+    """Reasoning tokens inside ``completion_tokens`` (DeepSeek thinking mode)."""
+    details = usage.completion_tokens_details
+    return _count(details.reasoning_tokens) if details is not None else None
 
 
 # Explicit SDK timeout. Read budget covers reasoning-tier providers
@@ -229,7 +256,9 @@ class OpenAICompatProvider(LLMProvider):
             provider=self.provider_name,
             model_id=model,
             tokens_in=usage.prompt_tokens if usage else None,
+            tokens_in_cached=_cached_input(usage) if usage else None,
             tokens_out=usage.completion_tokens if usage else None,
+            tokens_reasoning=_reasoning_output(usage) if usage else None,
             finish_reason=_normalize_choice_finish(choice.finish_reason),
             latency_ms=timer.elapsed_ms,
         )

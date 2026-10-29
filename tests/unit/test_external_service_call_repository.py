@@ -20,15 +20,31 @@ from course_supporter.storage.repositories import (
     ByCourseRow,
     ByNodeRow,
     ByProviderRow,
+    CostSums,
     ExternalServiceCallRepository,
     _to_exclusive,
 )
 
 
-def _scalar_session(value: float | int) -> AsyncMock:
-    """Build an AsyncMock session whose execute().scalar_one() returns value."""
+def _sums_row(
+    exact: float = 0.0, estimated: float = 0.0, unknown: int = 0, **fields: object
+) -> MagicMock:
+    """A result row carrying the three aggregates every report selects."""
+    row = MagicMock()
+    row.exact_usd = exact
+    row.estimated_usd = estimated
+    row.unknown_calls = unknown
+    for name, value in fields.items():
+        setattr(row, name, value)
+    return row
+
+
+def _scalar_session(
+    exact: float, estimated: float = 0.0, unknown: int = 0
+) -> AsyncMock:
+    """Build an AsyncMock session whose execute().one() is one totals row."""
     result = MagicMock()
-    result.scalar_one = MagicMock(return_value=value)
+    result.one = MagicMock(return_value=_sums_row(exact, estimated, unknown))
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
     return session
@@ -59,12 +75,13 @@ class TestToExclusive:
 
 class TestGetTotalForPeriod:
     async def test_returns_float_from_scalar_one(self) -> None:
-        session = _scalar_session(150.5)
+        session = _scalar_session(150.5, 2.25, 3)
         repo = ExternalServiceCallRepository(session)
         total = await repo.get_total_for_period(
             tenant_id=uuid.uuid4(), from_date=FROM, to_date=TO
         )
-        assert total == pytest.approx(150.5)
+        assert total == CostSums(exact_usd=150.5, estimated_usd=2.25, unknown_calls=3)
+        assert total.cost_usd == pytest.approx(152.75)
         session.execute.assert_awaited_once()
 
     async def test_zero_when_scalar_zero(self) -> None:
@@ -73,7 +90,7 @@ class TestGetTotalForPeriod:
         total = await repo.get_total_for_period(
             tenant_id=uuid.uuid4(), from_date=FROM, to_date=TO
         )
-        assert total == 0.0
+        assert total == CostSums()
 
 
 class TestGetTotalForSubtree:
@@ -86,7 +103,7 @@ class TestGetTotalForSubtree:
             from_date=FROM,
             to_date=TO,
         )
-        assert total == 0.0
+        assert total == CostSums()
         session.execute.assert_not_called()
 
     async def test_non_empty_subtree_executes_query(self) -> None:
@@ -98,7 +115,7 @@ class TestGetTotalForSubtree:
             from_date=FROM,
             to_date=TO,
         )
-        assert total == pytest.approx(42.0)
+        assert total.exact_usd == pytest.approx(42.0)
         session.execute.assert_awaited_once()
 
 
@@ -109,7 +126,7 @@ class TestGetUnattributedForPeriod:
         result = await repo.get_unattributed_for_period(
             tenant_id=uuid.uuid4(), from_date=FROM, to_date=TO
         )
-        assert result == pytest.approx(5.0)
+        assert result.exact_usd == pytest.approx(5.0)
         session.execute.assert_awaited_once()
 
     async def test_zero_when_no_rows(self) -> None:
@@ -118,16 +135,15 @@ class TestGetUnattributedForPeriod:
         result = await repo.get_unattributed_for_period(
             tenant_id=uuid.uuid4(), from_date=FROM, to_date=TO
         )
-        assert result == 0.0
+        assert result == CostSums()
 
 
 class TestGetByCourse:
     async def test_projects_rows_into_namedtuples(self) -> None:
         course_id = uuid.uuid4()
-        row = MagicMock()
-        row.course_node_id = course_id
-        row.course_title = "Python Basics"
-        row.cost_usd = 100.0
+        row = _sums_row(
+            100.0, 1.5, 2, course_node_id=course_id, course_title="Python Basics"
+        )
         session = _rows_session([row])
         repo = ExternalServiceCallRepository(session)
 
@@ -137,7 +153,9 @@ class TestGetByCourse:
 
         assert results == [
             ByCourseRow(
-                course_node_id=course_id, course_title="Python Basics", cost_usd=100.0
+                course_node_id=course_id,
+                course_title="Python Basics",
+                cost=CostSums(exact_usd=100.0, estimated_usd=1.5, unknown_calls=2),
             )
         ]
 
@@ -152,10 +170,7 @@ class TestGetByCourse:
 
 class TestGetByProvider:
     async def test_projects_provider_model_pairs(self) -> None:
-        row = MagicMock()
-        row.provider = "anthropic"
-        row.model_id = "claude-sonnet-4"
-        row.cost_usd = 75.0
+        row = _sums_row(75.0, provider="anthropic", model_id="claude-sonnet-4")
         session = _rows_session([row])
         repo = ExternalServiceCallRepository(session)
 
@@ -164,7 +179,9 @@ class TestGetByProvider:
         )
         assert results == [
             ByProviderRow(
-                provider="anthropic", model_id="claude-sonnet-4", cost_usd=75.0
+                provider="anthropic",
+                model_id="claude-sonnet-4",
+                cost=CostSums(exact_usd=75.0),
             )
         ]
 
@@ -184,10 +201,7 @@ class TestGetByNode:
 
     async def test_projects_node_rows(self) -> None:
         node_id = uuid.uuid4()
-        row = MagicMock()
-        row.course_node_id = node_id
-        row.title = "Lesson 1"
-        row.cost_usd = 30.0
+        row = _sums_row(30.0, course_node_id=node_id, title="Lesson 1")
         session = _rows_session([row])
         repo = ExternalServiceCallRepository(session)
 
@@ -198,7 +212,9 @@ class TestGetByNode:
             to_date=TO,
         )
         assert results == [
-            ByNodeRow(course_node_id=node_id, title="Lesson 1", cost_usd=30.0)
+            ByNodeRow(
+                course_node_id=node_id, title="Lesson 1", cost=CostSums(exact_usd=30.0)
+            )
         ]
 
 
@@ -216,9 +232,7 @@ class TestGetByAction:
         session.execute.assert_not_called()
 
     async def test_projects_action_rows(self) -> None:
-        row = MagicMock()
-        row.action = "document_processing"
-        row.cost_usd = 60.0
+        row = _sums_row(60.0, action="document_processing")
         session = _rows_session([row])
         repo = ExternalServiceCallRepository(session)
 
@@ -228,7 +242,9 @@ class TestGetByAction:
             from_date=FROM,
             to_date=TO,
         )
-        assert results == [ByActionRow(action="document_processing", cost_usd=60.0)]
+        assert results == [
+            ByActionRow(action="document_processing", cost=CostSums(exact_usd=60.0))
+        ]
 
 
 class TestPaginationParametersThreaded:

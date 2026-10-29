@@ -542,12 +542,20 @@ class DashScopeProvider(LLMProvider):
         # ``None`` (provider did not report), an explicit zero in details → ``0``.
         details = usage.get("output_tokens_details") if usage else None
         tokens_reasoning = details.get("reasoning_tokens") if details else None
+        # Context-cache hits sit in ``prompt_tokens_details.cached_tokens`` and
+        # are part of ``input_tokens`` (BIL-C). The live dumps of 2026-07-28
+        # carry the key as an empty dict: absent = not reported, not zero.
+        prompt_details = usage.get("prompt_tokens_details") if usage else None
+        tokens_in_cached = (
+            prompt_details.get("cached_tokens") if prompt_details else None
+        )
 
         return LLMResponse(
             content=content_text,
             provider=self.provider_name,
             model_id=model,
             tokens_in=tokens_in,
+            tokens_in_cached=tokens_in_cached,
             tokens_out=tokens_out,
             tokens_reasoning=tokens_reasoning,
             finish_reason=self._extract_finish_reason(response),

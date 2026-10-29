@@ -78,12 +78,16 @@ class LLMResponse(BaseModel):
     content: str
     provider: str  # gemini, anthropic, openai, deepseek
     model_id: str  # gemini-2.5-flash, claude-sonnet-4, ...
+    # Every input token the provider billed, cached ones included.
     tokens_in: int | None = None
+    # The part of ``tokens_in`` the provider served from its cache (billed at
+    # its cached price, BIL-C). ``None`` = not reported, ``0`` = reported zero.
+    tokens_in_cached: int | None = None
     tokens_out: int | None = None
     # Reasoning tokens billed as a subset of ``tokens_out``. ``None`` = the
-    # provider did not report them, ``0`` = reported zero. Only the DashScope
-    # connector extracts this today (STEP-0 P5/P6); other providers leave it
-    # ``None``.
+    # provider did not report them, ``0`` = reported zero. DashScope, Gemini
+    # and the OpenAI-compatible connectors (DeepSeek thinking mode) extract it;
+    # Anthropic leaves it ``None``.
     tokens_reasoning: int | None = None
     # Normalised by the connector from the vendor's own field (every connector
     # reads it). ``UNKNOWN`` only when the provider reported nothing.

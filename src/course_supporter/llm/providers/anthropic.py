@@ -100,12 +100,21 @@ class AnthropicProvider(LLMProvider):
         content = response.content[0].text if response.content else ""
         if request.expects_json:
             content = strip_markdown_json(content)
+        # Anthropic counts cache reads apart from ``input_tokens``; the register
+        # wants every billed input token in ``tokens_in`` and the cached part
+        # in ``tokens_in_cached`` (BIL-C). No request here sets cache_control,
+        # so cache writes (billed above the input rate) do not occur.
+        usage = response.usage
+        cache_read = usage.cache_read_input_tokens
+        if not isinstance(cache_read, int):
+            cache_read = None
         return LLMResponse(
             content=content,
             provider=self.provider_name,
             model_id=model,
-            tokens_in=response.usage.input_tokens,
-            tokens_out=response.usage.output_tokens,
+            tokens_in=usage.input_tokens + (cache_read or 0),
+            tokens_in_cached=cache_read,
+            tokens_out=usage.output_tokens,
             finish_reason=normalize_finish_reason(
                 response.stop_reason,
                 ceiling=_CEILING_STOP_REASONS,

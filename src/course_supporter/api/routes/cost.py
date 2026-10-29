@@ -43,6 +43,7 @@ from course_supporter.models.cost import (
     ByCourseEntry,
     ByNodeEntry,
     ByProviderEntry,
+    CostByKind,
     CostSummaryResponse,
     CourseCostResponse,
     HomeworkByCourseEntry,
@@ -62,6 +63,7 @@ from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import Tenant
 from course_supporter.storage.repositories import (
+    CostSums,
     ExternalServiceCallRepository,
     HomeworkCostRepository,
 )
@@ -73,6 +75,15 @@ router = APIRouter(tags=["cost"])
 SharedDep = Annotated[
     TenantContext, Depends(require_scope(AuthScope.PREP, AuthScope.CHECK))
 ]
+
+
+def _by_kind(sums: CostSums) -> CostByKind:
+    """The exact / estimated / unknown split of one figure (BIL-C, decision 7)."""
+    return CostByKind(
+        exact_usd=sums.exact_usd,
+        estimated_usd=sums.estimated_usd,
+        unknown_calls=sums.unknown_calls,
+    )
 
 
 async def _resolve_date_range(
@@ -206,13 +217,16 @@ async def get_cost_summary(
     response = CostSummaryResponse(
         from_=from_,
         to_=to_,
-        total_usd=total,
-        unattributed_cost_usd=unattributed,
+        total_usd=total.cost_usd,
+        total_by_kind=_by_kind(total),
+        unattributed_cost_usd=unattributed.cost_usd,
+        unattributed_by_kind=_by_kind(unattributed),
         by_course=[
             ByCourseEntry(
                 course_node_id=row.course_node_id,
                 course_title=row.course_title,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_course_rows
         ],
@@ -220,7 +234,8 @@ async def get_cost_summary(
             ByProviderEntry(
                 provider=row.provider,
                 model_id=row.model_id,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_provider_rows
         ],
@@ -238,8 +253,9 @@ async def get_cost_summary(
 # A separate surface from /cost/summary. Homework ExternalServiceCall rows are
 # written by the same _persist surface, but the homework Job carries
 # course_node_id=NULL (Variant B rejected, DD-6-I), so /cost/summary files
-# their cost under unattributed_cost_usd. These three endpoints attribute it by
-# joining ESC straight to HomeworkSubmission on job_id (HomeworkCostRepository).
+# their cost under unattributed_cost_usd. These three endpoints attribute it
+# through every job whose subject is the submission — the first and each
+# continuation (HomeworkCostRepository; BIL-C, decision 5).
 #
 # The tree is drilled on demand: total → by-course → by-task → by-student, each
 # level a separate request keyed by the parent. No Redis cache (MVP): freshness
@@ -288,12 +304,14 @@ async def get_homework_cost(
     return HomeworkCostResponse(
         from_=from_,
         to_=to_,
-        total_usd=total,
+        total_usd=total.cost_usd,
+        total_by_kind=_by_kind(total),
         by_course=[
             HomeworkByCourseEntry(
                 course_node_id=row.course_node_id,
                 course_title=row.course_title,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_course_rows
         ],
@@ -351,7 +369,8 @@ async def get_homework_cost_course(
                     order=row.order,
                 ),
                 is_deleted=row.is_deleted,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_task_rows
         ],
@@ -402,7 +421,8 @@ async def get_homework_cost_task(
             HomeworkByStudentEntry(
                 student_id=row.student_id,
                 student_display=row.student_display,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_student_rows
         ],
@@ -514,17 +534,23 @@ async def get_cost_course(
         course_title=course.title,
         from_=from_,
         to_=to_,
-        total_usd=total,
+        total_usd=total.cost_usd,
+        total_by_kind=_by_kind(total),
         by_node=[
             ByNodeEntry(
                 course_node_id=row.course_node_id,
                 title=row.title,
-                cost_usd=row.cost_usd,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
             )
             for row in by_node_rows
         ],
         by_action=[
-            ByActionEntry(action=row.action, cost_usd=row.cost_usd)
+            ByActionEntry(
+                action=row.action,
+                cost_usd=row.cost.cost_usd,
+                by_kind=_by_kind(row.cost),
+            )
             for row in by_action_rows
         ],
     )

@@ -13,7 +13,10 @@ Coverage:
 * Drill-down via real recursive CTE: subtree by_node + by_action.
 * Pagination correctness: 75 distinct (provider, model_id) combos with
   limit_providers=50 → exactly 50 returned, ordered cost DESC.
-* NULL ``cost_usd`` excluded from sums (not coalesced to zero).
+* NULL ``cost_usd`` excluded from sums (not coalesced to zero); paid calls of
+  unknown cost counted in ``by_kind.unknown_calls`` (BIL-C).
+* Exact and estimated sums reported apart, the KD5 invariant holding for each
+  (BIL-C, decision 7).
 * Cache hit on second call: real Redis spy via repo-method counter.
 * Tenant isolation: foreign tenant's course_node_id → 404.
 """
@@ -41,7 +44,10 @@ from course_supporter.storage.orm import (
     Job,
     Tenant,
 )
-from course_supporter.storage.repositories import ExternalServiceCallRepository
+from course_supporter.storage.repositories import (
+    CostSums,
+    ExternalServiceCallRepository,
+)
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
@@ -57,6 +63,7 @@ class _CostSeed(TypedDict):
     expected_total: float
     expected_unattributed: float
     expected_by_course: dict[uuid.UUID, float]
+    expected_total_by_kind: dict[str, float]
 
 
 PERIOD_FROM = "2026-01-01"
@@ -89,9 +96,12 @@ async def cost_seed(
       - X1: 10.0                  (anthropic / claude-sonnet-4)
       - X2: 5.0                   (anthropic / claude-haiku)
       - unattributed: 4.0 + 1.0   (deepseek / deepseek-v3)
-      - 2 NULL-cost rows on root (must be excluded from every sum)
-    * total_usd = 145.0; unattributed = 5.0; by_course rows = 3
-      (root=85.0, lesson=30.0, concept=25.0).
+      - 2 unknown-cost rows on root (excluded from every sum, counted)
+    * Kinds (BIL-C): estimated = 20.0 (root, methodist) + 5.0 (X2) + 1.0
+      (unattributed); every other sum exact.
+    * total_usd = 145.0 (exact 119.0 + estimated 26.0, 2 unknown calls);
+      unattributed = 5.0; by_course rows = 3 (root=85.0, lesson=30.0,
+      concept=25.0).
 
     The tree shape lets ``/cost/course/{root_id}`` exercise the
     recursive-CTE descendant path covering all three nodes.
@@ -155,13 +165,16 @@ async def cost_seed(
             model_id: str,
             cost: float | None,
             action: str = "document_processing",
+            kind: str = "exact",
         ) -> ExternalServiceCall:
             return ExternalServiceCall(
                 job_id=job_id,
                 provider=provider,
                 model_id=model_id,
                 cost_usd=cost,
-                cost_kind="estimated" if cost is not None else None,
+                cost_kind=kind if cost is not None else "unknown",
+                catalog_version="test-catalog",
+                tariff_window="flat",
                 action=action,
                 created_at=SAMPLE_TIMESTAMP,
             )
@@ -169,14 +182,21 @@ async def cost_seed(
         session.add_all(
             [
                 _esc(job_r.id, "anthropic", "claude-sonnet-4", 50.0),
-                _esc(job_r.id, "anthropic", "claude-sonnet-4", 20.0, "methodist"),
+                _esc(
+                    job_r.id,
+                    "anthropic",
+                    "claude-sonnet-4",
+                    20.0,
+                    "methodist",
+                    kind="estimated",
+                ),
                 _esc(job_l.id, "openai", "gpt-4o", 30.0),
                 _esc(job_c.id, "openai", "gpt-4o", 25.0),
                 _esc(job_x1.id, "anthropic", "claude-sonnet-4", 10.0),
-                _esc(job_x2.id, "anthropic", "claude-haiku", 5.0),
+                _esc(job_x2.id, "anthropic", "claude-haiku", 5.0, kind="estimated"),
                 _esc(job_u1.id, "deepseek", "deepseek-v3", 4.0),
-                _esc(job_u2.id, "deepseek", "deepseek-v3", 1.0),
-                # NULL-cost rows that must be excluded from every sum.
+                _esc(job_u2.id, "deepseek", "deepseek-v3", 1.0, kind="estimated"),
+                # Paid calls of unknown cost: no sum, counted apart.
                 _esc(job_r.id, "anthropic", "claude-sonnet-4", None, "stt"),
                 _esc(job_r.id, "anthropic", "claude-sonnet-4", None, "stt"),
             ]
@@ -195,6 +215,11 @@ async def cost_seed(
                 root.id: 85.0,
                 lesson.id: 30.0,
                 concept.id: 25.0,
+            },
+            "expected_total_by_kind": {
+                "exact_usd": 119.0,
+                "estimated_usd": 26.0,
+                "unknown_calls": 2,
             },
         }
 
@@ -283,6 +308,39 @@ class TestCostSummaryE2E:
             data["total_usd"]
         )
 
+    async def test_exact_estimated_and_unknown_are_reported_apart(
+        self, cost_client: AsyncClient, cost_seed: _CostSeed
+    ) -> None:
+        """BIL-C, decision 7. Lock: red if the kinds are summed together
+        (e.g. the exact filter widened to every kind) or unknown calls are
+        dropped instead of counted."""
+        response = await cost_client.get(
+            "/api/v1/cost/summary",
+            params={"from": PERIOD_FROM, "to": PERIOD_TO, "no_cache": "true"},
+        )
+        data = response.json()
+
+        assert data["total_by_kind"] == pytest.approx(
+            cost_seed["expected_total_by_kind"]
+        )
+        assert data["total_usd"] == pytest.approx(
+            data["total_by_kind"]["exact_usd"] + data["total_by_kind"]["estimated_usd"]
+        )
+        root = next(
+            c
+            for c in data["by_course"]
+            if c["course_node_id"] == str(cost_seed["root_id"])
+        )
+        assert root["by_kind"] == pytest.approx(
+            {"exact_usd": 60.0, "estimated_usd": 25.0, "unknown_calls": 2}
+        )
+        # The KD5 invariant holds kind by kind.
+        for field in ("exact_usd", "estimated_usd", "unknown_calls"):
+            attributed = sum(c["by_kind"][field] for c in data["by_course"])
+            assert attributed + data["unattributed_by_kind"][field] == pytest.approx(
+                data["total_by_kind"][field]
+            )
+
     async def test_by_course_includes_all_attributed_nodes(
         self, cost_client: AsyncClient, cost_seed: _CostSeed
     ) -> None:
@@ -304,11 +362,11 @@ class TestCostSummaryE2E:
         cost_seed: _CostSeed,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        """NULL ``cost_usd`` rows are excluded entirely (not coalesced to 0).
+        """Rows of no paid call are not read at all (not coalesced to 0).
 
-        Add a NULL-cost row on a unique provider+model — if NULLs were
-        included, that provider would appear in ``by_provider`` (with
-        cost 0). With exclusion it must be absent.
+        Add a row with no cost kind on a unique provider+model — if such rows
+        were read, that provider would appear in ``by_provider`` (with cost
+        0). With exclusion it must be absent.
         """
         async with session_factory() as session:
             job = Job(
@@ -396,7 +454,7 @@ class TestCostSummaryE2E:
         call_log: list[str] = []
         original = ExternalServiceCallRepository.get_total_for_period
 
-        async def _spy(self: ExternalServiceCallRepository, **kw: object) -> float:
+        async def _spy(self: ExternalServiceCallRepository, **kw: object) -> CostSums:
             call_log.append("get_total_for_period")
             return await original(self, **kw)  # type: ignore[arg-type]
 

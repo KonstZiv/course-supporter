@@ -29,6 +29,7 @@ from course_supporter.storage.repositories import (
     ByCourseRow,
     ByNodeRow,
     ByProviderRow,
+    CostSums,
     ExternalServiceCallRepository,
 )
 
@@ -61,14 +62,16 @@ def patched_summary_repo() -> Any:
     """Patch all four repo methods used by /cost/summary with sane defaults."""
     return patch.multiple(
         ExternalServiceCallRepository,
-        get_total_for_period=AsyncMock(return_value=150.0),
-        get_unattributed_for_period=AsyncMock(return_value=5.0),
+        get_total_for_period=AsyncMock(
+            return_value=CostSums(exact_usd=140.0, estimated_usd=10.0, unknown_calls=2)
+        ),
+        get_unattributed_for_period=AsyncMock(return_value=CostSums(exact_usd=5.0)),
         get_by_course=AsyncMock(
             return_value=[
                 ByCourseRow(
                     course_node_id=COURSE_ID,
                     course_title="Python Basics",
-                    cost_usd=145.0,
+                    cost=CostSums(exact_usd=135.0, estimated_usd=10.0, unknown_calls=2),
                 )
             ]
         ),
@@ -77,7 +80,7 @@ def patched_summary_repo() -> Any:
                 ByProviderRow(
                     provider="anthropic",
                     model_id="claude-sonnet-4",
-                    cost_usd=150.0,
+                    cost=CostSums(exact_usd=140.0, estimated_usd=10.0, unknown_calls=2),
                 )
             ]
         ),
@@ -102,14 +105,22 @@ def patched_course_repo() -> Any:
         ),
         patch.multiple(
             ExternalServiceCallRepository,
-            get_total_for_subtree=AsyncMock(return_value=100.0),
+            get_total_for_subtree=AsyncMock(return_value=CostSums(exact_usd=100.0)),
             get_by_node=AsyncMock(
                 return_value=[
-                    ByNodeRow(course_node_id=NODE_ID, title="Lesson 1", cost_usd=30.0)
+                    ByNodeRow(
+                        course_node_id=NODE_ID,
+                        title="Lesson 1",
+                        cost=CostSums(exact_usd=30.0),
+                    )
                 ]
             ),
             get_by_action=AsyncMock(
-                return_value=[ByActionRow(action="document_processing", cost_usd=60.0)]
+                return_value=[
+                    ByActionRow(
+                        action="document_processing", cost=CostSums(exact_usd=60.0)
+                    )
+                ]
             ),
         ),
     )
@@ -137,9 +148,18 @@ class TestCostSummaryHappyPath:
         assert data["from"] == "2026-01-01"
         assert data["to"] == "2026-04-28"
         assert data["total_usd"] == 150.0
+        # BIL-C: the split beside the figure; unknown calls counted, not summed.
+        assert data["total_by_kind"] == {
+            "exact_usd": 140.0,
+            "estimated_usd": 10.0,
+            "unknown_calls": 2,
+        }
         assert data["unattributed_cost_usd"] == 5.0
+        assert data["unattributed_by_kind"]["exact_usd"] == 5.0
         assert len(data["by_course"]) == 1
         assert data["by_course"][0]["course_title"] == "Python Basics"
+        assert data["by_course"][0]["cost_usd"] == 145.0
+        assert data["by_course"][0]["by_kind"]["unknown_calls"] == 2
         assert len(data["by_provider"]) == 1
         assert data["by_provider"][0]["provider"] == "anthropic"
 
@@ -219,7 +239,10 @@ class TestCostSummaryCache:
     ) -> None:
         cached_payload = (
             '{"from":"2026-01-01","to":"2026-04-28","total_usd":99.0,'
-            '"unattributed_cost_usd":1.0,"by_course":[],"by_provider":[]}'
+            '"total_by_kind":{"exact_usd":99.0,"estimated_usd":0.0,"unknown_calls":0},'
+            '"unattributed_cost_usd":1.0,'
+            '"unattributed_by_kind":{"exact_usd":1.0,"estimated_usd":0.0,'
+            '"unknown_calls":0},"by_course":[],"by_provider":[]}'
         )
         get_cached_mock = AsyncMock(return_value=cached_payload)
         set_cached_mock = AsyncMock()
@@ -414,7 +437,8 @@ class TestCostCourseCache:
         cached_payload = (
             f'{{"course_node_id":"{COURSE_ID}","course_title":"Python Basics",'
             f'"from":"2026-01-01","to":"2026-04-28","total_usd":42.0,'
-            f'"by_node":[],"by_action":[]}}'
+            f'"total_by_kind":{{"exact_usd":42.0,"estimated_usd":0.0,'
+            f'"unknown_calls":0}},"by_node":[],"by_action":[]}}'
         )
         get_cached_mock = AsyncMock(return_value=cached_payload)
         set_cached_mock = AsyncMock()

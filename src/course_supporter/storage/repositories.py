@@ -5,11 +5,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
-from sqlalchemy import String, cast, func, select
+from sqlalchemy import ColumnElement, Row, String, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.cost_kinds import CostKind
+from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -89,12 +91,30 @@ class SoftDeleteRepository[ModelT: SoftDeleteMixin]:
         return entity
 
 
+class CostSums(NamedTuple):
+    """A cost figure split by the kind of its rows' sums (BIL-C, decision 7).
+
+    Exact and estimated dollars are summed apart; calls of unknown cost have no
+    sum, so they are counted. ``cost_usd`` is the one money figure the reports
+    have always shown: exact plus estimated — the register's best number, the
+    same one the funds port is told for a stage.
+    """
+
+    exact_usd: float = 0.0
+    estimated_usd: float = 0.0
+    unknown_calls: int = 0
+
+    @property
+    def cost_usd(self) -> float:
+        return self.exact_usd + self.estimated_usd
+
+
 class ByCourseRow(NamedTuple):
     """One course row in /cost/summary by_course breakdown."""
 
     course_node_id: uuid.UUID
     course_title: str
-    cost_usd: float
+    cost: CostSums
 
 
 class ByProviderRow(NamedTuple):
@@ -102,7 +122,7 @@ class ByProviderRow(NamedTuple):
 
     provider: str
     model_id: str
-    cost_usd: float
+    cost: CostSums
 
 
 class ByNodeRow(NamedTuple):
@@ -110,14 +130,14 @@ class ByNodeRow(NamedTuple):
 
     course_node_id: uuid.UUID
     title: str
-    cost_usd: float
+    cost: CostSums
 
 
 class ByActionRow(NamedTuple):
     """One action row in /cost/course/{id} by_action breakdown."""
 
     action: str
-    cost_usd: float
+    cost: CostSums
 
 
 class HomeworkByCourseRow(NamedTuple):
@@ -125,7 +145,7 @@ class HomeworkByCourseRow(NamedTuple):
 
     course_node_id: uuid.UUID
     course_title: str
-    cost_usd: float
+    cost: CostSums
 
 
 class HomeworkByTaskRow(NamedTuple):
@@ -144,7 +164,7 @@ class HomeworkByTaskRow(NamedTuple):
     source_type: str
     order: int
     is_deleted: bool
-    cost_usd: float
+    cost: CostSums
 
 
 class HomeworkByStudentRow(NamedTuple):
@@ -157,7 +177,45 @@ class HomeworkByStudentRow(NamedTuple):
 
     student_id: uuid.UUID
     student_display: str
-    cost_usd: float
+    cost: CostSums
+
+
+def _sum_columns() -> list[ColumnElement[Any]]:
+    """The three aggregates every report selects: exact, estimated, unknown."""
+    cost = ExternalServiceCall.cost_usd
+    kind = ExternalServiceCall.cost_kind
+    return [
+        func.coalesce(func.sum(cost).filter(kind == CostKind.EXACT.value), 0).label(
+            "exact_usd"
+        ),
+        func.coalesce(func.sum(cost).filter(kind == CostKind.ESTIMATED.value), 0).label(
+            "estimated_usd"
+        ),
+        func.count().filter(kind == CostKind.UNKNOWN.value).label("unknown_calls"),
+    ]
+
+
+def _sums(row: Row[Any]) -> CostSums:
+    return CostSums(
+        exact_usd=float(row.exact_usd),
+        estimated_usd=float(row.estimated_usd),
+        unknown_calls=int(row.unknown_calls),
+    )
+
+
+# Rows of a paid call — the ones a cost report reads. A row with no kind
+# records no paid call (a trace, metrics, the funds port, a webhook).
+_PAID_CALL = ExternalServiceCall.cost_kind.is_not(None)
+# Dearest first; a group with only unknown sums has no money and sorts last.
+_DEAREST_FIRST = func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0).desc()
+
+# The homework submission a job is about (BIL-C, decision 5): every job whose
+# subject is the submission — the first one and every continuation — not the
+# one ``homework_submissions.job_id`` happens to point at now.
+_JOB_OF_SUBMISSION = and_(
+    Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+    Job.subject_id == HomeworkSubmission.id,
+)
 
 
 def _to_exclusive(to_date: date) -> date:
@@ -178,8 +236,8 @@ class ExternalServiceCallRepository:
     response models declared in :mod:`course_supporter.models.cost`.
     All methods are read-only aggregations; ESC writes flow through
     :func:`course_supporter.service_logging._persist` (single write
-    surface) plus three direct in-transaction writers in
-    ``api/tasks.py`` that need ``esc.id`` for FK back-pointers.
+    surface) plus :func:`~course_supporter.service_logging.add_register_row`
+    for webhook deliveries, which share its job check.
 
     Common SQL invariants across the breakdown methods:
 
@@ -189,12 +247,15 @@ class ExternalServiceCallRepository:
     * Date range ``ESC.created_at >= :from AND ESC.created_at <
       :to_exclusive`` where ``:to_exclusive = :to + 1 day`` (inclusive
       end-of-day).
-    * ``WHERE cost_usd IS NOT NULL`` — NULL means *unknown cost* (failed
-      LLM call before billing computed, or a register row that records no
-      call: a skipped / abandoned ladder rung, the per-review metrics row,
-      the funds-port row), not zero. Excluded from sums.
-    * ``ORDER BY SUM(cost_usd) DESC`` on every breakdown — cost-priority
-      first, predictable for UI.
+    * ``WHERE cost_kind IS NOT NULL`` — the rows of paid calls (BIL-C). Every
+      figure is :class:`CostSums`: exact and estimated dollars summed apart,
+      calls of unknown cost counted (their sum is NULL, never a zero). Rows
+      that record no paid call (a skipped / abandoned ladder rung, the
+      per-review metrics row, the funds-port row, a webhook delivery) carry
+      no kind and are not read.
+    * ``ORDER BY COALESCE(SUM(cost_usd), 0) DESC`` on every breakdown —
+      cost-priority first, predictable for UI; a group of unknown sums only
+      sorts last.
     * Pagination (``LIMIT/OFFSET``) only on aggregated breakdowns;
       scalar totals are not paginated.
     """
@@ -208,26 +269,25 @@ class ExternalServiceCallRepository:
         tenant_id: uuid.UUID,
         from_date: date,
         to_date: date,
-    ) -> float:
+    ) -> CostSums:
         """Sum of attributed and unattributed ESC costs in the period.
 
         Includes Jobs with ``course_node_id IS NULL`` (orphan jobs).
-        Returns ``0.0`` if no rows match.
+        All zero if no rows match.
         """
         stmt = (
-            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            select(*_sum_columns())
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
             .where(
                 Job.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
         )
         result = await self._session.execute(stmt)
-        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
-        return float(result.scalar_one() or 0.0)
+        return _sums(result.one())
 
     async def get_total_for_subtree(
         self,
@@ -236,12 +296,12 @@ class ExternalServiceCallRepository:
         course_node_ids: Sequence[uuid.UUID],
         from_date: date,
         to_date: date,
-    ) -> float:
+    ) -> CostSums:
         """Sum of ESC costs for Jobs whose ``course_node_id`` is in subtree.
 
         Per-course total for ``/cost/course/{id}`` — distinct from
         :meth:`get_total_for_period` (tenant-wide). Empty
-        ``course_node_ids`` short-circuits to ``0.0`` (no SQL emitted).
+        ``course_node_ids`` short-circuits to zero (no SQL emitted).
 
         Performance ceiling: ``course_node_ids`` is consumed as
         ``Job.course_node_id IN (...)``. PostgreSQL planner heuristics
@@ -255,9 +315,9 @@ class ExternalServiceCallRepository:
         :meth:`CourseNodeRepository.get_descendant_ids`.
         """
         if not course_node_ids:
-            return 0.0
+            return CostSums()
         stmt = (
-            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            select(*_sum_columns())
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
             .where(
@@ -265,12 +325,11 @@ class ExternalServiceCallRepository:
                 Job.course_node_id.in_(course_node_ids),
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
         )
         result = await self._session.execute(stmt)
-        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
-        return float(result.scalar_one() or 0.0)
+        return _sums(result.one())
 
     async def get_unattributed_for_period(
         self,
@@ -278,15 +337,15 @@ class ExternalServiceCallRepository:
         tenant_id: uuid.UUID,
         from_date: date,
         to_date: date,
-    ) -> float:
+    ) -> CostSums:
         """Sum of ESC costs for Jobs with ``course_node_id IS NULL``.
 
-        Invariant on the route layer:
-        ``total == sum(by_course.cost_usd) + unattributed``.
-        Returns ``0.0`` if no rows match.
+        Invariant on the route layer, kind by kind:
+        ``total == sum(by_course) + unattributed``.
+        All zero if no rows match.
         """
         stmt = (
-            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            select(*_sum_columns())
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
             .where(
@@ -294,12 +353,11 @@ class ExternalServiceCallRepository:
                 Job.course_node_id.is_(None),
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
         )
         result = await self._session.execute(stmt)
-        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
-        return float(result.scalar_one() or 0.0)
+        return _sums(result.one())
 
     async def get_by_course(
         self,
@@ -319,16 +377,13 @@ class ExternalServiceCallRepository:
         future Phase 1+ walk-up CTE option.
 
         Excludes orphan Jobs (``course_node_id IS NULL``) — those go
-        into ``unattributed_cost_usd`` via
-        :meth:`get_unattributed_for_period`.
+        into ``unattributed`` via :meth:`get_unattributed_for_period`.
         """
         stmt = (
             select(
                 CourseNode.id.label("course_node_id"),
                 CourseNode.title.label("course_title"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
@@ -337,10 +392,10 @@ class ExternalServiceCallRepository:
                 Job.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(CourseNode.id, CourseNode.title)
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -349,7 +404,7 @@ class ExternalServiceCallRepository:
             ByCourseRow(
                 course_node_id=row.course_node_id,
                 course_title=row.course_title,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]
@@ -372,9 +427,7 @@ class ExternalServiceCallRepository:
             select(
                 ExternalServiceCall.provider.label("provider"),
                 ExternalServiceCall.model_id.label("model_id"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
@@ -382,10 +435,10 @@ class ExternalServiceCallRepository:
                 Job.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(ExternalServiceCall.provider, ExternalServiceCall.model_id)
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -394,7 +447,7 @@ class ExternalServiceCallRepository:
             ByProviderRow(
                 provider=row.provider,
                 model_id=row.model_id,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]
@@ -433,9 +486,7 @@ class ExternalServiceCallRepository:
             select(
                 CourseNode.id.label("course_node_id"),
                 CourseNode.title.label("title"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
@@ -445,10 +496,10 @@ class ExternalServiceCallRepository:
                 Job.course_node_id.in_(course_node_ids),
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(CourseNode.id, CourseNode.title)
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -457,7 +508,7 @@ class ExternalServiceCallRepository:
             ByNodeRow(
                 course_node_id=row.course_node_id,
                 title=row.title,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]
@@ -493,9 +544,7 @@ class ExternalServiceCallRepository:
         stmt = (
             select(
                 ExternalServiceCall.action.label("action"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
             .join(Job, ExternalServiceCall.job_id == Job.id)
@@ -504,18 +553,15 @@ class ExternalServiceCallRepository:
                 Job.course_node_id.in_(course_node_ids),
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(ExternalServiceCall.action)
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
         result = await self._session.execute(stmt)
-        return [
-            ByActionRow(action=row.action, cost_usd=float(row.cost_usd))
-            for row in result.all()
-        ]
+        return [ByActionRow(action=row.action, cost=_sums(row)) for row in result.all()]
 
 
 class HomeworkCostRepository:
@@ -526,17 +572,19 @@ class HomeworkCostRepository:
     rows are written by the same ``service_logging._persist`` surface, but the
     homework ``Job`` is created with ``course_node_id = NULL`` (Variant B
     rejected — DD-6-I), so ``/cost/summary`` files their cost under
-    ``unattributed_cost_usd`` and never under ``by_course``. This repository
-    attributes them by joining ESC straight to ``HomeworkSubmission`` on
-    ``job_id`` — the submission carries every grouping key (tenant, student,
-    task, course-root, node, time), so the ``jobs`` table is not needed in the
-    join. The inner join simultaneously drops ingestion ESC (whose ``job_id``
-    matches no submission) and submissions whose ``job_id`` is NULL.
+    ``unattributed`` and never under ``by_course``. This repository attributes
+    them through the job's SUBJECT (BIL-C, decision 5): ESC → ``jobs`` →
+    the ``HomeworkSubmission`` whose id is the job's ``subject_id``. Every job
+    of the submission counts — the first one and each continuation — where the
+    former join on ``homework_submissions.job_id`` saw only the latest (each
+    continuation overwrites that column). The submission carries every
+    grouping key (tenant, student, task, course-root, node, time). The inner
+    joins drop ingestion ESC (whose job is about no submission).
 
-    Shares the :class:`ExternalServiceCallRepository` invariants (§140):
-    ``COALESCE(SUM, 0)``, ``WHERE cost_usd IS NOT NULL`` (NULL = unknown cost,
-    excluded from sums), inclusive date range via :func:`_to_exclusive`,
-    ``ORDER BY SUM(cost_usd) DESC``, pagination on the breakdowns.
+    Shares the :class:`ExternalServiceCallRepository` invariants:
+    :class:`CostSums` figures, ``WHERE cost_kind IS NOT NULL``, inclusive date
+    range via :func:`_to_exclusive`, dearest first, pagination on the
+    breakdowns.
 
     Tenant isolation: every query filters ``HomeworkSubmission.tenant_id``
     (NOT NULL) — never ``Job.tenant_id`` (nullable) and never through
@@ -558,28 +606,25 @@ class HomeworkCostRepository:
         tenant_id: uuid.UUID,
         from_date: date,
         to_date: date,
-    ) -> float:
+    ) -> CostSums:
         """Total homework-processing cost for the tenant in the period.
 
-        Level 1 (top). Returns ``0.0`` if no rows match.
+        Level 1 (top). All zero if no rows match.
         """
         stmt = (
-            select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0))
+            select(*_sum_columns())
             .select_from(ExternalServiceCall)
-            .join(
-                HomeworkSubmission,
-                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
-            )
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(HomeworkSubmission, _JOB_OF_SUBMISSION)
             .where(
                 HomeworkSubmission.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
         )
         result = await self._session.execute(stmt)
-        # COALESCE guarantees non-NULL; ``or 0.0`` placates SQLA stubs.
-        return float(result.scalar_one() or 0.0)
+        return _sums(result.one())
 
     async def get_homework_by_course(
         self,
@@ -600,24 +645,20 @@ class HomeworkCostRepository:
             select(
                 CourseNode.id.label("course_node_id"),
                 CourseNode.title.label("course_title"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
-            .join(
-                HomeworkSubmission,
-                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
-            )
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(HomeworkSubmission, _JOB_OF_SUBMISSION)
             .join(CourseNode, HomeworkSubmission.course_node_id == CourseNode.id)
             .where(
                 HomeworkSubmission.tenant_id == tenant_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(CourseNode.id, CourseNode.title)
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -626,7 +667,7 @@ class HomeworkCostRepository:
             HomeworkByCourseRow(
                 course_node_id=row.course_node_id,
                 course_title=row.course_title,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]
@@ -658,15 +699,11 @@ class HomeworkCostRepository:
                 AuthoredDocument.source_type.label("source_type"),
                 AuthoredDocument.order.label("order"),
                 AuthoredDocument.deleted_at.label("deleted_at"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
-            .join(
-                HomeworkSubmission,
-                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
-            )
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(HomeworkSubmission, _JOB_OF_SUBMISSION)
             .join(
                 AuthoredDocument,
                 HomeworkSubmission.authored_document_id == AuthoredDocument.id,
@@ -676,7 +713,7 @@ class HomeworkCostRepository:
                 HomeworkSubmission.course_node_id == course_node_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(
                 AuthoredDocument.id,
@@ -686,7 +723,7 @@ class HomeworkCostRepository:
                 AuthoredDocument.order,
                 AuthoredDocument.deleted_at,
             )
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -699,7 +736,7 @@ class HomeworkCostRepository:
                 source_type=row.source_type,
                 order=row.order,
                 is_deleted=row.deleted_at is not None,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]
@@ -717,11 +754,11 @@ class HomeworkCostRepository:
         """Homework cost grouped by student for one task — the leaf (level 3).
 
         The leaf sums cost across ALL of the student's submissions for the task
-        (every attempt's job → its ESC rows). ``student_display`` falls back
-        display_name → credential login → external_id → id so a mode-1 student
-        with no portal display_name and no credential still resolves. Student
-        is inner-joined (``student_id`` is NOT NULL); the credential is
-        outer-joined (1:1-optional).
+        (every job of every submission → its ESC rows). ``student_display``
+        falls back display_name → credential login → external_id → id so a
+        mode-1 student with no portal display_name and no credential still
+        resolves. Student is inner-joined (``student_id`` is NOT NULL); the
+        credential is outer-joined (1:1-optional).
         """
         student_display = func.coalesce(
             Student.display_name,
@@ -733,15 +770,11 @@ class HomeworkCostRepository:
             select(
                 Student.id.label("student_id"),
                 student_display.label("student_display"),
-                func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0.0).label(
-                    "cost_usd"
-                ),
+                *_sum_columns(),
             )
             .select_from(ExternalServiceCall)
-            .join(
-                HomeworkSubmission,
-                ExternalServiceCall.job_id == HomeworkSubmission.job_id,
-            )
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(HomeworkSubmission, _JOB_OF_SUBMISSION)
             .join(Student, HomeworkSubmission.student_id == Student.id)
             .outerjoin(StudentCredential, StudentCredential.student_id == Student.id)
             .where(
@@ -749,7 +782,7 @@ class HomeworkCostRepository:
                 HomeworkSubmission.authored_document_id == authored_document_id,
                 ExternalServiceCall.created_at >= from_date,
                 ExternalServiceCall.created_at < _to_exclusive(to_date),
-                ExternalServiceCall.cost_usd.is_not(None),
+                _PAID_CALL,
             )
             .group_by(
                 Student.id,
@@ -757,7 +790,7 @@ class HomeworkCostRepository:
                 Student.external_id,
                 StudentCredential.login,
             )
-            .order_by(func.sum(ExternalServiceCall.cost_usd).desc())
+            .order_by(_DEAREST_FIRST)
             .limit(limit)
             .offset(offset)
         )
@@ -766,7 +799,7 @@ class HomeworkCostRepository:
             HomeworkByStudentRow(
                 student_id=row.student_id,
                 student_display=row.student_display,
-                cost_usd=float(row.cost_usd),
+                cost=_sums(row),
             )
             for row in result.all()
         ]

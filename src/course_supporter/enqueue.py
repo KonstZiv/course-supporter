@@ -20,6 +20,7 @@ import structlog
 from arq.connections import ArqRedis
 from arq.constants import default_queue_name
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.config import get_settings
@@ -30,7 +31,7 @@ from course_supporter.storage.authored_document_repository import (
 )
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.job_repository import JobRepository
-from course_supporter.storage.orm import Job, ProjectBase
+from course_supporter.storage.orm import AuthoredDocument, Job, ProjectBase
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 
@@ -459,6 +460,11 @@ async def enqueue_key_explanation(
     in flight, a second is refused by the database. The version the job works on
     travels in the payload instead.
 
+    The job carries the task's node as ``course_node_id``, as the task's own
+    processing job does (:func:`enqueue_ingestion`): the cost reports attribute
+    the generation's spend to its course instead of filing it as unattributed
+    (BIL-C, decision 5).
+
     Returns:
         The created Job — the caller logs or ignores it; the author's request
         does not wait for the work.
@@ -468,8 +474,14 @@ async def enqueue_key_explanation(
         reference_id=str(reference_id),
     )
     job_repo = JobRepository(session)
+    task_node_id = await session.scalar(
+        select(AuthoredDocument.course_node_id).where(
+            AuthoredDocument.id == authored_document_id
+        )
+    )
     job = await job_repo.create(
         tenant_id=tenant_id,
+        course_node_id=task_node_id,
         job_type=JobType.KEY_EXPLANATION,
         input_params={"reference_id": str(reference_id)},
         subject_type=JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION],

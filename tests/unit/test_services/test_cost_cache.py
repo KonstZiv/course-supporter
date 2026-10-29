@@ -40,7 +40,7 @@ class TestMakeSummaryKey:
             limit_providers=100,
             offset_providers=10,
         )
-        assert key == (f"cost:summary:{tenant_id}:2026-01-01:2026-04-28:50:0:100:10")
+        assert key == (f"cost:v2:summary:{tenant_id}:2026-01-01:2026-04-28:50:0:100:10")
 
     def test_distinct_pagination_yields_distinct_keys(self) -> None:
         common = {
@@ -80,7 +80,7 @@ class TestMakeCourseKey:
             offset_actions=0,
         )
         assert key == (
-            f"cost:course:{tenant_id}:{course_id}:2026-01-01:2026-04-28:50:0:50:0"
+            f"cost:v2:course:{tenant_id}:{course_id}:2026-01-01:2026-04-28:50:0:50:0"
         )
 
 

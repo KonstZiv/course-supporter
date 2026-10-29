@@ -296,11 +296,16 @@ class TestPersist:
         )
 
     async def test_persist_swallows_db_error(self) -> None:
+        """A refused write is an ERROR carrying every field of the lost row.
+
+        Lock (BIL-C, decision 6): red if the line drops back to a few fields.
+        """
         from sqlalchemy.exc import OperationalError
 
         from course_supporter.service_logging import _persist
 
         session = AsyncMock()
+        session.add = MagicMock()
         session.commit = AsyncMock(side_effect=OperationalError("fail", {}, None))
         factory = AsyncMock()
         factory.__aenter__ = AsyncMock(return_value=session)
@@ -308,20 +313,27 @@ class TestPersist:
         mock_factory = MagicMock(return_value=factory)
 
         set_job_from_arq(uuid.uuid4())
-        with patch("course_supporter.storage.orm.ExternalServiceCall"):
+        with patch("course_supporter.service_logging.logger") as mock_logger:
             await _persist(
                 mock_factory,
                 action="test",
                 strategy="default",
                 provider="test",
                 model_id="test",
+                unit_type="tokens",
+                unit_in=7,
                 success=True,
             )
         # Should not raise
+        call = mock_logger.error.call_args
+        assert call.args[0] == "service_call_log_failed"
+        assert call.kwargs["skip_reason"] == "database_error"
+        assert call.kwargs["row_provider"] == "test"
+        assert call.kwargs["row_unit_in"] == 7
 
 
 class TestPersistGuardsMissingJobId:
-    """_persist must skip + WARN when job_id ContextVar is None.
+    """_persist must skip + log an ERROR when job_id ContextVar is None.
 
     Two-layer defense (KD5 + 0.4): ContextVar guard at the application
     layer, NOT NULL constraint at the DB layer. The skip prevents
@@ -357,8 +369,13 @@ class TestPersistGuardsMissingJobId:
         session.add.assert_not_called()
         session.commit.assert_not_called()
 
-    async def test_emits_warning_on_skip(self) -> None:
+    async def test_emits_an_error_with_every_field_of_the_row(self) -> None:
+        """Lock (BIL-C, decision 6): a dropped row is an ERROR line from which
+        the row can be rebuilt — every column, the text bodies as length and
+        hash. Red if the line is a warning again, or if a column goes missing.
+        """
         from course_supporter.service_logging import _persist
+        from course_supporter.storage.orm import ExternalServiceCall
 
         factory = AsyncMock()
         mock_factory = MagicMock(return_value=factory)
@@ -370,49 +387,50 @@ class TestPersistGuardsMissingJobId:
                 strategy="default",
                 provider="gemini",
                 model_id="gemini-2.5-flash",
+                output_text="the model's words about a student",
             )
 
-        mock_logger.warning.assert_called_once()
-        call = mock_logger.warning.call_args
+        mock_logger.warning.assert_not_called()
+        mock_logger.error.assert_called_once()
+        call = mock_logger.error.call_args
         assert call.args[0] == "esc_write_skipped_no_job_id"
-        assert call.kwargs["action"] == "course_structuring"
-        assert call.kwargs["provider"] == "gemini"
-        assert call.kwargs["model_id"] == "gemini-2.5-flash"
+        assert call.kwargs["row_action"] == "course_structuring"
+        assert call.kwargs["row_provider"] == "gemini"
+        assert call.kwargs["row_model_id"] == "gemini-2.5-flash"
+        columns = {c.name for c in ExternalServiceCall.__table__.columns}
+        logged = {
+            key.removeprefix("row_") for key in call.kwargs if key.startswith("row_")
+        }
+        assert logged == columns - {"input_text", "output_text"}
+        assert call.kwargs["output_text_length"] == len(
+            "the model's words about a student"
+        )
+        assert len(call.kwargs["output_text_sha256"]) == 64
+        assert "the model's words" not in repr(call.kwargs)
 
-
-class TestSTTLogCallbackOutcome:
-    """A speech-to-text row knows transport only: success or transport error."""
-
-    @pytest.mark.parametrize(
-        ("error_message", "expected"),
-        [(None, "success"), ("provider 503", "transport_error")],
-    )
-    async def test_outcome_follows_transport(
-        self, error_message: str | None, expected: str
-    ) -> None:
+    @pytest.mark.drops_paid_calls
+    async def test_a_dropped_paid_call_is_counted_apart(self) -> None:
         from course_supporter.cost_kinds import CostKind
-        from course_supporter.service_logging import create_stt_log_callback
-        from course_supporter.stt.router import STTAttempt
+        from course_supporter.service_logging import (
+            _persist,
+            dropped_paid_call_count,
+        )
         from tests._helpers.priced import priced_as
 
-        attempt = STTAttempt(
-            action="transcribe",
+        before = dropped_paid_call_count()
+        await _persist(
+            MagicMock(),
+            action="a",
             strategy="default",
-            provider="deepgram",
-            model_id="nova-3",
-            latency_ms=5,
-            priced=priced_as(CostKind.ESTIMATED, "0.001"),
-            error_message=error_message,
+            provider="p",
+            model_id="m",
+            unit_type="tokens",
+            priced=priced_as(CostKind.ESTIMATED, "0.01"),
         )
-        with patch(
-            "course_supporter.service_logging._persist", new_callable=AsyncMock
-        ) as persist:
-            await create_stt_log_callback(MagicMock())(attempt)
-        kwargs = persist.await_args.kwargs
-        assert kwargs["outcome"] == expected
-        assert kwargs["unit_type"] == "seconds"
-        assert kwargs["priced"] is attempt.priced
-        assert kwargs["provider"] == "deepgram"
+        await _persist(
+            MagicMock(), action="b", strategy="default", provider=None, model_id=None
+        )
+        assert dropped_paid_call_count() == before + 1
 
 
 class TestDroppedRowsLeaveATrace:

@@ -17,11 +17,13 @@ StageRouter, STTRouter, and VD pipeline components.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
     from course_supporter.llm.finish_reason import FinishReason
     from course_supporter.llm.pricing import PricedCall
     from course_supporter.review_metrics import ReviewMetrics
+    from course_supporter.storage.orm import ExternalServiceCall
     from course_supporter.stt.router import STTAttempt
 
 logger = structlog.get_logger()
@@ -167,25 +170,33 @@ _skipped_writes: Counter[str] = Counter()
 """How many register rows were dropped, by why (``DD-SP-AN``).
 
 A sum of costs read out of the register can be short without anything saying
-so: a row is silently dropped when the call happens outside a job context, and
-when the database write itself fails. Emptiness then looks exactly like a cheap
-run — the same shape of lie as a test that is green for the wrong reason.
+so: a row is dropped when the call happens outside a job context, and when the
+database write itself fails. Since BIL-C each drop is an ERROR line carrying
+every field of the lost row (:func:`_row_fields`), so the row can be rebuilt
+from the log; this count is the process-wide tally beside it. Read it with
+:func:`skipped_write_counts`.
+"""
 
-This is the visible trace: a process-wide count per reason, beside a log line
-that names the same reason. It does not make the sum right — that is the debt
-itself — but it lets a reader of the sum tell "it was cheap" from "it was not
-all written down". Read it with :func:`skipped_write_counts`.
+_dropped_paid_calls = 0
+"""How many rows of PAID calls were dropped (BIL-C, decision 6).
+
+The test suite's lock reads it: every paid call must leave its row, so a test
+that makes one outside a job context fails (``tests/conftest.py``). Never
+reset — the lock compares it before and after each test.
 """
 
 
-def _count_skipped_write(reason: str) -> int:
+def _count_skipped_write(reason: str, *, paid: bool) -> int:
     """Count one dropped register row and return the running total for its kind.
 
     Counted here, REPORTED by the caller on the line it already writes: one
     event deserves one log line, and a second line beside it would be noise a
     reader has to learn to ignore.
     """
+    global _dropped_paid_calls
     _skipped_writes[reason] += 1
+    if paid:
+        _dropped_paid_calls += 1
     return _skipped_writes[reason]
 
 
@@ -197,9 +208,105 @@ def skipped_write_counts() -> dict[str, int]:
     return dict(_skipped_writes)
 
 
+def dropped_paid_call_count() -> int:
+    """How many rows of paid calls this process has dropped (BIL-C)."""
+    return _dropped_paid_calls
+
+
 def reset_skipped_write_counts() -> None:
-    """Clear the counts. For tests; nothing in production resets them."""
+    """Clear the per-reason counts. For tests; nothing in production resets them."""
     _skipped_writes.clear()
+
+
+def _loggable(value: object) -> object:
+    """A column value as a log line can carry it."""
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _row_fields(record: ExternalServiceCall) -> dict[str, object]:
+    """Every field of a register row, for the ERROR line that replaces it.
+
+    The two text bodies are replaced by their length and SHA-256: they can
+    carry a student's submission or a model's words about it, which do not
+    belong in a log (BIL-C, decision P6). Everything a sum is computed from is
+    kept, so a dropped row can be rebuilt from the line.
+    """
+    fields: dict[str, object] = {}
+    for column in record.__table__.columns:
+        if column.name in ("input_text", "output_text"):
+            body = getattr(record, column.name)
+            fields[f"{column.name}_length"] = None if body is None else len(body)
+            fields[f"{column.name}_sha256"] = (
+                None if body is None else hashlib.sha256(body.encode()).hexdigest()
+            )
+            continue
+        fields[f"row_{column.name}"] = _loggable(getattr(record, column.name))
+    return fields
+
+
+def _under_current_job(record: ExternalServiceCall) -> bool:
+    """Stamp the row with the current job, or say loudly that it is dropped.
+
+    ``job_id`` is the register's only mandatory FK (KD5); it comes from the
+    contextvar set at the ARQ task entry. Outside a job the row cannot be
+    written: that is an ERROR with every field of the row, never a quiet skip
+    (BIL-C, decision 6). Production runtime is still never blocked through a
+    telemetry hole.
+    """
+    job_id = get_current_job_id()
+    if job_id is not None:
+        record.job_id = job_id
+        return True
+    logger.error(
+        "esc_write_skipped_no_job_id",
+        # DD-SP-AN: a cost sum read out of the register can be short
+        # without anything saying so. This is what says so.
+        skip_reason="no_job_context",
+        skipped_so_far=_count_skipped_write(
+            "no_job_context", paid=record.cost_kind is not None
+        ),
+        **_row_fields(record),
+    )
+    return False
+
+
+def add_register_row(
+    session: AsyncSession,
+    *,
+    action: str,
+    strategy: str,
+    provider: str,
+    model_id: str,
+    latency_ms: int,
+    success: bool,
+    error_message: str | None,
+    outcome: CallOutcome,
+) -> None:
+    """Stage a register row for a call that costs nothing, in the caller's session.
+
+    For webhook deliveries: their row is committed with the caller's own
+    transaction, as before, but it goes through the same job check as
+    :func:`_persist` — a delivery outside a job context is an ERROR line, not a
+    NOT NULL violation that would take the caller's transaction down with it.
+    """
+    from course_supporter.storage.orm import ExternalServiceCall
+
+    record = ExternalServiceCall(
+        action=action,
+        strategy=strategy,
+        provider=provider,
+        model_id=model_id,
+        latency_ms=latency_ms,
+        success=success,
+        error_message=error_message,
+        outcome=outcome,
+    )
+    if _under_current_job(record):
+        session.add(record)
 
 
 async def _persist(
@@ -249,30 +356,13 @@ async def _persist(
     instant the attempt was sent and the applied unit prices. A row without it
     records no paid call and carries none of them (BIL-C).
 
-    Two-layer guard for ``job_id`` (KD5 — only mandatory FK):
-    1. Read ``job_id`` from contextvar (set at ARQ task entry).
-    2. If absent, log WARNING and skip the write — would otherwise
-       violate the post-0.4 ``NOT NULL`` constraint. Production runtime
-       is never blocked through a telemetry hole.
+    ``job_id`` comes from the job context (:func:`_under_current_job`):
+    outside one, and when the database write fails, the row is dropped with an
+    ERROR line carrying all its fields (BIL-C, decision 6).
     """
     from course_supporter.storage.orm import ExternalServiceCall
 
-    job_id = get_current_job_id()
-    if job_id is None:
-        logger.warning(
-            "esc_write_skipped_no_job_id",
-            action=action,
-            provider=provider,
-            model_id=model_id,
-            # DD-SP-AN: a cost sum read out of the register can be short
-            # without anything saying so. This is what says so.
-            skip_reason="no_job_context",
-            skipped_so_far=_count_skipped_write("no_job_context"),
-        )
-        return
-
     record = ExternalServiceCall(
-        job_id=job_id,
         action=action,
         strategy=strategy,
         provider=provider,
@@ -319,6 +409,8 @@ async def _persist(
         funds_refusal_reason=funds_refusal_reason,
         path_key=path_key,
     )
+    if not _under_current_job(record):
+        return
     try:
         async with session_factory() as session:
             session.add(record)
@@ -326,14 +418,14 @@ async def _persist(
     except (SQLAlchemyError, OSError) as exc:
         logger.error(
             "service_call_log_failed",
-            provider=provider,
-            model=model_id,
-            action=action,
             error=str(exc),
             # DD-SP-AN, the other way a row is dropped.
             skip_reason="database_error",
-            skipped_so_far=_count_skipped_write("database_error"),
+            skipped_so_far=_count_skipped_write(
+                "database_error", paid=record.cost_kind is not None
+            ),
             exc_info=True,
+            **_row_fields(record),
         )
 
 

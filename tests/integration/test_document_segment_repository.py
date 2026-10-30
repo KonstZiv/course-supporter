@@ -27,7 +27,9 @@ Covers Phase 2.1 C7 (KD-2.1-O + KD-2.1-F):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
+from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -1121,15 +1123,20 @@ class TestSearchCandidateFilters:
             portal_submissions,
         )
 
-        for portal_route in (portal_courses, portal_materials, portal_submissions):
-            assert (
-                portal_route.role_visible_to_student
-                is material_visibility.role_visible_to_student
-            )
-        assert (
-            portal_courses.state_visible_to_student
-            is material_visibility.state_visible_to_student
-        )
+        # Each rule, and the routes that must hold that very function. Read
+        # through ``vars``: the routes import the rules, they do not export them.
+        held_by: dict[Callable[[str], bool], tuple[ModuleType, ...]] = {
+            material_visibility.role_visible_to_student: (
+                portal_courses,
+                portal_materials,
+                portal_submissions,
+            ),
+            material_visibility.state_visible_to_student: (portal_courses,),
+        }
+        for rule, portal_routes in held_by.items():
+            for portal_route in portal_routes:
+                held = vars(portal_route)[rule.__name__]
+                assert held is rule, (portal_route.__name__, rule.__name__)
 
         root = await _seed_root(db_session, seed_tenant)
         educational = await _seed_case(db_session, root, {})

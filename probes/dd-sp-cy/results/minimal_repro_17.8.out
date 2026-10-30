@@ -1,0 +1,23 @@
+                                                      version                                                       
+--------------------------------------------------------------------------------------------------------------------
+ PostgreSQL 17.8 (Debian 17.8-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+(1 row)
+
+NOTICE:  table "dd_sp_cy" does not exist, skipping
+ out_of_line | compression | octets 
+-------------+-------------+--------
+ t           |             |   4001
+(1 row)
+
+ERROR:  invalid byte sequence for encoding "UTF8": 0xd0
+ERROR:  invalid byte sequence for encoding "UTF8": 0xd0
+ left 
+------
+ x
+(1 row)
+
+ right 
+-------
+ а
+(1 row)
+

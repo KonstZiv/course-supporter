@@ -15,7 +15,11 @@ Phase 3.3b adds the read side: :meth:`DocumentSegmentRepository
 explained?" (vision §4) via JSONB ``@>`` containment over the
 GIN-indexed concept columns (KD-gamma), resolving each hit's lineage
 (material + node names) in a single JOIN so the Mentor agent does not
-dereference names one-by-one.
+dereference names one-by-one. Task 10 puts the hits in the course's
+learning order (:func:`course_supporter.learning_order.in_learning_order`)
+instead of comparing sibling numbers across the whole tree, and returns
+only candidates -- segments a student may be pointed at
+(:func:`_candidate_filters`).
 
 Standalone class (not a SoftDeleteRepository subclass) per the existing
 repository convention (matches ``DocumentSummaryRepository`` shape).
@@ -27,10 +31,16 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import Row, or_, select
+from sqlalchemy import ColumnElement, Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
+from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
+from course_supporter.material_visibility import (
+    student_visible_roles,
+    student_visible_states,
+)
+from course_supporter.models.source import SourceType
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -86,8 +96,8 @@ class ConceptSearchHit:
     single JOIN by :meth:`DocumentSegmentRepository.search_by_concepts`).
 
     The raw ``content`` is opt-in (``include_content``); the default hit is
-    a pointer without segment text. ``secondary_concepts`` is populated
-    only when ``include_secondary`` widened the query, else an empty list.
+    a pointer without segment text. ``secondary_concepts`` is informational:
+    the match reads ``main_concepts`` only (task 10, decision Б).
     """
 
     segment_id: uuid.UUID
@@ -128,6 +138,58 @@ def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
         # paragraph ordinals (may be None at the KD-C edge).
         return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
     raise ValueError(f"no anchor mapping for source_type {source_type!r}")
+
+
+def _candidate_filters(course_root_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
+    """What makes a segment of the course a candidate (task 10, decision Б).
+
+    A candidate is a segment a student may be pointed at: one from a document
+    the portal shows them in the course tree right now. One definition for
+    every reader of the course's candidates; the predicates name
+    ``DocumentSummary`` and ``AuthoredDocument``, so the statement joins the
+    segment's lineage. The concept match is the reader's own and is not here
+    -- it reads ``main_concepts`` only, secondary concepts never count.
+
+    - the segment is live and not a service file (``is_auxiliary``);
+    - the summary is the document's active one, in ``ready``;
+    - the document is live, and the portal's own rules show it: its role
+      (:func:`~course_supporter.material_visibility.student_visible_roles`)
+      and its processing state
+      (:func:`~course_supporter.material_visibility.student_visible_states`
+      over the SQL form of ``AuthoredDocument.state``) -- not copies of
+      their conditions;
+    - the document is not a task (any ``task_type``) and not a test the
+      author wrote in the system (``test_object``).
+
+    Each ``deleted_at`` is checked: the cascade normally keeps them in step,
+    a candidate does not rely on it. ``is_auxiliary`` is the author's marking
+    of a code file as auxiliary; recognising configs and dependencies
+    (``pyproject.toml``…) at upload, which nobody marks by hand, is a separate
+    ingestion task.
+    """
+    return (
+        DocumentSegment.course_root_id == course_root_id,
+        DocumentSegment.deleted_at.is_(None),
+        DocumentSegment.is_auxiliary.is_(False),
+        DocumentSummary.deleted_at.is_(None),
+        DocumentSummary.status == "ready",
+        AuthoredDocument.deleted_at.is_(None),
+        AuthoredDocument.material_role.in_(student_visible_roles()),
+        AuthoredDocument.state.in_(student_visible_states()),
+        AuthoredDocument.task_type.is_(None),
+        AuthoredDocument.source_type != SourceType.TEST_OBJECT.value,
+    )
+
+
+def _material_place(row: Row[Any]) -> MaterialPlace:
+    """The learning-order place of a result row (its node, document, segment)."""
+    return MaterialPlace(
+        course_node_id=row.course_node_id,
+        document_order=row.document_order,
+        document_created_at=row.document_created_at,
+        document_id=row.authored_document_id,
+        segment_order=row.segment_order,
+    )
 
 
 class DocumentSegmentRepository:
@@ -263,16 +325,17 @@ class DocumentSegmentRepository:
         *,
         course_root_id: uuid.UUID,
         concepts: list[str],
-        include_secondary: bool = False,
         include_content: bool = False,
     ) -> list[ConceptSearchHit]:
-        """Find segments teaching every concept in ``concepts`` (vision §4).
+        """Find candidate segments teaching every concept in ``concepts`` (§4).
 
         Concept-navigation primitive for the Mentor agent: "where in the
         course is concept X explained?". Matches via JSONB ``@>``
-        containment over the GIN-indexed concept columns (KD-gamma), so
-        every term in ``concepts`` must be present in the segment (AND
-        semantics; a single-term query is a list of one).
+        containment over the GIN-indexed ``main_concepts`` column
+        (KD-gamma), so every term in ``concepts`` must be among the
+        segment's main concepts (AND semantics; a single-term query is a
+        list of one). Secondary concepts never match (task 10, decision Б),
+        and only candidates are searched (:func:`_candidate_filters`).
 
         The query JOINs up the lineage chain
         (``DocumentSegment`` -> ``DocumentSummary`` -> ``AuthoredDocument``
@@ -288,32 +351,22 @@ class DocumentSegmentRepository:
                 Bilingual-key aware -- a term matches the exact stored
                 string with no query expansion (§4 amendment v0.20.10). An
                 empty list returns ``[]`` (it does NOT scan the course).
-            include_secondary: When ``True``, broaden the match to
-                ``secondary_concepts`` as well (``main @> arr OR secondary
-                @> arr``). Known limitation: a query split across columns
-                (one term in main, another in secondary of the same
-                segment) will not hit -- forward-note, acceptable for MVP.
-                Also populates each hit's ``secondary_concepts``.
             include_content: When ``True``, add the raw segment ``content``
                 column to the SELECT and project it; otherwise the heavy
                 text column is never read from the DB and each hit's
                 ``content`` is ``None``.
 
         Returns:
-            Hits in course reading order: ``CourseNode.order`` (NULLS LAST)
-            -> ``CourseNode.created_at`` -> ``AuthoredDocument.order`` ->
-            ``DocumentSegment.order``. No relevance score (Phase 3.3b is
-            position-ordered; relevance is the FD4/pgvector axis).
+            Hits in the course's learning order
+            (:func:`~course_supporter.learning_order.in_learning_order`):
+            nested nodes in sibling order, a node's own materials after
+            everything nested in it, the root's materials last; inside a
+            node, by ``AuthoredDocument.order`` then ``DocumentSegment.order``.
+            No relevance score (position-ordered; relevance is the
+            FD4/pgvector axis).
         """
         if not concepts:
             return []
-
-        main_match = DocumentSegment.main_concepts.contains(concepts)
-        match_predicate = (
-            or_(main_match, DocumentSegment.secondary_concepts.contains(concepts))
-            if include_secondary
-            else main_match
-        )
 
         # Narrow projection: exactly the columns ConceptSearchHit needs, never
         # whole entities. Whole-entity SELECT would pull the heavy
@@ -343,6 +396,10 @@ class DocumentSegmentRepository:
             DocumentSegment.start_paragraph.label("start_paragraph"),
             DocumentSegment.end_paragraph.label("end_paragraph"),
             DocumentSegment.file_path.label("file_path"),
+            # Learning-order place, read by _material_place.
+            AuthoredDocument.order.label("document_order"),
+            AuthoredDocument.created_at.label("document_created_at"),
+            DocumentSegment.order.label("segment_order"),
         )
         if include_content:
             stmt = stmt.add_columns(DocumentSegment.content.label("content"))
@@ -357,23 +414,17 @@ class DocumentSegmentRepository:
             )
             .join(CourseNode, AuthoredDocument.course_node_id == CourseNode.id)
             .where(
-                DocumentSegment.course_root_id == course_root_id,
-                # Active segments only. A soft-deleted summary/material
-                # cascade-soft-deletes its segments (CascadeDeleteService),
-                # so this single predicate also excludes reprocess history
-                # without joining deleted_at on every ancestor.
-                DocumentSegment.deleted_at.is_(None),
-                match_predicate,
-            )
-            .order_by(
-                CourseNode.order.asc().nulls_last(),
-                CourseNode.created_at.asc(),
-                AuthoredDocument.order.asc(),
-                DocumentSegment.order.asc(),
+                *_candidate_filters(course_root_id),
+                DocumentSegment.main_concepts.contains(concepts),
             )
         )
 
-        result = await self._session.execute(stmt)
+        rows = (await self._session.execute(stmt)).all()
+        if not rows:
+            return []
+        rows = in_learning_order(
+            rows, await self._course_tree(course_root_id), place=_material_place
+        )
         return [
             ConceptSearchHit(
                 segment_id=row.segment_id,
@@ -389,13 +440,42 @@ class DocumentSegmentRepository:
                 # projection yields a fresh per-row object (not a shared ORM
                 # attribute), so no defensive copy is needed (reviewer 3.3b).
                 main_concepts=row.main_concepts,
-                secondary_concepts=(
-                    row.secondary_concepts if include_secondary else []
-                ),
+                secondary_concepts=row.secondary_concepts,
                 char_count=row.char_count,
                 # content column is present only when include_content widened
                 # the SELECT; guard the attribute access accordingly.
                 content=row.content if include_content else None,
+            )
+            for row in rows
+        ]
+
+    async def _course_tree(self, course_root_id: uuid.UUID) -> list[TreeNode]:
+        """Every node of the course, as the learning order reads it.
+
+        Soft-deleted nodes are walked too: the tree only places a hit, it never
+        decides whether a segment is one -- that is the WHERE clause's job.
+        """
+        columns = (
+            CourseNode.id,
+            CourseNode.parent_id,
+            CourseNode.order,
+            CourseNode.created_at,
+        )
+        tree = (
+            select(*columns)
+            .where(CourseNode.id == course_root_id)
+            .cte(name="course_tree", recursive=True)
+        )
+        tree = tree.union_all(
+            select(*columns).join(tree, CourseNode.parent_id == tree.c.id)
+        )
+        result = await self._session.execute(select(tree))
+        return [
+            TreeNode(
+                id=row.id,
+                parent_id=row.parent_id,
+                order=row.order,
+                created_at=row.created_at,
             )
             for row in result.all()
         ]

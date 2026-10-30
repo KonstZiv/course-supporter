@@ -21,10 +21,9 @@ from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes._portal_shared import material_label
 from course_supporter.api.routes.portal_courses import _base_block
 from course_supporter.auth.context import StudentContext
-from course_supporter.models.source import MaterialRole
+from course_supporter.models.source import MaterialRole, MaterialState
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.orm import MaterialState
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,

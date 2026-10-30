@@ -41,7 +41,6 @@ from course_supporter.api.routes._portal_shared import (
     curated_rejection,
     curated_structure,
     curated_verdict,
-    role_visible_to_student,
 )
 from course_supporter.api.routes._test_shared import (
     require_published,
@@ -75,6 +74,7 @@ from course_supporter.homework.test_doors import (
     refuse_a_file_for_a_test,
     refuse_a_file_for_a_written_test,
 )
+from course_supporter.material_visibility import role_visible_to_student
 from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import compute_delta, manifest_from_jsonb
 from course_supporter.storage.authored_document_repository import (

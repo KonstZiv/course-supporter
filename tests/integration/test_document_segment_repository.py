@@ -27,7 +27,10 @@ Covers Phase 2.1 C7 (KD-2.1-O + KD-2.1-F):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
+from types import ModuleType
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -36,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.ingestion.schemas import DocumentSegmentDraft, VisualSceneRef
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -59,6 +63,7 @@ from course_supporter.storage.orm import (
     CourseNode,
     DocumentSegment,
     DocumentSummary,
+    Job,
     Tenant,
 )
 from tests._helpers.course_node_factory import make_root_course_node
@@ -484,8 +489,17 @@ async def _seed_material(
     source_type: str = "text",
     order: int = 0,
     filename: str | None = "material.txt",
+    material_role: str = "educational",
+    task_type: str | None = None,
+    deleted: bool = False,
+    error_message: str | None = None,
+    in_flight: bool = False,
 ) -> AuthoredDocument:
-    """Create an AuthoredDocument on ``node`` rooted at ``root``."""
+    """Create an AuthoredDocument on ``node`` rooted at ``root``.
+
+    ``in_flight`` gives it a processing Job, the way a reprocess does: the
+    document's state reads ``pending`` until the job lets it go.
+    """
     doc = AuthoredDocument(
         course_node_id=node.id,
         course_root_id=root.id,
@@ -493,9 +507,26 @@ async def _seed_material(
         source_url="https://example.com/search",
         order=order,
         filename=filename,
+        material_role=material_role,
+        task_type=task_type,
+        error_message=error_message,
     )
+    if deleted:
+        doc.deleted_at = datetime.now(UTC)
     session.add(doc)
     await session.flush()
+    if in_flight:
+        job = Job(
+            tenant_id=root.tenant_id,
+            job_type=JobType.DOCUMENT_PROCESSING.value,
+            subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PROCESSING],
+            subject_id=doc.id,
+            status="active",
+        )
+        session.add(job)
+        await session.flush()
+        doc.job_id = job.id
+        await session.flush()
     return doc
 
 
@@ -505,14 +536,18 @@ async def _seed_summary(
     root: CourseNode,
     *,
     title: str = "Material Title",
+    status: str = "ready",
+    deleted: bool = False,
 ) -> DocumentSummary:
-    """Create the active DocumentSummary for ``doc``."""
+    """Create the DocumentSummary for ``doc`` (active unless ``deleted``)."""
     summary = DocumentSummary(
         authored_document_id=doc.id,
         course_root_id=root.id,
         title=title,
-        status="ready",
+        status=status,
     )
+    if deleted:
+        summary.deleted_at = datetime.now(UTC)
     session.add(summary)
     await session.flush()
     return summary
@@ -528,6 +563,7 @@ async def _seed_segment(
     secondary: list[str] | None = None,
     content: str = "segment body",
     deleted: bool = False,
+    is_auxiliary: bool = False,
     start_time_sec: float | None = None,
     end_time_sec: float | None = None,
     start_slide: int | None = None,
@@ -547,6 +583,7 @@ async def _seed_segment(
         content_char_count=len(content),
         main_concepts=main or [],
         secondary_concepts=secondary or [],
+        is_auxiliary=is_auxiliary,
         start_time_sec=start_time_sec,
         end_time_sec=end_time_sec,
         start_slide=start_slide,
@@ -642,28 +679,28 @@ class TestSearchByConcepts:
         )
         assert missing == []
 
-    async def test_include_secondary_broadens_and_projects(
+    async def test_secondary_concepts_projected_never_matched(
         self, db_session: AsyncSession, seed_tenant: Tenant
     ) -> None:
-        """include_secondary widens the match and fills secondary_concepts."""
+        """A hit carries its secondary concepts; they never make a hit.
+
+        Task 10 (decision Б) dropped ``include_secondary``: a candidate is
+        matched on its main concepts only.
+        """
         root, seg = await _one_segment_course(
             db_session, seed_tenant, main=["loops"], secondary=["iterables"]
         )
 
         repo = DocumentSegmentRepository(db_session)
-        # Secondary-only term is invisible by default.
-        narrow = await repo.search_by_concepts(
-            course_root_id=root.id, concepts=["iterables"]
+        assert (
+            await repo.search_by_concepts(
+                course_root_id=root.id, concepts=["iterables"]
+            )
+            == []
         )
-        assert narrow == []
-        # With include_secondary it matches and projects secondary_concepts.
-        wide = await repo.search_by_concepts(
-            course_root_id=root.id,
-            concepts=["iterables"],
-            include_secondary=True,
-        )
-        assert [h.segment_id for h in wide] == [seg.id]
-        assert wide[0].secondary_concepts == ["iterables"]
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["loops"])
+        assert [h.segment_id for h in hits] == [seg.id]
+        assert hits[0].secondary_concepts == ["iterables"]
 
     async def test_include_content_projection(
         self, db_session: AsyncSession, seed_tenant: Tenant
@@ -902,12 +939,16 @@ class TestSearchByConcepts:
         (hit,) = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
         assert hit.anchor == SegmentAnchor("paragraph", None, None)
 
-    async def test_results_in_course_reading_order(
+    async def test_in_node_order_and_unnumbered_child_before_root(
         self, db_session: AsyncSession, seed_tenant: Tenant
     ) -> None:
-        """Order = CourseNode.order (NULLS LAST), then doc.order, seg.order."""
+        """Inside a node: doc.order, then seg.order; the root's materials last.
+
+        Task 10 (decision A) reversed the old expectation here: a child node's
+        materials come BEFORE the root's own, even when the child has no
+        ``order`` -- the root's materials open only after everything nested.
+        """
         root = await _seed_root(db_session, seed_tenant, title="Root", order=0)
-        # Child node with NULL order → sorts after the root node.
         child = await _seed_child(
             db_session, seed_tenant, root, title="Late", order=None
         )
@@ -921,7 +962,7 @@ class TestSearchByConcepts:
         doc_b = await _seed_material(db_session, root, root, order=1, filename="b")
         sum_b = await _seed_summary(db_session, doc_b, root, title="B")
         seg_b = await _seed_segment(db_session, sum_b, root, order=0, main=["nav"])
-        # Child node (NULL order) → last.
+        # Child node (NULL order) -> nested, so before the root's materials.
         doc_c = await _seed_material(db_session, child, root, order=0, filename="c")
         sum_c = await _seed_summary(db_session, doc_c, root, title="C")
         seg_c = await _seed_segment(db_session, sum_c, root, order=0, main=["nav"])
@@ -930,8 +971,239 @@ class TestSearchByConcepts:
         hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
 
         assert [h.segment_id for h in hits] == [
-            seg_a0.id,  # node order 0, doc order 0, seg order 0
-            seg_a1.id,  # node order 0, doc order 0, seg order 1
-            seg_b.id,  # node order 0, doc order 1
-            seg_c.id,  # node order NULL → last
+            seg_c.id,  # nested node first
+            seg_a0.id,  # root, doc order 0, seg order 0
+            seg_a1.id,  # root, doc order 0, seg order 1
+            seg_b.id,  # root, doc order 1
         ]
+
+
+async def _seed_taught(
+    session: AsyncSession,
+    node: CourseNode,
+    root: CourseNode,
+    *,
+    order: int = 0,
+    segments: int = 1,
+) -> list[DocumentSegment]:
+    """A material on ``node`` with ``segments`` segments teaching ``nav``.
+
+    Segments are inserted in reverse ``order`` so the result's order is the
+    sort's doing, not the insertion's.
+    """
+    doc = await _seed_material(session, node, root, order=order)
+    summary = await _seed_summary(session, doc, root)
+    created = [
+        await _seed_segment(session, summary, root, order=i, main=["nav"])
+        for i in reversed(range(segments))
+    ]
+    return list(reversed(created))
+
+
+class TestSearchLearningOrder:
+    """Lock 1 (task 10, decision A): hits follow the course's learning order."""
+
+    async def test_three_level_tree_children_first_root_last(
+        self, db_session: AsyncSession, seed_tenant: Tenant
+    ) -> None:
+        """Lessons of block 1, block 1, lessons of block 2, block 2, root.
+
+        Sibling numbers repeat across levels (blocks 1-2, lessons 1-2 in each
+        block), which is what the old cross-tree ``CourseNode.order`` sort got
+        wrong: it put lesson 1 of block 2 before lesson 2 of block 1. Nodes
+        are created out of order, and the unnumbered lesson first, so neither
+        insertion order nor ``created_at`` can pass for the rule.
+        """
+        root = await _seed_root(db_session, seed_tenant, title="Course", order=0)
+        block_2 = await _seed_child(db_session, seed_tenant, root, order=2)
+        block_1 = await _seed_child(db_session, seed_tenant, root, order=1)
+        lesson_1_none = await _seed_child(db_session, seed_tenant, block_1, order=None)
+        lesson_1_12 = await _seed_child(db_session, seed_tenant, block_1, order=12)
+        lesson_1_02 = await _seed_child(db_session, seed_tenant, block_1, order=2)
+        lesson_2_02 = await _seed_child(db_session, seed_tenant, block_2, order=2)
+        lesson_2_01 = await _seed_child(db_session, seed_tenant, block_2, order=1)
+
+        # Materials on every level; block 1 has two documents, created in
+        # reverse order, the first with two segments.
+        root_mat = await _seed_taught(db_session, root, root)
+        block_2_mat = await _seed_taught(db_session, block_2, root)
+        block_1_doc_1 = await _seed_taught(db_session, block_1, root, order=1)
+        block_1_doc_0 = await _seed_taught(
+            db_session, block_1, root, order=0, segments=2
+        )
+        l_2_01 = await _seed_taught(db_session, lesson_2_01, root)
+        l_2_02 = await _seed_taught(db_session, lesson_2_02, root)
+        l_1_none = await _seed_taught(db_session, lesson_1_none, root)
+        l_1_12 = await _seed_taught(db_session, lesson_1_12, root)
+        l_1_02 = await _seed_taught(db_session, lesson_1_02, root)
+
+        repo = DocumentSegmentRepository(db_session)
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
+
+        expected = [
+            *l_1_02,  # block 1: lessons by order ...
+            *l_1_12,
+            *l_1_none,  # ... the unnumbered one after the numbered
+            *block_1_doc_0,  # block 1's own: doc order 0 (seg 0, seg 1) ...
+            *block_1_doc_1,  # ... then doc order 1
+            *l_2_01,  # block 2: lessons by order
+            *l_2_02,
+            *block_2_mat,  # block 2's own
+            *root_mat,  # the root's own, last
+        ]
+        assert [h.segment_id for h in hits] == [s.id for s in expected]
+
+
+# One case per candidate condition (task 10, decision Б): the overrides break
+# exactly that condition and nothing else, on a segment that teaches ``nav``.
+_NOT_A_CANDIDATE: dict[str, dict[str, dict[str, Any]]] = {
+    "methodological_role": {"material": {"material_role": "methodological"}},
+    "task_type_test": {"material": {"task_type": "test"}},
+    "task_type_short_task": {"material": {"task_type": "short_task"}},
+    "task_type_task": {"material": {"task_type": "task"}},
+    "task_type_project": {"material": {"task_type": "project"}},
+    "test_object": {"material": {"source_type": "test_object"}},
+    "document_deleted": {"material": {"deleted": True}},
+    "document_failed_not_in_portal": {"material": {"error_message": "boom"}},
+    "document_processing_not_in_portal": {"material": {"in_flight": True}},
+    "summary_pending": {"summary": {"status": "pending"}},
+    "summary_failed": {"summary": {"status": "failed"}},
+    "summary_inactive": {"summary": {"deleted": True}},
+    "segment_deleted": {"segment": {"deleted": True}},
+    "segment_auxiliary": {"segment": {"is_auxiliary": True}},
+    "concept_only_secondary": {"segment": {"main": [], "secondary": ["nav"]}},
+}
+
+
+async def _seed_case(
+    session: AsyncSession,
+    root: CourseNode,
+    overrides: dict[str, dict[str, Any]],
+) -> DocumentSegment:
+    """A material on the root teaching ``nav``, with ``overrides`` applied."""
+    doc = await _seed_material(session, root, root, **overrides.get("material", {}))
+    summary = await _seed_summary(session, doc, root, **overrides.get("summary", {}))
+    segment = {"main": ["nav"], **overrides.get("segment", {})}
+    return await _seed_segment(session, summary, root, **segment)
+
+
+class TestSearchCandidateFilters:
+    """Lock 2 (task 10): only candidates are found, by the portal's rule."""
+
+    @pytest.mark.parametrize("case", sorted(_NOT_A_CANDIDATE))
+    async def test_each_condition_cuts_its_own_case(
+        self, db_session: AsyncSession, seed_tenant: Tenant, case: str
+    ) -> None:
+        """The broken condition drops its segment; the candidate beside stays."""
+        root = await _seed_root(db_session, seed_tenant)
+        candidate = await _seed_case(db_session, root, {})
+        await _seed_case(db_session, root, _NOT_A_CANDIDATE[case])
+
+        repo = DocumentSegmentRepository(db_session)
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
+
+        assert [h.segment_id for h in hits] == [candidate.id]
+
+    async def test_visibility_is_the_portal_rule(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Search and portal read both visibility rules from one source.
+
+        The portal routes hold the very functions of ``material_visibility``
+        -- the role rule and the course tree's state rule -- and changing a
+        rule there changes what the search selects.
+        """
+        from course_supporter import material_visibility
+        from course_supporter.api.routes import (
+            portal_courses,
+            portal_materials,
+            portal_submissions,
+        )
+
+        # Each rule, and the routes that must hold that very function. Read
+        # through ``vars``: the routes import the rules, they do not export them.
+        held_by: dict[Callable[[str], bool], tuple[ModuleType, ...]] = {
+            material_visibility.role_visible_to_student: (
+                portal_courses,
+                portal_materials,
+                portal_submissions,
+            ),
+            material_visibility.state_visible_to_student: (portal_courses,),
+        }
+        for rule, portal_routes in held_by.items():
+            for portal_route in portal_routes:
+                held = vars(portal_route)[rule.__name__]
+                assert held is rule, (portal_route.__name__, rule.__name__)
+
+        root = await _seed_root(db_session, seed_tenant)
+        educational = await _seed_case(db_session, root, {})
+        methodological = await _seed_case(
+            db_session, root, {"material": {"material_role": "methodological"}}
+        )
+        processing = await _seed_case(
+            db_session, root, {"material": {"in_flight": True}}
+        )
+        repo = DocumentSegmentRepository(db_session)
+
+        async def found() -> set[uuid.UUID]:
+            hits = await repo.search_by_concepts(
+                course_root_id=root.id, concepts=["nav"]
+            )
+            return {h.segment_id for h in hits}
+
+        assert await found() == {educational.id}
+
+        monkeypatch.setattr(
+            material_visibility,
+            "role_visible_to_student",
+            lambda role: role == "methodological",
+        )
+        assert await found() == {methodological.id}
+        monkeypatch.undo()
+
+        monkeypatch.setattr(
+            material_visibility,
+            "state_visible_to_student",
+            lambda state: state in ("ready", "pending"),
+        )
+        assert await found() == {educational.id, processing.id}
+
+    async def test_document_state_in_sql_is_the_portal_state(
+        self, db_session: AsyncSession, seed_tenant: Tenant
+    ) -> None:
+        """``AuthoredDocument.state`` in SQL equals the state the portal reads.
+
+        The portal reads the Python body on a loaded document; the search
+        filters by the SQL form on the class. Every combination of the two
+        inputs (``error_message`` empty / set, a job in flight or not) must
+        come out the same in both.
+        """
+        root = await _seed_root(db_session, seed_tenant)
+        expected = {
+            (None, False): "ready",
+            ("", False): "ready",
+            ("boom", False): "error",
+            (None, True): "pending",
+            ("", True): "pending",
+            ("boom", True): "error",
+        }
+        docs = {
+            inputs: await _seed_material(
+                db_session, root, root, error_message=inputs[0], in_flight=inputs[1]
+            )
+            for inputs in expected
+        }
+
+        rows = await db_session.execute(
+            select(AuthoredDocument.id, AuthoredDocument.state).where(
+                AuthoredDocument.id.in_([d.id for d in docs.values()])
+            )
+        )
+        in_sql = dict(rows.tuples().all())
+
+        for inputs, doc in docs.items():
+            assert (inputs, doc.state) == (inputs, expected[inputs])
+            assert (inputs, in_sql[doc.id]) == (inputs, expected[inputs])

@@ -36,7 +36,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
-from course_supporter.material_visibility import student_visible_roles
+from course_supporter.material_visibility import (
+    student_visible_roles,
+    student_visible_states,
+)
 from course_supporter.models.source import SourceType
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
@@ -140,33 +143,39 @@ def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
 def _candidate_filters(course_root_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
     """What makes a segment of the course a candidate (task 10, decision Б).
 
-    A candidate is a segment a student may be pointed at. One definition for
+    A candidate is a segment a student may be pointed at: one from a document
+    the portal shows them in the course tree right now. One definition for
     every reader of the course's candidates; the predicates name
     ``DocumentSummary`` and ``AuthoredDocument``, so the statement joins the
     segment's lineage. The concept match is the reader's own and is not here
     -- it reads ``main_concepts`` only, secondary concepts never count.
 
-    - the segment and its document are live, and the summary is the
-      document's active one in ``ready`` (each ``deleted_at`` is checked:
-      the cascade normally keeps them in step, a candidate does not rely on
-      it);
-    - the document's role is one a student may see -- the portal's own rule
-      (:func:`~course_supporter.material_visibility.student_visible_roles`),
-      not a copy of its condition;
+    - the segment is live and not a service file (``is_auxiliary``);
+    - the summary is the document's active one, in ``ready``;
+    - the document is live, and the portal's own rules show it: its role
+      (:func:`~course_supporter.material_visibility.student_visible_roles`)
+      and its processing state
+      (:func:`~course_supporter.material_visibility.student_visible_states`
+      over the SQL form of ``AuthoredDocument.state``) -- not copies of
+      their conditions;
     - the document is not a task (any ``task_type``) and not a test the
       author wrote in the system (``test_object``).
 
-    Service code files (configs, dependencies) are NOT excluded here: the
-    one per-segment flag, ``is_auxiliary``, is set only by the author's hand
-    and does not cover them (task 10, decision Г -- an open question).
+    Each ``deleted_at`` is checked: the cascade normally keeps them in step,
+    a candidate does not rely on it. ``is_auxiliary`` is the author's marking
+    of a code file as auxiliary; recognising configs and dependencies
+    (``pyproject.toml``…) at upload, which nobody marks by hand, is a separate
+    ingestion task.
     """
     return (
         DocumentSegment.course_root_id == course_root_id,
         DocumentSegment.deleted_at.is_(None),
+        DocumentSegment.is_auxiliary.is_(False),
         DocumentSummary.deleted_at.is_(None),
         DocumentSummary.status == "ready",
         AuthoredDocument.deleted_at.is_(None),
         AuthoredDocument.material_role.in_(student_visible_roles()),
+        AuthoredDocument.state.in_(student_visible_states()),
         AuthoredDocument.task_type.is_(None),
         AuthoredDocument.source_type != SourceType.TEST_OBJECT.value,
     )

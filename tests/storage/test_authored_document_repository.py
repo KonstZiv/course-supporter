@@ -431,7 +431,7 @@ class TestCompleteProcessingStateTransition:
         * ``processed_at`` set to a non-NULL timestamp
         * ``state`` property returns ``MaterialState.READY``
         """
-        from course_supporter.storage.orm import MaterialState
+        from course_supporter.models.source import MaterialState
 
         async with kd_delta_session_factory() as session:
             tenant = await _make_tenant(session, "complete-processing")

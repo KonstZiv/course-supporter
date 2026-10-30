@@ -1,16 +1,23 @@
 """Which materials a student may see — one rule for every reader (task 10).
 
-Moved here from the portal routes (``api/routes/_portal_shared``), below
-both layers, so the storage layer takes the SAME rule without importing a
-route module. The portal checks each loaded document with
-:func:`role_visible_to_student`; the concept search filters in SQL by
-:func:`student_visible_roles`, which asks that same function — never a second
-copy of the condition. The portal's behaviour is unchanged by the move.
+Moved here from the portal routes (``api/routes/_portal_shared`` and the
+course tree in ``portal_courses``), below both layers, so the storage layer
+takes the SAME rules without importing a route module. Two rules, one per
+axis of a document:
+
+* its ROLE — :func:`role_visible_to_student`;
+* its processing STATE — :func:`state_visible_to_student` (the course tree
+  shows a document only once it is ready).
+
+The portal checks each loaded document with these predicates; the concept
+search filters in SQL by :func:`student_visible_roles` and
+:func:`student_visible_states`, which ask the same predicates — never a second
+copy of a condition. The portal's behaviour is unchanged by the move.
 """
 
 from __future__ import annotations
 
-from course_supporter.models.source import MaterialRole
+from course_supporter.models.source import MaterialRole, MaterialState
 
 
 def role_visible_to_student(material_role: str) -> bool:
@@ -47,3 +54,27 @@ def student_visible_roles() -> list[str]:
     allowlist hides it.
     """
     return [role.value for role in MaterialRole if role_visible_to_student(role.value)]
+
+
+def state_visible_to_student(material_state: str) -> bool:
+    """Whether the course tree shows a document in this processing STATE.
+
+    Allowlist, like the role rule: shown ⇔ the state is exactly ``ready``. A
+    document being (re)processed (``pending``) or failed (``error``) is left
+    out of the student's tree until it is ready again. The state itself is
+    derived by ``orm.AuthoredDocument.state`` — on a loaded document, or in
+    SQL on the class.
+    """
+    return material_state == MaterialState.READY.value
+
+
+def student_visible_states() -> list[str]:
+    """Every state :func:`state_visible_to_student` shows a student.
+
+    The SQL-side form of the rule (``state IN (...)``), asked of each member
+    of :class:`MaterialState` at call time, as :func:`student_visible_roles`
+    is.
+    """
+    return [
+        state.value for state in MaterialState if state_visible_to_student(state.value)
+    ]

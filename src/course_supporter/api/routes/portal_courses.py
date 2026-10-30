@@ -53,7 +53,10 @@ from course_supporter.api.schemas import (
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.homework.test_doors import new_path_serves_tests
-from course_supporter.material_visibility import role_visible_to_student
+from course_supporter.material_visibility import (
+    role_visible_to_student,
+    state_visible_to_student,
+)
 from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -61,7 +64,6 @@ from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
     HomeworkSubmission,
-    MaterialState,
     ProjectBase,
 )
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
@@ -312,7 +314,7 @@ def _project_node(
                 d
                 for d in node.documents
                 if d.deleted_at is None
-                and d.state == MaterialState.READY
+                and state_visible_to_student(d.state)
                 and role_visible_to_student(d.material_role)
                 and _shown_to_student(d, published)
             ),

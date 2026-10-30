@@ -59,6 +59,20 @@ class MaterialRole(StrEnum):
     METHODOLOGICAL = "methodological"
 
 
+class MaterialState(StrEnum):
+    """Derived state of a AuthoredDocument (not stored in DB).
+
+    Derived by ``orm.AuthoredDocument.state``; lives here, beside
+    :class:`MaterialRole`, so the student-visibility rules
+    (:mod:`course_supporter.material_visibility`) can name it without
+    importing the storage layer (task 10).
+    """
+
+    PENDING = "pending"
+    READY = "ready"
+    ERROR = "error"
+
+
 class AssignmentType(StrEnum):
     """Assignment types with increasing complexity and duration.
 

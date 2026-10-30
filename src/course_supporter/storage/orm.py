@@ -10,6 +10,7 @@ import uuid_utils as uuid7_lib
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    ColumnElement,
     DateTime,
     Enum,
     Float,
@@ -21,11 +22,13 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    case,
     func,
     inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
@@ -45,6 +48,7 @@ from course_supporter.feedback_kinds import (
     FeedbackValue,
 )
 from course_supporter.llm.finish_reason import FinishReason
+from course_supporter.models.source import MaterialState
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
 from course_supporter.storage.cascade import (
     ScrubCallable,
@@ -348,14 +352,6 @@ class CourseNode(SoftDeleteMixin, Base):
     )
 
 
-class MaterialState(StrEnum):
-    """Derived state of a AuthoredDocument (not stored in DB)."""
-
-    PENDING = "pending"
-    READY = "ready"
-    ERROR = "error"
-
-
 class AuthoredDocument(SoftDeleteMixin, Base):
     """A single material attached to a node in the material tree.
 
@@ -558,18 +554,38 @@ class AuthoredDocument(SoftDeleteMixin, Base):
 
     # ── Derived state ──
 
-    @property
+    @hybrid_property
     def state(self) -> MaterialState:
         """Derive current state. Phase 2.x will refine after Pass 2 pipeline.
 
         Priority: ERROR > PENDING > READY. RAW / INTEGRITY_BROKEN states are
         deferred to Phase 2.x semantics after Pass 2 pipeline introduction.
+
+        A hybrid (task 10): on a loaded document this body runs; on the class
+        (``AuthoredDocument.state``) :meth:`_state_expression` gives the same
+        derivation in SQL, so a reader filtering in a query reads the state
+        the portal reads off the instance.
         """
         if self.error_message:
             return MaterialState.ERROR
         if self.job_id is not None:
             return MaterialState.PENDING
         return MaterialState.READY
+
+    @state.inplace.expression
+    @classmethod
+    def _state_expression(cls) -> ColumnElement[MaterialState]:
+        """The :attr:`state` derivation in SQL, branch for branch.
+
+        An empty ``error_message`` is no error here either (the Python body
+        tests truthiness). The two forms are locked together by
+        ``test_document_state_in_sql_is_the_portal_state``.
+        """
+        return case(
+            (func.coalesce(cls.error_message, "") != "", MaterialState.ERROR.value),
+            (cls.job_id.is_not(None), MaterialState.PENDING.value),
+            else_=MaterialState.READY.value,
+        )
 
     @property
     def processing_phase(self) -> str:

@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.ingestion.schemas import DocumentSegmentDraft, VisualSceneRef
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -60,6 +61,7 @@ from course_supporter.storage.orm import (
     CourseNode,
     DocumentSegment,
     DocumentSummary,
+    Job,
     Tenant,
 )
 from tests._helpers.course_node_factory import make_root_course_node
@@ -488,8 +490,14 @@ async def _seed_material(
     material_role: str = "educational",
     task_type: str | None = None,
     deleted: bool = False,
+    error_message: str | None = None,
+    in_flight: bool = False,
 ) -> AuthoredDocument:
-    """Create an AuthoredDocument on ``node`` rooted at ``root``."""
+    """Create an AuthoredDocument on ``node`` rooted at ``root``.
+
+    ``in_flight`` gives it a processing Job, the way a reprocess does: the
+    document's state reads ``pending`` until the job lets it go.
+    """
     doc = AuthoredDocument(
         course_node_id=node.id,
         course_root_id=root.id,
@@ -499,11 +507,24 @@ async def _seed_material(
         filename=filename,
         material_role=material_role,
         task_type=task_type,
+        error_message=error_message,
     )
     if deleted:
         doc.deleted_at = datetime.now(UTC)
     session.add(doc)
     await session.flush()
+    if in_flight:
+        job = Job(
+            tenant_id=root.tenant_id,
+            job_type=JobType.DOCUMENT_PROCESSING.value,
+            subject_type=JOB_SUBJECT_TYPE[JobType.DOCUMENT_PROCESSING],
+            subject_id=doc.id,
+            status="active",
+        )
+        session.add(job)
+        await session.flush()
+        doc.job_id = job.id
+        await session.flush()
     return doc
 
 
@@ -540,6 +561,7 @@ async def _seed_segment(
     secondary: list[str] | None = None,
     content: str = "segment body",
     deleted: bool = False,
+    is_auxiliary: bool = False,
     start_time_sec: float | None = None,
     end_time_sec: float | None = None,
     start_slide: int | None = None,
@@ -559,6 +581,7 @@ async def _seed_segment(
         content_char_count=len(content),
         main_concepts=main or [],
         secondary_concepts=secondary or [],
+        is_auxiliary=is_auxiliary,
         start_time_sec=start_time_sec,
         end_time_sec=end_time_sec,
         start_slide=start_slide,
@@ -1039,10 +1062,13 @@ _NOT_A_CANDIDATE: dict[str, dict[str, dict[str, Any]]] = {
     "task_type_project": {"material": {"task_type": "project"}},
     "test_object": {"material": {"source_type": "test_object"}},
     "document_deleted": {"material": {"deleted": True}},
+    "document_failed_not_in_portal": {"material": {"error_message": "boom"}},
+    "document_processing_not_in_portal": {"material": {"in_flight": True}},
     "summary_pending": {"summary": {"status": "pending"}},
     "summary_failed": {"summary": {"status": "failed"}},
     "summary_inactive": {"summary": {"deleted": True}},
     "segment_deleted": {"segment": {"deleted": True}},
+    "segment_auxiliary": {"segment": {"is_auxiliary": True}},
     "concept_only_secondary": {"segment": {"main": [], "secondary": ["nav"]}},
 }
 
@@ -1082,10 +1108,11 @@ class TestSearchCandidateFilters:
         seed_tenant: Tenant,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Search and portal read visibility from one source.
+        """Search and portal read both visibility rules from one source.
 
-        The portal routes hold the very function of ``material_visibility``,
-        and changing the rule there changes what the search selects.
+        The portal routes hold the very functions of ``material_visibility``
+        -- the role rule and the course tree's state rule -- and changing a
+        rule there changes what the search selects.
         """
         from course_supporter import material_visibility
         from course_supporter.api.routes import (
@@ -1099,25 +1126,77 @@ class TestSearchCandidateFilters:
                 portal_route.role_visible_to_student
                 is material_visibility.role_visible_to_student
             )
+        assert (
+            portal_courses.state_visible_to_student
+            is material_visibility.state_visible_to_student
+        )
 
         root = await _seed_root(db_session, seed_tenant)
         educational = await _seed_case(db_session, root, {})
         methodological = await _seed_case(
             db_session, root, {"material": {"material_role": "methodological"}}
         )
+        processing = await _seed_case(
+            db_session, root, {"material": {"in_flight": True}}
+        )
         repo = DocumentSegmentRepository(db_session)
 
-        async def found() -> list[uuid.UUID]:
+        async def found() -> set[uuid.UUID]:
             hits = await repo.search_by_concepts(
                 course_root_id=root.id, concepts=["nav"]
             )
-            return [h.segment_id for h in hits]
+            return {h.segment_id for h in hits}
 
-        assert await found() == [educational.id]
+        assert await found() == {educational.id}
 
         monkeypatch.setattr(
             material_visibility,
             "role_visible_to_student",
             lambda role: role == "methodological",
         )
-        assert await found() == [methodological.id]
+        assert await found() == {methodological.id}
+        monkeypatch.undo()
+
+        monkeypatch.setattr(
+            material_visibility,
+            "state_visible_to_student",
+            lambda state: state in ("ready", "pending"),
+        )
+        assert await found() == {educational.id, processing.id}
+
+    async def test_document_state_in_sql_is_the_portal_state(
+        self, db_session: AsyncSession, seed_tenant: Tenant
+    ) -> None:
+        """``AuthoredDocument.state`` in SQL equals the state the portal reads.
+
+        The portal reads the Python body on a loaded document; the search
+        filters by the SQL form on the class. Every combination of the two
+        inputs (``error_message`` empty / set, a job in flight or not) must
+        come out the same in both.
+        """
+        root = await _seed_root(db_session, seed_tenant)
+        expected = {
+            (None, False): "ready",
+            ("", False): "ready",
+            ("boom", False): "error",
+            (None, True): "pending",
+            ("", True): "pending",
+            ("boom", True): "error",
+        }
+        docs = {
+            inputs: await _seed_material(
+                db_session, root, root, error_message=inputs[0], in_flight=inputs[1]
+            )
+            for inputs in expected
+        }
+
+        rows = await db_session.execute(
+            select(AuthoredDocument.id, AuthoredDocument.state).where(
+                AuthoredDocument.id.in_([d.id for d in docs.values()])
+            )
+        )
+        in_sql = dict(rows.tuples().all())
+
+        for inputs, doc in docs.items():
+            assert (inputs, doc.state) == (inputs, expected[inputs])
+            assert (inputs, in_sql[doc.id]) == (inputs, expected[inputs])

@@ -37,3 +37,5 @@ test.score: 'Bal: {number} %'
 test.try_again: Testi bir daha sınayın.
 test.no_explanation: Bu sual üçün izah yoxdur.
 test.explanations_in_course_language: İzah kursun dilində verilib.
+position.audio: audio, {time}
+link.later_in_course: Ətraflı — kursun davamında

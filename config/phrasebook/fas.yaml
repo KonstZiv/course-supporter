@@ -37,3 +37,5 @@ test.score: 'امتیاز: {number}٪'
 test.try_again: دوباره در آزمون شرکت کنید.
 test.no_explanation: این سوال توضیحی ندارد.
 test.explanations_in_course_language: توضیحات به زبان دوره ارائه شده است.
+position.audio: صوت، {time}
+link.later_in_course: توضیح بیشتر — در ادامهٔ دوره

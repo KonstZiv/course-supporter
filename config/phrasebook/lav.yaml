@@ -37,3 +37,5 @@ test.score: 'Vērtējums: {number} %'
 test.try_again: Mēģiniet vēlreiz nokārtot testu.
 test.no_explanation: Šim jautājumam nav paskaidrojuma.
 test.explanations_in_course_language: Paskaidrojumi ir sniegti kursa valodā.
+position.audio: audio, {time}
+link.later_in_course: Sīkāk — kursā vēlāk

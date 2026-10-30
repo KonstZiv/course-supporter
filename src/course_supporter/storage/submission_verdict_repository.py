@@ -6,21 +6,23 @@ Purpose:
     reads them back through the resubmission safeguard. Each of these has to
     remember the same filters — the tenant, and the live submission — and a
     rule spread over several call sites is a rule that drifts, so all of them
-    live here, with the explanation stage's answer beside them.
+    live here, with the explanation stage's answer beside them — and, since
+    task 10, the course links the search found for the failed criteria.
 
 Interface:
     :class:`VerdictRecord` — one verdict as a stage hands it in.
-    :class:`SubmissionVerdictRepository` — five methods: ``replace_for_submission``,
-    ``list_for_submission``, ``previous_verdicts``, ``store_explanation`` and
-    ``get_explanation``.
+    :class:`SubmissionVerdictRepository` — seven methods:
+    ``replace_for_submission``, ``list_for_submission``, ``previous_verdicts``,
+    ``store_explanation``, ``get_explanation``, ``store_candidates`` and
+    ``get_candidates``.
 
     Writes ``flush`` and never commit: the caller owns the transaction, so a
     stage's verdicts are committed together with the checkpoint that marks the
     stage done (``homework/path_runner.py``).
 
 Replacing:
-    The stages depend on these five methods and on the two value types only;
-    another store implements the same five without touching a stage.
+    The stages depend on these seven methods and on the two value types only;
+    another store implements the same seven without touching a stage.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from course_supporter.criteria_kinds import (
 )
 from course_supporter.storage.orm import (
     HomeworkSubmission,
+    SubmissionCourseLinkCandidates,
     SubmissionCriterionVerdict,
     SubmissionExplanation,
 )
@@ -87,7 +90,7 @@ class VerdictRecord:
 
 
 class SubmissionVerdictRepository:
-    """Storage for a submission's verdicts and for its explanation."""
+    """Storage for a submission's verdicts, its explanation and its course links."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -231,6 +234,45 @@ class SubmissionVerdictRepository:
         stmt = select(SubmissionExplanation).where(
             SubmissionExplanation.tenant_id == tenant_id,
             SubmissionExplanation.submission_id == submission_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def store_candidates(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        body: dict[str, Any],
+    ) -> SubmissionCourseLinkCandidates:
+        """Keep the course links found for the submission, replacing earlier ones.
+
+        Bounded by the tenant as :meth:`store_explanation` is: a row of another
+        tenant is never overwritten, and the call then fails instead of
+        returning a row that is not the caller's.
+        """
+        stmt = (
+            pg_insert(SubmissionCourseLinkCandidates)
+            .values(tenant_id=tenant_id, submission_id=submission_id, body=body)
+            .on_conflict_do_update(
+                index_elements=[SubmissionCourseLinkCandidates.submission_id],
+                set_={"body": body, "updated_at": func.now()},
+                where=SubmissionCourseLinkCandidates.tenant_id == tenant_id,
+            )
+            .returning(SubmissionCourseLinkCandidates)
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.scalar_one()
+
+    async def get_candidates(
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> SubmissionCourseLinkCandidates | None:
+        """The course links found for the submission, or ``None``."""
+        stmt = select(SubmissionCourseLinkCandidates).where(
+            SubmissionCourseLinkCandidates.tenant_id == tenant_id,
+            SubmissionCourseLinkCandidates.submission_id == submission_id,
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()

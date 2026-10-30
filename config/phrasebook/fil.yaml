@@ -37,3 +37,5 @@ test.score: 'Puntos: {number} %'
 test.try_again: Subukang kunin muli ang pagsusulit.
 test.no_explanation: Walang paliwanag para sa tanong na ito.
 test.explanations_in_course_language: Ang paliwanag ay nasa wika ng kurso.
+position.audio: Audio, {time}
+link.later_in_course: Higit pa rito — sa susunod na bahagi ng kurso

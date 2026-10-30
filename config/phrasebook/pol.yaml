@@ -37,3 +37,5 @@ test.score: 'Wynik: {number}%'
 test.try_again: Proszę spróbować rozwiązać test jeszcze raz.
 test.no_explanation: Brak wyjaśnienia do tego pytania.
 test.explanations_in_course_language: Wyjaśnienia podano w języku kursu.
+position.audio: audio, {time}
+link.later_in_course: Więcej — dalej w kursie

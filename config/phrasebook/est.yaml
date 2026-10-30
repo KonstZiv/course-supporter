@@ -37,3 +37,5 @@ test.score: 'Tulemus: {number} %'
 test.try_again: Proovige testi uuesti sooritada.
 test.no_explanation: Sellele küsimusele selgitus puudub.
 test.explanations_in_course_language: Selgitused on esitatud kursuse keeles.
+position.audio: audio, {time}
+link.later_in_course: Täpsemalt — kursuse edasises osas

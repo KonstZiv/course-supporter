@@ -37,3 +37,5 @@ test.score: 'Điểm: {number} %'
 test.try_again: Hãy thử làm lại bài kiểm tra.
 test.no_explanation: Không có giải thích cho câu hỏi này.
 test.explanations_in_course_language: Giải thích bằng ngôn ngữ của khóa học.
+position.audio: âm thanh, {time}
+link.later_in_course: Chi tiết hơn — ở phần sau của khóa học

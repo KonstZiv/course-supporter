@@ -37,3 +37,5 @@ test.score: 'Alama: {number} %'
 test.try_again: Jaribu kufanya mtihani tena.
 test.no_explanation: Hakuna maelezo kwa swali hili.
 test.explanations_in_course_language: Maelezo yametolewa kwa lugha ya kozi.
+position.audio: sauti, {time}
+link.later_in_course: Maelezo zaidi — baadaye katika kozi

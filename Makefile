@@ -35,8 +35,8 @@ run-api:  ## Запустити API сервер (uvicorn --reload)
 
 # --- Database ---
 
-migrate:  ## Створити нову міграцію (autogenerate): make migrate msg="add_feedback_table"
-	uv run alembic revision --autogenerate -m "$(msg)"
+migrate:  ## Порожній шаблон нової міграції, писати руками (без autogenerate): make migrate msg="add_feedback_table"
+	uv run alembic revision -m "$(msg)"
 
 db-upgrade:  ## Застосувати міграції
 	uv run alembic upgrade head

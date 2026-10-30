@@ -37,3 +37,5 @@ test.score: 'Skor: {number} %'
 test.try_again: Sila cuba ujian ini sekali lagi.
 test.no_explanation: Tiada penjelasan untuk soalan ini.
 test.explanations_in_course_language: Penjelasan diberikan dalam bahasa kursus.
+position.audio: audio, {time}
+link.later_in_course: Butiran lanjut — kemudian dalam kursus

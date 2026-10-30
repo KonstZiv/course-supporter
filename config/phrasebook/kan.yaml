@@ -37,3 +37,5 @@ test.score: 'ಅಂಕ: {number} %'
 test.try_again: ಪರೀಕ್ಷೆಯನ್ನು ಮತ್ತೊಮ್ಮೆ ಪ್ರಯತ್ನಿಸಿ.
 test.no_explanation: ಈ ಪ್ರಶ್ನೆಗೆ ಯಾವುದೇ ವಿವರಣೆಯಿಲ್ಲ.
 test.explanations_in_course_language: ವಿವರಣೆಗಳನ್ನು ಕೋರ್ಸ್‌ನ ಭಾಷೆಯಲ್ಲಿ ನೀಡಲಾಗಿದೆ.
+position.audio: ಆಡಿಯೊ, {time}
+link.later_in_course: ಹೆಚ್ಚಿನ ವಿವರ — ಕೋರ್ಸ್‌ನ ಮುಂದಿನ ಭಾಗದಲ್ಲಿ

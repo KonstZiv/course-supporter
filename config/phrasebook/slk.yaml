@@ -37,3 +37,5 @@ test.score: 'Skóre: {number} %'
 test.try_again: Skúste test absolvovať znova.
 test.no_explanation: K tejto otázke nie je vysvetlenie.
 test.explanations_in_course_language: Vysvetlenie je uvedené v jazyku kurzu.
+position.audio: audio, {time}
+link.later_in_course: Podrobnejšie — ďalej v kurze

@@ -37,3 +37,5 @@ test.score: 'Įvertinimas: {number} %'
 test.try_again: Pabandykite atlikti testą dar kartą.
 test.no_explanation: Šiam klausimui paaiškinimo nėra.
 test.explanations_in_course_language: Paaiškinimai pateikti kurso kalba.
+position.audio: Garso įrašas, {time}
+link.later_in_course: Plačiau — vėliau kurse

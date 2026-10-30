@@ -37,3 +37,5 @@ test.score: 'Scor: {number} %'
 test.try_again: Încercați să refaceți testul.
 test.no_explanation: Nu există nicio explicație pentru această întrebare.
 test.explanations_in_course_language: Explicațiile sunt oferite în limba cursului.
+position.audio: audio, {time}
+link.later_in_course: Mai multe detalii — mai departe în curs

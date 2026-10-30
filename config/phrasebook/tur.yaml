@@ -37,3 +37,5 @@ test.score: 'Puan: {number} %'
 test.try_again: Testi tekrar çözmeyi deneyin.
 test.no_explanation: Bu soru için açıklama yok.
 test.explanations_in_course_language: Açıklamalar kurs dilinde verilmiştir.
+position.audio: ses kaydı, {time}
+link.later_in_course: Ayrıntılar — kursun ilerleyen bölümlerinde

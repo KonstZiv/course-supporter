@@ -37,3 +37,5 @@ test.score: Գնահատական՝ {number} %
 test.try_again: Փորձեք նորից անցնել թեստը։
 test.no_explanation: Այս հարցի համար բացատրություն չկա։
 test.explanations_in_course_language: Բացատրությունը տրված է դասընթացի լեզվով։
+position.audio: աուդիո, {time}
+link.later_in_course: Մանրամասն՝ դասընթացի հաջորդ մասերում

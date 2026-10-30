@@ -33,6 +33,7 @@ from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
     HomeworkSubmission,
+    SubmissionCourseLinkCandidates,
     SubmissionCriterionVerdict,
     SubmissionExplanation,
     Tenant,
@@ -45,6 +46,8 @@ _TASK_09B_TABLES = [
     cast(Table, SubmissionCriterionVerdict.__table__),
     cast(Table, SubmissionExplanation.__table__),
 ]
+# Task 10, K4: the course link candidates, shaped after the explanations.
+_TASK_10_TABLES = [cast(Table, SubmissionCourseLinkCandidates.__table__)]
 
 
 async def _column_comments(
@@ -63,7 +66,9 @@ async def _column_comments(
 
 
 class TestCommentsAreTheOrms:
-    @pytest.mark.parametrize("table", _TASK_09B_TABLES, ids=lambda t: t.name)
+    @pytest.mark.parametrize(
+        "table", _TASK_09B_TABLES + _TASK_10_TABLES, ids=lambda t: t.name
+    )
     async def test_every_column_comment_is_the_orms(
         self, db_session: AsyncSession, table: Table
     ) -> None:
@@ -75,7 +80,9 @@ class TestCommentsAreTheOrms:
         for column in table.columns:
             assert live[column.name] == column.comment, column.name
 
-    @pytest.mark.parametrize("table", _TASK_09B_TABLES, ids=lambda t: t.name)
+    @pytest.mark.parametrize(
+        "table", _TASK_09B_TABLES + _TASK_10_TABLES, ids=lambda t: t.name
+    )
     async def test_the_table_comment_is_the_orms(
         self, db_session: AsyncSession, table: Table
     ) -> None:

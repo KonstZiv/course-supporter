@@ -37,3 +37,5 @@ test.score: 'Βαθμολογία: {number} %'
 test.try_again: Προσπαθήστε ξανά.
 test.no_explanation: Δεν υπάρχει εξήγηση για αυτήν την ερώτηση.
 test.explanations_in_course_language: Οι εξηγήσεις παρέχονται στη γλώσσα του μαθήματος.
+position.audio: ηχητικό, {time}
+link.later_in_course: Περισσότερα — παρακάτω στο μάθημα

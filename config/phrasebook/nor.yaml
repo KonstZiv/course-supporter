@@ -37,3 +37,5 @@ test.score: 'Poengsum: {number} %'
 test.try_again: Prøv å ta testen på nytt.
 test.no_explanation: Ingen forklaring for dette spørsmålet.
 test.explanations_in_course_language: Forklaringen er gitt på kursspråket.
+position.audio: Lyd, {time}
+link.later_in_course: Mer om dette senere i kurset

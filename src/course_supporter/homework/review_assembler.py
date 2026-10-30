@@ -53,6 +53,7 @@ from collections.abc import Mapping, Sequence
 from course_supporter.models.review_structure import (
     SECTION_ORDER,
     Position,
+    Reference,
     Remark,
     Reply,
     ReviewStructureV1,
@@ -105,12 +106,46 @@ def _fill(text: str, value: str) -> str:
     return "".join(out)
 
 
+def _position_text(
+    position: Position, phrases: Mapping[str, str], language: str
+) -> str:
+    """Where in the material, as the phrase of its kind with the value put in."""
+    phrase = _phrase(phrases, f"position.{position.kind}", language)
+    return _fill(phrase, position.value)
+
+
 def _position_line(
     position: Position, phrases: Mapping[str, str], language: str
 ) -> str:
     """Where the remark points, as its own italic line above the remark."""
-    phrase = _phrase(phrases, f"position.{position.kind}", language)
-    return f"*{_fill(phrase, position.value)}*"
+    return f"*{_position_text(position, phrases, language)}*"
+
+
+def _reference(reference: Reference, phrases: Mapping[str, str], language: str) -> str:
+    """One thing to read: its title, and where in it when it is a course link.
+
+    The title is a link when the reference has an address and plain text when
+    it does not — a course link's address is the portal's to build (task 10).
+    The place in the material and the note that it comes later in the course
+    follow in parentheses, separated by a semicolon: the phrase of a position
+    may itself hold a comma ("відео, 03:41"), and the references are joined by
+    commas. The excerpt is not printed; the portal shows it.
+
+    A reference with neither of the two notes prints exactly as before task 10.
+    """
+    text = (
+        reference.title
+        if reference.url is None
+        else f"[{reference.title}]({reference.url})"
+    )
+    notes: list[str] = []
+    if reference.position is not None:
+        notes.append(_position_text(reference.position, phrases, language))
+    if reference.later_in_course:
+        notes.append(_phrase(phrases, "link.later_in_course", language))
+    if notes:
+        text += f" ({'; '.join(notes)})"
+    return text
 
 
 def _remark_block(
@@ -140,7 +175,7 @@ def _remark_block(
     ):
         lines.append(f"- **{_phrase(phrases, key, language)}:** {value}")
     if remark.read:
-        links = ", ".join(f"[{ref.title}]({ref.url})" for ref in remark.read)
+        links = ", ".join(_reference(ref, phrases, language) for ref in remark.read)
         lines.append(f"- **{_phrase(phrases, 'remark.read', language)}:** {links}")
     return lines
 

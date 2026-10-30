@@ -37,3 +37,5 @@ test.score: 'Ұпай: {number} %'
 test.try_again: Тестті қайта тапсырып көріңіз.
 test.no_explanation: Бұл сұраққа түсініктеме жоқ.
 test.explanations_in_course_language: Түсініктеме курс тілінде берілген.
+position.audio: аудио, {time}
+link.later_in_course: Толығырақ — курстың әрі қарайғы бөлімінде

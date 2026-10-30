@@ -2559,6 +2559,70 @@ class SubmissionExplanation(Base):
         )
 
 
+class SubmissionCourseLinkCandidates(Base):
+    """The course links found for one submission's failed criteria (task 10).
+
+    The step that looks for places in the course where a failed criterion's
+    topic is explained runs before the stages that choose among them and
+    explain them, and a path's checkpoint keeps no stage output
+    (``homework/path_checkpoint.py``) — so what it found waits here, one row per
+    submission, as :class:`SubmissionExplanation` waits for the builder.
+    ``body`` is the candidates as the step's own model dumps them.
+
+    A repeat run of the step replaces the row: one per submission, which the
+    unique index on ``submission_id`` holds. No soft-delete; the foreign key's
+    ``ON DELETE CASCADE`` takes the row with its submission, as on the
+    explanations.
+    """
+
+    __tablename__ = "submission_course_link_candidates"
+    __table_args__ = (
+        Index(
+            "uq_submission_course_link_candidates_submission_id",
+            "submission_id",
+            unique=True,
+        ),
+        {
+            "comment": "Course links found for one submission's failed criteria "
+            "(mentor-rebuild task 10), kept for the stages after the search. "
+            "One row per submission; a repeat run replaces it."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Tenant. Every read and write of candidates is scoped by it.",
+    )
+    # No standalone index: uq_submission_course_link_candidates_submission_id
+    # serves it.
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="CASCADE"),
+        comment="FK → HomeworkSubmission the candidates are found for.",
+    )
+    body: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        comment="The candidates, as the search step's own model dumps them.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the candidates were first written.",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="When they were last replaced. On the ON CONFLICT DO UPDATE "
+        "path this column is set EXPLICITLY: SQLAlchemy does not apply a "
+        "Python-side onupdate to an upsert (dialects/postgresql/dml.py).",
+    )
+
+    def __repr__(self) -> str:
+        return f"SubmissionCourseLinkCandidates(submission_id={self.submission_id!r})"
+
+
 # ──────────────────────────────────────────────
 # Methodist layer — NodeSummary models (vision §2.2, KD6, KD9, KD10, KD11, KD12)
 # ──────────────────────────────────────────────

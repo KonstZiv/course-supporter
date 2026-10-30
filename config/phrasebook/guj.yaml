@@ -37,3 +37,5 @@ test.score: 'સ્કોર: {number} %'
 test.try_again: ફરીથી ટેસ્ટ આપવાનો પ્રયાસ કરો.
 test.no_explanation: આ પ્રશ્ન માટે કોઈ સમજૂતી નથી.
 test.explanations_in_course_language: સમજૂતી કોર્સની ભાષામાં છે.
+position.audio: ઑડિયો, {time}
+link.later_in_course: વધુ વિગતો — કોર્સમાં આગળ

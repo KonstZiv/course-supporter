@@ -37,3 +37,5 @@ test.score: 'ציון: {number}%'
 test.try_again: נסו לענות על המבחן שוב.
 test.no_explanation: אין הסבר לשאלה זו.
 test.explanations_in_course_language: ההסבר מוצג בשפת הקורס.
+position.audio: אודיו, {time}
+link.later_in_course: פרטים נוספים — בהמשך הקורס

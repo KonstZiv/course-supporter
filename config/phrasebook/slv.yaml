@@ -37,3 +37,5 @@ test.score: 'Rezultat: {number} %'
 test.try_again: Poskusite ponovno rešiti test.
 test.no_explanation: Za to vprašanje ni pojasnila.
 test.explanations_in_course_language: Pojasnilo je v jeziku tečaja.
+position.audio: zvočni posnetek, {time}
+link.later_in_course: Podrobneje — v nadaljevanju tečaja

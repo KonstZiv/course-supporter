@@ -37,3 +37,5 @@ test.score: 'Бал: {number} %'
 test.try_again: Паспрабуйце прайсці тэст яшчэ раз.
 test.no_explanation: Тлумачэння да гэтага пытання няма.
 test.explanations_in_course_language: Тлумачэнне пададзена на мове курса.
+position.audio: аўдыя, {time}
+link.later_in_course: Падрабязней — далей у курсе

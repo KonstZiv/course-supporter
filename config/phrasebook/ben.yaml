@@ -37,3 +37,5 @@ test.score: 'স্কোর: {number} %'
 test.try_again: আবার টেস্টটি দেওয়ার চেষ্টা করুন।
 test.no_explanation: এই প্রশ্নের কোনো ব্যাখ্যা নেই।
 test.explanations_in_course_language: ব্যাখ্যাটি কোর্সের ভাষায় দেওয়া হয়েছে।
+position.audio: অডিও, {time}
+link.later_in_course: বিস্তারিত — কোর্সের পরের অংশে

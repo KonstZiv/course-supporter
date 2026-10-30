@@ -37,3 +37,5 @@ test.score: 'ସ୍କୋର: {number} %'
 test.try_again: ପୁଣିଥରେ ପରୀକ୍ଷା ଦେବାକୁ ଚେଷ୍ଟା କରନ୍ତୁ।
 test.no_explanation: ଏହି ପ୍ରଶ୍ନ ପାଇଁ କୌଣସି ବ୍ୟାଖ୍ୟା ନାହିଁ।
 test.explanations_in_course_language: ବ୍ୟାଖ୍ୟା ପାଠ୍ୟକ୍ରମର ଭାଷାରେ ଦିଆଯାଇଛି।
+position.audio: ଅଡିଓ, {time}
+link.later_in_course: ଅଧିକ ବିବରଣୀ — ପାଠ୍ୟକ୍ରମରେ ପରେ

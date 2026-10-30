@@ -196,19 +196,115 @@ class TestRemark:
         assert _A_REMARK.read == []
         assert _A_REMARK.position is None
 
-    def test_a_reference_carries_both_a_title_and_a_destination(self) -> None:
+    def test_a_reference_carries_a_title(self) -> None:
         """Code resolves the identifier before it lands here (§2.12), so the
-        assembler never meets a bare id."""
-        with pytest.raises(ValidationError, match="url"):
-            Reference(title="The docs")  # type: ignore[call-arg]
+        assembler never meets a bare id: whatever else a reference has, it has
+        something to call it by."""
+        with pytest.raises(ValidationError, match="title"):
+            Reference(url="https://example.test/d")  # type: ignore[call-arg]
+
+
+class TestCourseLink:
+    """A reference to a place in the course (task 10, K4, lock b)."""
+
+    def test_a_course_link_without_an_address_is_valid(self) -> None:
+        """The portal builds the address from the fragment's id; the review
+        holds what the portal needs and what the markdown prints."""
+        link = Reference(
+            title="Змінні середовища",
+            position=Position(kind="audio", value="12:05"),
+            excerpt="Пароль ніколи не пишуть у коді.",
+            segment_id="0192f6a0-0000-7000-8000-000000000001",
+            later_in_course=True,
+        )
+
+        assert link.url is None
+        assert link.later_in_course is True
+
+    def test_every_new_field_is_optional(self) -> None:
+        link = Reference(title="Змінні середовища")
+
+        assert (link.url, link.position, link.excerpt, link.segment_id) == (
+            None,
+            None,
+            None,
+            None,
+        )
+        assert link.later_in_course is False
+
+    def test_an_unknown_field_is_still_refused(self) -> None:
+        """``extra="forbid"`` stays: a link that invents a field would have it
+        silently dropped on read."""
+        with pytest.raises(ValidationError, match="timestamp"):
+            Reference(title="Змінні середовища", timestamp="03:41")  # type: ignore[call-arg]
+
+    @pytest.mark.parametrize("field", ["url", "excerpt"])
+    def test_an_empty_string_is_not_a_value(self, field: str) -> None:
+        with pytest.raises(ValidationError, match=field):
+            Reference(title="Змінні середовища", **{field: ""})  # type: ignore[arg-type]
+
+    def test_it_survives_a_round_trip_through_storage(self) -> None:
+        original = _review(
+            verdict=Verdict(passed=False, why="Not yet."),
+            new_remarks=[
+                Remark(
+                    what="Wrong.",
+                    why="It matters.",
+                    todo="Fix it.",
+                    read=[
+                        Reference(
+                            title="Змінні середовища",
+                            position=Position(kind="audio", value="1:02:05"),
+                            excerpt="Пароль ніколи не пишуть у коді.",
+                            segment_id="s-1",
+                            later_in_course=True,
+                        )
+                    ],
+                )
+            ],
+        )
+
+        assert ReviewStructureV1.model_validate(original.model_dump()) == original
+
+
+class TestAStoredVersion1Review:
+    """What is in the database today reads back as it did (task 10, lock a)."""
+
+    def test_a_reference_stored_before_task_10_validates_unchanged(self) -> None:
+        stored = {
+            "schema_version": REVIEW_SCHEMA_VERSION,
+            "language": "ukr",
+            "verdict": {"passed": False, "why": "Not yet."},
+            "new_remarks": [
+                {
+                    "what": "Wrong.",
+                    "why": "It matters.",
+                    "todo": "Fix it.",
+                    "read": [{"title": "The docs", "url": "https://example.test/d"}],
+                    "position": {"kind": "video", "value": "03:41"},
+                }
+            ],
+        }
+
+        review = ReviewStructureV1.model_validate(stored)
+
+        (reference,) = review.new_remarks[0].read
+        assert (reference.title, reference.url) == (
+            "The docs",
+            "https://example.test/d",
+        )
+        assert (
+            reference.model_dump(exclude_defaults=True)
+            == stored["new_remarks"][0]["read"][0]
+        )  # type: ignore[index]
 
 
 class TestParts:
-    @pytest.mark.parametrize("kind", ["video", "slide", "paragraph", "file"])
-    def test_the_four_kinds_of_position(self, kind: str) -> None:
+    @pytest.mark.parametrize("kind", ["video", "audio", "slide", "paragraph", "file"])
+    def test_the_five_kinds_of_position(self, kind: str) -> None:
         assert Position(kind=kind, value="12").kind == kind  # type: ignore[arg-type]
 
-    def test_a_fifth_kind_of_position_is_refused(self) -> None:
+    def test_a_sixth_kind_of_position_is_refused(self) -> None:
         """A kind with no phrase behind it would assemble to a blank."""
         with pytest.raises(ValidationError, match="kind"):
             Position(kind="chapter", value="2")  # type: ignore[arg-type]

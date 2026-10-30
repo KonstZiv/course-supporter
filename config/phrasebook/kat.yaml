@@ -37,3 +37,5 @@ test.score: 'ქულა: {number} %'
 test.try_again: სცადეთ ტესტის ხელახლა გავლა.
 test.no_explanation: ამ კითხვას განმარტება არ აქვს.
 test.explanations_in_course_language: განმარტება მოცემულია კურსის ენაზე.
+position.audio: აუდიო, {time}
+link.later_in_course: დაწვრილებით — კურსის შემდგომ ნაწილში

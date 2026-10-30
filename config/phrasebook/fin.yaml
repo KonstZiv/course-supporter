@@ -37,3 +37,5 @@ test.score: 'Pisteet: {number} %'
 test.try_again: Yritä testiä uudelleen.
 test.no_explanation: Tähän kysymykseen ei ole selitystä.
 test.explanations_in_course_language: Selitykset ovat kurssin kielellä.
+position.audio: ääni, {time}
+link.later_in_course: Lisää myöhemmin kurssilla

@@ -37,3 +37,5 @@ test.score: 'Einkunn: {number} %'
 test.try_again: Reyndu prófið aftur.
 test.no_explanation: Engin útskýring.
 test.explanations_in_course_language: Útskýringar eru á tungumáli námskeiðsins.
+position.audio: hljóð, {time}
+link.later_in_course: Nánar síðar í námskeiðinu
